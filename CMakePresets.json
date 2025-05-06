@@ -1,0 +1,27 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "mypreset",
+            "displayName": "Clang 18.1.8 (MSVC CLI) - x86 for MSVC 17.12.35707.178 (Visual Studio Community 2022 Release)",
+            "description": "Using compilers: C = C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\Llvm\\bin\\clang-cl.exe, CXX = C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\Llvm\\bin\\clang-cl.exe",
+            "generator": "Visual Studio 17 2022",
+            "toolset": "ClangCL,host=x86",
+            "architecture": "win32",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang-cl.exe",
+                "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang-cl.exe"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "mypreset-debug",
+            "displayName": "Clang 18.1.8 (MSVC CLI) - x86 for MSVC 17.12.35707.178 (Visual Studio Community 2022 Release) - Debug",
+            "configurePreset": "mypreset",
+            "configuration": "Debug"
+        }
+    ]
+}
