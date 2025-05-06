@@ -4,10 +4,12 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <concepts>
 
 namespace kinDS
 {
-  template<typename K, typename V>
+
+  template<std::totally_ordered K, typename V>
   class AVLTree
   {
   private:
