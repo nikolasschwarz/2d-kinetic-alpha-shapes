@@ -178,26 +178,34 @@ namespace kinDS
       }
 
       // Recursive function to fill the 2D vector with node values
-      static void fill(AVLNode* root, std::vector<std::vector<std::string>>& res, int depth, int left, int right) {
-        if (!root || left > right) return;
-        int mid = (left + right) / 2;
-        res[depth][mid] = std::to_string(root->value);
-        fill(root->left, res, depth + 1, left, mid - 1);
-        fill(root->right, res, depth + 1, mid + 1, right);
+      static void fill(AVLNode* root, std::vector<std::vector<std::string>>& res, int row, int col, int depth, int offset) {
+        if (!root) return;
+        res[row][col] = std::to_string(root->value);
+        int childOffset = offset / 2;
+
+        if (root->left) {
+          res[row + 1][col - childOffset] = "/";
+          fill(root->left, res, row + 2, col - offset, depth, childOffset);
+        }
+        if (root->right) {
+          res[row + 1][col + childOffset] = "\\";
+          fill(root->right, res, row + 2, col + offset, depth, childOffset);
+        }
       }
 
       // Print function
       static void printTree(AVLNode* root) {
         if (!root) return;
         int depth = maxDepth(root);
-        int width = (1 << depth) - 1;  // Width = 2^depth - 1
-        std::vector<std::vector<std::string>> res(depth, std::vector<std::string>(width, " "));
+        int height = depth * 2 - 1;
+        int width = (1 << depth) * 2 - 1;
+        std::vector<std::vector<std::string>> res(height, std::vector<std::string>(width, " "));
 
-        fill(root, res, 0, 0, width - 1);
+        fill(root, res, 0, width / 2, depth, (1 << (depth - 1)));
 
         for (const auto& row : res) {
-          for (const auto& col : row) {
-            std::cout << (col.empty() ? " " : col);
+          for (const auto& val : row) {
+            std::cout << val;
           }
           std::cout << "\n";
         }
