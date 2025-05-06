@@ -3,8 +3,6 @@
 
 int main()
 {
-    std::cout << "Hello World" << std::endl;
-
     kinDS::AVLTree<int, int> test;
 
     test.insert(1, 1);
