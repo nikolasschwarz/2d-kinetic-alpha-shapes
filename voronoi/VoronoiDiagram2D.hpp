@@ -2,7 +2,6 @@
 
 #include <array>
 #include <vector>
-#include "qhull_ra.h"
 
 using Point2D = std::array<double, 2>;
 
@@ -24,7 +23,6 @@ public:
 
 private:
   std::vector<Cell> _cells;
-  qhT _qh;  // Reentrant Qhull context
   bool _qhInitialized = false;
 
   void computeVoronoi(const std::vector<Point2D>& inputPoints);
