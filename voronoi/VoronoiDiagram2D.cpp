@@ -1,6 +1,7 @@
-#include "VoronoiDiagramGenerator.hpp"
+#include "VoronoiDiagram2D.hpp"
 #include <cstring>  // for memset
 #include <stdexcept>
+#include <iostream>
 
 VoronoiDiagram2D::VoronoiDiagram2D(const std::vector<Point2D>& inputPoints) {
   computeVoronoi(inputPoints);
@@ -13,9 +14,14 @@ VoronoiDiagram2D::~VoronoiDiagram2D() {
 void VoronoiDiagram2D::cleanup() {
   if (_qhInitialized) {
     qh_freeqhull(&_qh, !qh_ALL);  // Free memory
-    qh_memfreeshort(&_qh, nullptr, nullptr);
+    int curlong, totlong;
+    qh_memfreeshort(&_qh, &curlong, &totlong);
     _qhInitialized = false;
-
+    if (curlong || totlong) {
+      std::cerr << "Qhull: memory not fully freed: "
+        << curlong << " blocks remaining, "
+        << totlong << " bytes in total\n";
+    }
   }
 }
 
@@ -52,7 +58,6 @@ void VoronoiDiagram2D::computeVoronoi(const std::vector<Point2D>& inputPoints) {
   for (facetT* facet = _qh.facet_list; facet && facet->next; facet = facet->next) {
     if (!facet->upperdelaunay && facet->center) {
       for (int i = 0; i < facet->vertices->maxsize; ++i) {
-        setT* vertexSet = facet->vertices;
 
         for (vertexT* vertex = _qh.vertex_list; vertex && vertex->next; vertex = vertex->next) {
           setT* neighbors = vertex->neighbors;
@@ -69,6 +74,7 @@ void VoronoiDiagram2D::computeVoronoi(const std::vector<Point2D>& inputPoints) {
               coordT* center = facet->center;
               cell.vertices.push_back({ center[0], center[1] });
               // optionally collect neighbors here
+              cell.neighbors.push_back(siteIndex);
             }
           }
           break;  // Only need to process each facet once

@@ -9,7 +9,7 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build Qhull as static library")
 # Add Qhull
 add_subdirectory(external/qhull EXCLUDE_FROM_ALL)
 
-add_executable(kinDS-app main.cpp "voronoi/VoronoiDiagramGenerator.cpp")
+add_executable(kinDS-app main.cpp "voronoi/VoronoiDiagram2D.cpp")
 
 # Include Qhull headers
 target_include_directories(kinDS-app PRIVATE

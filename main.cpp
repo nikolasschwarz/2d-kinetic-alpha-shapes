@@ -1,6 +1,6 @@
 #include <iostream>
 #include "kinDS/AVLTree.hpp"
-#include "voronoi/VoronoiDiagramGenerator.hpp"
+#include "voronoi/VoronoiDiagram2D.hpp"
 
 void voronoi_example()
 {
