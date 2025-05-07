@@ -1,5 +1,19 @@
 #include <iostream>
 #include "kinDS/AVLTree.hpp"
+#include "voronoi/VoronoiDiagramGenerator.hpp"
+
+void voronoi_example()
+{
+  std::vector<Point2D> points = {
+    {0.0, 0.0},
+    {1.0, 0.0},
+    {0.5, 1.0},
+    {2.0, 2.0},
+    {3.0, 1.5}
+  };
+
+  VoronoiDiagram2D voronoi(points);
+}
 
 int main()
 {
@@ -12,4 +26,6 @@ int main()
     test.insert(2, 2);
     
     test.printTreeStructure();
+
+		voronoi_example();
 }
