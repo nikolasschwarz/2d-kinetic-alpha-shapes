@@ -1,18 +1,27 @@
 #include <iostream>
 #include "kinDS/AVLTree.hpp"
-#include "voronoi/VoronoiDiagram2D.hpp"
+#include "voronoi/VoronoiDiagramGenerator.h"
 
 void voronoi_example()
 {
-  std::vector<Point2D> points = {
-    {0.0, 0.0},
-    {1.1, 0.0},
-    {0.5, 1.0},
-    {2.0, 2.0},
-    {3.0, 1.5}
-  };
+	float xValues[4] = { -22, -17, 4,22 };
+	float yValues[4] = { -9, 31,13,-5 };
 
-  VoronoiDiagram2D voronoi(points);
+	long count = 4;
+
+	VoronoiDiagramGenerator vdg;
+	vdg.generateVoronoi(xValues, yValues, count, -100, 100, -100, 100, 3);
+
+	vdg.resetIterator();
+
+	float x1, y1, x2, y2;
+
+	printf("\n-------------------------------\n");
+	while (vdg.getNext(x1, y1, x2, y2))
+	{
+		printf("GOT Line (%f,%f)->(%f,%f)\n", x1, y1, x2, y2);
+
+	}
 }
 
 int main()
