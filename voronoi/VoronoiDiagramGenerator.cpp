@@ -29,6 +29,9 @@
 
 #include "VoronoiDiagramGenerator.h"
 
+namespace voronoi_diagram_generator
+{
+
 VoronoiDiagramGenerator::VoronoiDiagramGenerator()
 {
 	siteidx = 0;
@@ -96,7 +99,7 @@ bool VoronoiDiagramGenerator::generateVoronoi(float* xValues, float* yValues, in
 		else if (yValues[i] > ymax)
 			ymax = yValues[i];
 
-		//printf("\n%f %f\n",xValues[i],yValues[i]);
+		logger.log(DEBUG, "\n%f %f\n",xValues[i],yValues[i]);
 	}
 
 	qsort(sites, nsites, sizeof(*sites), scomp);
@@ -326,7 +329,7 @@ struct Edge* VoronoiDiagramGenerator::bisect(struct Site* s1, struct	Site* s2)
 
 	newedge->edgenbr = nedges;
 
-	//printf("\nbisect(%d) ((%f,%f) and (%f,%f)",nedges,s1->coord.x,s1->coord.y,s2->coord.x,s2->coord.y);
+	logger.log(DEBUG, "\nbisect(%d) ((%f,%f) and (%f,%f)",nedges,s1->coord.x,s1->coord.y,s2->coord.x,s2->coord.y);
 
 	nedges += 1;
 	return(newedge);
@@ -786,7 +789,7 @@ void VoronoiDiagramGenerator::clip_line(struct Edge* e)
 		}
 		if (y1 > pymax)
 		{
-			//	printf("\nClipped (1) y1 = %f to %f",y1,pymax);
+			logger.log(DEBUG, "\nClipped (1) y1 = %f to %f", y1, pymax);
 			y1 = pymax;
 			//return;
 		}
@@ -797,14 +800,14 @@ void VoronoiDiagramGenerator::clip_line(struct Edge* e)
 
 		if (y2 < pymin)
 		{
-			//printf("\nClipped (2) y2 = %f to %f",y2,pymin);
+			logger.log(DEBUG, "\nClipped (2) y2 = %f to %f", y2, pymin);
 			y2 = pymin;
 			//return;
 		}
 		x2 = (e->c) - (e->b) * y2;
 		if (((x1 > pxmax) & (x2 > pxmax)) | ((x1 < pxmin) & (x2 < pxmin)))
 		{
-			//printf("\nClipLine jumping out(3), x1 = %f, pxmin = %f, pxmax = %f",x1,pxmin,pxmax);
+			logger.log(DEBUG, "\nClipLine jumping out(3), x1 = %f, pxmin = %f, pxmax = %f", x1, pxmin, pxmax);
 			return;
 		}
 		if (x1 > pxmax)
@@ -831,7 +834,7 @@ void VoronoiDiagramGenerator::clip_line(struct Edge* e)
 			x1 = s1->coord.x;
 		if (x1 > pxmax)
 		{
-			//printf("\nClipped (3) x1 = %f to %f",x1,pxmin);
+			logger.log(DEBUG, "\nClipped (3) x1 = %f to %f", x1, pxmin);
 			//return;
 			x1 = pxmax;
 		}
@@ -841,14 +844,14 @@ void VoronoiDiagramGenerator::clip_line(struct Edge* e)
 			x2 = s2->coord.x;
 		if (x2 < pxmin)
 		{
-			//printf("\nClipped (4) x2 = %f to %f",x2,pxmin);
+			logger.log(DEBUG, "\nClipped (4) x2 = %f to %f", x2, pxmin);
 			//return;
 			x2 = pxmin;
 		}
 		y2 = e->c - e->a * x2;
 		if (((y1 > pymax) & (y2 > pymax)) | ((y1 < pymin) & (y2 < pymin)))
 		{
-			//printf("\nClipLine jumping out(6), y1 = %f, pymin = %f, pymax = %f",y2,pymin,pymax);
+			logger.log(DEBUG, "\nClipLine jumping out(6), y1 = %f, pymin = %f, pymax = %f", y2, pymin, pymax);
 			return;
 		}
 		if (y1 > pymax)
@@ -869,7 +872,26 @@ void VoronoiDiagramGenerator::clip_line(struct Edge* e)
 		};
 	};
 
-	//printf("\nPushing line (%f,%f,%f,%f)",x1,y1,x2,y2);
+	// log sites
+	if (s1)
+	{
+		logger.log(DEBUG, "Site 1 at: (%f,%f)", s1->coord.x, s1->coord.y);
+	}
+	else
+	{
+		logger.log(DEBUG, "Site 1 does not exist");
+	}
+
+	if (s2)
+	{
+		logger.log(DEBUG, "Site 2 at: (%f,%f)", s2->coord.x, s2->coord.y);
+	}
+	else
+	{
+		logger.log(DEBUG, "Site 2 does not exist");
+	}
+
+	logger.log(DEBUG, "\nPushing line (%f,%f,%f,%f)",x1,y1,x2,y2);
 	line(x1, y1, x2, y2);
 }
 
@@ -944,6 +966,7 @@ bool VoronoiDiagramGenerator::voronoi(int triangulate)
 			out_triple(bot, top, rightreg(lbnd));		//output the triple of sites, stating that a circle goes through them
 
 			v = lbnd->vertex;						//get the vertex that caused this event
+      logger.log(DEBUG, "\nVertex event at (%f,%f)", v->coord.x, v->coord.y);
 			makevertex(v);							//set the vertex number - couldn't do this earlier since we didn't know when it would be processed
 			endpoint(lbnd->ELedge, lbnd->ELpm, v);	//set the endpoint of the left HalfEdge to be this vector
 			endpoint(rbnd->ELedge, rbnd->ELpm, v);	//set the endpoint of the right HalfEdge to be this vector
@@ -1024,3 +1047,4 @@ struct Site* VoronoiDiagramGenerator::nextone()
 	else
 		return((struct Site*)NULL);
 }
+}; // namespace Voronoi_diagram_generator
