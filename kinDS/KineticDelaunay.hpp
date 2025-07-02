@@ -106,14 +106,14 @@ private:
                 // boundary edges must be treated separately using ccw
 
                 // need to get the inner half-edge so we have access to the triangle
-                if (graph.get_half_edges()[i].face == -1)
+                if (graph.is_outside_boundary(he_id))
                 {
                     he_id = i ^ 1; // use the twin half-edge if the current one is on the boundary
                 }
 
-                size_t a = graph.get_half_edges()[he_id].origin; // First vertex
-                size_t b = graph.destination(he_id); // Second vertex
-                size_t c = graph.triangle_opposite_vertex(he_id); // Third vertex
+                int a = graph.get_half_edges()[he_id].origin; // First vertex
+                int b = graph.destination(he_id); // Second vertex
+                int c = graph.triangle_opposite_vertex(he_id); // Third vertex
 
                 // print the triangle vertices:
                 std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
@@ -144,10 +144,10 @@ private:
             }
             else
             {
-                size_t a = graph.get_half_edges()[he_id].origin; // First vertex
-                size_t b = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
-                size_t c = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
-                size_t d = graph.triangle_opposite_vertex(he_id); // Fourth vertex
+                int a = graph.get_half_edges()[he_id].origin; // First vertex
+                int b = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
+                int c = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
+                int d = graph.triangle_opposite_vertex(he_id); // Fourth vertex
 
                 // print the quadrilateral vertices:
                 std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;

@@ -181,7 +181,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
     // need another run to create faces and link the half-edges that meet at infinity
     for (size_t u = 0; u < vertex_count; ++u)
     {
-        int incoming_edge_index = boundary_edge_map[u];
+        int incoming_edge_index = incoming_edge_map[u];
         if (incoming_edge_index != -1)
         {
             HalfEdge& incoming = half_edges[incoming_edge_index];

@@ -63,18 +63,32 @@ public:
     void print_debug() const;
 
     // utils
+    bool is_outside_boundary(size_t he_id) const
+    {
+        // walk the triangle and check if any vertex is -1
+        for (size_t i = 0; i < 3; i++)
+        {
+            if (half_edges[he_id].origin == -1)
+            {
+                return true;
+            }
+            he_id = half_edges[he_id].next;
+        }
+
+        return false;
+    }
+
     bool is_on_boundary(size_t he_id) const
     {
-        return half_edges[he_id].face == -1 || half_edges[he_id ^ 1].face == -1;
+        return is_outside_boundary(he_id) || is_outside_boundary(he_id ^ 1);
     }
     inline size_t destination(size_t he_id) const
     {
         return half_edges[he_id ^ 1].origin;
     }
-    size_t triangle_opposite_vertex(size_t he_id) const
+    int triangle_opposite_vertex(size_t he_id) const
     {
         // Returns the vertex opposite to the half-edge in its triangle
-        // TODO: catch boundary edge
         size_t next_he_id = half_edges[he_id].next;
         next_he_id = half_edges[next_he_id].next;
         return half_edges[next_he_id].origin;
