@@ -104,7 +104,8 @@ void eigen_example()
   std::cout << "Sum evaluated at x = " << x << ": " << result_sum << std::endl;   // e.g. 3*2^2 + 7*2 + 5
   std::cout << "Product evaluated at x = " << x << ": " << result_prod << std::endl; // e.g. 15*2^3 + 22*2^2 + 13*2 + 4
 
-	Eigen::VectorXd c(3); c << 4, 5, -2;     // 4 + 5x - 2x^2
+  Eigen::VectorXd c(3);
+  c << 4, 5, -2; // 4 + 5x - 2x^2
 
   auto test = POLYNOMIAL(x ^ 2); // X^2
 	kinDS::Polynomial p3 = kinDS::Polynomial([&](kinDS::Var x) { return (kinDS::Polynomial{ (10 * (x ^ 4) + 4 * (x ^ 2) + 2) }); });
