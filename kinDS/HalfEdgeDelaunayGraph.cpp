@@ -2,20 +2,19 @@
 #include "../Logger.hpp"
 
 using namespace kinDS;
-uint64_t HalfEdgeDelaunayGraph::edge_key(int a, int b)
-{
-    return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
-}
 
 void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 {
     logger.log(INFO, "Building half-edge mesh from triangle index buffer of size %zu", index_buffer.size());
     assert(index_buffer.size() % 3 == 0 && "Input must be a triangle index buffer.");
-
-    half_edges.clear();
-    faces.clear();
-
     const int num_tris = index_buffer.size() / 3;
+
+    // note that the following reserves are off by one compared to Euler's formula because there is an implicit vertex at infinity that is not counted in the vertex count
+    half_edges.clear();
+    half_edges.reserve(6 * (vertex_count - 1)); // Reserve space for half-edges, at most 6 * (V - 1) half-edges in a triangulation
+
+    faces.clear();
+    faces.reserve(2 * (vertex_count - 1)); // Reserve space for faces, at most 2 * (V - 1) faces in a triangulation
     faces.resize(num_tris);
 
     std::vector<int> boundary_edge_map(vertex_count, -1);
@@ -149,21 +148,60 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
         }
     }
 
-    // continue with boundary edges
+    std::vector<int> incoming_edge_map(vertex_count, -1);
+
+    // at the boundary, create additional faces and half-edges that connect to a vertex at infinity
     for (size_t u = 0; u < vertex_count; ++u)
     {
         int boundary_edge_index = boundary_edge_map[u];
         if (boundary_edge_index != -1)
         {
             HalfEdge& he = half_edges[boundary_edge_index];
-            // we need the twin to get the destination vertex
-            HalfEdge& twin_he = half_edges[boundary_edge_index ^ 1]; // twin is the next half-edge in the list
+            size_t v = destination(boundary_edge_index); // situated between he and next_he
+            size_t next_he_id = boundary_edge_map[v]; // next boundary half-edge
+            HalfEdge& next_he = half_edges[next_he_id];
+            // create new pair of half-edges that connect to a vertex at infinity
+            HalfEdge he_infinity;
+            he_infinity.origin = v; // origin is the current vertex
+            he_infinity.face = -1; // -1 means boundary, assign proper id later
+            he.next = half_edges.size(); // link the current half-edge to the new one
 
-            he.next = boundary_edge_map[twin_he.origin]; // link to the next boundary half-edge
-            if (he.next == -1)
-            {
-                logger.log(WARNING, "Boundary edge for vertex %zu is not linked to another boundary edge.", u);
-            }
+            HalfEdge he_infinity_twin;
+            he_infinity_twin.origin = -1; // vertex at infinity
+            he_infinity_twin.face = -1; // -1 means boundary, assign proper id later
+            he_infinity_twin.next = next_he_id;
+
+            half_edges.push_back(he_infinity);
+            // store the incoming edge from infinity so we can later find it
+            incoming_edge_map[v] = half_edges.size();
+            half_edges.push_back(he_infinity_twin);
+        }
+    }
+
+    // need another run to create faces and link the half-edges that meet at infinity
+    for (size_t u = 0; u < vertex_count; ++u)
+    {
+        int incoming_edge_index = boundary_edge_map[u];
+        if (incoming_edge_index != -1)
+        {
+            HalfEdge& incoming = half_edges[incoming_edge_index];
+            HalfEdge& boundary = half_edges[incoming.next];
+            assert(incoming.next == boundary_edge_map[u]);
+            HalfEdge& outgoing = half_edges[boundary.next];
+
+            outgoing.next = incoming_edge_index; // link the outgoing half-edge to the incoming one
+
+            // create new face for the boundary edge
+            Triangle new_face;
+            new_face.half_edges[0] = incoming_edge_index; // first half-edge is the incoming one
+            new_face.half_edges[1] = incoming.next; // second half-edge is the boundary half-edge
+            new_face.half_edges[2] = boundary.next; // third half-edge is the outgoing one
+
+            incoming.face = faces.size(); // assign the new face index to the incoming half-edge
+            boundary.face = faces.size(); // assign the new face index to the boundary half-edge
+            outgoing.face = faces.size(); // assign the new face index to the outgoing half-edge
+
+            faces.push_back(new_face); // add the new face to the list
         }
     }
 
@@ -248,7 +286,7 @@ void HalfEdgeDelaunayGraph::print_debug() const
     std::cout << "\nFaces:\n";
     for (size_t i = 0; i < faces.size(); ++i)
     {
-        const Face& f = faces[i];
+        const Triangle& f = faces[i];
         std::cout << "  [" << i << "] half_edge = " << f.half_edges[0] << "\n";
 
         // Walk the face's boundary

@@ -2,6 +2,7 @@
 #include "CubicHermiteSpline.hpp"
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "Polynomial.hpp"
+#include <queue>
 
 namespace kinDS
 {
@@ -56,9 +57,46 @@ private:
         return (ax * by) + (bx * cy) + (cx * ay) - (ay * bx) - (by * cx) - (cy * ax);
     }
 
-    void computeStep(double t)
+    static Point<2> circumcenter(const Point<2>& a, const Point<2>& b, const Point<2>& c)
     {
+        // Calculate the circumcenter of the triangle formed by points a, b, c
+        double D = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+        double Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
+        double Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
+        return { Ux, Uy };
+    }
 
+    /*static Trajectory<2> circumcenter(const Trajectory<2>& a, const Trajectory<2>& b, const Trajectory<2>& c)
+    {
+        // Calculate the circumcenter of the triangle formed by points a, b, c
+        Polynomial D = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+        Polynomial Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
+        Polynomial Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
+        return { Ux, Uy };
+    }*/
+
+    class Event
+    {
+    public:
+        double time; // Time of the event
+        size_t half_edge_id; // Half-edge index associated with the event
+        Event(double t, size_t he_id)
+            : time(t)
+            , half_edge_id(he_id)
+        {
+        }
+        bool operator<(const Event& other) const
+        {
+            return time > other.time; // For priority queue, we want the earliest event first
+        }
+    };
+
+    typedef std::priority_queue<Event> EventQueue;
+
+    EventQueue precomputeStep(double t)
+    {
+        // TODO: Make sure it works where no change of sign occurs in the polynomial, i.e., roots that do not lead to a change in the triangulation.
+        EventQueue events; // Store events as pairs of (time, half-edge index)
         // Obtain all quadrilaterals, only even indices are considered to avoid duplicates from twin edges
         for (size_t i = 0; i < graph.get_half_edges().size(); i += 2)
         {
@@ -97,9 +135,10 @@ private:
                 // print roots:
                 for (const auto& root : zeros)
                 {
-                    if (root >= 0 && root <= 1)
+                    if (root >= 0 && root < 1)
                     { // Check if the root is within the valid range
                         std::cout << "Root found in triangle (" << a << ", " << b << ", " << c << ") at t = " << root + t << std::endl;
+                        events.emplace(root, he_id); // Store the event with the time and half-edge index
                     }
                 }
             }
@@ -131,12 +170,29 @@ private:
                 // print roots:
                 for (const auto& root : zeros)
                 {
-                    if (root >= 0 && root <= 1)
+                    if (root >= 0 && root < 1)
                     { // Check if the root is within the valid range
                         std::cout << "Root found in quadrilateral (" << a << ", " << b << ", " << c << ", " << d << ") at t = " << root + t << std::endl;
+                        events.emplace(root, he_id); // Store the event with the time and half-edge index
                     }
                 }
             }
+        }
+
+        return events;
+    }
+
+    void handleEvents(EventQueue& events)
+    {
+        while (!events.empty())
+        {
+            auto event = events.top();
+            events.pop();
+            // Process the event at the given time
+            std::cout << "Processing event at time: " << event.time << " for half-edge ID: " << event.half_edge_id << std::endl;
+
+            // flip if not on boundary
+            graph.flipEdge(event.half_edge_id);
         }
     }
 
@@ -157,7 +213,7 @@ public:
 
         graph.print_debug(); // Print the graph after flipping the edge
 
-        computeStep(0.0);
+        auto events = precomputeStep(0.0);
     }
     // Other methods to manipulate and query the triangulation can be added here.
 };

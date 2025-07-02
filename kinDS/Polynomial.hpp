@@ -221,9 +221,9 @@ public:
         return Polynomial(coeffs * scalar);
     }
 
-    // allow multiplication with a scalar after a term
+    // allow multiplication with a scalar before a term
     template<typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
-    friend Polynomial operator*(const Polynomial& poly, T scalar)
+    friend Polynomial operator*(T scalar, const Polynomial& poly)
     {
         return Polynomial(poly.coeffs * scalar);
     }

@@ -18,18 +18,25 @@ public:
         // twin = index ^ 1
     };
 
-    struct Face
+    struct Triangle
     {
         std::array<size_t, 3> half_edges;
     };
 
 private:
     size_t vertex_count = 0; // Number of vertices in the triangulation
-    std::vector<Face> faces;
+    std::vector<Triangle> faces;
     std::vector<HalfEdge> half_edges; // List of half-edges in the triangulation
 
+    /**
+     * @brief Build the data structure from an index buffer of triangles.
+     *
+     * Constructs the half-edge data structure from a list of triangle indices. Construction is done in O(n) time.
+     * Twin edges are stored implicitly by storing them next to each other. The twin index can be computed as `index ^ 1`.
+     *
+     * @param index_buffer index buffer of triangles, size must be multiple of 3 to be valid and each index must be in range [0, vertex_count).
+     */
     void build(const std::vector<size_t>& index_buffer);
-    static uint64_t edge_key(int a, int b); // encodes directed edge (a->b)
 
 public:
     HalfEdgeDelaunayGraph() = default;
@@ -75,6 +82,6 @@ public:
 
     // getters
     const std::vector<HalfEdge>& get_half_edges() const { return half_edges; }
-    const std::vector<Face>& get_faces() const { return faces; }
+    const std::vector<Triangle>& get_faces() const { return faces; }
 };
 }
