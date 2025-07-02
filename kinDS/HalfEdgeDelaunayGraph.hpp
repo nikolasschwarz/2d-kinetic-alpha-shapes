@@ -80,7 +80,8 @@ public:
 
     bool is_on_boundary(size_t he_id) const
     {
-        return is_outside_boundary(he_id) || is_outside_boundary(he_id ^ 1);
+        // XOR this as one half-edge will be inside and the other one outside
+        return is_outside_boundary(he_id) != is_outside_boundary(he_id ^ 1);
     }
     inline size_t destination(size_t he_id) const
     {

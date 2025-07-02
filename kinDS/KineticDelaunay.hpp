@@ -100,20 +100,36 @@ private:
         // Obtain all quadrilaterals, only even indices are considered to avoid duplicates from twin edges
         for (size_t i = 0; i < graph.get_half_edges().size(); i += 2)
         {
+            // skip anything entirely outside
+
             size_t he_id = i;
-            if (graph.is_on_boundary(i))
+            if (graph.is_on_boundary(i) || graph.is_outside_boundary(i))
             {
                 // boundary edges must be treated separately using ccw
 
                 // need to get the inner half-edge so we have access to the triangle
+                // in case both are outside, this swap does not matter, so we just let it happen
                 if (graph.is_outside_boundary(he_id))
                 {
                     he_id = i ^ 1; // use the twin half-edge if the current one is on the boundary
                 }
 
-                int a = graph.get_half_edges()[he_id].origin; // First vertex
-                int b = graph.destination(he_id); // Second vertex
-                int c = graph.triangle_opposite_vertex(he_id); // Third vertex
+                // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter it out
+                int indices[4];
+                indices[0] = graph.get_half_edges()[he_id].origin; // First vertex
+                indices[1] = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
+                indices[2] = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
+                indices[3] = graph.triangle_opposite_vertex(he_id); // Fourth vertex
+
+                std::vector<int> filtered_indices;
+
+                std::copy_if(indices, indices + 4, std::back_inserter(filtered_indices),
+                    [this](int index)
+                    { return index != -1; });
+
+                int& a = filtered_indices[0]; // First vertex
+                int& b = filtered_indices[1]; // Second vertex
+                int& c = filtered_indices[2]; // Third vertex
 
                 // print the triangle vertices:
                 std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
