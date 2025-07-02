@@ -121,16 +121,16 @@ namespace kinDS
       return result;
     }
 
-    Eigen::VectorXd realRoots() const {
+    std::vector<double> realRoots() const {
       Eigen::PolynomialSolver<double, Eigen::Dynamic> solver;
       solver.compute(coeffs);
       const Eigen::VectorXcd& complex_roots = solver.roots();
 
-      Eigen::VectorXd real_roots;
+      std::vector<double> real_roots;
       for (auto& root : complex_roots) {
         if (root.imag() == 0)
         {
-          real_roots << root.real();
+          real_roots.emplace_back(root.real());
         }
       }
 
@@ -196,20 +196,28 @@ namespace kinDS
       return result;
     }*/
     
+    std::string to_string() const {
+      std::string result;
 
-    void print() const {
       for (int i = coeffs.size() - 1; i >= 0; --i)
+      {
         if (coeffs[i] != 0)
         {
-          std::cout << (i != coeffs.size() - 1 && coeffs[i] > 0 ? "+" : "")
-            << coeffs[i];
+          result += (i != coeffs.size() - 1 && coeffs[i] > 0 ? "+" : "")
+            + std::to_string(coeffs[i]);
 
           if (i > 1)
-            std::cout << "x^" << i << " ";
+            result += "x^" + std::to_string(i) + " ";
           else if (i == 1)
-            std::cout << "x ";
+            result +=  "x ";
         }
-      std::cout << "\n";
+      }
+
+      return result.empty() ? "0" : result; // If all coefficients are zero, return "0"
+    }
+
+    void print(std::ostream& stringstream = std::cout) const {
+      stringstream << to_string() << "\n";
     }
   };
 
@@ -217,6 +225,10 @@ namespace kinDS
   Polynomial operator+(const CoefficientTerm& term1, const CoefficientTerm& term2);
 
   Polynomial operator-(const CoefficientTerm& term1, const CoefficientTerm& term2);
+
+  inline std::ostream& operator<<(std::ostream& os, const Polynomial& p) {
+    return os << p.to_string();
+  }
 
 #define POLYNOMIAL(expr) kinDS::Polynomial([&](kinDS::Var x) { return (kinDS::Polynomial{(expr)}); })
 } // namespace kinDS

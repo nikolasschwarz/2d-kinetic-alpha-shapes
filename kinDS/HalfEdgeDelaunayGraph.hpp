@@ -6,7 +6,7 @@
 
 namespace kinDS {
   // A graph that can represent the delaunay triangulation such that edges are explicitly stored and can be flipped in its quadrilateral.
-  class DelaunayGraph {
+  class HalfEdgeDelaunayGraph {
   public:
 
     struct HalfEdge {
@@ -29,24 +29,8 @@ namespace kinDS {
     void build(const std::vector<size_t>& index_buffer);
     static uint64_t edge_key(int a, int b); // encodes directed edge (a->b)
 
-    const std::vector<HalfEdge>& get_half_edges() const { return half_edges; }
-    const std::vector<Face>& get_faces() const { return faces; }
-
-    // utils
-    inline size_t destination(size_t he_id) const {
-      return half_edges[he_id ^ 1].origin;
-    }
-
-    size_t triangle_opposite_vertex(size_t he_id) const {
-      // Returns the vertex opposite to the half-edge in its triangle
-      size_t next_he_id = half_edges[he_id].next;
-      next_he_id = half_edges[next_he_id].next;
-      return half_edges[next_he_id].origin;
-    }
-
-
   public:
-    DelaunayGraph() = default;
+    HalfEdgeDelaunayGraph() = default;
 
     void init(const std::vector<CubicHermiteSpline<2>>& splines) {
       vertex_count = splines.size();
@@ -67,6 +51,25 @@ namespace kinDS {
     void flipEdge(size_t he_id);
     // Other methods to manipulate and query the triangulation can be added here.
     void print_debug() const;
+
+    // utils
+    bool is_on_boundary(size_t he_id) const {
+      return half_edges[he_id].face == -1 || half_edges[he_id ^ 1].face == -1;
+    }
+    inline size_t destination(size_t he_id) const {
+      return half_edges[he_id ^ 1].origin;
+    }
+    size_t triangle_opposite_vertex(size_t he_id) const {
+      // Returns the vertex opposite to the half-edge in its triangle
+      // TODO: catch boundary edge
+      size_t next_he_id = half_edges[he_id].next;
+      next_he_id = half_edges[next_he_id].next;
+      return half_edges[next_he_id].origin;
+    }
+
+    // getters
+    const std::vector<HalfEdge>& get_half_edges() const { return half_edges; }
+    const std::vector<Face>& get_faces() const { return faces; }
 
   };
 }

@@ -74,9 +74,7 @@ void voronoi_example()
 		{
 			std::cout << "Failed to save the file." << std::endl;
 		}
-
 	}
-
 }
 
 void eigen_example()

@@ -2,11 +2,11 @@
 #include "../Logger.hpp"
 
 using namespace kinDS;
-uint64_t DelaunayGraph::edge_key(int a, int b) {
+uint64_t HalfEdgeDelaunayGraph::edge_key(int a, int b) {
   return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
 }
 
-void DelaunayGraph::build(const std::vector<size_t>& index_buffer) {
+void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer) {
   logger.log(INFO, "Building half-edge mesh from triangle index buffer of size %zu", index_buffer.size());
   assert(index_buffer.size() % 3 == 0 && "Input must be a triangle index buffer.");
 
@@ -154,7 +154,7 @@ void DelaunayGraph::build(const std::vector<size_t>& index_buffer) {
 
 #include <iostream>
 
-void kinDS::DelaunayGraph::flipEdge(size_t he_id)
+void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
 {
   if (he_id >= half_edges.size()) {
     logger.log(ERROR, "Invalid half-edge ID for flipping: %zu", he_id);
@@ -213,7 +213,7 @@ void kinDS::DelaunayGraph::flipEdge(size_t he_id)
   logger.log(INFO, "Flipped edge %zu between vertices %d and %d.", he_id, u, v);
 }
 
-void DelaunayGraph::print_debug() const {
+void HalfEdgeDelaunayGraph::print_debug() const {
   std::cout << "Half-Edges:\n";
   for (size_t i = 0; i < half_edges.size(); ++i) {
     const HalfEdge& he = half_edges[i];
