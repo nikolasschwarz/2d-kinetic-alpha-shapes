@@ -13,9 +13,9 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
     half_edges.clear();
     half_edges.reserve(6 * (vertex_count - 1)); // Reserve space for half-edges, at most 6 * (V - 1) half-edges in a triangulation
 
-    faces.clear();
-    faces.reserve(2 * (vertex_count - 1)); // Reserve space for faces, at most 2 * (V - 1) faces in a triangulation
-    faces.resize(num_tris);
+    triangles.clear();
+    triangles.reserve(2 * (vertex_count - 1)); // Reserve space for faces, at most 2 * (V - 1) faces in a triangulation
+    triangles.resize(num_tris);
 
     std::vector<int> boundary_edge_map(vertex_count, -1);
 
@@ -92,7 +92,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 
             if (he_up.face != -1)
             {
-                faces[he_up.face].half_edges[up_it->j] = half_edges.size(); // store the half-edge index in the face
+                triangles[he_up.face].half_edges[up_it->j] = half_edges.size(); // store the half-edge index in the face
             }
             else
             {
@@ -109,7 +109,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 
             if (he_down.face != -1)
             {
-                faces[he_down.face].half_edges[down_it->j] = half_edges.size(); // store the half-edge index in the face
+                triangles[he_down.face].half_edges[down_it->j] = half_edges.size(); // store the half-edge index in the face
             }
             else
             {
@@ -131,7 +131,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 
     // now link the half-edges together
     // triangle edges first
-    for (auto& face : faces)
+    for (auto& face : triangles)
     {
         for (size_t j = 0; j < 3; ++j)
         {
@@ -143,7 +143,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
             }
             else
             {
-                logger.log(WARNING, "Face %zu has a missing half-edge at index %zu.", &face - &faces[0], j);
+                logger.log(WARNING, "Face %zu has a missing half-edge at index %zu.", &face - &triangles[0], j);
             }
         }
     }
@@ -197,15 +197,15 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
             new_face.half_edges[1] = incoming.next; // second half-edge is the boundary half-edge
             new_face.half_edges[2] = boundary.next; // third half-edge is the outgoing one
 
-            incoming.face = faces.size(); // assign the new face index to the incoming half-edge
-            boundary.face = faces.size(); // assign the new face index to the boundary half-edge
-            outgoing.face = faces.size(); // assign the new face index to the outgoing half-edge
+            incoming.face = triangles.size(); // assign the new face index to the incoming half-edge
+            boundary.face = triangles.size(); // assign the new face index to the boundary half-edge
+            outgoing.face = triangles.size(); // assign the new face index to the outgoing half-edge
 
-            faces.push_back(new_face); // add the new face to the list
+            triangles.push_back(new_face); // add the new face to the list
         }
     }
 
-    logger.log(INFO, "Half-edge mesh built with %zu half-edges and %zu faces.", half_edges.size(), faces.size());
+    logger.log(INFO, "Half-edge mesh built with %zu half-edges and %zu faces.", half_edges.size(), triangles.size());
 }
 
 #include <iostream>
@@ -230,14 +230,14 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
         return;
     }
 
-    int& he_next_id = he.next;
-    int& twin_next_id = twin.next;
+    int he_next_id = he.next;
+    int twin_next_id = twin.next;
 
     size_t he_last_id = half_edges[he_next_id].next; // The next half-edge in the triangle
     size_t twin_last_id = half_edges[twin_next_id].next; // The next half-edge in the twin triangle
 
-    size_t he_opposite_id = triangle_opposite_vertex(he_id);
-    size_t twin_opposite_id = triangle_opposite_vertex(he_id ^ 1);
+    size_t he_opposite_id = triangleOppositeVertex(he_id);
+    size_t twin_opposite_id = triangleOppositeVertex(he_id ^ 1);
 
     // Update the half-edges to flip the edge
     he.origin = twin_opposite_id;
@@ -260,18 +260,18 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
     std::swap(half_edges[he_next_id].face, half_edges[twin_next_id].face);
 
     // Update the half-edge indices in the faces
-    faces[he.face].half_edges[0] = he_id; // Update the first half-edge of the face
-    faces[he.face].half_edges[1] = he_last_id; // Update the second half-edge of the face
-    faces[he.face].half_edges[2] = twin_next_id; // Update the third half-edge of the face
+    triangles[he.face].half_edges[0] = he_id; // Update the first half-edge of the face
+    triangles[he.face].half_edges[1] = he_last_id; // Update the second half-edge of the face
+    triangles[he.face].half_edges[2] = twin_next_id; // Update the third half-edge of the face
 
-    faces[twin.face].half_edges[0] = he_id ^ 1; // Update the first half-edge of the twin face
-    faces[twin.face].half_edges[1] = twin_last_id; // Update the second half-edge of the twin face
-    faces[twin.face].half_edges[2] = he_next_id; // Update the third half-edge of the twin face
+    triangles[twin.face].half_edges[0] = he_id ^ 1; // Update the first half-edge of the twin face
+    triangles[twin.face].half_edges[1] = twin_last_id; // Update the second half-edge of the twin face
+    triangles[twin.face].half_edges[2] = he_next_id; // Update the third half-edge of the twin face
 
     logger.log(INFO, "Flipped edge %zu between vertices %d and %d.", he_id, u, v);
 }
 
-void HalfEdgeDelaunayGraph::print_debug() const
+void HalfEdgeDelaunayGraph::printDebug() const
 {
     std::cout << "Half-Edges:\n";
     for (size_t i = 0; i < half_edges.size(); ++i)
@@ -284,9 +284,9 @@ void HalfEdgeDelaunayGraph::print_debug() const
     }
 
     std::cout << "\nFaces:\n";
-    for (size_t i = 0; i < faces.size(); ++i)
+    for (size_t i = 0; i < triangles.size(); ++i)
     {
-        const Triangle& f = faces[i];
+        const Triangle& f = triangles[i];
         std::cout << "  [" << i << "] half_edge = " << f.half_edges[0] << "\n";
 
         // Walk the face's boundary

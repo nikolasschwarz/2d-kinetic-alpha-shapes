@@ -79,47 +79,29 @@ private:
         return (ax * by) + (bx * cy) + (cx * ay) - (ay * bx) - (by * cx) - (cy * ax);
     }
 
-    static Point<2> circumcenter(const Point<2>& a, const Point<2>& b, const Point<2>& c)
-    {
-        // Calculate the circumcenter of the triangle formed by points a, b, c
-        double D = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
-        double Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
-        double Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
-        return { Ux, Uy };
-    }
-
-    /*static Trajectory<2> circumcenter(const Trajectory<2>& a, const Trajectory<2>& b, const Trajectory<2>& c)
-    {
-        // Calculate the circumcenter of the triangle formed by points a, b, c
-        Polynomial D = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
-        Polynomial Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
-        Polynomial Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
-        return { Ux, Uy };
-    }*/
-
     void computeEvents(double t, size_t quad_id)
     {
         const size_t section = static_cast<size_t>(t);
         const float fraction = t - section;
 
         size_t he_id = quad_id * 2;
-        if (graph.is_on_boundary(he_id) || graph.is_outside_boundary(he_id))
+        if (graph.isOnBoundary(he_id) || graph.isOutsideBoundary(he_id))
         {
             // boundary edges must be treated separately using ccw
 
             // need to get the inner half-edge so we have access to the triangle
             // in case both are outside, this swap does not matter, so we just let it happen
-            if (graph.is_outside_boundary(he_id))
+            if (graph.isOutsideBoundary(he_id))
             {
                 he_id = he_id ^ 1; // use the twin half-edge if the current one is on the boundary
             }
 
             // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter it out
             int indices[4];
-            indices[0] = graph.get_half_edges()[he_id].origin; // First vertex
-            indices[1] = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
-            indices[2] = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
-            indices[3] = graph.triangle_opposite_vertex(he_id); // Fourth vertex
+            indices[0] = graph.getHalfEdges()[he_id].origin; // First vertex
+            indices[1] = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
+            indices[2] = graph.getHalfEdges()[he_id ^ 1].origin; // Third vertex
+            indices[3] = graph.triangleOppositeVertex(he_id); // Fourth vertex
 
             std::vector<int> filtered_indices;
 
@@ -160,10 +142,10 @@ private:
         }
         else
         {
-            int a = graph.get_half_edges()[he_id].origin; // First vertex
-            int b = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
-            int c = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
-            int d = graph.triangle_opposite_vertex(he_id); // Fourth vertex
+            int a = graph.getHalfEdges()[he_id].origin; // First vertex
+            int b = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
+            int c = graph.getHalfEdges()[he_id ^ 1].origin; // Third vertex
+            int d = graph.triangleOppositeVertex(he_id); // Fourth vertex
 
             // print the quadrilateral vertices:
             std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
@@ -198,7 +180,7 @@ private:
     void precomputeStep(double t)
     {
         // TODO: Make sure it works where no change of sign occurs in the polynomial, i.e., roots that do not lead to a change in the triangulation.
-        size_t quad_count = graph.get_half_edges().size() / 2;
+        size_t quad_count = graph.getHalfEdges().size() / 2;
         for (size_t i = 0; i < quad_count; i++)
         {
             computeEvents(t, i);
@@ -208,7 +190,7 @@ private:
     void handleEvents()
     {
 
-        std::vector<double> quadrilateral_last_updated(graph.get_half_edges().size() / 2, 0.0);
+        std::vector<double> quadrilateral_last_updated(graph.getHalfEdges().size() / 2, 0.0);
         while (!events.empty())
         {
             auto event = events.top();
@@ -227,11 +209,11 @@ private:
             graph.flipEdge(event.half_edge_id);
 
             // After flipping the edge, we need to recompute the events for all surrounding half-edges
-            size_t next1 = graph.get_half_edges()[event.half_edge_id].next;
-            size_t next2 = graph.get_half_edges()[next1].next;
+            size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
+            size_t next2 = graph.getHalfEdges()[next1].next;
 
-            size_t twin_next1 = graph.get_half_edges()[event.half_edge_id ^ 1].next;
-            size_t twin_next2 = graph.get_half_edges()[twin_next1].next;
+            size_t twin_next1 = graph.getHalfEdges()[event.half_edge_id ^ 1].next;
+            size_t twin_next2 = graph.getHalfEdges()[twin_next1].next;
 
             computeEvents(event.time, next1 / 2);
             quadrilateral_last_updated[next1 / 2] = event.time; // Update the last updated time for the quadrilateral
@@ -268,7 +250,7 @@ public:
     {
         graph.init(splines);
         sections_advanced = 0; // Reset the section counter
-        graph.print_debug();
+        graph.printDebug();
 
         return graph;
     }

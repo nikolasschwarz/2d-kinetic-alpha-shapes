@@ -1,6 +1,8 @@
 // C++ program to implement a basic logging system.
 // Source: https://www.geeksforgeeks.org/cpp/logging-system-in-cpp/
 
+#pragma once
+
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
