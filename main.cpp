@@ -34,19 +34,6 @@ void voronoi_example()
 
         Document doc("voronoi.svg", layout);
 
-        /*Polygon test_cell(Stroke(1, Color::Red));
-
-        test_cell << svg::Point(0, 0) << svg::Point(layout.dimensions.width, 0)
-                << svg::Point(layout.dimensions.width, layout.dimensions.height)
-                << svg::Point(0, layout.dimensions.height);
-        doc << test_cell;
-
-        doc << Circle(svg::Point(0, 0), 20, Fill(Color::Red), Stroke(1, Color::Black));
-        doc << Circle(
-                svg::Point(layout.dimensions.width - 10, layout.dimensions.height - 10), 20,
-                Fill(Color::Red), Stroke(1, Color::Black));
-                */
-
         // output lines of the Voronoi diagram
         while (vdg.getNext(x1, y1, x2, y2))
         {
@@ -79,14 +66,6 @@ void voronoi_example()
 
 void eigen_example()
 {
-
-    /*using Eigen::MatrixXd;
-    MatrixXd m(2, 2);
-    m(0, 0) = 3;
-    m(1, 0) = 2.5;
-    m(0, 1) = -1;
-    m(1, 1) = m(1, 0) + m(0, 1);
-    std::cout << m << std::endl;*/
     Eigen::VectorXd a(3);
     a << 1, 2, 3; // 1 + 2x + 3x^2
     Eigen::VectorXd b(2);
@@ -101,8 +80,8 @@ void eigen_example()
 
     // Test evaluation
     double x = 2.0;
-    double result_sum = sum.eval(x);
-    double result_prod = prod.eval(x);
+    double result_sum = sum(x);
+    double result_prod = prod(x);
     std::cout << "Sum evaluated at x = " << x << ": " << result_sum << std::endl; // e.g. 3*2^2 + 7*2 + 5
     std::cout << "Product evaluated at x = " << x << ": " << result_prod << std::endl; // e.g. 15*2^3 + 22*2^2 + 13*2 + 4
 

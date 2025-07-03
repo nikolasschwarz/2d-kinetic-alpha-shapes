@@ -137,7 +137,7 @@ public:
         coeffs = poly.coeffs;
     }
 
-    double eval(double x) const
+    double operator()(double x) const
     {
         double result = 0;
         for (int i = coeffs.size() - 1; i >= 0; --i)
