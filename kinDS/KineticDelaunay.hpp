@@ -19,8 +19,29 @@ namespace kinDS
 class KineticDelaunay
 {
 private:
+    class Event
+    {
+    public:
+        double time; // Time of the event
+        size_t half_edge_id; // Half-edge index associated with the event
+        double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
+        Event(double t, size_t he_id, double creation_time = 0.0)
+            : time(t)
+            , half_edge_id(he_id)
+            , creation_time(creation_time)
+        {
+        }
+        bool operator<(const Event& other) const
+        {
+            return time > other.time; // For priority queue, we want the earliest event first
+        }
+    };
+
+    typedef std::priority_queue<Event> EventQueue;
+
     std::vector<CubicHermiteSpline<2>> splines;
     HalfEdgeDelaunayGraph graph;
+    EventQueue events;
 
     /* Compare to Leonidas Guibas and Jorge Stolfi. 1985. Primitives for the manipulation of general subdivisions and the computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74–123. https://doi.org/10.1145/282918.282923
      */
@@ -39,7 +60,7 @@ private:
         const Polynomial cp = fx * fx + fy * fy;
 
         // log all just computed polynomials with their variable names
-        logger.log(DEBUG, "dx: %s", dx.to_string().c_str());
+        /* logger.log(DEBUG, "dx: %s", dx.to_string().c_str());
         logger.log(DEBUG, "dy: %s", dy.to_string().c_str());
         logger.log(DEBUG, "ex: %s", ex.to_string().c_str());
         logger.log(DEBUG, "ey: %s", ey.to_string().c_str());
@@ -47,7 +68,7 @@ private:
         logger.log(DEBUG, "fy: %s", fy.to_string().c_str());
         logger.log(DEBUG, "ap: %s", ap.to_string().c_str());
         logger.log(DEBUG, "bp: %s", bp.to_string().c_str());
-        logger.log(DEBUG, "cp: %s", cp.to_string().c_str());
+        logger.log(DEBUG, "cp: %s", cp.to_string().c_str());*/
 
         return (dx * (ey * cp - bp * fy) - dy * (ex * cp - bp * fx) + ap * (ex * fy - ey * fx));
     }
@@ -75,140 +96,153 @@ private:
         return { Ux, Uy };
     }*/
 
-    class Event
+    void computeEvents(double t, size_t quad_id)
     {
-    public:
-        double time; // Time of the event
-        size_t half_edge_id; // Half-edge index associated with the event
-        Event(double t, size_t he_id)
-            : time(t)
-            , half_edge_id(he_id)
-        {
-        }
-        bool operator<(const Event& other) const
-        {
-            return time > other.time; // For priority queue, we want the earliest event first
-        }
-    };
+        const size_t section = static_cast<size_t>(t);
+        const float fraction = t - section;
 
-    typedef std::priority_queue<Event> EventQueue;
-
-    EventQueue precomputeStep(double t)
-    {
-        // TODO: Make sure it works where no change of sign occurs in the polynomial, i.e., roots that do not lead to a change in the triangulation.
-        EventQueue events; // Store events as pairs of (time, half-edge index)
-        // Obtain all quadrilaterals, only even indices are considered to avoid duplicates from twin edges
-        for (size_t i = 0; i < graph.get_half_edges().size(); i += 2)
+        size_t he_id = quad_id * 2;
+        if (graph.is_on_boundary(he_id) || graph.is_outside_boundary(he_id))
         {
-            // skip anything entirely outside
+            // boundary edges must be treated separately using ccw
 
-            size_t he_id = i;
-            if (graph.is_on_boundary(i) || graph.is_outside_boundary(i))
+            // need to get the inner half-edge so we have access to the triangle
+            // in case both are outside, this swap does not matter, so we just let it happen
+            if (graph.is_outside_boundary(he_id))
             {
-                // boundary edges must be treated separately using ccw
-
-                // need to get the inner half-edge so we have access to the triangle
-                // in case both are outside, this swap does not matter, so we just let it happen
-                if (graph.is_outside_boundary(he_id))
-                {
-                    he_id = i ^ 1; // use the twin half-edge if the current one is on the boundary
-                }
-
-                // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter it out
-                int indices[4];
-                indices[0] = graph.get_half_edges()[he_id].origin; // First vertex
-                indices[1] = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
-                indices[2] = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
-                indices[3] = graph.triangle_opposite_vertex(he_id); // Fourth vertex
-
-                std::vector<int> filtered_indices;
-
-                std::copy_if(indices, indices + 4, std::back_inserter(filtered_indices),
-                    [this](int index)
-                    { return index != -1; });
-
-                int& a = filtered_indices[0]; // First vertex
-                int& b = filtered_indices[1]; // Second vertex
-                int& c = filtered_indices[2]; // Third vertex
-
-                // print the triangle vertices:
-                std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
-
-                Polynomial ax = splines[a].getPiecePolynomial(static_cast<size_t>(t))[0];
-                Polynomial ay = splines[a].getPiecePolynomial(static_cast<size_t>(t))[1];
-                Polynomial bx = splines[b].getPiecePolynomial(static_cast<size_t>(t))[0];
-                Polynomial by = splines[b].getPiecePolynomial(static_cast<size_t>(t))[1];
-                Polynomial cx = splines[c].getPiecePolynomial(static_cast<size_t>(t))[0];
-                Polynomial cy = splines[c].getPiecePolynomial(static_cast<size_t>(t))[1];
-
-                Polynomial ccw_func = ccw(ax, ay, bx, by, cx, cy);
-
-                // print polynomial:
-                ccw_func.print();
-
-                auto zeros = ccw_func.realRoots();
-
-                // print roots:
-                for (const auto& root : zeros)
-                {
-                    if (root >= 0 && root < 1)
-                    { // Check if the root is within the valid range
-                        std::cout << "Root found in triangle (" << a << ", " << b << ", " << c << ") at t = " << root + t << std::endl;
-                        events.emplace(root, he_id); // Store the event with the time and half-edge index
-                    }
-                }
+                he_id = he_id ^ 1; // use the twin half-edge if the current one is on the boundary
             }
-            else
+
+            // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter it out
+            int indices[4];
+            indices[0] = graph.get_half_edges()[he_id].origin; // First vertex
+            indices[1] = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
+            indices[2] = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
+            indices[3] = graph.triangle_opposite_vertex(he_id); // Fourth vertex
+
+            std::vector<int> filtered_indices;
+
+            std::copy_if(indices, indices + 4, std::back_inserter(filtered_indices),
+                [this](int index)
+                { return index != -1; });
+
+            int& a = filtered_indices[0]; // First vertex
+            int& b = filtered_indices[1]; // Second vertex
+            int& c = filtered_indices[2]; // Third vertex
+
+            // print the triangle vertices:
+            // std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
+
+            Polynomial ax = splines[a].getPiecePolynomial(section)[0];
+            Polynomial ay = splines[a].getPiecePolynomial(section)[1];
+            Polynomial bx = splines[b].getPiecePolynomial(section)[0];
+            Polynomial by = splines[b].getPiecePolynomial(section)[1];
+            Polynomial cx = splines[c].getPiecePolynomial(section)[0];
+            Polynomial cy = splines[c].getPiecePolynomial(section)[1];
+
+            Polynomial ccw_func = ccw(ax, ay, bx, by, cx, cy);
+
+            // print polynomial:
+            // ccw_func.print();
+
+            auto zeros = ccw_func.realRoots();
+
+            // print roots:
+            for (const auto& root : zeros)
             {
-                int a = graph.get_half_edges()[he_id].origin; // First vertex
-                int b = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
-                int c = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
-                int d = graph.triangle_opposite_vertex(he_id); // Fourth vertex
-
-                // print the quadrilateral vertices:
-                std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
-
-                Polynomial ax = splines[a].getPiecePolynomial(static_cast<size_t>(t))[0];
-                Polynomial ay = splines[a].getPiecePolynomial(static_cast<size_t>(t))[1];
-                Polynomial bx = splines[b].getPiecePolynomial(static_cast<size_t>(t))[0];
-                Polynomial by = splines[b].getPiecePolynomial(static_cast<size_t>(t))[1];
-                Polynomial cx = splines[c].getPiecePolynomial(static_cast<size_t>(t))[0];
-                Polynomial cy = splines[c].getPiecePolynomial(static_cast<size_t>(t))[1];
-                Polynomial dx = splines[d].getPiecePolynomial(static_cast<size_t>(t))[0];
-                Polynomial dy = splines[d].getPiecePolynomial(static_cast<size_t>(t))[1];
-
-                Polynomial in_circle = inCircle(ax, ay, bx, by, cx, cy, dx, dy);
-                // print polynomial:
-                in_circle.print();
-
-                auto zeros = in_circle.realRoots();
-
-                // print roots:
-                for (const auto& root : zeros)
-                {
-                    if (root >= 0 && root < 1)
-                    { // Check if the root is within the valid range
-                        std::cout << "Root found in quadrilateral (" << a << ", " << b << ", " << c << ", " << d << ") at t = " << root + t << std::endl;
-                        events.emplace(root, he_id); // Store the event with the time and half-edge index
-                    }
+                if (root > fraction && root <= 1)
+                { // Check if the root is within the valid range
+                    std::cout << "Root found in triangle (" << a << ", " << b << ", " << c << ") at t = " << root + section << std::endl;
+                    events.emplace(root, he_id, fraction); // Store the event with the time and half-edge index
                 }
             }
         }
+        else
+        {
+            int a = graph.get_half_edges()[he_id].origin; // First vertex
+            int b = graph.triangle_opposite_vertex(he_id ^ 1); // Second vertex
+            int c = graph.get_half_edges()[he_id ^ 1].origin; // Third vertex
+            int d = graph.triangle_opposite_vertex(he_id); // Fourth vertex
 
-        return events;
+            // print the quadrilateral vertices:
+            std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
+
+            Polynomial ax = splines[a].getPiecePolynomial(section)[0];
+            Polynomial ay = splines[a].getPiecePolynomial(section)[1];
+            Polynomial bx = splines[b].getPiecePolynomial(section)[0];
+            Polynomial by = splines[b].getPiecePolynomial(section)[1];
+            Polynomial cx = splines[c].getPiecePolynomial(section)[0];
+            Polynomial cy = splines[c].getPiecePolynomial(section)[1];
+            Polynomial dx = splines[d].getPiecePolynomial(section)[0];
+            Polynomial dy = splines[d].getPiecePolynomial(section)[1];
+
+            Polynomial in_circle = inCircle(ax, ay, bx, by, cx, cy, dx, dy);
+            // print polynomial:
+            // in_circle.print();
+
+            auto zeros = in_circle.realRoots();
+
+            // print roots:
+            for (const auto& root : zeros)
+            {
+                if (root > fraction && root <= 1)
+                { // Check if the root is within the valid range
+                    std::cout << "Root found in quadrilateral (" << a << ", " << b << ", " << c << ", " << d << ") at t = " << root + section << std::endl;
+                    events.emplace(root, he_id, fraction); // Store the event with the time and half-edge index
+                }
+            }
+        }
     }
 
-    void handleEvents(EventQueue& events)
+    void precomputeStep(double t)
     {
+        // TODO: Make sure it works where no change of sign occurs in the polynomial, i.e., roots that do not lead to a change in the triangulation.
+        size_t quad_count = graph.get_half_edges().size() / 2;
+        for (size_t i = 0; i < quad_count; i++)
+        {
+            computeEvents(t, i);
+        }
+    }
+
+    void handleEvents()
+    {
+
+        std::vector<double> quadrilateral_last_updated(graph.get_half_edges().size() / 2, 0.0);
         while (!events.empty())
         {
             auto event = events.top();
             events.pop();
+
+            // Check if the event is still valid
+            if (event.creation_time < quadrilateral_last_updated[event.half_edge_id / 2])
+            {
+                // This event is outdated, skip it
+                continue;
+            }
+
             // Process the event at the given time
             std::cout << "Processing event at time: " << event.time << " for half-edge ID: " << event.half_edge_id << std::endl;
 
-            // flip if not on boundary
             graph.flipEdge(event.half_edge_id);
+
+            // After flipping the edge, we need to recompute the events for all surrounding half-edges
+            size_t next1 = graph.get_half_edges()[event.half_edge_id].next;
+            size_t next2 = graph.get_half_edges()[next1].next;
+
+            size_t twin_next1 = graph.get_half_edges()[event.half_edge_id ^ 1].next;
+            size_t twin_next2 = graph.get_half_edges()[twin_next1].next;
+
+            computeEvents(event.time, next1 / 2);
+            quadrilateral_last_updated[next1 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+            computeEvents(event.time, next2 / 2);
+            quadrilateral_last_updated[next2 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+            computeEvents(event.time, twin_next1 / 2);
+            quadrilateral_last_updated[twin_next1 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+            computeEvents(event.time, twin_next2 / 2);
+            quadrilateral_last_updated[twin_next2 / 2] = event.time; // Update the last updated time for the quadrilateral
         }
     }
 
@@ -225,11 +259,17 @@ public:
 
         graph.print_debug();
 
-        graph.flipEdge(6); // Example of flipping the first edge
+        // graph.flipEdge(6); // Example of flipping the first edge
 
         graph.print_debug(); // Print the graph after flipping the edge
 
-        auto events = precomputeStep(0.0);
+        size_t section_count = splines[0].pointCount() - 1; // Assuming all splines have the same number of points
+
+        for (size_t i = 0; i < section_count; ++i)
+        {
+            precomputeStep(static_cast<double>(i));
+            handleEvents();
+        }
     }
     // Other methods to manipulate and query the triangulation can be added here.
 };

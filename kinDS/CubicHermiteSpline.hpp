@@ -99,5 +99,10 @@ public:
         }
         return result;
     }
+
+    size_t pointCount() const
+    {
+        return points.size();
+    }
 };
 } // namespace kinDS
