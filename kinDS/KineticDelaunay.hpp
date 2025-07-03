@@ -42,6 +42,7 @@ private:
     std::vector<CubicHermiteSpline<2>> splines;
     HalfEdgeDelaunayGraph graph;
     EventQueue events;
+    size_t sections_advanced = 0; // Counter for the number of sections advanced
 
     /* Compare to Leonidas Guibas and Jorge Stolfi. 1985. Primitives for the manipulation of general subdivisions and the computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74–123. https://doi.org/10.1145/282918.282923
      */
@@ -251,24 +252,59 @@ public:
         : splines(splines)
     {
     }
+
+    std::vector<Point<2>> getPointsAt(double t) const
+    {
+        std::vector<Point<2>> points;
+        points.reserve(splines.size());
+        for (const auto& spline : splines)
+        {
+            points.push_back(spline.evaluate(t)); // Get the first point of each spline
+        }
+        return points;
+    }
+
+    const HalfEdgeDelaunayGraph& init()
+    {
+        graph.init(splines);
+        sections_advanced = 0; // Reset the section counter
+        graph.print_debug();
+
+        return graph;
+    }
+
+    const HalfEdgeDelaunayGraph& advanceOneSection()
+    {
+        size_t section_count = splines[0].pointCount() - 1;
+        assert(sections_advanced < section_count); // Ensure we do not exceed the number of sections
+
+        precomputeStep(static_cast<double>(sections_advanced));
+        handleEvents();
+        sections_advanced++;
+
+        return graph;
+    }
+
+    const HalfEdgeDelaunayGraph& getGraph() const
+    {
+        return graph;
+    }
+
+    size_t getSectionCount() const
+    {
+        return splines[0].pointCount() - 1; // Assuming all splines have the same number of points
+    }
+
     // Computes the Delaunay triangulation of the given splines
     void compute()
     {
 
-        graph.init(splines);
-
-        graph.print_debug();
-
-        // graph.flipEdge(6); // Example of flipping the first edge
-
-        graph.print_debug(); // Print the graph after flipping the edge
-
-        size_t section_count = splines[0].pointCount() - 1; // Assuming all splines have the same number of points
+        size_t section_count = getSectionCount(); // Assuming all splines have the same number of points
 
         for (size_t i = 0; i < section_count; ++i)
         {
-            precomputeStep(static_cast<double>(i));
-            handleEvents();
+            assert(i == sections_advanced); // Ensure we are advancing one section at a time
+            advanceOneSection();
         }
     }
     // Other methods to manipulate and query the triangulation can be added here.

@@ -175,7 +175,18 @@ void kinetic_delaunay_example()
         spline_C,
         spline_D });
 
-    kinetic_delaunay.compute();
+    kinetic_delaunay.init();
+    auto points = kinetic_delaunay.getPointsAt(0.0);
+    HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg");
+
+    size_t section_count = kinetic_delaunay.getSectionCount();
+
+    for (size_t i = 0; i < section_count; ++i)
+    {
+        kinetic_delaunay.advanceOneSection();
+        points = kinetic_delaunay.getPointsAt(static_cast<double>(i + 1));
+        HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test_" + std::to_string(i + 1) + ".svg");
+    }
 }
 
 void avl_tree_example()

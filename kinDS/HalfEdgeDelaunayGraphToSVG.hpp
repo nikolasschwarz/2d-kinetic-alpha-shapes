@@ -44,25 +44,24 @@ public:
         svg::Dimensions dimensions(width, height);
 
         svg::Document doc(filename, svg::Layout(dimensions, svg::Layout::TopLeft, 1.0, svg::Point(-min_x, -min_y)));
-        // Draw vertices
-        for (auto& point : points)
-        {
-            doc << svg::Circle(svg::Point(point[0], point[1]), 3, svg::Fill(svg::Color::Red), svg::Stroke(1, svg::Color::Black));
-        }
         // Draw edges
         for (size_t he_id = 0; he_id < graph.get_half_edges().size(); he_id += 2)
         {
             const HalfEdgeDelaunayGraph::HalfEdge& he = graph.get_half_edges()[he_id];
-            if (he.next != -1 && he.face != -1) // Only draw edges that are not boundary edges
+            if (he.origin != -1 && graph.get_half_edges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
             {
                 Point<2> start = points[graph.get_half_edges()[he_id].origin];
                 Point<2> end = points[graph.get_half_edges()[he_id ^ 1].origin];
                 doc << svg::Line(svg::Point(start[0], start[1]), svg::Point(end[0], end[1]),
-                    svg::Stroke(0.5, svg::Color::Black));
+                    svg::Stroke(0.01, svg::Color::Black));
             }
+        }
+
+        // Draw vertices
+        for (auto& point : points)
+        {
+            doc << svg::Circle(svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
         }
         doc.save();
     }
-
-private:
 };
