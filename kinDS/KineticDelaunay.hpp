@@ -187,7 +187,7 @@ private:
         }
     }
 
-    void handleEvents()
+    void handleEvents(std::function<void(Event& e, bool before)> event_handler = [](Event& e, bool before) { })
     {
 
         std::vector<double> quadrilateral_last_updated(graph.getHalfEdges().size() / 2, 0.0);
@@ -205,6 +205,9 @@ private:
 
             // Process the event at the given time
             std::cout << "Processing event at time: " << event.time << " for half-edge ID: " << event.half_edge_id << std::endl;
+
+            // Call the event handler if provided
+            event_handler(event, true);
 
             graph.flipEdge(event.half_edge_id);
 
@@ -226,6 +229,8 @@ private:
 
             computeEvents(event.time, twin_next2 / 2);
             quadrilateral_last_updated[twin_next2 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+            event_handler(event, false); // Call the event handler after processing the event
         }
     }
 
@@ -255,7 +260,7 @@ public:
         return graph;
     }
 
-    const HalfEdgeDelaunayGraph& advanceOneSection()
+    const HalfEdgeDelaunayGraph& advanceOneSection(std::function<void(Event& e, bool before)> event_handler = [](Event& e, bool before) { })
     {
         size_t section_count = splines[0].pointCount() - 1;
         assert(sections_advanced < section_count); // Ensure we do not exceed the number of sections
@@ -278,7 +283,7 @@ public:
     }
 
     // Computes the Delaunay triangulation of the given splines
-    void compute()
+    void compute(std::function<void(Event& e, bool before)> event_handler = [](Event& e, bool before) { })
     {
 
         size_t section_count = getSectionCount(); // Assuming all splines have the same number of points
@@ -286,9 +291,8 @@ public:
         for (size_t i = 0; i < section_count; ++i)
         {
             assert(i == sections_advanced); // Ensure we are advancing one section at a time
-            advanceOneSection();
+            advanceOneSection(event_handler);
         }
     }
-    // Other methods to manipulate and query the triangulation can be added here.
 };
 } // namespace kinDS

@@ -4,7 +4,8 @@
 #include "../simple_svg.hpp"
 #include "HalfEdgeDelaunayGraph.hpp"
 
-using namespace kinDS;
+namespace kinDS
+{
 
 class HalfEdgeDelaunayGraphToSVG
 {
@@ -158,3 +159,4 @@ public:
         doc.save();
     }
 };
+} // namespace kinDS
