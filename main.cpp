@@ -156,8 +156,8 @@ void kinetic_delaunay_example()
 
     kinetic_delaunay.init();
     auto points = kinetic_delaunay.getPointsAt(0.0);
-    HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
-    HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi.svg", 0.1);
+    kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
+    kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi.svg", 0.1);
 
     size_t section_count = kinetic_delaunay.getSectionCount();
 
@@ -166,8 +166,8 @@ void kinetic_delaunay_example()
         kinetic_delaunay.advanceOneSection();
         kinetic_delaunay.getGraph().printDebug();
         points = kinetic_delaunay.getPointsAt(static_cast<double>(i + 1));
-        HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test_" + std::to_string(i + 1) + ".svg", 0.1);
-        HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi_" + std::to_string(i + 1) + ".svg", 0.1);
+        kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test_" + std::to_string(i + 1) + ".svg", 0.1);
+        kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi_" + std::to_string(i + 1) + ".svg", 0.1);
     }
 }
 

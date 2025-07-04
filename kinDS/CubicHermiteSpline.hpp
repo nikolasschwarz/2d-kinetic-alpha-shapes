@@ -142,7 +142,7 @@ public:
         Point<dim> result {};
         for (size_t i = 0; i < dim; ++i)
         {
-            result[i] = piece[i].eval(localT);
+            result[i] = piece[i](localT);
         }
         return result;
     }
