@@ -1,58 +1,9 @@
 #pragma once
+#include "Point.hpp"
 #include "Polynomial.hpp"
 
 namespace kinDS
 {
-
-template<size_t dim>
-using Point = std::array<double, dim>;
-
-// operators for Point
-template<size_t dim>
-Point<dim> operator+(const Point<dim>& a, const Point<dim>& b)
-{
-    Point<dim> result {};
-    for (size_t i = 0; i < dim; ++i)
-    {
-        result[i] = a[i] + b[i];
-    }
-    return result;
-}
-
-template<size_t dim>
-Point<dim> operator-(const Point<dim>& a, const Point<dim>& b)
-{
-    Point<dim> result {};
-    for (size_t i = 0; i < dim; ++i)
-    {
-        result[i] = a[i] - b[i];
-    }
-    return result;
-}
-
-template<size_t dim>
-Point<dim> operator*(const Point<dim>& a, double scalar)
-{
-    Point<dim> result {};
-    for (size_t i = 0; i < dim; ++i)
-    {
-        result[i] = a[i] * scalar;
-    }
-    return result;
-}
-
-// allow multiplication with a scalar before a point
-
-template<size_t dim>
-Point<dim> operator*(double scalar, const Point<dim>& a)
-{
-    Point<dim> result {};
-    for (size_t i = 0; i < dim; ++i)
-    {
-        result[i] = a[i] * scalar;
-    }
-    return result;
-}
 
 template<size_t dim>
 using Trajectory = std::array<Polynomial, dim>;
@@ -61,95 +12,95 @@ template<size_t dim>
 class CubicHermiteSpline
 {
 
-private:
-    std::vector<Point<dim>> points; // Control points
+ private:
+  std::vector<Point<dim>> points; // Control points
 
-    static Trajectory<dim> createPiece(const Point<dim>& P0, const Point<dim>& M0, const Point<dim>& P1, const Point<dim>& M1)
-    {
-        Trajectory<dim> result {};
-        // Create the cubic Hermite spline polynomials for each dimension
-        for (int i = 0; i < dim; ++i)
-        {
-
-            result[i] = POLYNOMIAL(
-                (2 * (x ^ 3) - 3 * (x ^ 2) + 1) * P0[i]
-                + ((x ^ 3) - 2 * (x ^ 2) + x) * M0[i]
-                + ((-2 * (x ^ 3)) + 3 * (x ^ 2)) * P1[i]
-                + ((x ^ 3) - (x ^ 2)) * M1[i]);
-        }
-        return result;
-    }
-
-public:
-    CubicHermiteSpline() = default;
-    CubicHermiteSpline(const std::vector<Point<dim>>& controlPoints)
-        : points(controlPoints)
-    {
-    }
-
-    void addControlPoint(const Point<dim>& point)
-    {
-        points.push_back(point);
-    }
-
-    void addControlPoints(const std::vector<Point<dim>>& newPoints)
-    {
-        points.insert(points.end(), newPoints.begin(), newPoints.end());
-    }
-
-    Trajectory<dim> getPiecePolynomial(size_t index) const
-    {
-        if (index >= points.size() - 1)
-        {
-            throw std::out_of_range("Index out of range for piece polynomial.");
-        }
-        const auto& P0 = points[index];
-        const auto& P1 = points[index + 1];
-
-        // Calculate tangents (M0, M1) as needed
-        Point<dim> M0, M1;
-        for (size_t i = 0; i < dim; ++i)
-        {
-            M0[i] = (index > 0) ? (P1[i] - points[index - 1][i]) / 2.0 : (P1[i] - P0[i]) / 2.0;
-            M1[i] = (index < points.size() - 2) ? (points[index + 2][i] - P0[i]) / 2.0 : (P1[i] - P0[i]) / 2.0;
-        }
-
-        return createPiece(P0, M0, P1, M1);
-    }
-
-    Point<dim> evaluate(double t) const
+  static Trajectory<dim> createPiece(const Point<dim>& P0, const Point<dim>& M0, const Point<dim>& P1, const Point<dim>& M1)
+  {
+    Trajectory<dim> result {};
+    // Create the cubic Hermite spline polynomials for each dimension
+    for (int i = 0; i < dim; ++i)
     {
 
-        if (points.empty())
-        {
-            throw std::runtime_error("No control points defined.");
-        }
-
-        // catch t out of bounds
-        if (t < 0 || t > points.size() - 1)
-        {
-            throw std::out_of_range("Parameter t is out of bounds for the spline.");
-        }
-
-        size_t segment = static_cast<size_t>(t);
-        if (segment == points.size() - 1)
-        {
-            segment = points.size() - 2; // Clamp to the last segment
-        }
-
-        double localT = t - segment;
-        auto piece = getPiecePolynomial(segment);
-        Point<dim> result {};
-        for (size_t i = 0; i < dim; ++i)
-        {
-            result[i] = piece[i](localT);
-        }
-        return result;
+      result[i] = POLYNOMIAL(
+        (2 * (x ^ 3) - 3 * (x ^ 2) + 1) * P0[i]
+        + ((x ^ 3) - 2 * (x ^ 2) + x) * M0[i]
+        + ((-2 * (x ^ 3)) + 3 * (x ^ 2)) * P1[i]
+        + ((x ^ 3) - (x ^ 2)) * M1[i]);
     }
+    return result;
+  }
 
-    size_t pointCount() const
+ public:
+  CubicHermiteSpline() = default;
+  CubicHermiteSpline(const std::vector<Point<dim>>& controlPoints)
+    : points(controlPoints)
+  {
+  }
+
+  void addControlPoint(const Point<dim>& point)
+  {
+    points.push_back(point);
+  }
+
+  void addControlPoints(const std::vector<Point<dim>>& newPoints)
+  {
+    points.insert(points.end(), newPoints.begin(), newPoints.end());
+  }
+
+  Trajectory<dim> getPiecePolynomial(size_t index) const
+  {
+    if (index >= points.size() - 1)
     {
-        return points.size();
+      throw std::out_of_range("Index out of range for piece polynomial.");
     }
+    const auto& P0 = points[index];
+    const auto& P1 = points[index + 1];
+
+    // Calculate tangents (M0, M1) as needed
+    Point<dim> M0, M1;
+    for (size_t i = 0; i < dim; ++i)
+    {
+      M0[i] = (index > 0) ? (P1[i] - points[index - 1][i]) / 2.0 : (P1[i] - P0[i]) / 2.0;
+      M1[i] = (index < points.size() - 2) ? (points[index + 2][i] - P0[i]) / 2.0 : (P1[i] - P0[i]) / 2.0;
+    }
+
+    return createPiece(P0, M0, P1, M1);
+  }
+
+  Point<dim> evaluate(double t) const
+  {
+
+    if (points.empty())
+    {
+      throw std::runtime_error("No control points defined.");
+    }
+
+    // catch t out of bounds
+    if (t < 0 || t > points.size() - 1)
+    {
+      throw std::out_of_range("Parameter t is out of bounds for the spline.");
+    }
+
+    size_t segment = static_cast<size_t>(t);
+    if (segment == points.size() - 1)
+    {
+      segment = points.size() - 2; // Clamp to the last segment
+    }
+
+    double localT = t - segment;
+    auto piece = getPiecePolynomial(segment);
+    Point<dim> result {};
+    for (size_t i = 0; i < dim; ++i)
+    {
+      result[i] = piece[i](localT);
+    }
+    return result;
+  }
+
+  size_t pointCount() const
+  {
+    return points.size();
+  }
 };
 } // namespace kinDS

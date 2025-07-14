@@ -1,24 +1,24 @@
 pragma once
 
-class VoronoiGraph
+  class VoronoiGraph
 {
-public:
-	VoronoiGraph();
-	~VoronoiGraph();
+ public:
+  VoronoiGraph();
+  ~VoronoiGraph();
 
-	struct Site
-	{
+  struct Site
+  {
     float x, y; // Coordinates of the site
     int index; // Site number
     std::vector<size_t> edges; // Indices of edges connected to this site
-	};
+  };
 
   struct VoronoiVertex
   {
     float x, y; // Coordinates of the vertex
     bool is_infinite; // Flag to indicate if the vertex is infinite
     int index; // Vertex number
-    //std::vector<size_t> edges; // Indices of edges connected to this vertex
+    // std::vector<size_t> edges; // Indices of edges connected to this vertex
   };
 
   struct HalfEdge
@@ -34,8 +34,7 @@ public:
   std::vector<VoronoiVertex> vertices;
   std::vector<HalfEdge> halfEdges;
 
-private:
-
+ private:
 };
 
 VoronoiGraph::VoronoiGraph()
