@@ -77,15 +77,6 @@ class HalfEdgeDelaunayGraph
     return { Ux, Uy };
   }
 
-  /*static Trajectory<2> circumcenter(const Trajectory<2>& a, const Trajectory<2>& b, const Trajectory<2>& c)
-  {
-      // Calculate the circumcenter of the triangle formed by points a, b, c
-      Polynomial D = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
-      Polynomial Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
-      Polynomial Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
-      return { Ux, Uy };
-  }*/
-
   std::vector<std::pair<Point<2>, bool>> computeCircumcenters(const std::vector<Point<2>>& vertices) const
   {
     // give either the position of the circumcenter or a direction vector if the triangle is infinite, the boolean indicates if the circumcenter is infinite
@@ -171,8 +162,21 @@ class HalfEdgeDelaunayGraph
     return half_edges[next_he_id].origin;
   }
 
+  std::array<int, 3> adjacentTriangleVertices(size_t he_id) const
+  {
+    // Returns the vertices of the triangle that the half-edge belongs to
+    std::array<int, 3> vertices;
+    for (size_t i = 0; i < 3; i++)
+    {
+      vertices[i] = half_edges[he_id].origin;
+      he_id = half_edges[he_id].next;
+    }
+    return vertices;
+  }
+
   // getters
   const std::vector<HalfEdge>& getHalfEdges() const { return half_edges; }
   const std::vector<Triangle>& getFaces() const { return triangles; }
+  size_t getVertexCount() const { return vertex_count; }
 };
 }

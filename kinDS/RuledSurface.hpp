@@ -39,8 +39,16 @@ RationalFunction operator/(const Polynomial& num, const Polynomial& den)
 class VoronoiSiteTrajectory : public std::array<RationalFunction, 2>
 {
  public:
-  double start_time; // Start time of the trajectory
-  double end_time; // End time of the trajectory
+  // double start_time; // Start time of the trajectory
+  // double end_time; // End time of the trajectory
+  static VoronoiSiteTrajectory circumcenterTrajectory(const Trajectory<2>& a, const Trajectory<2>& b, const Trajectory<2>& c)
+  {
+    // Calculate the circumcenter of the triangle formed by points a, b, c
+    Polynomial D = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+    RationalFunction Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
+    RationalFunction Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
+    return VoronoiSiteTrajectory { Ux, Uy };
+  }
 };
 
 class RuledSurface
@@ -50,36 +58,32 @@ class RuledSurface
   std::vector<double> left_bounds; // bounds for the left trajectory
   std::vector<VoronoiSiteTrajectory> right_trajectory; // piecewise trajectory for the right side of the ruled surface
   std::vector<double> right_bounds; // bounds for the right trajectory
-  double lower_bound; // Lower bound of the ruled surface
-  double upper_bound; // Upper bound of the ruled surface
+  bool is_initialized = false; // Flag to check if the ruled surface is initialized
 
  public:
-  RuledSurface(const std::vector<VoronoiSiteTrajectory>& left, const std::vector<double>& left_bounds,
-    const std::vector<VoronoiSiteTrajectory>& right, const std::vector<double>& right_bounds,
-    double lower, double upper)
-    : left_trajectory(left)
-    , left_bounds(left_bounds)
-    , right_trajectory(right)
-    , right_bounds(right_bounds)
-    , lower_bound(lower)
-    , upper_bound(upper)
+  RuledSurface()
+    : is_initialized(false)
   {
-    if (left_trajectory.size() != left_bounds.size() - 1)
-    {
-      throw std::invalid_argument("Left trajectory and bounds size mismatch.");
-    }
-
-    if (right_trajectory.size() != right_bounds.size() - 1)
-    {
-      throw std::invalid_argument("Right trajectory and bounds size mismatch.");
-    }
   }
 
-  double getLowerBound() const { return lower_bound; }
-  double getUpperBound() const { return upper_bound; }
+  double lowerBound() const
+  {
+    assert(is_initialized && "Ruled surface must be initialized before accessing bounds.");
+    return left_bounds[0];
+  }
+  double upperBound() const
+  {
+    assert(is_initialized && "Ruled surface must be initialized before accessing bounds.");
+    if (left_bounds.back() != right_bounds.back())
+    {
+      logger.log(WARNING, "Left and right bounds of the ruled surface do not match. Returning the maximum of both.");
+    }
+
+    return std::max(left_bounds.back(), right_bounds.back());
+  }
   std::pair<Point<2>, Point<2>> operator()(double t)
   {
-    if (t < lower_bound || t > upper_bound)
+    if (t < lowerBound() || t > left_bounds.back() || t > right_bounds.back())
     {
       throw std::out_of_range("Time t is out of bounds of the ruled surface.");
     }
@@ -91,6 +95,45 @@ class RuledSurface
       Point<2> { left_trajectory[left_index][0](t), left_trajectory[left_index][1](t) },
       Point<2> { right_trajectory[right_index][0](t), right_trajectory[right_index][1](t) }
     };
+  }
+
+  void insertLeft(const VoronoiSiteTrajectory& traj, double lb)
+  {
+    assert(is_initialized && "Ruled surface must be initialized before inserting trajectories.");
+    assert(lb > left_bounds.back() && "Lower bound must be greater than the last left bound.");
+    left_trajectory.push_back(traj);
+    left_bounds.push_back(lb);
+  }
+
+  void insertRight(const VoronoiSiteTrajectory& traj, double lb)
+  {
+    assert(is_initialized && "Ruled surface must be initialized before inserting trajectories.");
+    assert(lb > right_bounds.back() && "Lower bound must be greater than the last right bound.");
+    right_trajectory.push_back(traj);
+    right_bounds.push_back(lb);
+  }
+
+  void init(const VoronoiSiteTrajectory& left_traj, VoronoiSiteTrajectory& right_traj, double lb)
+  {
+    left_trajectory.push_back(left_traj);
+    right_trajectory.push_back(right_traj);
+    left_bounds.push_back(lb);
+    right_bounds.push_back(lb);
+    is_initialized = true;
+  }
+
+  void finalize(double upper_bound)
+  {
+    assert(!isFinalized() && "Ruled surface is already finalized.");
+    assert(is_initialized && "Ruled surface must be initialized before finalizing.");
+    left_bounds.push_back(upper_bound);
+    right_bounds.push_back(upper_bound);
+  }
+
+  bool isFinalized() const
+  {
+    // Note: The other conditions (right side and initialization) are implied
+    return left_bounds.size() == left_trajectory.size() + 1;
   }
 };
 } // namespace kinDS

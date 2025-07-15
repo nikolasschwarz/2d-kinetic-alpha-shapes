@@ -150,13 +150,18 @@ void kinetic_delaunay_example()
   kinDS::CubicHermiteSpline<2> spline_C(trajectory_C);
   kinDS::CubicHermiteSpline<2> spline_D(trajectory_D);
 
-  kinDS::KineticDelaunay kinetic_delaunay({ spline_A,
+  std::vector<kinDS::CubicHermiteSpline<2>> splines = {
+    spline_A,
     spline_B,
     spline_C,
-    spline_D });
+    spline_D
+  };
 
-  kinDS::MeshBuilder mesh_builder({ 0, 1, 2, 3 });
+  kinDS::KineticDelaunay kinetic_delaunay(splines);
+
   kinetic_delaunay.init();
+  kinDS::MeshBuilder mesh_builder(kinetic_delaunay, splines);
+  mesh_builder.init();
   auto points = kinetic_delaunay.getPointsAt(0.0);
   kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
   kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi.svg", 0.1);
