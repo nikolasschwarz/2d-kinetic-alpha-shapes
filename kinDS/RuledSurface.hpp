@@ -36,7 +36,7 @@ RationalFunction operator/(const Polynomial& num, const Polynomial& den)
   return RationalFunction { num, den };
 }
 
-class VoronoiSiteTrajectory : public std::vector<std::array<RationalFunction, 2>>
+class VoronoiSiteTrajectory : public std::array<RationalFunction, 2>
 {
  public:
   double start_time; // Start time of the trajectory
@@ -48,14 +48,14 @@ class RuledSurface
  private:
   std::vector<VoronoiSiteTrajectory> left_trajectory; // piecewise trajectory for the left side of the ruled surface
   std::vector<double> left_bounds; // bounds for the left trajectory
-  VoronoiSiteTrajectory right_trajectory; // piecewise trajectory for the right side of the ruled surface
-  VoronoiSiteTrajectory right_bounds; // bounds for the right trajectory
+  std::vector<VoronoiSiteTrajectory> right_trajectory; // piecewise trajectory for the right side of the ruled surface
+  std::vector<double> right_bounds; // bounds for the right trajectory
   double lower_bound; // Lower bound of the ruled surface
   double upper_bound; // Upper bound of the ruled surface
 
  public:
   RuledSurface(const std::vector<VoronoiSiteTrajectory>& left, const std::vector<double>& left_bounds,
-    const VoronoiSiteTrajectory& right, const VoronoiSiteTrajectory& right_bounds,
+    const std::vector<VoronoiSiteTrajectory>& right, const std::vector<double>& right_bounds,
     double lower, double upper)
     : left_trajectory(left)
     , left_bounds(left_bounds)
@@ -87,10 +87,10 @@ class RuledSurface
     int left_index = std::lower_bound(left_bounds.begin(), left_bounds.end(), t) - left_bounds.begin() - 1;
     int right_index = std::lower_bound(right_bounds.begin(), right_bounds.end(), t) - right_bounds.begin() - 1;
 
-    /*return {
-      { left_trajectory[left_index](t), left_trajectory[left_index].getSiteTrajectory()[1](t) },
-      { right_trajectory.getSiteTrajectory()[0](t), right_trajectory.getSiteTrajectory()[1](t) }
-    };*/
+    return {
+      Point<2> { left_trajectory[left_index][0](t), left_trajectory[left_index][1](t) },
+      Point<2> { right_trajectory[right_index][0](t), right_trajectory[right_index][1](t) }
+    };
   }
 };
 } // namespace kinDS
