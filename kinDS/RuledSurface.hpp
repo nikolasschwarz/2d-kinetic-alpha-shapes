@@ -25,6 +25,58 @@ class RationalFunction
   {
     return numerator(x) / denominator(x);
   }
+
+  void reduce()
+  {
+    Polynomial::reduce(numerator, denominator);
+  }
+
+  // Now implement operators
+  RationalFunction operator+(const RationalFunction& other) const
+  {
+    Polynomial num = numerator * other.denominator + other.numerator * denominator;
+    Polynomial den = denominator * other.denominator;
+    RationalFunction result(num, den);
+    result.reduce();
+    return result;
+  }
+
+  RationalFunction operator-() const
+  {
+    return RationalFunction(-numerator, denominator);
+  }
+
+  RationalFunction operator-(const RationalFunction& other) const
+  {
+    return *this + (-other); // Use the addition operator for subtraction
+  }
+
+  RationalFunction operator*(const RationalFunction& other) const
+  {
+    Polynomial num = numerator * other.numerator;
+    Polynomial den = denominator * other.denominator;
+    RationalFunction result(num, den);
+    result.reduce();
+    return result;
+  }
+
+  RationalFunction inv() const
+  {
+    // Invert the rational function by swapping numerator and denominator
+    if (numerator.degree() == -1)
+    {
+      throw std::invalid_argument("Cannot invert a rational function with zero numerator.");
+    }
+
+    RationalFunction result(denominator, numerator);
+    return result;
+  }
+
+  RationalFunction operator/(const RationalFunction& other) const
+  {
+    return *this * other.inv(); // Use the multiplication operator for division
+  }
+
   // Get the numerator polynomial
   const Polynomial& getNumerator() const { return numerator; }
   // Get the denominator polynomial
@@ -134,6 +186,65 @@ class RuledSurface
   {
     // Note: The other conditions (right side and initialization) are implied
     return left_bounds.size() == left_trajectory.size() + 1;
+  }
+
+  void extractTriangles(std::vector<Point<3>>& vertices, std::vector<size_t>& indices) const
+  {
+    assert(isFinalized() && "Ruled surface must be finalized before extracting triangles.");
+
+    double t = left_bounds[0]; // Start time for the triangles
+    double upper_bound = upperBound();
+
+    // Initialize the first vertices
+    size_t left_vertex_index = vertices.size();
+    vertices.emplace_back(Point<3> { left_trajectory[0][0](t), left_trajectory[0][1](t), t });
+    size_t right_vertex_index = vertices.size();
+    vertices.emplace_back(Point<3> { right_trajectory[0][0](t), right_trajectory[0][1](t), t });
+
+    size_t left_index = 1;
+    size_t right_index = 1;
+
+    while (t <= upper_bound)
+    {
+      if (left_bounds[left_index] < right_bounds[right_index])
+      {
+        left_index++;
+        if (left_index >= left_trajectory.size())
+        {
+          break; // No more left trajectories to process
+        }
+
+        // Insert new vertices for the left trajectory
+        t = left_bounds[left_index];
+        vertices.emplace_back(Point<3> { left_trajectory[left_index][0](t), left_trajectory[left_index][1](t), t });
+
+        // Create triangles with the previous right vertex
+        indices.push_back(left_vertex_index);
+        indices.push_back(right_vertex_index);
+
+        left_vertex_index = vertices.size() - 1;
+        indices.push_back(left_vertex_index); // New left vertex index
+      }
+      else
+      {
+        right_index++;
+        if (right_index >= right_trajectory.size())
+        {
+          break; // No more right trajectories to process
+        }
+
+        // Insert new vertices for the right trajectory
+        t = right_bounds[right_index];
+        vertices.emplace_back(Point<3> { right_trajectory[right_index][0](t), right_trajectory[right_index][1](t), t });
+
+        // Create triangles with the previous left vertex
+        indices.push_back(left_vertex_index);
+        indices.push_back(right_vertex_index);
+
+        right_vertex_index = vertices.size() - 1;
+        indices.push_back(right_vertex_index); // New right vertex index
+      }
+    }
   }
 };
 } // namespace kinDS

@@ -1,5 +1,6 @@
 #pragma once
 #include "KineticDelaunay.hpp"
+#include "Mesh.hpp"
 #include "RuledSurface.hpp"
 
 namespace kinDS
@@ -9,6 +10,19 @@ struct StrandGeometry
 {
   size_t strand_id; // Unique identifier for the strand
   std::vector<RuledSurface> ruled_surfaces; // List of ruled surfaces associated with the strand
+
+  Mesh extractMesh() const
+  {
+    std::vector<Point<3>> vertices;
+    std::vector<size_t> indices;
+
+    for (const auto& ruled_surface : ruled_surfaces)
+    {
+
+      ruled_surface.extractTriangles(vertices, indices); // Extract triangles from the ruled surface
+    }
+    return Mesh(vertices, indices); // Return the constructed mesh
+  }
 };
 
 class MeshBuilder : public KineticDelaunay::EventHandler
@@ -18,6 +32,7 @@ class MeshBuilder : public KineticDelaunay::EventHandler
   std::vector<int> edge_id_to_ruled_surface; // Maps edge IDs to the corresponding ruled surface index
   const KineticDelaunay& kin_del;
   const std::vector<CubicHermiteSpline<2>>& splines; // Reference to the splines used for the triangulation
+  bool finalized = false; // Flag to indicate if the mesh has been finalized
 
   VoronoiSiteTrajectory constructTrajectoryForHalfEdge(size_t half_edge_id) const
   {
@@ -25,14 +40,28 @@ class MeshBuilder : public KineticDelaunay::EventHandler
     auto& graph = kin_del.getGraph();
     auto triVertices = graph.adjacentTriangleVertices(half_edge_id);
 
-    // TODO: deal with infinite vertex
-    // The solution here will probably be to use the two finite vertices and shift outwards by some amount
+    int infinite_vertex = -1;
+    std::vector<Trajectory<2>> trajs;
+    for (int i = 0; i < 3; i++)
+    {
+      if (triVertices[i] == -1)
+      {
+        infinite_vertex = i;
+      }
+      else
+      {
+        trajs.push_back(splines[triVertices[i]].getPiecePolynomial(0)); // Get the trajectory for the vertex
+      }
+    }
 
-    Trajectory<2> traj0 = splines[triVertices[0]].getPiecePolynomial(0);
-    Trajectory<2> traj1 = splines[triVertices[1]].getPiecePolynomial(0);
-    Trajectory<2> traj2 = splines[triVertices[2]].getPiecePolynomial(0);
+    // No infinite vertex found, construct the circumcenter trajectory
+    if (infinite_vertex == -1)
+    {
+      return VoronoiSiteTrajectory::circumcenterTrajectory(trajs[0], trajs[1], trajs[2]);
+    }
 
-    return VoronoiSiteTrajectory::circumcenterTrajectory(traj0, traj1, traj2);
+    // Else, just let them run along the center of the edge, any offsets will be computed at mesh extraction
+    return VoronoiSiteTrajectory { (trajs[0][0] + trajs[1][0]) / 2, (trajs[0][1] + trajs[1][1]) / 2 }; // Return the trajectory for the edge opposite to the infinite vertex
   }
 
   void insertTrajectoryIntoRuledSurface(size_t half_edge_id, const VoronoiSiteTrajectory& traj, double t)
@@ -152,9 +181,29 @@ class MeshBuilder : public KineticDelaunay::EventHandler
 
       for (auto& ruled_surface : strand.ruled_surfaces)
       {
-        ruled_surface.finalize(splines[strand_id].pointCount() - 1); // Finalize the ruled surface with the upper bound of the spline
+        if (!ruled_surface.isFinalized())
+          ruled_surface.finalize(splines[strand_id].pointCount() - 1); // Finalize the ruled surface with the upper bound of the spline
       }
     }
+
+    finalized = true; // Set the finalized flag to true
+  }
+
+  std::vector<Mesh> extractMeshes(double boundary_offset, double subdivision) const
+  {
+    if (!finalized)
+    {
+      throw std::runtime_error("MeshBuilder must be finalized before extracting the mesh.");
+    }
+
+    std::vector<Mesh> meshes;
+    for (const auto& strand : strand_geometries)
+    {
+
+      meshes.push_back(strand.extractMesh()); // Add the mesh for the strand to the list of meshes
+    }
+
+    return meshes; // Return the list of extracted meshes
   }
 };
 } // namespace kinDS

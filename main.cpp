@@ -4,6 +4,7 @@
 #include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
 #include "kinDS/MeshBuilder.hpp"
+#include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "simple_svg.hpp"
 #include "voronoi/VoronoiDiagramGenerator.h"
@@ -175,6 +176,16 @@ void kinetic_delaunay_example()
     points = kinetic_delaunay.getPointsAt(static_cast<double>(i + 1));
     kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test_" + std::to_string(i + 1) + ".svg", 0.1);
     kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi_" + std::to_string(i + 1) + ".svg", 0.1);
+  }
+
+  mesh_builder.finalize();
+  auto meshes = mesh_builder.extractMeshes(0.1, 0.01);
+
+  for (size_t i = 0; i < meshes.size(); ++i)
+  {
+    std::string filename = "mesh_" + std::to_string(i) + ".obj";
+    kinDS::ObjExporter::writeMesh(meshes[i], filename);
+    std::cout << "Mesh saved to " << filename << std::endl;
   }
 }
 

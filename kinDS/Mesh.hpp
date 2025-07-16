@@ -30,6 +30,11 @@ class Mesh
     , uv_indices(std::move(uv_indices))
     , group_offsets(std::vector<size_t>(1, 0)) // Initialize with one group offset at 0
   {
+    if (this->uv_indices.empty())
+    {
+      // If no UV indices are provided, set the same length as vertex indices
+      this->uv_indices.resize(this->vertex_indices.size(), std::numeric_limits<size_t>::max());
+    }
   }
 
   ~Mesh() = default;

@@ -83,6 +83,11 @@ class Polynomial
   }
 
  public:
+  Polynomial()
+  {
+    assert(coeffs.size() == 0 && "Default constructor should not initialize coefficients.");
+  }
+
   Polynomial(const Eigen::VectorXd& c)
     : coeffs(c)
   {
@@ -133,8 +138,7 @@ class Polynomial
   Polynomial(std::function<Polynomial(const Var&)> func)
   {
     Var X;
-    Polynomial poly = func(X);
-    coeffs = poly.coeffs;
+    *this = func(X);
   }
 
   double operator()(double x) const
@@ -192,6 +196,105 @@ class Polynomial
       derived_coeffs.resize(derived_coeffs.size() - 1);
     }
     return Polynomial(derived_coeffs);
+  }
+
+  // Utility: Remove leading zeros
+  void trim()
+  {
+    size_t trimmed_size = coeffs.size();
+    while (coeffs.size() != 0 && std::abs(*(coeffs.end() - 1)) < std::numeric_limits<double>::epsilon())
+    {
+      trimmed_size--;
+    }
+
+    coeffs.resize(trimmed_size);
+  }
+
+  // Polynomial degree, will return -1 for the zero polynomial
+  int degree() const
+  {
+    size_t trimmed_size = coeffs.size();
+    while (coeffs.size() != 0 && std::abs(*(coeffs.end() - 1)) < std::numeric_limits<double>::epsilon())
+    {
+      trimmed_size--;
+    }
+
+    return (int)trimmed_size - 1;
+  }
+
+  // Polynomial division: dividend = divisor * quotient + remainder
+  static void divide(const Polynomial& dividend, const Polynomial& divisor, Polynomial& quotient, Polynomial& remainder)
+  {
+    remainder = dividend;
+    remainder.trim();
+
+    Polynomial div = divisor;
+    div.trim();
+
+    int n = remainder.degree();
+    int d = div.degree();
+
+    if (d < 0)
+    {
+      throw std::runtime_error("Division by zero polynomial");
+    }
+
+    quotient = Polynomial(Eigen::VectorXd::Zero(n - d + 1));
+
+    for (int i = n - d; i >= 0; --i)
+    {
+      double coeff = remainder.coeffs[d + i] / div.coeffs[d];
+      quotient.coeffs[i] = coeff;
+      for (int j = 0; j <= d; ++j)
+      {
+        remainder.coeffs[i + j] -= coeff * div.coeffs[j];
+      }
+    }
+
+    quotient.trim();
+    remainder.trim();
+  }
+
+  // Polynomial GCD using Euclidean algorithm
+  static Polynomial gcd(Polynomial a, Polynomial b)
+  {
+    a.trim();
+    b.trim();
+    while (b.coeffs.size() != 0)
+    {
+      Polynomial q, r;
+      divide(a, b, q, r);
+      a = b;
+      b = r;
+    }
+
+    // Normalize GCD to have leading coefficient 1
+    if (a.coeffs.size() != 0)
+    {
+      double lead = *(a.coeffs.end() - 1);
+      for (double& c : a.coeffs)
+        c /= lead;
+    }
+
+    return a;
+  }
+
+  // Reduce rational function p/q to lowest degree
+  static void reduce(Polynomial& p, Polynomial& q)
+  {
+    p.trim();
+    q.trim();
+    Polynomial g = gcd(p, q);
+    if (g.coeffs.size() == 0)
+      return; // nothing to reduce
+
+    Polynomial quotient;
+    Polynomial dummy;
+    divide(p, g, quotient, dummy);
+    p = quotient;
+
+    divide(q, g, quotient, dummy);
+    q = quotient;
   }
 
   Polynomial operator+(const Polynomial& other) const
