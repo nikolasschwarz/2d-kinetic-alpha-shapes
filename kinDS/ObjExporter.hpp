@@ -15,7 +15,7 @@ class ObjExporter
     const auto& indices = mesh.getVertexIndices();
     const auto& uv_indices = mesh.getUVIndices();
 
-    for (size_t i = 0; i < indices.size(); i += 3)
+    for (size_t i = 3 * lb; i < 3 * ub; i += 3)
     {
       file << "f "
            << (indices[i] + 1) << ((uv_indices[i] != std::numeric_limits<size_t>::max()) ? ("/" + std::to_string(uv_indices[i] + 1)) : "")
@@ -66,16 +66,16 @@ class ObjExporter
 
     for (size_t group_index = 0; group_index < group_count - 1; group_index++)
     {
-      file << "g group_" << group_index << "\n";
+      file << "o group_" << group_index << "\n";
       size_t lb = mesh.getGroupOffsets()[group_index];
       size_t ub = mesh.getGroupOffsets()[group_index + 1];
       writeFaces(file, mesh, lb, ub);
     }
 
     // Write the last group
-    file << "g group_" << (group_count - 1) << "\n";
+    file << "o group_" << (group_count - 1) << "\n";
     size_t lb = mesh.getGroupOffsets().back();
-    size_t ub = mesh.getVertexIndices().size();
+    size_t ub = mesh.getVertexIndices().size() / 3;
     writeFaces(file, mesh, lb, ub);
 
     file.close();

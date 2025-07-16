@@ -15,13 +15,17 @@ struct StrandGeometry
   {
     std::vector<Point<3>> vertices;
     std::vector<size_t> indices;
+    std::vector<size_t> group_offsets;
 
     for (const auto& ruled_surface : ruled_surfaces)
     {
-
+      group_offsets.emplace_back(indices.size() / 3); // Store the current vertex count as a group offset
       ruled_surface.extractTriangles(vertices, indices); // Extract triangles from the ruled surface
     }
-    return Mesh(vertices, indices); // Return the constructed mesh
+    Mesh result(vertices, indices); // Return the constructed mesh
+
+    result.setGroupOffsets(group_offsets); // Set the group offsets for the mesh
+    return result;
   }
 };
 

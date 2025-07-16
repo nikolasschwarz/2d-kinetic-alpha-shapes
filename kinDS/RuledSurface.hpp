@@ -197,26 +197,26 @@ class RuledSurface
 
     // Initialize the first vertices
     size_t left_vertex_index = vertices.size();
-    vertices.emplace_back(Point<3> { left_trajectory[0][0](t), left_trajectory[0][1](t), t });
+    vertices.emplace_back(Point<3> { left_trajectory[0][0](t - std::floor(t)), left_trajectory[0][1](t - std::floor(t)), t });
     size_t right_vertex_index = vertices.size();
-    vertices.emplace_back(Point<3> { right_trajectory[0][0](t), right_trajectory[0][1](t), t });
+    vertices.emplace_back(Point<3> { right_trajectory[0][0](t - std::floor(t)), right_trajectory[0][1](t - std::floor(t)), t });
 
-    size_t left_index = 1;
-    size_t right_index = 1;
+    size_t left_index = 0;
+    size_t right_index = 0;
 
     while (t <= upper_bound)
     {
       if (left_bounds[left_index] < right_bounds[right_index])
       {
-        left_index++;
         if (left_index >= left_trajectory.size())
         {
           break; // No more left trajectories to process
         }
+        left_index++;
 
         // Insert new vertices for the left trajectory
         t = left_bounds[left_index];
-        vertices.emplace_back(Point<3> { left_trajectory[left_index][0](t), left_trajectory[left_index][1](t), t });
+        vertices.emplace_back(Point<3> { left_trajectory[left_index - 1][0](t - std::floor(t)), left_trajectory[left_index - 1][1](t - std::floor(t)), t });
 
         // Create triangles with the previous right vertex
         indices.push_back(left_vertex_index);
@@ -227,15 +227,15 @@ class RuledSurface
       }
       else
       {
-        right_index++;
         if (right_index >= right_trajectory.size())
         {
           break; // No more right trajectories to process
         }
+        right_index++;
 
         // Insert new vertices for the right trajectory
         t = right_bounds[right_index];
-        vertices.emplace_back(Point<3> { right_trajectory[right_index][0](t), right_trajectory[right_index][1](t), t });
+        vertices.emplace_back(Point<3> { right_trajectory[right_index - 1][0](t - std::floor(t)), right_trajectory[right_index - 1][1](t - std::floor(t)), t });
 
         // Create triangles with the previous left vertex
         indices.push_back(left_vertex_index);

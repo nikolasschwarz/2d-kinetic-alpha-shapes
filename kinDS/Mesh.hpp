@@ -50,6 +50,11 @@ class Mesh
     group_offsets.push_back(vertex_indices.size()); // Store the current vertex index count as a new group offset
   }
 
+  void setGroupOffsets(const std::vector<size_t>& offsets)
+  {
+    group_offsets = offsets;
+  }
+
   Mesh& operator+=(const Mesh& other)
   {
     size_t old_vertices_size = vertices.size();
