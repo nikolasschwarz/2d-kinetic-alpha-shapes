@@ -216,7 +216,19 @@ class RuledSurface
 
         // Insert new vertices for the left trajectory
         t = left_bounds[left_index];
-        vertices.emplace_back(Point<3> { left_trajectory[left_index - 1][0](t - std::floor(t)), left_trajectory[left_index - 1][1](t - std::floor(t)), t });
+
+        // Last index must be treated differently because it can be at frac = 1.0 in the last trajectory piece
+        if (left_index == left_trajectory.size())
+        {
+          double frac = t - std::floor(t);
+          if (frac == 0.0)
+            frac = 1.0;
+          vertices.emplace_back(Point<3> { left_trajectory.back()[0](frac), left_trajectory.back()[1](frac), t });
+        }
+        else
+        {
+          vertices.emplace_back(Point<3> { left_trajectory[left_index][0](t - std::floor(t)), left_trajectory[left_index][1](t - std::floor(t)), t });
+        }
 
         // Create triangles with the previous right vertex
         indices.push_back(left_vertex_index);
@@ -235,7 +247,19 @@ class RuledSurface
 
         // Insert new vertices for the right trajectory
         t = right_bounds[right_index];
-        vertices.emplace_back(Point<3> { right_trajectory[right_index - 1][0](t - std::floor(t)), right_trajectory[right_index - 1][1](t - std::floor(t)), t });
+
+        // Last index must be treated differently because it can be at frac = 1.0 in the last trajectory piece
+        if (right_index == right_trajectory.size())
+        {
+          double frac = t - std::floor(t);
+          if (frac == 0.0)
+            frac = 1.0;
+          vertices.emplace_back(Point<3> { right_trajectory.back()[0](frac), right_trajectory.back()[1](frac), t });
+        }
+        else
+        {
+          vertices.emplace_back(Point<3> { right_trajectory[right_index][0](t - std::floor(t)), right_trajectory[right_index][1](t - std::floor(t)), t });
+        }
 
         // Create triangles with the previous left vertex
         indices.push_back(left_vertex_index);
@@ -245,6 +269,31 @@ class RuledSurface
         indices.push_back(right_vertex_index); // New right vertex index
       }
     }
+  }
+
+  void printDebugInfo() const
+  {
+    logger.log(INFO, "RuledSurface Debug Info:");
+    logger.log(INFO, "Left Trajectory Count: %zu", left_trajectory.size());
+    logger.log(INFO, "Right Trajectory Count: %zu", right_trajectory.size());
+    logger.log(INFO, "Left Bounds Count: %zu", left_bounds.size());
+
+    // print all left bounds
+    for (const auto& lb : left_bounds)
+    {
+      logger.log(INFO, "Left Bound: %f", lb);
+    }
+
+    logger.log(INFO, "Right Bounds Count: %zu", right_bounds.size());
+
+    // print all right bounds
+    for (const auto& rb : right_bounds)
+    {
+      logger.log(INFO, "Right Bound: %f", rb);
+    }
+
+    logger.log(INFO, "Is Initialized: %s", is_initialized ? "true" : "false");
+    logger.log(INFO, "Is Finalized: %s", isFinalized() ? "true" : "false");
   }
 };
 } // namespace kinDS

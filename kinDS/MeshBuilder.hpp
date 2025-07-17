@@ -75,12 +75,16 @@ class MeshBuilder : public KineticDelaunay::EventHandler
     auto& strand = strand_geometries[he.origin];
     RuledSurface& ruled_surface = strand.ruled_surfaces[edge_id_to_ruled_surface[half_edge_id]];
     ruled_surface.insertRight(traj, t); // Insert the new trajectory into the ruled surface
+    logger.log(DEBUG, "Inserted into right side of strand %i, surface no. %i", he.origin, edge_id_to_ruled_surface[half_edge_id]);
 
     // twin
     auto& twin_he = graph.getHalfEdges()[half_edge_id ^ 1];
-    auto twin_strand = strand_geometries[twin_he.origin];
+    auto& twin_strand = strand_geometries[twin_he.origin];
     RuledSurface& twin_ruled_surface = twin_strand.ruled_surfaces[edge_id_to_ruled_surface[half_edge_id ^ 1]];
     twin_ruled_surface.insertLeft(traj, t); // Insert the twin trajectory into the ruled surface
+    logger.log(DEBUG, "Inserted into left side of strand %i, surface no. %i", twin_he.origin, edge_id_to_ruled_surface[half_edge_id ^ 1]);
+
+    logger.log(DEBUG, "Inserted trajectory into ruled surface for half-edge %zu at time %f between strands %i and %i", half_edge_id, t, he.origin, twin_he.origin);
   }
 
  public:
@@ -198,6 +202,18 @@ class MeshBuilder : public KineticDelaunay::EventHandler
     insertTrajectoryIntoRuledSurface(he1_id, traj, e.time); // Insert the new trajectory into the ruled surface for the second half-edge
     insertTrajectoryIntoRuledSurface(he2_id, twin_traj, e.time); // Insert the twin trajectory into the ruled surface for the third half-edge
     insertTrajectoryIntoRuledSurface(he3_id, twin_traj, e.time); // Insert the twin trajectory into the ruled surface for the fourth half-edge
+
+    // For debugging, iterate through all ruled surfaces and print their debug info
+    for (size_t strand_id = 0; strand_id < strand_geometries.size(); strand_id++)
+    {
+      logger.log(DEBUG, "Debugging ruled surfaces for strand %zu", strand_id);
+      for (const auto& ruled_surface : strand_geometries[strand_id].ruled_surfaces)
+      {
+        ruled_surface.printDebugInfo(); // Print debug info for each ruled surface
+        // visual separator in log
+        logger.log(DEBUG, "----------------------------------------");
+      }
+    }
   }
 
   void finalize() override
