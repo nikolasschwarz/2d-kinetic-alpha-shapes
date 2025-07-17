@@ -111,10 +111,15 @@ class RuledSurface
   std::vector<VoronoiSiteTrajectory> right_trajectory; // piecewise trajectory for the right side of the ruled surface
   std::vector<double> right_bounds; // bounds for the right trajectory
   bool is_initialized = false; // Flag to check if the ruled surface is initialized
+  // use faces to establish an absolute order at vertex extraction
+  size_t left_face_index; // Index of the left face in the delaunay triangulation
+  size_t right_face_index; // Index of the right face in the delaunay triangulation
 
  public:
-  RuledSurface()
+  RuledSurface(size_t left_face_index, size_t right_face_index)
     : is_initialized(false)
+    , left_face_index(left_face_index)
+    , right_face_index(right_face_index)
   {
   }
 
@@ -206,12 +211,38 @@ class RuledSurface
 
     while (t <= upper_bound)
     {
-      if (left_bounds[left_index] < right_bounds[right_index])
+      if (left_index >= left_trajectory.size() && right_index >= right_trajectory.size())
       {
-        if (left_index >= left_trajectory.size())
+        break; // No more left trajectories to process
+      }
+
+      std::function<bool()> advance_left = [&]()
+      {
+        if (left_bounds[left_index] < right_bounds[right_index])
+          return true; // Left trajectory has a smaller bound
+
+        if (left_bounds[left_index] > right_bounds[right_index])
         {
-          break; // No more left trajectories to process
+          return false;
         }
+
+        // if both are equal, first check if one index is always at maximum and then return the other side
+        if (left_index == left_bounds.size() - 1)
+        {
+          return false; // Left trajectory is at its maximum, prefer right
+        }
+        else if (right_index == right_bounds.size() - 1)
+        {
+          return true; // Right trajectory is at its maximum, prefer left
+        }
+
+        // If bounds are equal, prefer the side that is closer
+        return left_bounds[left_index + 1] < right_bounds[right_index + 1] || (left_bounds[left_index + 1] == right_bounds[right_index + 1] && left_face_index < right_face_index);
+      };
+
+      if (advance_left())
+      {
+
         left_index++;
 
         // Insert new vertices for the left trajectory
@@ -239,10 +270,6 @@ class RuledSurface
       }
       else
       {
-        if (right_index >= right_trajectory.size())
-        {
-          break; // No more right trajectories to process
-        }
         right_index++;
 
         // Insert new vertices for the right trajectory

@@ -125,7 +125,7 @@ class MeshBuilder : public KineticDelaunay::EventHandler
         VoronoiSiteTrajectory right_traj = constructTrajectoryForHalfEdge(i);
         VoronoiSiteTrajectory left_traj = constructTrajectoryForHalfEdge(i ^ 1); // Get the twin half-edge trajectory
 
-        RuledSurface ruled_surface;
+        RuledSurface ruled_surface(graph.getHalfEdges()[i].face, he.face);
         ruled_surface.init(left_traj, right_traj, t); // Initialize the ruled surface with the trajectories and time
         strand_geometries[he.origin].ruled_surfaces.push_back(ruled_surface);
         edge_id_to_ruled_surface[i] = strand_geometries[he.origin].ruled_surfaces.size() - 1; // Map edge ID to ruled surface index
@@ -178,14 +178,14 @@ class MeshBuilder : public KineticDelaunay::EventHandler
     VoronoiSiteTrajectory traj = constructTrajectoryForHalfEdge(e.half_edge_id);
     VoronoiSiteTrajectory twin_traj = constructTrajectoryForHalfEdge(e.half_edge_id ^ 1); // Get the twin half-edge trajectory
 
-    RuledSurface ruled_surface;
+    RuledSurface ruled_surface(twin_he.face, he.face);
     ruled_surface.init(twin_traj, traj, e.time); // Initialize the ruled surface with the trajectories and time
     auto& strandA = strand_geometries[he.origin];
     strandA.ruled_surfaces.push_back(ruled_surface);
     edge_id_to_ruled_surface[e.half_edge_id] = strand_geometries[he.origin].ruled_surfaces.size() - 1; // Map edge ID to ruled surface index
 
     // now for the twin
-    RuledSurface twin_ruled_surface;
+    RuledSurface twin_ruled_surface(he.face, twin_he.face);
     twin_ruled_surface.init(traj, twin_traj, e.time); // Initialize the twin ruled surface with the trajectories and time
     auto& strandB = strand_geometries[twin_he.origin];
     strandB.ruled_surfaces.push_back(twin_ruled_surface);
