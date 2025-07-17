@@ -1,5 +1,6 @@
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "Logger.hpp"
+#include <iostream>
 
 using namespace kinDS;
 
@@ -208,8 +209,6 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
   logger.log(INFO, "Half-edge mesh built with %zu half-edges and %zu faces.", half_edges.size(), triangles.size());
 }
 
-#include <iostream>
-
 void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
 {
   if (he_id >= half_edges.size())
@@ -268,7 +267,7 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
   triangles[twin.face].half_edges[1] = twin_last_id; // Update the second half-edge of the twin face
   triangles[twin.face].half_edges[2] = he_next_id; // Update the third half-edge of the twin face
 
-  logger.log(INFO, "Flipped edge %zu between vertices %d and %d.", he_id, u, v);
+  logger.log(DEBUG, "Flipped edge %zu between vertices %d and %d.", he_id, u, v);
 }
 
 void HalfEdgeDelaunayGraph::printDebug() const

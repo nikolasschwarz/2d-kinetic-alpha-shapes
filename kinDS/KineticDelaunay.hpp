@@ -55,6 +55,8 @@ class KineticDelaunay
      */
     virtual void afterEvent(Event& e) { }
 
+    virtual void betweenSections(size_t index) { }
+
     /**
      * \brief initialize event handler.
      */
@@ -115,6 +117,7 @@ class KineticDelaunay
     const float fraction = t - section;
 
     size_t he_id = quad_id * 2;
+    Polynomial event_trigger;
     if (graph.isOnBoundary(he_id) || graph.isOutsideBoundary(he_id))
     {
       // boundary edges must be treated separately using ccw
@@ -153,22 +156,7 @@ class KineticDelaunay
       Polynomial cx = splines[c].getPiecePolynomial(section)[0];
       Polynomial cy = splines[c].getPiecePolynomial(section)[1];
 
-      Polynomial ccw_func = ccw(ax, ay, bx, by, cx, cy);
-
-      // print polynomial:
-      // ccw_func.print();
-
-      auto zeros = ccw_func.realRoots();
-
-      // print roots:
-      for (const auto& root : zeros)
-      {
-        if (root > fraction && root <= 1)
-        { // Check if the root is within the valid range
-          std::cout << "Root found in triangle (" << a << ", " << b << ", " << c << ") at t = " << root + section << std::endl;
-          events.emplace(root, he_id, fraction); // Store the event with the time and half-edge index
-        }
-      }
+      event_trigger = ccw(ax, ay, bx, by, cx, cy);
     }
     else
     {
@@ -178,7 +166,7 @@ class KineticDelaunay
       int d = graph.triangleOppositeVertex(he_id); // Fourth vertex
 
       // print the quadrilateral vertices:
-      std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
+      // std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
 
       Polynomial ax = splines[a].getPiecePolynomial(section)[0];
       Polynomial ay = splines[a].getPiecePolynomial(section)[1];
@@ -189,20 +177,19 @@ class KineticDelaunay
       Polynomial dx = splines[d].getPiecePolynomial(section)[0];
       Polynomial dy = splines[d].getPiecePolynomial(section)[1];
 
-      Polynomial in_circle = inCircle(ax, ay, bx, by, cx, cy, dx, dy);
-      // print polynomial:
-      // in_circle.print();
+      event_trigger = inCircle(ax, ay, bx, by, cx, cy, dx, dy);
+    }
 
-      auto zeros = in_circle.realRoots();
+    auto zeros = event_trigger.realRoots();
 
-      // print roots:
-      for (const auto& root : zeros)
-      {
-        if (root > fraction && root <= 1)
-        { // Check if the root is within the valid range
-          std::cout << "Root found in quadrilateral (" << a << ", " << b << ", " << c << ", " << d << ") at t = " << root + section << std::endl;
-          events.emplace(root, he_id, fraction); // Store the event with the time and half-edge index
-        }
+    // print roots:
+    for (const auto& root : zeros)
+    {
+      if (root > fraction && root <= 1)
+      { // Check if the root is within the valid range
+        double event_time = root + section;
+        // std::cout << "Root found at t = " << event_time << std::endl;
+        events.emplace(event_time, he_id, t); // Store the event with the time and half-edge index
       }
     }
   }
@@ -234,7 +221,7 @@ class KineticDelaunay
       }
 
       // Process the event at the given time
-      std::cout << "Processing event at time fraction: " << event.time << " for half-edge ID: " << event.half_edge_id << std::endl;
+      logger.log(DEBUG, "Processing event at time %f for half-edge ID %zu", event.time, event.half_edge_id);
 
       // Call the event handler if provided
       event_handler.beforeEvent(event);
@@ -294,6 +281,7 @@ class KineticDelaunay
   {
     size_t section_count = splines[0].pointCount() - 1;
     assert(sections_advanced < section_count); // Ensure we do not exceed the number of sections
+    logger.log(DEBUG, "Advancing to section %zu of %zu", sections_advanced + 1, section_count);
 
     precomputeStep(static_cast<double>(sections_advanced));
     handleEvents(event_handler);
@@ -315,12 +303,13 @@ class KineticDelaunay
   // Computes the Delaunay triangulation of the given splines
   void compute(EventHandler& event_handler)
   {
-
     size_t section_count = getSectionCount(); // Assuming all splines have the same number of points
 
     for (size_t i = 0; i < section_count; ++i)
     {
       assert(i == sections_advanced); // Ensure we are advancing one section at a time
+      if (i != 0)
+        event_handler.betweenSections(i); // Call the event handler for the section
       advanceOneSection(event_handler);
     }
   }

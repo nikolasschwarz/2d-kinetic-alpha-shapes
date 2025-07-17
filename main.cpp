@@ -171,8 +171,10 @@ void kinetic_delaunay_example()
 
   for (size_t i = 0; i < section_count; ++i)
   {
+    if (i != 0)
+      mesh_builder.betweenSections(i);
     kinetic_delaunay.advanceOneSection(mesh_builder);
-    kinetic_delaunay.getGraph().printDebug();
+    // kinetic_delaunay.getGraph().printDebug();
     points = kinetic_delaunay.getPointsAt(static_cast<double>(i + 1));
     kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test_" + std::to_string(i + 1) + ".svg", 0.1);
     kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi_" + std::to_string(i + 1) + ".svg", 0.1);
