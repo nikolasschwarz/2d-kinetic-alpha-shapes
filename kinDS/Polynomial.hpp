@@ -5,18 +5,18 @@
 
 namespace kinDS
 {
-struct CoefficientTerm
+struct Monomial
 {
   double coefficient; // Coefficient of the term
   int exponent; // Exponent of the term
-  CoefficientTerm(double coeff, int exp = 0)
+  Monomial(double coeff, int exp = 0)
     : coefficient(coeff)
     , exponent(exp)
   {
   }
 
   // unary minus for CoefficientTerm
-  CoefficientTerm operator-() const
+  Monomial operator-() const
   {
     return { -coefficient, exponent };
   }
@@ -26,13 +26,13 @@ struct CoefficientTerm
 struct Var
 {
   // overload ^ operator for powers
-  CoefficientTerm operator^(int exp) const
+  Monomial operator^(int exp) const
   {
     return { 1, exp }; // coefficient 1, exponent `exp`
   }
 
   // allow X by itself: X == X^1
-  operator CoefficientTerm() const
+  operator Monomial() const
   {
     return { 1, 1 };
   }
@@ -40,14 +40,14 @@ struct Var
 
 // allow multiplication: 3 * (X^2)
 template<typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
-CoefficientTerm operator*(T coeff, const CoefficientTerm& term)
+Monomial operator*(T coeff, const Monomial& term)
 {
   return { coeff * term.coefficient, term.exponent };
 }
 
 // allow multiplication: (X^2) * 3
 template<typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
-CoefficientTerm operator*(const CoefficientTerm& term, T coeff)
+Monomial operator*(const Monomial& term, T coeff)
 {
   return { coeff * term.coefficient, term.exponent };
 }
@@ -93,7 +93,7 @@ class Polynomial
   {
   }
 
-  Polynomial(std::initializer_list<CoefficientTerm> init)
+  Polynomial(std::initializer_list<Monomial> init)
   {
     // Determine the maximum exponent
     int max_exp = 0;
@@ -379,9 +379,9 @@ class Polynomial
 };
 
 // combine coeffient terms to a polynomial
-Polynomial operator+(const CoefficientTerm& term1, const CoefficientTerm& term2);
+Polynomial operator+(const Monomial& term1, const Monomial& term2);
 
-Polynomial operator-(const CoefficientTerm& term1, const CoefficientTerm& term2);
+Polynomial operator-(const Monomial& term1, const Monomial& term2);
 
 inline std::ostream& operator<<(std::ostream& os, const Polynomial& p)
 {
