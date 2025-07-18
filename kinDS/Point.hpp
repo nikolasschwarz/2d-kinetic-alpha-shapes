@@ -1,10 +1,72 @@
 #pragma once
 #include <array>
+#include <cmath>
+#include <string>
 
 namespace kinDS
 {
 template<size_t dim>
-using Point = std::array<double, dim>;
+class Point : public std::array<double, dim>
+{
+ public:
+  // Default constructor
+  // These should be inherited from std::array
+  /* Point() = default;
+
+   // Constructor from an initializer list
+   Point(std::initializer_list<double> values)
+   {
+     std::copy(values.begin(), values.end(), this->begin());
+   }
+
+   // Access operator
+   double& operator[](size_t index) { return std::array<double, dim>::operator[](index); }
+   const double& operator[](size_t index) const { return std::array<double, dim>::operator[](index); }*/
+
+  // String representation for debugging
+  std::string toString() const
+  {
+    std::string result = "(";
+    for (size_t i = 0; i < dim; ++i)
+    {
+      result += std::to_string((*this)[i]);
+      if (i < dim - 1)
+        result += ", ";
+    }
+    result += ")";
+    return result;
+  }
+
+  double operator*(const Point<dim>& other) const
+  {
+    double result = 0.0;
+    for (size_t i = 0; i < dim; ++i)
+    {
+      result += (*this)[i] * other[i];
+    }
+    return result;
+  }
+
+  double len_sqr() const
+  {
+    return (*this) * (*this);
+  }
+
+  double len() const
+  {
+    return std::sqrt(len_sqr());
+  }
+
+  double dist_sqr(const Point<dim>& other) const
+  {
+    return ((*this) - other).len_sqr();
+  }
+
+  double dist(const Point<dim>& other) const
+  {
+    return std::sqrt(dist_sqr(other));
+  }
+};
 
 // operators for Point
 template<size_t dim>
@@ -52,6 +114,9 @@ Point<dim> operator*(double scalar, const Point<dim>& a)
   }
   return result;
 }
+
+// cross product for 3D points
+Point<3> operator%(const Point<3>& a, const Point<3>& b);
 
 // also provide Vector as alias
 template<size_t dim>

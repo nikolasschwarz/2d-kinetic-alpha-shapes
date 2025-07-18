@@ -185,6 +185,8 @@ class RuledSurface
     assert(is_initialized && "Ruled surface must be initialized before finalizing.");
     left_bounds.push_back(upper_bound);
     right_bounds.push_back(upper_bound);
+
+    debugCompareSamplesAtKnots(); // Do this as soon as it is finalized
   }
 
   bool isFinalized() const
@@ -321,6 +323,59 @@ class RuledSurface
 
     logger.log(INFO, "Is Initialized: %s", is_initialized ? "true" : "false");
     logger.log(INFO, "Is Finalized: %s", isFinalized() ? "true" : "false");
+  }
+
+  void debugCompareSamplesAtKnots()
+  {
+    logger.log(INFO, "Debugging RuledSurface samples at knots:");
+    for (size_t i = 1; i < left_bounds.size() - 1; ++i)
+    {
+      double t_lower = left_bounds[i] - std::floor(left_bounds[i]);
+      double t_upper = t_lower;
+      if (t_upper == 0.0)
+      {
+        t_upper = 1.0; // Handle the case where the upper bound is exactly an integer
+      }
+
+      auto left_upper_sample = Point<2> {
+        left_trajectory[i - 1][0](t_upper), left_trajectory[i - 1][1](t_upper)
+      };
+      auto left_lower_sample = Point<2> {
+        left_trajectory[i][0](t_lower), left_trajectory[i][1](t_lower)
+      };
+
+      // now compare and print the results
+      if (left_upper_sample.dist(left_lower_sample) > std::numeric_limits<double>::epsilon())
+      {
+        logger.log(INFO, "Upper Left Trajectory Sample at t = %f: %s", left_bounds[i], left_upper_sample.toString().c_str());
+        logger.log(INFO, "Lower Left Trajectory Sample at t = %f: %s", left_bounds[i], left_lower_sample.toString().c_str());
+      }
+    }
+
+    // same for right trajectory
+    for (size_t i = 1; i < right_bounds.size() - 1; ++i)
+    {
+      double t_lower = right_bounds[i] - std::floor(right_bounds[i]);
+      double t_upper = t_lower;
+      if (t_upper == 0.0)
+      {
+        t_upper = 1.0; // Handle the case where the upper bound is exactly an integer
+      }
+
+      auto right_upper_sample = Point<2> {
+        right_trajectory[i - 1][0](t_upper), right_trajectory[i - 1][1](t_upper)
+      };
+      auto right_lower_sample = Point<2> {
+        right_trajectory[i][0](t_lower), right_trajectory[i][1](t_lower)
+      };
+
+      // now compare and print the results
+      if (right_upper_sample.dist(right_lower_sample) > std::numeric_limits<double>::epsilon())
+      {
+        logger.log(INFO, "Upper Right Trajectory Sample at t = %f: %s", right_bounds[i], right_upper_sample.toString().c_str());
+        logger.log(INFO, "Lower Right Trajectory Sample at t = %f: %s", right_bounds[i], right_lower_sample.toString().c_str());
+      }
+    }
   }
 };
 } // namespace kinDS
