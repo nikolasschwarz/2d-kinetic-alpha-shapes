@@ -1,5 +1,4 @@
 #include "eigen/Eigen/Dense"
-#include "kinDS/AVLTree.hpp"
 #include "kinDS/CubicHermiteSpline.hpp"
 #include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
@@ -189,19 +188,6 @@ void kinetic_delaunay_example()
     kinDS::ObjExporter::writeMesh(meshes[i], filename);
     std::cout << "Mesh saved to " << filename << std::endl;
   }
-}
-
-void avl_tree_example()
-{
-  kinDS::AVLTree<int, int> test;
-
-  test.insert(1, 1);
-  test.insert(3, 3);
-  test.insert(4, 4);
-  test.insert(5, 5);
-  test.insert(2, 2);
-
-  test.printTreeStructure();
 }
 
 int main()
