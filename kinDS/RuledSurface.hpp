@@ -102,8 +102,6 @@ class RuledSurface
     assert(is_initialized && "Ruled surface must be initialized before finalizing.");
     left_bounds.push_back(upper_bound);
     right_bounds.push_back(upper_bound);
-
-    debugCompareSamplesAtKnots(); // Do this as soon as it is finalized
   }
 
   bool isFinalized() const
@@ -112,8 +110,9 @@ class RuledSurface
     return left_bounds.size() == left_trajectory.size() + 1;
   }
 
-  void extractTriangles(std::vector<Point<3>>& vertices, std::vector<size_t>& indices) const
+  void extractTriangles(std::vector<Point<3>>& vertices, std::vector<size_t>& indices, bool invert) const
   {
+    // TODO: take inversion into account
     assert(isFinalized() && "Ruled surface must be finalized before extracting triangles.");
 
     double t = left_bounds[0]; // Start time for the triangles
@@ -217,29 +216,29 @@ class RuledSurface
     }
   }
 
-  void printDebugInfo() const
+  void printDebugInfo(std::string prefix = "") const
   {
-    logger.log(INFO, "RuledSurface Debug Info:");
-    logger.log(INFO, "Left Trajectory Count: %zu", left_trajectory.size());
-    logger.log(INFO, "Right Trajectory Count: %zu", right_trajectory.size());
-    logger.log(INFO, "Left Bounds Count: %zu", left_bounds.size());
+    logger.log(INFO, "%sRuledSurface Debug Info:", prefix.c_str());
+    logger.log(INFO, "%sLeft Trajectory Count: %zu", prefix.c_str(), left_trajectory.size());
+    logger.log(INFO, "%sRight Trajectory Count: %zu", prefix.c_str(), right_trajectory.size());
+    logger.log(INFO, "%sLeft Bounds Count: %zu", prefix.c_str(), left_bounds.size());
 
     // print all left bounds
     for (const auto& lb : left_bounds)
     {
-      logger.log(INFO, "Left Bound: %f", lb);
+      logger.log(INFO, "%sLeft Bound: %f", prefix.c_str(), lb);
     }
 
-    logger.log(INFO, "Right Bounds Count: %zu", right_bounds.size());
+    logger.log(INFO, "%sRight Bounds Count: %zu", prefix.c_str(), right_bounds.size());
 
     // print all right bounds
     for (const auto& rb : right_bounds)
     {
-      logger.log(INFO, "Right Bound: %f", rb);
+      logger.log(INFO, "%sRight Bound: %f", prefix.c_str(), rb);
     }
 
-    logger.log(INFO, "Is Initialized: %s", is_initialized ? "true" : "false");
-    logger.log(INFO, "Is Finalized: %s", isFinalized() ? "true" : "false");
+    logger.log(INFO, "%sIs Initialized: %s", prefix.c_str(), is_initialized ? "true" : "false");
+    logger.log(INFO, "%sIs Finalized: %s", prefix.c_str(), isFinalized() ? "true" : "false");
   }
 
   void debugCompareSamplesAtKnots()

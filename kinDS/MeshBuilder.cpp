@@ -8,10 +8,10 @@ Mesh StrandGeometry::extractMesh(const MeshBuilder* mesh_builder) const
   std::vector<size_t> indices;
   std::vector<size_t> group_offsets;
 
-  for (size_t index : ruled_surface_indices)
+  for (auto& [index, inverted] : ruled_surface_indices)
   {
     group_offsets.emplace_back(indices.size() / 3); // Store the current vertex count as a group offset
-    mesh_builder->getRuledSurface(index).extractTriangles(vertices, indices); // Extract triangles from the ruled surface
+    mesh_builder->getRuledSurface(index).extractTriangles(vertices, indices, inverted); // Extract triangles from the ruled surface
   }
   Mesh result(vertices, indices); // Return the constructed mesh
 
@@ -49,23 +49,32 @@ VoronoiSiteTrajectory MeshBuilder::constructTrajectoryForHalfEdge(size_t half_ed
   return VoronoiSiteTrajectory { (trajs[0][0] + trajs[1][0]) / 2, (trajs[0][1] + trajs[1][1]) / 2 }; // Return the trajectory for the edge opposite to the infinite vertex
 }
 
-void MeshBuilder::insertTrajectoryIntoRuledSurface(size_t half_edge_id, const VoronoiSiteTrajectory& traj, double t)
+void MeshBuilder::insertTrajectoryIntoRuledSurface(size_t half_edge_id, const VoronoiSiteTrajectory& traj, double t, bool inverted)
 {
   auto& graph = kin_del.getGraph();
   auto& he = graph.getHalfEdges()[half_edge_id];
   auto& strand = strand_geometries[he.origin];
   RuledSurface& ruled_surface = ruled_surfaces[edge_id_to_ruled_surface[half_edge_id]];
-  ruled_surface.insertRight(traj, t); // Insert the new trajectory into the ruled surface
-  logger.log(DEBUG, "Inserted into right side of strand %i, surface no. %i", he.origin, edge_id_to_ruled_surface[half_edge_id]);
+
+  if (!inverted)
+  {
+    ruled_surface.insertRight(traj, t); // Insert the new trajectory into the ruled surface
+    logger.log(DEBUG, "Inserted into right side of strand %i, surface no. %i", he.origin, edge_id_to_ruled_surface[half_edge_id]);
+  }
+  else
+  {
+    ruled_surface.insertLeft(traj, t); // Insert the new trajectory into the ruled surface
+    logger.log(DEBUG, "Inserted into left side of strand %i, surface no. %i", he.origin, edge_id_to_ruled_surface[half_edge_id]);
+  }
 
   // twin
-  auto& twin_he = graph.getHalfEdges()[half_edge_id ^ 1];
+  /* auto& twin_he = graph.getHalfEdges()[half_edge_id ^ 1];
   auto& twin_strand = strand_geometries[twin_he.origin];
   RuledSurface& twin_ruled_surface = ruled_surfaces[edge_id_to_ruled_surface[half_edge_id ^ 1]];
   twin_ruled_surface.insertLeft(traj, t); // Insert the twin trajectory into the ruled surface
   logger.log(DEBUG, "Inserted into left side of strand %i, surface no. %i", twin_he.origin, edge_id_to_ruled_surface[half_edge_id ^ 1]);
 
-  logger.log(DEBUG, "Inserted trajectory into ruled surface for half-edge %zu at time %f between strands %i and %i", half_edge_id, t, he.origin, twin_he.origin);
+  logger.log(DEBUG, "Inserted trajectory into ruled surface for half-edge %zu at time %f between strands %i and %i", half_edge_id, t, he.origin, twin_he.origin);*/
 }
 
 MeshBuilder::MeshBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines)
@@ -95,21 +104,29 @@ void MeshBuilder::init()
   auto& graph = kin_del.getGraph();
 
   size_t half_edge_count = graph.getHalfEdges().size();
-  for (size_t i = 0; i < half_edge_count; ++i)
+  for (size_t i = 0; i < half_edge_count; i += 2)
   {
     const auto& he = graph.getHalfEdges()[i];
+
+    // Build trajectories for each Voronoi vertex
+    // TODO: avoid constructing trajectories for the same half-edge twice
+    VoronoiSiteTrajectory right_traj = constructTrajectoryForHalfEdge(i);
+    VoronoiSiteTrajectory left_traj = constructTrajectoryForHalfEdge(i ^ 1); // Get the twin half-edge trajectory
+
+    RuledSurface ruled_surface(graph.getHalfEdges()[i].face, he.face);
+    ruled_surface.init(left_traj, right_traj, t); // Initialize the ruled surface with the trajectories and time
+    ruled_surfaces.push_back(ruled_surface);
+
+    edge_id_to_ruled_surface[i] = ruled_surfaces.size() - 1; // Map edge ID to ruled surface index
     if (he.origin != -1) // Skip half-edges with the infinite vertex as origin
     {
-      // Build trajectories for each Voronoi vertex
-      // TODO: avoid constructing trajectories for the same half-edge twice
-      VoronoiSiteTrajectory right_traj = constructTrajectoryForHalfEdge(i);
-      VoronoiSiteTrajectory left_traj = constructTrajectoryForHalfEdge(i ^ 1); // Get the twin half-edge trajectory
+      strand_geometries[he.origin].ruled_surface_indices.push_back(std::make_pair(ruled_surfaces.size() - 1, false));
+    }
 
-      RuledSurface ruled_surface(graph.getHalfEdges()[i].face, he.face);
-      ruled_surface.init(left_traj, right_traj, t); // Initialize the ruled surface with the trajectories and time
-      ruled_surfaces.push_back(ruled_surface);
-      edge_id_to_ruled_surface[i] = ruled_surfaces.size() - 1; // Map edge ID to ruled surface index
-      strand_geometries[he.origin].ruled_surface_indices.push_back(ruled_surfaces.size() - 1);
+    edge_id_to_ruled_surface[i ^ 1] = ruled_surfaces.size() - 1; // Map edge ID to twin ruled surface index
+    if (graph.getHalfEdges()[i ^ 1].origin != -1) // Skip half-edges with the infinite vertex as origin
+    {
+      strand_geometries[graph.getHalfEdges()[i ^ 1].origin].ruled_surface_indices.push_back(std::make_pair(ruled_surfaces.size() - 1, true));
     }
   }
 }
@@ -118,21 +135,21 @@ void MeshBuilder::betweenSections(size_t index)
 {
   auto& graph = kin_del.getGraph();
   size_t half_edge_count = graph.getHalfEdges().size();
-  for (size_t i = 0; i < half_edge_count; ++i)
+  for (size_t i = 0; i < half_edge_count; i += 2)
   {
     const auto& he = graph.getHalfEdges()[i];
-    if (he.origin != -1) // Skip half-edges with the infinite vertex as origin
-    {
-      // Build trajectories for each Voronoi vertex
-      // TODO: avoid constructing trajectories for the same half-edge twice
-      VoronoiSiteTrajectory right_traj = constructTrajectoryForHalfEdge(i, index);
-      VoronoiSiteTrajectory left_traj = constructTrajectoryForHalfEdge(i ^ 1, index); // Get the twin half-edge trajectory
+    /* if (he.origin != -1) // Skip half-edges with the infinite vertex as origin
+    {*/
+    // Build trajectories for each Voronoi vertex
+    // TODO: avoid constructing trajectories for the same half-edge twice
+    VoronoiSiteTrajectory right_traj = constructTrajectoryForHalfEdge(i, index);
+    VoronoiSiteTrajectory left_traj = constructTrajectoryForHalfEdge(i ^ 1, index); // Get the twin half-edge trajectory
 
-      RuledSurface& ruled_surface = ruled_surfaces[edge_id_to_ruled_surface[i]];
+    RuledSurface& ruled_surface = ruled_surfaces[edge_id_to_ruled_surface[i]];
 
-      ruled_surface.insertLeft(left_traj, index); // Insert the new section into the ruled surface
-      ruled_surface.insertRight(right_traj, index); // Insert the new section into the twin ruled surface
-    }
+    ruled_surface.insertLeft(left_traj, index); // Insert the new section into the ruled surface
+    ruled_surface.insertRight(right_traj, index); // Insert the new section into the twin ruled surface
+    //}
   }
 }
 
@@ -145,9 +162,10 @@ void MeshBuilder::beforeEvent(KineticDelaunay::Event& e)
   s0.finalize(e.time); // Finalize the ruled surface at the event time
 
   // same for twin half-edge
-  auto& twin_he = graph.getHalfEdges()[e.half_edge_id ^ 1];
+  /* auto& twin_he = graph.getHalfEdges()[e.half_edge_id ^ 1];
   RuledSurface& s1 = ruled_surfaces[edge_id_to_ruled_surface[e.half_edge_id ^ 1]];
   s1.finalize(e.time); // Finalize the twin ruled surface at the event time
+  */
 }
 
 void MeshBuilder::afterEvent(KineticDelaunay::Event& e)
@@ -164,15 +182,16 @@ void MeshBuilder::afterEvent(KineticDelaunay::Event& e)
   auto& strandA = strand_geometries[he.origin];
   ruled_surfaces.push_back(ruled_surface);
   edge_id_to_ruled_surface[e.half_edge_id] = ruled_surfaces.size() - 1; // Map edge ID to ruled surface index
-  strand_geometries[he.origin].ruled_surface_indices.push_back(ruled_surfaces.size() - 1);
+  strand_geometries[he.origin].ruled_surface_indices.push_back(std::make_pair(ruled_surfaces.size() - 1, false));
 
   // now for the twin
-  RuledSurface twin_ruled_surface(he.face, twin_he.face);
+  /* RuledSurface twin_ruled_surface(he.face, twin_he.face);
   twin_ruled_surface.init(traj, twin_traj, e.time); // Initialize the twin ruled surface with the trajectories and time
   auto& strandB = strand_geometries[twin_he.origin];
-  ruled_surfaces.push_back(twin_ruled_surface);
+  ruled_surfaces.push_back(twin_ruled_surface);*/
+  // re-use the same ruled surface, just invert the sides
   edge_id_to_ruled_surface[e.half_edge_id ^ 1] = ruled_surfaces.size() - 1; // Map edge ID to twin ruled surface index
-  strand_geometries[twin_he.origin].ruled_surface_indices.push_back(ruled_surfaces.size() - 1);
+  strand_geometries[twin_he.origin].ruled_surface_indices.push_back(std::make_pair(ruled_surfaces.size() - 1, true));
 
   // first get the other half-edges of the quadrilateral
   size_t he0_id = graph.getHalfEdges()[e.half_edge_id].next; // Next half-edge in the quadrilateral
@@ -181,10 +200,10 @@ void MeshBuilder::afterEvent(KineticDelaunay::Event& e)
   size_t he3_id = graph.getHalfEdges()[he2_id].next; // Next half-edge in the quadrilateral
 
   // now update the ruled surfaces for the other half-edges
-  insertTrajectoryIntoRuledSurface(he0_id, traj, e.time); // Insert the new trajectory into the ruled surface for the first half-edge
-  insertTrajectoryIntoRuledSurface(he1_id, traj, e.time); // Insert the new trajectory into the ruled surface for the second half-edge
-  insertTrajectoryIntoRuledSurface(he2_id, twin_traj, e.time); // Insert the twin trajectory into the ruled surface for the third half-edge
-  insertTrajectoryIntoRuledSurface(he3_id, twin_traj, e.time); // Insert the twin trajectory into the ruled surface for the fourth half-edge
+  insertTrajectoryIntoRuledSurface(he0_id, traj, e.time, he0_id % 2 != 0); // Insert the new trajectory into the ruled surface for the first half-edge
+  insertTrajectoryIntoRuledSurface(he1_id, traj, e.time, he1_id % 2 != 0); // Insert the new trajectory into the ruled surface for the second half-edge
+  insertTrajectoryIntoRuledSurface(he2_id, twin_traj, e.time, he2_id % 2 != 0); // Insert the twin trajectory into the ruled surface for the third half-edge
+  insertTrajectoryIntoRuledSurface(he3_id, twin_traj, e.time, he3_id % 2 != 0); // Insert the twin trajectory into the ruled surface for the fourth half-edge
 
   // For debugging, iterate through all ruled surfaces and print their debug info
   logger.log(DEBUG, "Debugging ruled surfaces");
@@ -203,7 +222,7 @@ void MeshBuilder::finalize()
   {
     auto& strand = strand_geometries[strand_id];
 
-    for (auto& ruled_surface_index : strand.ruled_surface_indices)
+    for (auto& [ruled_surface_index, inverted] : strand.ruled_surface_indices)
     {
       if (!getRuledSurface(ruled_surface_index).isFinalized())
         getRuledSurface(ruled_surface_index).finalize(splines[strand_id].pointCount() - 1); // Finalize the ruled surface with the upper bound of the spline
@@ -215,6 +234,8 @@ void MeshBuilder::finalize()
 
 std::vector<Mesh> MeshBuilder::extractMeshes(double boundary_offset, double subdivision) const
 {
+  logger.log(INFO, "Extracting meshes with boundary offset %f and subdivision %f", boundary_offset, subdivision);
+
   if (!finalized)
   {
     throw std::runtime_error("MeshBuilder must be finalized before extracting the mesh.");
@@ -246,4 +267,18 @@ RuledSurface& MeshBuilder::getRuledSurface(size_t index)
     throw std::out_of_range("Index out of range for ruled surfaces.");
   }
   return ruled_surfaces[index]; // Return the ruled surface at the specified index
+}
+
+void MeshBuilder::printDebugInfo() const
+{
+  for (size_t i = 0; i < strand_geometries.size(); ++i)
+  {
+    const auto& strand = strand_geometries[i];
+    logger.log(INFO, "======== Strand %zu has %zu ruled surfaces ========", i, strand.ruled_surface_indices.size());
+    for (const auto& [ruled_surface_index, inverted] : strand.ruled_surface_indices)
+    {
+      logger.log(INFO, "  Ruled Surface Index: %zu, Inverted: %s", ruled_surface_index, inverted ? "true" : "false");
+      ruled_surfaces[ruled_surface_index].printDebugInfo("    ");
+    }
+  }
 }

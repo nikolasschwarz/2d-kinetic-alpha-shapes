@@ -13,7 +13,7 @@ struct StrandGeometry
 {
   size_t strand_id; // Unique identifier for the strand
   // std::vector<RuledSurface> ruled_surfaces; // List of ruled surfaces associated with the strand
-  std::vector<size_t> ruled_surface_indices; // Indices of the ruled surfaces associated with the strand
+  std::vector<std::pair<size_t, bool>> ruled_surface_indices; // Indices of the ruled surfaces associated with the strand
 
   Mesh extractMesh(const MeshBuilder* mesh_builder) const;
 };
@@ -30,7 +30,7 @@ class MeshBuilder : public KineticDelaunay::EventHandler
 
   VoronoiSiteTrajectory constructTrajectoryForHalfEdge(size_t half_edge_id, size_t section_index = 0) const;
 
-  void insertTrajectoryIntoRuledSurface(size_t half_edge_id, const VoronoiSiteTrajectory& traj, double t);
+  void insertTrajectoryIntoRuledSurface(size_t half_edge_id, const VoronoiSiteTrajectory& traj, double t, bool inverted);
 
  public:
   MeshBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines);
@@ -50,5 +50,7 @@ class MeshBuilder : public KineticDelaunay::EventHandler
   const RuledSurface& getRuledSurface(size_t index) const;
 
   RuledSurface& getRuledSurface(size_t index);
+
+  void printDebugInfo() const;
 };
 } // namespace kinDS

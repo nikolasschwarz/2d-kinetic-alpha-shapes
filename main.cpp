@@ -180,6 +180,9 @@ void kinetic_delaunay_example()
   }
 
   mesh_builder.finalize();
+
+  mesh_builder.printDebugInfo();
+
   auto meshes = mesh_builder.extractMeshes(0.1, 0.01);
 
   for (size_t i = 0; i < meshes.size(); ++i)
