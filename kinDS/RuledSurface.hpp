@@ -31,6 +31,8 @@ class RuledSurface
   // use faces to establish an absolute order at vertex extraction
   size_t left_face_index; // Index of the left face in the delaunay triangulation
   size_t right_face_index; // Index of the right face in the delaunay triangulation
+  std::vector<std::pair<double, Point<2>>> left_event_points; // Left event points by time
+  std::vector<std::pair<double, Point<2>>> right_event_points; // Right event points by time
 
  public:
   RuledSurface(size_t left_face_index, size_t right_face_index)
@@ -73,18 +75,42 @@ class RuledSurface
 
   void insertLeft(const VoronoiSiteTrajectory& traj, double lb)
   {
+    // only allow whole numbers, else the event function should be used
+    assert(std::floor(lb) == lb && "Lower bound must be a whole number.");
     assert(is_initialized && "Ruled surface must be initialized before inserting trajectories.");
     assert(lb > left_bounds.back() && "Lower bound must be greater than the last left bound.");
     left_trajectory.push_back(traj);
     left_bounds.push_back(lb);
   }
 
+  void insertLeftEvent(const Point<2>& p, const VoronoiSiteTrajectory& traj, double lb)
+  {
+    assert(is_initialized && "Ruled surface must be initialized before inserting event points.");
+    assert(is_initialized && "Ruled surface must be initialized before inserting trajectories.");
+    assert(lb > left_bounds.back() && "Lower bound must be greater than the last left bound.");
+    left_trajectory.push_back(traj);
+    left_bounds.push_back(lb);
+    left_event_points.emplace_back(lb, p);
+  }
+
   void insertRight(const VoronoiSiteTrajectory& traj, double lb)
   {
+    // only allow whole numbers, else the event function should be used
+    assert(std::floor(lb) == lb && "Lower bound must be a whole number.");
     assert(is_initialized && "Ruled surface must be initialized before inserting trajectories.");
     assert(lb > right_bounds.back() && "Lower bound must be greater than the last right bound.");
     right_trajectory.push_back(traj);
     right_bounds.push_back(lb);
+  }
+
+  void insertRightEvent(const Point<2>& p, const VoronoiSiteTrajectory& traj, double lb)
+  {
+    assert(is_initialized && "Ruled surface must be initialized before inserting event points.");
+    assert(is_initialized && "Ruled surface must be initialized before inserting trajectories.");
+    assert(lb > left_bounds.back() && "Lower bound must be greater than the last left bound.");
+    right_trajectory.push_back(traj);
+    right_bounds.push_back(lb);
+    right_event_points.emplace_back(lb, p);
   }
 
   void init(const VoronoiSiteTrajectory& left_traj, VoronoiSiteTrajectory& right_traj, double lb)
@@ -96,6 +122,17 @@ class RuledSurface
     is_initialized = true;
   }
 
+  void initEvent(const Point<2>& p, const VoronoiSiteTrajectory& left_traj, VoronoiSiteTrajectory& right_traj, double lb)
+  {
+    left_trajectory.push_back(left_traj);
+    right_trajectory.push_back(right_traj);
+    left_bounds.push_back(lb);
+    right_bounds.push_back(lb);
+    left_event_points.emplace_back(lb, p);
+    right_event_points.emplace_back(lb, p);
+    is_initialized = true;
+  }
+
   void finalize(double upper_bound)
   {
     assert(!isFinalized() && "Ruled surface is already finalized.");
@@ -104,11 +141,30 @@ class RuledSurface
     right_bounds.push_back(upper_bound);
   }
 
+  void finalizeEvent(const Point<2>& p, double upper_bound)
+  {
+    assert(!isFinalized() && "Ruled surface is already finalized.");
+    assert(is_initialized && "Ruled surface must be initialized before finalizing.");
+    left_bounds.push_back(upper_bound);
+    right_bounds.push_back(upper_bound);
+    left_event_points.emplace_back(upper_bound, p);
+    right_event_points.emplace_back(upper_bound, p);
+  }
+
   bool isFinalized() const
   {
     // Note: The other conditions (right side and initialization) are implied
     return left_bounds.size() == left_trajectory.size() + 1;
   }
+
+  /* void extractTriangles(std::vector<Point<3>>& vertices, std::vector<size_t>& indices, bool invert, size_t subdivision = 1) const
+  {
+    assert(isFinalized() && "Ruled surface must be finalized before extracting triangles.");
+
+    // Take steps of 1/subdivision in t direction and walk along the event points that are in between
+    double step = 1.0 / subdivision;
+    double t = left_bounds[0]; // Start time for the triangles // TODO: probably need to save this differently
+  }*/
 
   void extractTriangles(std::vector<Point<3>>& vertices, std::vector<size_t>& indices, bool invert) const
   {
@@ -119,10 +175,28 @@ class RuledSurface
     double upper_bound = upperBound();
 
     // Initialize the first vertices
+
     size_t left_vertex_index = vertices.size();
-    vertices.emplace_back(Point<3> { left_trajectory[0][0](t - std::floor(t)), left_trajectory[0][1](t - std::floor(t)), t });
+    // distinguish between event points and regular points
+    if (!left_event_points.empty() && left_event_points[0].first == t)
+    {
+      vertices.emplace_back(Point<3> { left_event_points[0].second[0], left_event_points[0].second[1], t });
+    }
+    else
+    {
+      vertices.emplace_back(Point<3> { left_trajectory[0][0](t - std::floor(t)), left_trajectory[0][1](t - std::floor(t)), t });
+    }
+
     size_t right_vertex_index = vertices.size();
-    vertices.emplace_back(Point<3> { right_trajectory[0][0](t - std::floor(t)), right_trajectory[0][1](t - std::floor(t)), t });
+
+    if (!right_event_points.empty() && right_event_points[0].first == t)
+    {
+      vertices.emplace_back(Point<3> { right_event_points[0].second[0], right_event_points[0].second[1], t });
+    }
+    else
+    {
+      vertices.emplace_back(Point<3> { right_trajectory[0][0](t - std::floor(t)), right_trajectory[0][1](t - std::floor(t)), t });
+    }
 
     size_t left_index = 0;
     size_t right_index = 0;
@@ -166,17 +240,36 @@ class RuledSurface
         // Insert new vertices for the left trajectory
         t = left_bounds[left_index];
 
-        // Last index must be treated differently because it can be at frac = 1.0 in the last trajectory piece
-        if (left_index == left_trajectory.size())
+        // TODO: this is slow, potentially O(n) in each iteration. We could do O(log n) with a binary search or even amortized O(1) by maintaining an index throughout the while-loop
+        bool is_event_point = false;
+        // test if t also exist in the event points
+        for (const auto& [et, ep] : left_event_points)
         {
-          double frac = t - std::floor(t);
-          if (frac == 0.0)
-            frac = 1.0;
-          vertices.emplace_back(Point<3> { left_trajectory.back()[0](frac), left_trajectory.back()[1](frac), t });
+          if (et == t)
+          {
+            vertices.emplace_back(Point<3> { ep[0], ep[1], t });
+            is_event_point = true;
+            break;
+          }
         }
-        else
+
+        if (!is_event_point)
         {
-          vertices.emplace_back(Point<3> { left_trajectory[left_index][0](t - std::floor(t)), left_trajectory[left_index][1](t - std::floor(t)), t });
+          // assert that t is a whole number
+          assert(std::floor(t) == t && "Left bound must be a whole number if it is not an event point.");
+
+          // Last index must be treated differently because it can be at frac = 1.0 in the last trajectory piece
+          if (left_index == left_trajectory.size())
+          {
+            double frac = t - std::floor(t);
+            if (frac == 0.0)
+              frac = 1.0;
+            vertices.emplace_back(Point<3> { left_trajectory.back()[0](frac), left_trajectory.back()[1](frac), t });
+          }
+          else
+          {
+            vertices.emplace_back(Point<3> { left_trajectory[left_index][0](t - std::floor(t)), left_trajectory[left_index][1](t - std::floor(t)), t });
+          }
         }
 
         // Create triangles with the previous right vertex
@@ -193,17 +286,34 @@ class RuledSurface
         // Insert new vertices for the right trajectory
         t = right_bounds[right_index];
 
-        // Last index must be treated differently because it can be at frac = 1.0 in the last trajectory piece
-        if (right_index == right_trajectory.size())
+        bool is_event_point = false;
+        // test if t also exist in the event points
+        for (const auto& [et, ep] : right_event_points)
         {
-          double frac = t - std::floor(t);
-          if (frac == 0.0)
-            frac = 1.0;
-          vertices.emplace_back(Point<3> { right_trajectory.back()[0](frac), right_trajectory.back()[1](frac), t });
+          if (et == t)
+          {
+            vertices.emplace_back(Point<3> { ep[0], ep[1], t });
+            is_event_point = true;
+            break;
+          }
         }
-        else
+
+        if (!is_event_point)
         {
-          vertices.emplace_back(Point<3> { right_trajectory[right_index][0](t - std::floor(t)), right_trajectory[right_index][1](t - std::floor(t)), t });
+          // assert that t is a whole number
+          assert(std::floor(t) == t && "Right bound must be a whole number if it is not an event point.");
+          // Last index must be treated differently because it can be at frac = 1.0 in the last trajectory piece
+          if (right_index == right_trajectory.size())
+          {
+            double frac = t - std::floor(t);
+            if (frac == 0.0)
+              frac = 1.0;
+            vertices.emplace_back(Point<3> { right_trajectory.back()[0](frac), right_trajectory.back()[1](frac), t });
+          }
+          else
+          {
+            vertices.emplace_back(Point<3> { right_trajectory[right_index][0](t - std::floor(t)), right_trajectory[right_index][1](t - std::floor(t)), t });
+          }
         }
 
         // Create triangles with the previous left vertex

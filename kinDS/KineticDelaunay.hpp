@@ -25,10 +25,13 @@ class KineticDelaunay
     double time; // Time of the event
     size_t half_edge_id; // Half-edge index associated with the event
     double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
-    Event(double t, size_t he_id, double creation_time = 0.0)
+    Point<2> position; // Position of the event
+
+    Event(double t, size_t he_id, double creation_time, Point<2> position)
       : time(t)
       , half_edge_id(he_id)
       , creation_time(creation_time)
+      , position(position)
     {
     }
     bool operator<(const Event& other) const
@@ -118,6 +121,9 @@ class KineticDelaunay
 
     size_t he_id = quad_id * 2;
     Polynomial event_trigger;
+
+    std::vector<Trajectory<2>> trajs;
+
     if (graph.isOnBoundary(he_id) || graph.isOutsideBoundary(he_id))
     {
       // boundary edges must be treated separately using ccw
@@ -149,14 +155,11 @@ class KineticDelaunay
       // print the triangle vertices:
       // std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
 
-      Polynomial ax = splines[a].getPiecePolynomial(section)[0];
-      Polynomial ay = splines[a].getPiecePolynomial(section)[1];
-      Polynomial bx = splines[b].getPiecePolynomial(section)[0];
-      Polynomial by = splines[b].getPiecePolynomial(section)[1];
-      Polynomial cx = splines[c].getPiecePolynomial(section)[0];
-      Polynomial cy = splines[c].getPiecePolynomial(section)[1];
+      trajs.push_back(splines[a].getPiecePolynomial(section));
+      trajs.push_back(splines[b].getPiecePolynomial(section));
+      trajs.push_back(splines[c].getPiecePolynomial(section));
 
-      event_trigger = ccw(ax, ay, bx, by, cx, cy);
+      event_trigger = ccw(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1]);
     }
     else
     {
@@ -168,16 +171,12 @@ class KineticDelaunay
       // print the quadrilateral vertices:
       // std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
 
-      Polynomial ax = splines[a].getPiecePolynomial(section)[0];
-      Polynomial ay = splines[a].getPiecePolynomial(section)[1];
-      Polynomial bx = splines[b].getPiecePolynomial(section)[0];
-      Polynomial by = splines[b].getPiecePolynomial(section)[1];
-      Polynomial cx = splines[c].getPiecePolynomial(section)[0];
-      Polynomial cy = splines[c].getPiecePolynomial(section)[1];
-      Polynomial dx = splines[d].getPiecePolynomial(section)[0];
-      Polynomial dy = splines[d].getPiecePolynomial(section)[1];
+      trajs.push_back(splines[a].getPiecePolynomial(section));
+      trajs.push_back(splines[b].getPiecePolynomial(section));
+      trajs.push_back(splines[c].getPiecePolynomial(section));
+      trajs.push_back(splines[d].getPiecePolynomial(section));
 
-      event_trigger = inCircle(ax, ay, bx, by, cx, cy, dx, dy);
+      event_trigger = inCircle(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);
     }
 
     auto zeros = event_trigger.realRoots();
@@ -189,7 +188,19 @@ class KineticDelaunay
       { // Check if the root is within the valid range
         double event_time = root + section;
         // std::cout << "Root found at t = " << event_time << std::endl;
-        events.emplace(event_time, he_id, t); // Store the event with the time and half-edge index
+
+        Point<2> center {};
+
+        for (const auto& traj : trajs)
+        {
+          center[0] += traj[0](root);
+          center[1] += traj[1](root);
+        }
+        center[0] /= trajs.size();
+        center[1] /= trajs.size();
+        logger.log(DEBUG, "Event at time %f for half-edge ID %zu at center position %s", event_time, he_id, center.toString().c_str());
+
+        events.emplace(Event(event_time, he_id, t, center)); // Store the event with the time and half-edge index
       }
     }
   }

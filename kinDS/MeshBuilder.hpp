@@ -30,7 +30,7 @@ class MeshBuilder : public KineticDelaunay::EventHandler
 
   VoronoiSiteTrajectory constructTrajectoryForHalfEdge(size_t half_edge_id, size_t section_index = 0) const;
 
-  void insertTrajectoryIntoRuledSurface(size_t half_edge_id, const VoronoiSiteTrajectory& traj, double t, bool inverted);
+  void insertTrajectoryIntoRuledSurface(size_t half_edge_id, const VoronoiSiteTrajectory& traj, KineticDelaunay::Event& e);
 
  public:
   MeshBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines);
