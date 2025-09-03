@@ -174,6 +174,9 @@ class RuledSurface
     double t = left_bounds[0]; // Start time for the triangles
     double upper_bound = upperBound();
 
+    size_t left_event_index = 0;
+    size_t right_event_index = 0;
+
     // Initialize the first vertices
 
     size_t left_vertex_index = vertices.size();
@@ -181,6 +184,7 @@ class RuledSurface
     if (!left_event_points.empty() && left_event_points[0].first == t)
     {
       vertices.emplace_back(Point<3> { left_event_points[0].second[0], left_event_points[0].second[1], t });
+      left_event_index++;
     }
     else
     {
@@ -192,6 +196,7 @@ class RuledSurface
     if (!right_event_points.empty() && right_event_points[0].first == t)
     {
       vertices.emplace_back(Point<3> { right_event_points[0].second[0], right_event_points[0].second[1], t });
+      right_event_index++;
     }
     else
     {
@@ -240,20 +245,17 @@ class RuledSurface
         // Insert new vertices for the left trajectory
         t = left_bounds[left_index];
 
-        // TODO: this is slow, potentially O(n) in each iteration. We could do O(log n) with a binary search or even amortized O(1) by maintaining an index throughout the while-loop
-        bool is_event_point = false;
         // test if t also exist in the event points
-        for (const auto& [et, ep] : left_event_points)
+        while (left_event_index < left_event_points.size() && left_event_points[left_event_index].first < t)
         {
-          if (et == t)
-          {
-            vertices.emplace_back(Point<3> { ep[0], ep[1], t });
-            is_event_point = true;
-            break;
-          }
+          left_event_index++;
         }
-
-        if (!is_event_point)
+        if (left_event_index < left_event_points.size() && left_event_points[left_event_index].first == t)
+        {
+          vertices.emplace_back(Point<3> { left_event_points[left_event_index].second[0], left_event_points[left_event_index].second[1], t });
+          left_event_index++;
+        }
+        else
         {
           // assert that t is a whole number
           assert(std::floor(t) == t && "Left bound must be a whole number if it is not an event point.");
@@ -286,19 +288,17 @@ class RuledSurface
         // Insert new vertices for the right trajectory
         t = right_bounds[right_index];
 
-        bool is_event_point = false;
         // test if t also exist in the event points
-        for (const auto& [et, ep] : right_event_points)
+        while (right_event_index < right_event_points.size() && right_event_points[right_event_index].first < t)
         {
-          if (et == t)
-          {
-            vertices.emplace_back(Point<3> { ep[0], ep[1], t });
-            is_event_point = true;
-            break;
-          }
+          right_event_index++;
         }
-
-        if (!is_event_point)
+        if (right_event_index < right_event_points.size() && right_event_points[right_event_index].first == t)
+        {
+          vertices.emplace_back(Point<3> { right_event_points[right_event_index].second[0], right_event_points[right_event_index].second[1], t });
+          right_event_index++;
+        }
+        else
         {
           // assert that t is a whole number
           assert(std::floor(t) == t && "Right bound must be a whole number if it is not an event point.");
