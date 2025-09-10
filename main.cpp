@@ -183,7 +183,15 @@ void kinetic_delaunay_example()
 
   mesh_builder.printDebugInfo();
 
-  auto meshes = mesh_builder.extractMeshes(0.1, 0.01);
+  // Test subdivisions for 4 strands
+  std::vector<std::vector<double>> subdivisions = {
+    { 0.42, 1.37, 2.89, 5.46 },
+    { 0.15, 1.92, 3.08, 4.61, 6.73 },
+    { 0.08, 2.14, 2.95, 4.22, 6.11 },
+    { 0.33, 1.25, 2.67, 4.19, 5.78, 6.92 }
+  };
+
+  auto meshes = mesh_builder.extractMeshes(0.1, 0.01, subdivisions);
 
   for (size_t i = 0; i < meshes.size(); ++i)
   {

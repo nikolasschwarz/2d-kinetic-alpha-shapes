@@ -15,7 +15,8 @@ struct StrandGeometry
   // std::vector<RuledSurface> ruled_surfaces; // List of ruled surfaces associated with the strand
   std::vector<std::pair<size_t, bool>> ruled_surface_indices; // Indices of the ruled surfaces associated with the strand
 
-  Mesh extractMesh(const MeshBuilder* mesh_builder) const;
+  std::vector<Mesh> extractMesh(const MeshBuilder* mesh_builder, std::vector<std::vector<double>>& strand_subdivisions) const;
+  void applySubdivision(const std::vector<double>& strand_subdivision, std::vector<RuledSurface>& ruled_surfaces);
 };
 
 class MeshBuilder : public KineticDelaunay::EventHandler
@@ -45,7 +46,12 @@ class MeshBuilder : public KineticDelaunay::EventHandler
 
   void finalize() override;
 
-  std::vector<Mesh> extractMeshes(double boundary_offset, double subdivision) const;
+  void applySubdivisions(const std::vector<std::vector<double>>& strand_subdivisions);
+
+  // TODO: this should be const, but it is very hard to implement it as the vector of subdivisions is passed through a lot of functions
+  std::vector<Mesh> extractMeshes(double boundary_offset, double subdivision);
+
+  std::vector<Mesh> extractMeshes(double boundary_offset, double subdivision, std::vector<std::vector<double>>& strand_subdivisions);
 
   const RuledSurface& getRuledSurface(size_t index) const;
 

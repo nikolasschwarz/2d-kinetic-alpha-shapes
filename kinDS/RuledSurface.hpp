@@ -33,6 +33,7 @@ class RuledSurface
   size_t right_face_index; // Index of the right face in the delaunay triangulation
   std::vector<std::pair<double, Point<2>>> left_event_points; // Left event points by time
   std::vector<std::pair<double, Point<2>>> right_event_points; // Right event points by time
+  std::vector<double> strand_subdivision; // Subdivision points along the strand, used for mesh extraction
 
  public:
   RuledSurface(size_t left_face_index, size_t right_face_index)
@@ -157,19 +158,14 @@ class RuledSurface
     return left_bounds.size() == left_trajectory.size() + 1;
   }
 
-  /* void extractTriangles(std::vector<Point<3>>& vertices, std::vector<size_t>& indices, bool invert, size_t subdivision = 1) const
-  {
-    assert(isFinalized() && "Ruled surface must be finalized before extracting triangles.");
-
-    // Take steps of 1/subdivision in t direction and walk along the event points that are in between
-    double step = 1.0 / subdivision;
-    double t = left_bounds[0]; // Start time for the triangles // TODO: probably need to save this differently
-  }*/
-
-  void extractTriangles(std::vector<Point<3>>& vertices, std::vector<size_t>& indices, bool invert) const
+  std::vector<Mesh> extractTriangles(bool invert, std::vector<std::vector<double>>& strand_subdivisions, size_t strand_id) const
   {
     // TODO: take inversion into account
     assert(isFinalized() && "Ruled surface must be finalized before extracting triangles.");
+
+    std::vector<Mesh> meshes;
+    std::vector<Point<3>> vertices;
+    std::vector<size_t> indices;
 
     double t = left_bounds[0]; // Start time for the triangles
     double upper_bound = upperBound();
@@ -178,8 +174,7 @@ class RuledSurface
     size_t right_event_index = 0;
 
     // Initialize the first vertices
-
-    size_t left_vertex_index = vertices.size();
+    size_t left_vertex_index = 0;
     // distinguish between event points and regular points
     if (!left_event_points.empty() && left_event_points[0].first == t)
     {
@@ -191,7 +186,7 @@ class RuledSurface
       vertices.emplace_back(Point<3> { left_trajectory[0][0](t - std::floor(t)), left_trajectory[0][1](t - std::floor(t)), t });
     }
 
-    size_t right_vertex_index = vertices.size();
+    size_t right_vertex_index = 0;
 
     if (!right_event_points.empty() && right_event_points[0].first == t)
     {
@@ -205,12 +200,71 @@ class RuledSurface
 
     size_t left_index = 0;
     size_t right_index = 0;
+    size_t subdivision_index = 0;
+
+    // TODO: whenever t exceeds a strand subdivision, create a new mesh
 
     while (t <= upper_bound)
     {
       if (left_index >= left_trajectory.size() && right_index >= right_trajectory.size())
       {
         break; // No more left trajectories to process
+      }
+
+      // Decide whether we have to subdivide here
+      std::function<bool()> subdivide = [&]()
+      {
+        if (strand_subdivision.empty())
+          return false;
+
+        if (subdivision_index >= strand_subdivision.size())
+          return false;
+
+        if (left_index + 1 >= left_bounds.size() || right_index + 1 >= right_bounds.size())
+          return false; // No more bounds to compare
+
+        return (strand_subdivision[subdivision_index] < left_bounds[left_index + 1]) && (strand_subdivision[subdivision_index] < right_bounds[right_index + 1]);
+      };
+
+      if (subdivide())
+      {
+        // Finish the current mesh and start a new one
+        t = strand_subdivision[subdivision_index];
+        subdivision_index++;
+
+        // Add the two top points at time t
+        Point<3> left_point { left_trajectory[left_index][0](t - std::floor(t)), left_trajectory[left_index][1](t - std::floor(t)), t };
+        vertices.emplace_back(left_point);
+        size_t prev_left_vertex_index = left_vertex_index;
+        left_vertex_index = vertices.size() - 1;
+
+        Point<3> right_point { right_trajectory[right_index][0](t - std::floor(t)), right_trajectory[right_index][1](t - std::floor(t)), t };
+        vertices.emplace_back(right_point);
+        size_t prev_right_vertex_index = right_vertex_index;
+        right_vertex_index = vertices.size() - 1;
+
+        // Put triangles into index buffer
+        indices.push_back(prev_left_vertex_index);
+        indices.push_back(prev_right_vertex_index);
+        indices.push_back(left_vertex_index);
+
+        indices.push_back(prev_right_vertex_index);
+        indices.push_back(right_vertex_index);
+        indices.push_back(left_vertex_index);
+
+        meshes.push_back(Mesh(vertices, indices));
+
+        vertices.clear();
+        indices.clear();
+
+        left_vertex_index = 0;
+        right_vertex_index = 0;
+        // Re-insert the current vertices at time t
+        vertices.emplace_back(left_point);
+        left_vertex_index = 0;
+        vertices.emplace_back(right_point);
+        right_vertex_index = 1;
+        continue; // Re-evaluate subdivision after resetting
       }
 
       std::function<bool()> advance_left = [&]()
@@ -324,6 +378,9 @@ class RuledSurface
         indices.push_back(right_vertex_index); // New right vertex index
       }
     }
+
+    meshes.push_back(Mesh(vertices, indices));
+    return meshes;
   }
 
   void printDebugInfo(std::string prefix = "") const
@@ -402,6 +459,106 @@ class RuledSurface
         logger.log(INFO, "Lower Right Trajectory Sample at t = %f: %s", right_bounds[i], right_lower_sample.toString().c_str());
       }
     }
+  }
+
+  void applySubdivision(const std::vector<double>& subdivision)
+  {
+    // if (subdivision.empty())
+    //   return; // No subdivision to apply
+
+    // Assert that the subdivision points are sorted
+    assert(std::is_sorted(subdivision.begin(), subdivision.end()) && "Subdivision points must be sorted.");
+
+    // Insert subdivision points into the ruled surface
+    // We acheive this by merging the subdivision points with the existing bounds into a new vector and then copying it back
+    // Anything outside the bounds of the ruled surface is ignored
+    /* std::vector<double> new_left_bounds;
+    std::vector<double> new_right_bounds;
+    new_left_bounds.reserve(left_bounds.size() + subdivision.size());
+    new_right_bounds.reserve(right_bounds.size() + subdivision.size());
+    size_t left_index = 0;
+    size_t right_index = 0;
+    size_t subdiv_index = 0;
+    double lower_bound = lowerBound();
+    double upper_bound = upperBound();
+
+    while (left_index < left_bounds.size() || right_index < right_bounds.size() || subdiv_index < subdivision.size())
+    {
+      double left_val = left_index < left_bounds.size() ? left_bounds[left_index] : std::numeric_limits<double>::infinity();
+      double right_val = right_index < right_bounds.size() ? right_bounds[right_index] : std::numeric_limits<double>::infinity();
+      double subdiv_val = subdiv_index < subdivision.size() ? subdivision[subdiv_index] : std::numeric_limits<double>::infinity();
+      double next_val = std::min({ left_val, right_val, subdiv_val });
+      if (next_val == std::numeric_limits<double>::infinity())
+        break; // All vectors are exhausted
+
+      // if subdiv_val is the smallest, insert it into both
+      if (subdiv_val == next_val)
+      {
+        if (subdiv_val >= lower_bound && subdiv_val <= upper_bound)
+        {
+          new_left_bounds.push_back(subdiv_val);
+          new_right_bounds.push_back(subdiv_val);
+        }
+      }
+      else
+      {
+        if (left_val == next_val)
+        {
+          new_left_bounds.push_back(left_val);
+        }
+        if (right_val == next_val)
+        {
+          new_right_bounds.push_back(right_val);
+        }
+      }
+
+      if (next_val == left_val)
+        left_index++;
+      if (next_val == right_val)
+        right_index++;
+      if (next_val == subdiv_val)
+        subdiv_index++;
+    }
+
+    left_bounds = std::move(new_left_bounds);
+    right_bounds = std::move(new_right_bounds);*/
+
+    // This above does not work, instead we simply store the subdivision, if needed merge it with the previous one, and take care of it during mesh extraction
+    std::vector<double> new_subdivision;
+    new_subdivision.reserve(strand_subdivision.size() + subdivision.size());
+    size_t i = 0, j = 0;
+    while (i < strand_subdivision.size() && j < subdivision.size())
+    {
+      if (strand_subdivision[i] < subdivision[j])
+      {
+        new_subdivision.push_back(strand_subdivision[i]);
+        i++;
+      }
+      else if (strand_subdivision[i] > subdivision[j])
+      {
+        new_subdivision.push_back(subdivision[j]);
+        j++;
+      }
+      else
+      {
+        new_subdivision.push_back(strand_subdivision[i]); // Both are equal, add one
+        i++;
+        j++;
+      }
+    }
+    // copy remaining elements
+    if (i < strand_subdivision.size())
+    {
+      new_subdivision.insert(new_subdivision.end(), strand_subdivision.begin() + i, strand_subdivision.end());
+    }
+    if (j < subdivision.size())
+    {
+      new_subdivision.insert(new_subdivision.end(), subdivision.begin() + j, subdivision.end());
+    }
+
+    strand_subdivision = std::move(new_subdivision);
+
+    assert(std::is_sorted(strand_subdivision.begin(), strand_subdivision.end()) && "Merged subdivisions should be sorted.");
   }
 };
 } // namespace kinDS

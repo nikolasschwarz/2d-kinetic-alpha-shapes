@@ -2,9 +2,9 @@
 
 using namespace kinDS;
 
-Mesh StrandGeometry::extractMesh(const MeshBuilder* mesh_builder) const
+std::vector<Mesh> StrandGeometry::extractMesh(const MeshBuilder* mesh_builder, std::vector<std::vector<double>>& strand_subdivisions) const
 {
-  std::vector<Point<3>> vertices;
+  /* std::vector<Point<3>> vertices;
   std::vector<size_t> indices;
   std::vector<size_t> group_offsets;
 
@@ -16,7 +16,27 @@ Mesh StrandGeometry::extractMesh(const MeshBuilder* mesh_builder) const
   Mesh result(vertices, indices); // Return the constructed mesh
 
   result.setGroupOffsets(group_offsets); // Set the group offsets for the mesh
-  return result;
+  return result;*/
+
+  // Re-do this such that we obtain meshlets according to the strand subdivisions
+  std::vector<Mesh> meshes;
+  for (auto& [index, inverted] : ruled_surface_indices)
+  {
+    std::vector<Mesh> extracted = mesh_builder->getRuledSurface(index).extractTriangles(inverted, strand_subdivisions, strand_id);
+    std::copy(extracted.begin(), extracted.end(), std::back_inserter(meshes));
+  }
+
+  return meshes;
+}
+
+void kinDS::StrandGeometry::applySubdivision(const std::vector<double>& strand_subdivision, std::vector<RuledSurface>& ruled_surfaces)
+{
+  // iterate through the ruled surfaces and apply the subdivision
+  for (auto& [index, inverted] : ruled_surface_indices)
+  {
+    RuledSurface& rs = ruled_surfaces[index];
+    rs.applySubdivision(strand_subdivision);
+  }
 }
 
 VoronoiSiteTrajectory MeshBuilder::constructTrajectoryForHalfEdge(size_t half_edge_id, size_t section_index) const
@@ -219,8 +239,26 @@ void MeshBuilder::finalize()
   finalized = true; // Set the finalized flag to true
 }
 
-std::vector<Mesh> MeshBuilder::extractMeshes(double boundary_offset, double subdivision) const
+void kinDS::MeshBuilder::applySubdivisions(const std::vector<std::vector<double>>& strand_subdivisions)
 {
+  // first of all, we insert the strand subdivisions to all ruled surfaces
+  for (size_t strand_id = 0; strand_id < strand_geometries.size(); ++strand_id)
+  {
+    StrandGeometry& strand = strand_geometries[strand_id];
+    strand.applySubdivision(strand_subdivisions[strand_id], ruled_surfaces);
+  }
+}
+
+std::vector<Mesh> MeshBuilder::extractMeshes(double boundary_offset, double subdivision)
+{
+  std::vector<std::vector<double>> strand_subdivisions(strand_geometries.size());
+
+  return extractMeshes(boundary_offset, subdivision, strand_subdivisions);
+}
+
+std::vector<Mesh> MeshBuilder::extractMeshes(double boundary_offset, double subdivision, std::vector<std::vector<double>>& strand_subdivisions)
+{
+  assert(strand_subdivisions.size() == strand_geometries.size() && "Strand subdivisions size must match the number of strands.");
   logger.log(INFO, "Extracting meshes with boundary offset %f and subdivision %f", boundary_offset, subdivision);
 
   if (!finalized)
@@ -228,11 +266,15 @@ std::vector<Mesh> MeshBuilder::extractMeshes(double boundary_offset, double subd
     throw std::runtime_error("MeshBuilder must be finalized before extracting the mesh.");
   }
 
-  std::vector<Mesh> meshes;
-  for (const auto& strand : strand_geometries)
-  {
+  applySubdivisions(strand_subdivisions); // Apply the strand subdivisions to the ruled surfaces
 
-    meshes.push_back(strand.extractMesh(this)); // Add the mesh for the strand to the list of meshes
+  std::vector<Mesh> meshes;
+  for (size_t strand_id = 0; strand_id < strand_geometries.size(); ++strand_id)
+  {
+    assert(strand_geometries[strand_id].strand_id == strand_id && "Strand ID mismatch.");
+
+    std::vector<Mesh> extracted = strand_geometries[strand_id].extractMesh(this, strand_subdivisions); // Add the mesh for the strand to the list of meshes
+    std::copy(extracted.begin(), extracted.end(), std::back_inserter(meshes)); // TODO: we do this twice, this could be really inefficient if the compiler does not optimize it away
   }
 
   return meshes; // Return the list of extracted meshes
