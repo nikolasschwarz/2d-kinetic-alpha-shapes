@@ -174,7 +174,7 @@ class RuledSurface
     size_t right_event_index = 0;
 
     // Initialize the first vertices
-    size_t left_vertex_index = 0;
+    size_t left_vertex_index = vertices.size();
     // distinguish between event points and regular points
     if (!left_event_points.empty() && left_event_points[0].first == t)
     {
@@ -186,7 +186,7 @@ class RuledSurface
       vertices.emplace_back(Point<3> { left_trajectory[0][0](t - std::floor(t)), left_trajectory[0][1](t - std::floor(t)), t });
     }
 
-    size_t right_vertex_index = 0;
+    size_t right_vertex_index = vertices.size();
 
     if (!right_event_points.empty() && right_event_points[0].first == t)
     {
