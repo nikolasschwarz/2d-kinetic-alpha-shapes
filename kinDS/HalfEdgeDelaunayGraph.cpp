@@ -331,7 +331,7 @@ void HalfEdgeDelaunayGraph::printDebug() const
   {
     std::cout << " Outgoing edges from vertex " << u << ":\n";
 
-    for (IncidentEdgeIterator it = incident_edges_begin(u); it != incident_edges_end(u); ++it)
+    for (IncidentEdgeIterator it = incidentEdgesBegin(u); it != incidentEdgesEnd(u); ++it)
     {
       size_t he_id = *it;
       const HalfEdge& he = half_edges[he_id];

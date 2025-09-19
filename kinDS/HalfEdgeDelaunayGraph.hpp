@@ -134,12 +134,12 @@ class HalfEdgeDelaunayGraph
   };
 
   // helper functions to get iterator ranges
-  IncidentEdgeIterator incident_edges_begin(size_t v) const
+  IncidentEdgeIterator incidentEdgesBegin(size_t v) const
   {
     return IncidentEdgeIterator(this, v, false);
   }
 
-  IncidentEdgeIterator incident_edges_end(size_t v) const
+  IncidentEdgeIterator incidentEdgesEnd(size_t v) const
   {
     return IncidentEdgeIterator(this, v, true);
   }

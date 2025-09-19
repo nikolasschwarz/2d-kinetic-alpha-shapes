@@ -169,6 +169,29 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
 void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
 {
   // Traverse all half-edges around this strand and insert a new vertex into the corresponding segment meshes
+  auto& graph = kin_del.getGraph();
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
+  {
+    size_t he_id = *it;
+    size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[he_id];
+    // Get corresponding mesh
+    Mesh& mesh = meshes[segment_mesh_pair_index];
+    // Insert Voronoi vertex
+    size_t new_left_vertex_index = mesh.getVertices().size();
+    Point<3> left_vertex = computeVoronoiVertex(he_id, t, segment_mesh_pair_index);
+    mesh.addVertex(left_vertex[0], left_vertex[1], left_vertex[2]);
+    size_t new_right_vertex_index = mesh.getVertices().size();
+    Point<3> right_vertex = computeVoronoiVertex(he_id ^ 1, t, segment_mesh_pair_index);
+    mesh.addVertex(right_vertex[0], right_vertex[1], right_vertex[2]);
+    // build triangles
+    const auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
+    // create two triangles
+    mesh.addTriangle(last_vertices.first, last_vertices.second, new_left_vertex_index);
+    mesh.addTriangle(new_left_vertex_index, last_vertices.second, new_right_vertex_index);
+    // update last vertex indices
+    segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index]
+      = std::make_pair(new_left_vertex_index, new_right_vertex_index);
+  }
 }
 
 void SegmentBuilder::finalize()
