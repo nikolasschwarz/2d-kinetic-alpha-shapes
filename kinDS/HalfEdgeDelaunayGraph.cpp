@@ -183,27 +183,28 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
   for (size_t u = 0; u < vertex_count; ++u)
   {
     int incoming_edge_index = incoming_edge_map[u];
-    if (incoming_edge_index != -1)
-    {
-      HalfEdge& incoming = half_edges[incoming_edge_index];
-      HalfEdge& boundary = half_edges[incoming.next];
-      assert(incoming.next == boundary_edge_map[u]);
-      HalfEdge& outgoing = half_edges[boundary.next];
+    assert(incoming_edge_index != -1);
+    HalfEdge& incoming = half_edges[incoming_edge_index];
+    HalfEdge& boundary = half_edges[incoming.next];
+    assert(incoming.next == boundary_edge_map[u]);
+    HalfEdge& outgoing = half_edges[boundary.next];
 
-      outgoing.next = incoming_edge_index; // link the outgoing half-edge to the incoming one
+    outgoing.next = incoming_edge_index; // link the outgoing half-edge to the incoming one
 
-      // create new face for the boundary edge
-      Triangle new_face;
-      new_face.half_edges[0] = incoming_edge_index; // first half-edge is the incoming one
-      new_face.half_edges[1] = incoming.next; // second half-edge is the boundary half-edge
-      new_face.half_edges[2] = boundary.next; // third half-edge is the outgoing one
+    // create new face for the boundary edge
+    Triangle new_face;
+    new_face.half_edges[0] = incoming_edge_index; // first half-edge is the incoming one
+    new_face.half_edges[1] = incoming.next; // second half-edge is the boundary half-edge
+    new_face.half_edges[2] = boundary.next; // third half-edge is the outgoing one
 
-      incoming.face = triangles.size(); // assign the new face index to the incoming half-edge
-      boundary.face = triangles.size(); // assign the new face index to the boundary half-edge
-      outgoing.face = triangles.size(); // assign the new face index to the outgoing half-edge
+    incoming.face = triangles.size(); // assign the new face index to the incoming half-edge
+    boundary.face = triangles.size(); // assign the new face index to the boundary half-edge
+    outgoing.face = triangles.size(); // assign the new face index to the outgoing half-edge
 
-      triangles.push_back(new_face); // add the new face to the list
-    }
+    triangles.push_back(new_face); // add the new face to the list
+
+    // finally, set the vertex to half-edge mapping for easy access
+    vertex_to_half_edge[u] = twin(incoming_edge_index);
   }
 
   logger.log(INFO, "Half-edge mesh built with %zu half-edges and %zu faces.", half_edges.size(), triangles.size());
@@ -227,6 +228,18 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
   {
     logger.log(ERROR, "Cannot flip edge %zu because one of the triangles is a boundary triangle.", he_id);
     return;
+  }
+
+  // check if edge is referenced in vertex_to_half_edge and update
+  if (vertex_to_half_edge[u] == he_id)
+  {
+    // just set to next half-edge on the vertex
+    vertex_to_half_edge[u] = neighbor_edge_id(he_id);
+  }
+
+  if (vertex_to_half_edge[v] == HalfEdgeDelaunayGraph::twin(he_id))
+  {
+    vertex_to_half_edge[v] = neighbor_edge_id(HalfEdgeDelaunayGraph::twin(he_id)); // update to point to the half-edge
   }
 
   int he_next_id = he.next;
@@ -268,6 +281,8 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
   triangles[twin.face].half_edges[2] = he_next_id; // Update the third half-edge of the twin face
 
   logger.log(DEBUG, "Flipped edge %zu between vertices %d and %d.", he_id, u, v);
+
+  printDebug();
 }
 
 void HalfEdgeDelaunayGraph::printDebug() const
@@ -310,4 +325,161 @@ void HalfEdgeDelaunayGraph::printDebug() const
     } while (he != start && he != -1);
     std::cout << "\n";
   }
+
+  std::cout << "Vertex incident half-edges:\n";
+  for (size_t u = 0; u < vertex_count; ++u)
+  {
+    std::cout << " Outgoing edges from vertex " << u << ":\n";
+
+    for (IncidentEdgeIterator it = incident_edges_begin(u); it != incident_edges_end(u); ++it)
+    {
+      size_t he_id = *it;
+      const HalfEdge& he = half_edges[he_id];
+      std::cout << "  Half-edge " << he_id << " to vertex " << destination(he_id) << " in face " << he.face << "\n";
+    }
+  }
 }
+
+void HalfEdgeDelaunayGraph::init(const std::vector<CubicHermiteSpline<2>>& splines)
+{
+  vertex_count = splines.size();
+  vertex_to_half_edge.assign(vertex_count, -1);
+  std::vector<float> coords;
+  coords.reserve(splines.size() * 2); // Reserve space for x and y coordinates
+  for (const auto& spline : splines)
+  {
+    Point<2> point = spline.evaluate(0.0);
+    coords.push_back(point[0]);
+    coords.push_back(point[1]);
+  }
+
+  Delaunator::Delaunator2D delaunator(coords);
+
+  build(delaunator.triangles);
+}
+
+Point<2> HalfEdgeDelaunayGraph::circumcenter(const Point<2>& a, const Point<2>& b, const Point<2>& c)
+{
+  // Calculate the circumcenter of the triangle formed by points a, b, c
+  double D = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  if (D == 0)
+  {
+    // Degenerate case, return a point at infinity
+    logger.log(ERROR, "Circumcenter calculation failed due to zero denominator. Points may be collinear.");
+    return Point<2> { std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() };
+  }
+  double Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
+  double Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
+  return { Ux, Uy };
+}
+
+std::vector<std::pair<Point<2>, bool>> HalfEdgeDelaunayGraph::computeCircumcenters(const std::vector<Point<2>>& vertices) const
+{
+  // give either the position of the circumcenter or a direction vector if the triangle is infinite, the boolean indicates if the circumcenter is infinite
+  std::vector<std::pair<Point<2>, bool>> circumcenters(triangles.size());
+
+  for (size_t triangle_id = 0; triangle_id < triangles.size(); triangle_id++)
+  {
+    const Triangle& triangle = triangles[triangle_id];
+    const HalfEdge& he0 = half_edges[triangle.half_edges[0]];
+    const HalfEdge& he1 = half_edges[triangle.half_edges[1]];
+    const HalfEdge& he2 = half_edges[triangle.half_edges[2]];
+
+    // TODO:: How do we obtain the correct direction for these infinite vertices?
+    // Filter for infinity vertices
+    if (he0.origin == -1)
+    {
+      const Point<2>& v1 = vertices[he1.origin];
+      const Point<2>& v2 = vertices[he2.origin];
+      const Point<2> dir = v2 - v1;
+      circumcenters[triangle_id] = { Point<2> { dir[1], -dir[0] }, true };
+      continue;
+    }
+
+    if (he1.origin == -1)
+    {
+      const Point<2>& v0 = vertices[he0.origin];
+      const Point<2>& v2 = vertices[he2.origin];
+      const Point<2> dir = v0 - v2;
+      circumcenters[triangle_id] = { Point<2> { dir[1], -dir[0] }, true };
+      continue;
+    }
+
+    if (he2.origin == -1)
+    {
+      const Point<2>& v0 = vertices[he0.origin];
+      const Point<2>& v1 = vertices[he1.origin];
+      const Point<2> dir = v1 - v0;
+      circumcenters[triangle_id] = { Point<2> { dir[1], -dir[0] }, true };
+      continue;
+    }
+
+    // Get the vertices of the triangle
+    const Point<2>& v0 = vertices[he0.origin];
+    const Point<2>& v1 = vertices[he1.origin];
+    const Point<2>& v2 = vertices[he2.origin];
+    // Compute the circumcenter of the triangle
+    circumcenters[triangle_id] = { circumcenter(v0, v1, v2), false };
+  }
+
+  return circumcenters;
+}
+
+// utils
+bool HalfEdgeDelaunayGraph::isOutsideBoundary(size_t he_id) const
+{
+  // walk the triangle and check if any vertex is -1
+  for (size_t i = 0; i < 3; i++)
+  {
+    if (half_edges[he_id].origin == -1)
+    {
+      return true;
+    }
+    he_id = half_edges[he_id].next;
+  }
+
+  return false;
+}
+
+bool HalfEdgeDelaunayGraph::isOnBoundary(size_t he_id) const
+{
+  // XOR this as one half-edge will be inside and the other one outside
+  return isOutsideBoundary(he_id) != isOutsideBoundary(he_id ^ 1);
+}
+
+inline int HalfEdgeDelaunayGraph::destination(size_t he_id) const
+{
+  return half_edges[he_id ^ 1].origin;
+}
+
+int HalfEdgeDelaunayGraph::triangleOppositeVertex(size_t he_id) const
+{
+  // Returns the vertex opposite to the half-edge in its triangle
+  size_t next_he_id = half_edges[he_id].next;
+  next_he_id = half_edges[next_he_id].next;
+  return half_edges[next_he_id].origin;
+}
+
+std::array<int, 3> HalfEdgeDelaunayGraph::adjacentTriangleVertices(size_t he_id) const
+{
+  // Returns the vertices of the triangle that the half-edge belongs to
+  std::array<int, 3> vertices;
+  for (size_t i = 0; i < 3; i++)
+  {
+    vertices[i] = half_edges[he_id].origin;
+    he_id = half_edges[he_id].next;
+  }
+  return vertices;
+}
+
+size_t kinDS::HalfEdgeDelaunayGraph::neighbor_edge_id(size_t he_id) const
+{
+  return half_edges[twin(he_id)].next;
+}
+
+size_t HalfEdgeDelaunayGraph::twin(size_t he_id) { return he_id ^ 1; }
+
+// getters
+const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& HalfEdgeDelaunayGraph::getHalfEdges() const { return half_edges; }
+const std::vector<HalfEdgeDelaunayGraph::Triangle>& HalfEdgeDelaunayGraph::getFaces() const { return triangles; }
+size_t HalfEdgeDelaunayGraph::getVertexCount() const { return vertex_count; }
