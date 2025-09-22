@@ -68,7 +68,7 @@ class KineticDelaunay
     /**
      * \brief Finalize after all events have been handled
      */
-    virtual void finalize() { }
+    virtual void finalize(double t) { }
   };
 
  private:
@@ -221,7 +221,7 @@ class KineticDelaunay
     std::vector<double> quadrilateral_last_updated(graph.getHalfEdges().size() / 2, 0.0);
     while (!events.empty())
     {
-      auto event = events.top();
+      Event event = events.top();
       events.pop();
 
       // Check if the event is still valid

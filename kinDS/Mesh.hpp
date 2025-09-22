@@ -40,7 +40,7 @@ class Mesh
   ~Mesh() = default;
 
   // Add methods to manipulate the mesh, such as adding vertices, triangles, normals, and UVs
-  void addVertex(double x, double y, double z);
+  size_t addVertex(double x, double y, double z);
   void addTriangle(size_t v1, size_t v2, size_t v3);
   void addTriangle(size_t v1, size_t v2, size_t v3, size_t uv1, size_t uv2, size_t uv3);
   void addNormal(double nx, double ny, double nz);

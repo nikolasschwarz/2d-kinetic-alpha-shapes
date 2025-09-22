@@ -222,7 +222,7 @@ void MeshBuilder::afterEvent(KineticDelaunay::Event& e)
   }
 }
 
-void MeshBuilder::finalize()
+void MeshBuilder::finalize(double t)
 {
   // Finalize the mesh by finishing all ruled surfaces
   for (size_t strand_id = 0; strand_id < strand_geometries.size(); ++strand_id)

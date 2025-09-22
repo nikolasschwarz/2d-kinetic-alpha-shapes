@@ -34,6 +34,8 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
 
   void insertSubdivision(size_t strand_id, double t);
 
-  void finalize() override;
+  void finalize(double t) override;
+
+  std::vector<Mesh> extractMeshes() const;
 };
 } // namespace kinDS

@@ -44,7 +44,7 @@ class MeshBuilder : public KineticDelaunay::EventHandler
 
   void afterEvent(KineticDelaunay::Event& e) override;
 
-  void finalize() override;
+  void finalize(double t) override;
 
   void applySubdivisions(const std::vector<std::vector<double>>& strand_subdivisions);
 

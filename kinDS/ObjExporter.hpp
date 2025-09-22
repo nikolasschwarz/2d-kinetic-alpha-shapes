@@ -64,19 +64,28 @@ class ObjExporter
     file << "# Faces\n";
     size_t group_count = mesh.getGroupOffsets().size();
 
-    for (size_t group_index = 0; group_index < group_count - 1; group_index++)
+    if (group_count > 0)
     {
-      file << "o group_" << group_index << "\n";
-      size_t lb = mesh.getGroupOffsets()[group_index];
-      size_t ub = mesh.getGroupOffsets()[group_index + 1];
+      for (size_t group_index = 0; group_index < group_count - 1; group_index++)
+      {
+        file << "o group_" << group_index << "\n";
+        size_t lb = mesh.getGroupOffsets()[group_index];
+        size_t ub = mesh.getGroupOffsets()[group_index + 1];
+        writeFaces(file, mesh, lb, ub);
+      }
+
+      // Write the last group
+
+      file << "o group_" << (group_count - 1) << "\n";
+      size_t lb = mesh.getGroupOffsets().back();
+      size_t ub = mesh.getVertexIndices().size() / 3;
       writeFaces(file, mesh, lb, ub);
     }
-
-    // Write the last group
-    file << "o group_" << (group_count - 1) << "\n";
-    size_t lb = mesh.getGroupOffsets().back();
-    size_t ub = mesh.getVertexIndices().size() / 3;
-    writeFaces(file, mesh, lb, ub);
+    else
+    {
+      // No groups defined, write all faces
+      writeFaces(file, mesh, 0, mesh.getVertexIndices().size() / 3);
+    }
 
     file.close();
   }

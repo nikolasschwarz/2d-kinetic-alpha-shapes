@@ -5,11 +5,12 @@
 #include "kinDS/MeshBuilder.hpp"
 #include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
+#include "kinDS/SegmentBuilder.hpp"
 #include "simple_svg.hpp"
 #include "voronoi/VoronoiDiagramGenerator.h"
 #include <iostream>
 
-void voronoi_example()
+static void voronoi_example()
 {
   const size_t count = 4;
   float xValues[count] = { -22, -17, 4, 22 };
@@ -65,7 +66,7 @@ void voronoi_example()
   }
 }
 
-void eigen_example()
+static void eigen_example()
 {
   Eigen::VectorXd a(3);
   a << 1, 2, 3; // 1 + 2x + 3x^2
@@ -99,7 +100,7 @@ void eigen_example()
   std::cout << "Roots of the polynomial: " << roots << std::endl; // Outputs the roots of the polynomial
 }
 
-void kinetic_delaunay_example()
+static void kinetic_delaunay_example()
 {
   std::vector<kinDS::Point<2>> trajectory_A = {
     { -0.420113, -0.558875 },
@@ -160,7 +161,7 @@ void kinetic_delaunay_example()
   kinDS::KineticDelaunay kinetic_delaunay(splines);
 
   kinetic_delaunay.init();
-  kinDS::MeshBuilder mesh_builder(kinetic_delaunay, splines);
+  kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, splines);
   mesh_builder.init();
   auto points = kinetic_delaunay.getPointsAt(0.0);
   kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
@@ -179,9 +180,9 @@ void kinetic_delaunay_example()
     kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi_" + std::to_string(i + 1) + ".svg", 0.1);
   }
 
-  mesh_builder.finalize();
+  mesh_builder.finalize(section_count);
 
-  mesh_builder.printDebugInfo();
+  // mesh_builder.printDebugInfo();
 
   // Test subdivisions for 4 strands
   std::vector<std::vector<double>> subdivisions = {
@@ -191,7 +192,8 @@ void kinetic_delaunay_example()
     { 0.33, 1.25, 2.67, 4.19, 5.78, 6.92 }
   };
 
-  auto meshes = mesh_builder.extractMeshes(0.1, 0.01, subdivisions);
+  auto meshes = mesh_builder.extractMeshes();
+  //(0.1, 0.01, subdivisions);
 
   for (size_t i = 0; i < meshes.size(); ++i)
   {

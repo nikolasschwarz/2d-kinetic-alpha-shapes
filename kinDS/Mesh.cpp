@@ -2,9 +2,11 @@
 
 using namespace kinDS;
 
-void Mesh::addVertex(double x, double y, double z)
+size_t Mesh::addVertex(double x, double y, double z)
 {
+  size_t index = vertices.size();
   vertices.emplace_back(Point<3> { x, y, z });
+  return index;
 }
 
 void Mesh::addTriangle(size_t v1, size_t v2, size_t v3)

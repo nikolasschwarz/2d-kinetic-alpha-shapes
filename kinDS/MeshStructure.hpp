@@ -3,12 +3,8 @@
 namespace kinDS
 {
 // Provides a structure to hold the mesh data for the segments as it will later be on the GPU
-class MeshStructure
+struct MeshStructure
 {
- public:
-  MeshStructure();
-  ~MeshStructure();
-
   struct SegmentMeshPair
   {
     size_t segment_index0;
@@ -32,14 +28,4 @@ class MeshStructure
 
   std::vector<SegmentMeshPair> segment_pairs; // pairs of (start, end) indices into the index buffer for each meshlet
 };
-}
-
-using namespace kinDS;
-
-MeshStructure::MeshStructure()
-{
-}
-
-MeshStructure::~MeshStructure()
-{
 }
