@@ -100,6 +100,59 @@ static void eigen_example()
   std::cout << "Roots of the polynomial: " << roots << std::endl; // Outputs the roots of the polynomial
 }
 
+#include <queue>
+#include <utility> // for std::pair
+#include <vector>
+
+std::vector<std::pair<size_t, double>> merge_sorted_vectors(
+  const std::vector<std::vector<double>>& inputs)
+{
+  using Entry = std::pair<size_t, double>; // (index of input vector, value)
+  std::vector<std::pair<size_t, double>> result;
+
+  struct HeapNode
+  {
+    size_t vec_idx; // which input vector
+    size_t elem_idx; // index inside that vector
+    double value; // value itself
+
+    bool operator>(const HeapNode& other) const
+    {
+      return value > other.value; // for min-heap
+    }
+  };
+
+  std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<>> min_heap;
+
+  // Initialize heap with the first element of each vector
+  for (size_t i = 0; i < inputs.size(); ++i)
+  {
+    if (!inputs[i].empty())
+    {
+      min_heap.push({ i, 0, inputs[i][0] });
+    }
+  }
+
+  while (!min_heap.empty())
+  {
+    auto node = min_heap.top();
+    min_heap.pop();
+
+    // record (vector index, value)
+    result.emplace_back(node.vec_idx, node.value);
+
+    // advance in that vector
+    if (node.elem_idx + 1 < inputs[node.vec_idx].size())
+    {
+      min_heap.push({ node.vec_idx,
+        node.elem_idx + 1,
+        inputs[node.vec_idx][node.elem_idx + 1] });
+    }
+  }
+
+  return result;
+}
+
 static void kinetic_delaunay_example()
 {
   std::vector<kinDS::Point<2>> trajectory_A = {
@@ -158,10 +211,21 @@ static void kinetic_delaunay_example()
     spline_D
   };
 
+  // Test subdivisions for 4 strands
+  std::vector<std::vector<double>> subdivisions = {
+    { 0.42, 1.37, 2.89, 5.46 },
+    { 0.15, 1.92, 3.08, 4.61, 6.73 },
+    { 0.08, 2.14, 2.95, 4.22, 6.11 },
+    { 0.33, 1.25, 2.67, 4.19, 5.78, 6.92 }
+  };
+
+  // Sort subdivisions into pairs of strand index and parameter
+  std::vector<std::pair<size_t, double>> sorted_subdivisions = merge_sorted_vectors(subdivisions);
+
   kinDS::KineticDelaunay kinetic_delaunay(splines);
 
   kinetic_delaunay.init();
-  kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, splines);
+  kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, splines, sorted_subdivisions);
   mesh_builder.init();
   auto points = kinetic_delaunay.getPointsAt(0.0);
   kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
@@ -183,14 +247,6 @@ static void kinetic_delaunay_example()
   mesh_builder.finalize(section_count);
 
   // mesh_builder.printDebugInfo();
-
-  // Test subdivisions for 4 strands
-  std::vector<std::vector<double>> subdivisions = {
-    { 0.42, 1.37, 2.89, 5.46 },
-    { 0.15, 1.92, 3.08, 4.61, 6.73 },
-    { 0.08, 2.14, 2.95, 4.22, 6.11 },
-    { 0.33, 1.25, 2.67, 4.19, 5.78, 6.92 }
-  };
 
   auto meshes = mesh_builder.extractMeshes();
   //(0.1, 0.01, subdivisions);

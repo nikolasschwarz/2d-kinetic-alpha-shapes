@@ -18,11 +18,17 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   const KineticDelaunay& kin_del;
   const std::vector<CubicHermiteSpline<2>>& splines; // Reference to the splines used for the triangulation
   bool finalized = false; // Flag to indicate if the mesh has been finalized
+  std::vector<std::pair<size_t, double>> subdivisions;
+  size_t subdivision_index = 0;
 
   Point<3> computeVoronoiVertex(size_t half_edge_id, double t, size_t segment_mesh_pair_index) const;
 
+  void finishMesh(size_t half_edge_id, double t);
+
+  void startNewMesh(size_t half_edge_id, double t);
+
  public:
-  SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines);
+  SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines, std::vector<std::pair<size_t, double>> subdivisions);
 
   void init() override;
 
