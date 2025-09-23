@@ -248,7 +248,8 @@ static void kinetic_delaunay_example()
 
   // mesh_builder.printDebugInfo();
 
-  auto meshes = mesh_builder.extractMeshes();
+  // auto meshes = mesh_builder.extractMeshes();
+  auto meshes = mesh_builder.extractSegmentMeshlets();
   //(0.1, 0.01, subdivisions);
 
   for (size_t i = 0; i < meshes.size(); ++i)

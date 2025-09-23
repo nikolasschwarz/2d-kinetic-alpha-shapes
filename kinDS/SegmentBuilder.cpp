@@ -86,8 +86,6 @@ SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<Cubic
   size_t strand_count = graph.getVertexCount();
   strand_to_segment_indices.resize(strand_count);
   half_edge_index_to_segment_mesh_pair_index.resize(graph.getHalfEdges().size(), -1);
-
-  // size_t half_edge_count = graph.getHalfEdges().size();
 }
 
 void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
@@ -125,6 +123,75 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   assert(segment_mesh_pairs.size() == segment_mesh_pair_last_left_and_right_vertex.size());
 }
 
+size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t)
+{
+  auto& graph = kin_del.getGraph();
+
+  MeshStructure::SegmentMeshPair segment_mesh_pair;
+  segment_mesh_pairs.push_back(segment_mesh_pair);
+
+  Mesh mesh;
+
+  // first sample spline at t
+  // Point<2> p = splines[strand_id].evaluate(t);
+  // mesh.addVertex(p[0], p[1], t);
+  // we just create a triangle fan because the Voronoi cell is convex
+
+  // iterate over all segment indices of the strand
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
+  {
+    Point<3> voronoi_vertex = computeVoronoiVertex(*it, t, half_edge_index_to_segment_mesh_pair_index[*it]);
+    mesh.addVertex(voronoi_vertex[0], voronoi_vertex[1], voronoi_vertex[2]);
+  }
+
+  // create triangles
+  size_t center_index = 0;
+
+  for (size_t voronoi_index = 2; voronoi_index < mesh.getVertices().size(); ++voronoi_index)
+  {
+    mesh.addTriangle(center_index, voronoi_index - 1, voronoi_index);
+  }
+
+  size_t index = meshes.size();
+  meshes.push_back(mesh);
+  segment_mesh_pair_last_left_and_right_vertex.push_back(
+    std::make_pair(-1, -1)); // not needed, so we just set it to -1,-1
+
+  return index;
+}
+
+void kinDS::SegmentBuilder::accumulateSegmentProperties()
+{
+  // Iterate through all pairs and accumulate properties
+  for (size_t pair_id = 0; pair_id < segment_mesh_pairs.size(); ++pair_id)
+  {
+    auto& pair = segment_mesh_pairs[pair_id];
+    if (pair.segment_index0 != -1)
+    {
+      // make sure there is space left
+      assert(segment_properties[pair.segment_index0].neighbor_count < MeshStructure::SegmentProperties::MAX_NEIGHBORS);
+
+      segment_properties[pair.segment_index0].mesh_pair_indices[segment_properties[pair.segment_index0].neighbor_count]
+        = pair_id; // add mesh pair index
+      segment_properties[pair.segment_index0].neighbor_indices[segment_properties[pair.segment_index0].neighbor_count]
+        = pair.segment_index1; // add neighbor
+      segment_properties[pair.segment_index0].neighbor_count++;
+    }
+
+    if (pair.segment_index1 != -1)
+    {
+      // make sure there is space left
+      assert(segment_properties[pair.segment_index1].neighbor_count < MeshStructure::SegmentProperties::MAX_NEIGHBORS);
+
+      segment_properties[pair.segment_index1].mesh_pair_indices[segment_properties[pair.segment_index1].neighbor_count]
+        = pair_id; // add mesh pair index
+      segment_properties[pair.segment_index1].neighbor_indices[segment_properties[pair.segment_index1].neighbor_count]
+        = pair.segment_index0; // add neighbor
+      segment_properties[pair.segment_index1].neighbor_count++;
+    }
+  }
+}
+
 void SegmentBuilder::init()
 {
   // Initialize the strand geometries at t = 0.0
@@ -137,10 +204,16 @@ void SegmentBuilder::init()
   // initialize segment mesh properties for each strand
   for (size_t strand_id = 0; strand_id < graph.getVertexCount(); ++strand_id)
   {
-    size_t segment_mesh_properties_id = segment_mesh_properties.size();
-    MeshStructure::SegmentMeshProperties properties;
-    segment_mesh_properties.push_back(properties);
-    strand_to_segment_indices[strand_id].push_back(segment_mesh_properties_id);
+    size_t new_segment_id = segment_properties.size();
+    MeshStructure::SegmentProperties properties;
+    segment_properties.push_back(properties);
+    strand_to_segment_indices[strand_id].push_back(new_segment_id);
+
+    // create a closing mesh
+    size_t closing_mesh_index = createClosingMesh(strand_id, t);
+    MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[new_segment_id];
+    segment_mesh_pair.segment_index0 = -1;
+    segment_mesh_pair.segment_index1 = strand_to_segment_indices[strand_id].back();
   }
 
   // now go through all half-edges and create a segment mesh pair
@@ -274,11 +347,18 @@ void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
     finishMesh(*it, t);
   }
 
+  size_t new_segment_id = segment_properties.size();
+
+  // create a closing mesh
+  size_t closing_mesh_index = createClosingMesh(strand_id, t);
+  MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[closing_mesh_index];
+  segment_mesh_pair.segment_index0 = strand_to_segment_indices[strand_id].back();
+  segment_mesh_pair.segment_index1 = new_segment_id;
+
   // Create a new segment mesh property for the new segment
-  size_t segment_mesh_properties_id = segment_mesh_properties.size();
-  MeshStructure::SegmentMeshProperties properties;
-  segment_mesh_properties.push_back(properties);
-  strand_to_segment_indices[strand_id].push_back(segment_mesh_properties_id);
+  MeshStructure::SegmentProperties properties;
+  segment_properties.push_back(properties);
+  strand_to_segment_indices[strand_id].push_back(new_segment_id);
 
   // Start new meshes
   for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
@@ -327,10 +407,44 @@ void SegmentBuilder::finalize(double t)
     finishMesh(i, t);
   }
 
+  // finalize closing meshes
+  for (size_t strand_id = 0; strand_id < graph.getVertexCount(); ++strand_id)
+  {
+    // create a closing mesh
+    size_t closing_mesh_index = createClosingMesh(strand_id, t);
+    MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[closing_mesh_index];
+    segment_mesh_pair.segment_index0 = strand_to_segment_indices[strand_id].back();
+    segment_mesh_pair.segment_index1 = -1;
+  }
+
+  accumulateSegmentProperties();
+
   finalized = true; // Set the finalized flag to true
 }
 
 std::vector<Mesh> kinDS::SegmentBuilder::extractMeshes() const
 {
   return meshes;
+}
+
+std::vector<Mesh> kinDS::SegmentBuilder::extractSegmentMeshlets() const
+{
+  std::vector<Mesh> meshlets;
+
+  for (size_t segment_id = 0; segment_id < segment_properties.size(); ++segment_id)
+  {
+    Mesh segment_mesh;
+    const auto& properties = segment_properties[segment_id];
+    for (size_t neighbor_index = 0; neighbor_index < properties.neighbor_count; ++neighbor_index)
+    {
+      size_t mesh_pair_index = properties.mesh_pair_indices[neighbor_index];
+      const auto& mesh_pair = segment_mesh_pairs[mesh_pair_index];
+      const auto& mesh = meshes[mesh_pair_index];
+      // Append the mesh to the segment mesh
+      segment_mesh += mesh;
+    }
+    meshlets.push_back(segment_mesh);
+  }
+
+  return meshlets;
 }

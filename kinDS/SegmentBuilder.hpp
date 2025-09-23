@@ -9,7 +9,7 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
 {
  private:
   std::vector<std::vector<size_t>> strand_to_segment_indices; // Maps strand IDs to their corresponding segment indices in correct order
-  std::vector<MeshStructure::SegmentMeshProperties> segment_mesh_properties; // Properties for each segment mesh
+  std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs; // Pairs of segments and their corresponding mesh data
   std::vector<size_t> half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<Mesh> meshes; // List of all generated meshes
@@ -27,6 +27,10 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
 
   void startNewMesh(size_t half_edge_id, double t);
 
+  size_t createClosingMesh(size_t strand_id, double t);
+
+  void accumulateSegmentProperties();
+
  public:
   SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines, std::vector<std::pair<size_t, double>> subdivisions);
 
@@ -43,5 +47,7 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   void finalize(double t) override;
 
   std::vector<Mesh> extractMeshes() const;
+
+  std::vector<Mesh> extractSegmentMeshlets() const;
 };
 } // namespace kinDS

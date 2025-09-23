@@ -15,11 +15,12 @@ struct MeshStructure
   };
 
   // TODO: will a fixed size array be sufficient here? Alternatively, we need a separate buffer with start index and length
-  struct SegmentMeshProperties
+  struct SegmentProperties
   {
-    size_t mesh_pair_indices[15];
+    static const size_t MAX_NEIGHBORS = 15;
+    size_t mesh_pair_indices[MAX_NEIGHBORS];
     size_t neighbor_count = 0;
-    size_t neighbor_indices[15]; // TODO: do we need this? We can access it through the segment mesh pairs
+    size_t neighbor_indices[MAX_NEIGHBORS]; // TODO: do we need this? We can access it through the segment mesh pairs
     size_t padding;
   };
 
