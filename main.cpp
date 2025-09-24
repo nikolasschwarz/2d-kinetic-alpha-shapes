@@ -2,7 +2,6 @@
 #include "kinDS/CubicHermiteSpline.hpp"
 #include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
-#include "kinDS/MeshBuilder.hpp"
 #include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"

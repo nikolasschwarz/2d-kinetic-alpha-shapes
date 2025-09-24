@@ -12,7 +12,6 @@ add_executable(kinDS-app main.cpp
 	"kinDS/HalfEdgeDelaunayGraph.cpp"
 	"kinDS/Mesh.cpp"
 	"kinDS/Point.cpp"
-	"kinDS/MeshBuilder.cpp"
 	"kinDS/RationalFunction.cpp"
 	"kinDS/SegmentBuilder.cpp"
 )
