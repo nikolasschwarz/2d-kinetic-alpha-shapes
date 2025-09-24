@@ -6,64 +6,7 @@
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"
 #include "simple_svg.hpp"
-#include "voronoi/VoronoiDiagramGenerator.h"
 #include <iostream>
-
-static void voronoi_example()
-{
-  const size_t count = 4;
-  float xValues[count] = { -22, -17, 4, 22 };
-  float yValues[count] = { -9, 31, 13, -5 };
-
-  float minX = -100, maxX = 100, minY = -100, maxY = 100;
-
-  voronoi_diagram_generator::VoronoiDiagramGenerator vdg;
-  vdg.generateVoronoi(xValues, yValues, count, -100, 100, -100, 100, 3);
-
-  vdg.resetIterator();
-
-  float x1, y1, x2, y2;
-
-  printf("\n-------------------------------\n");
-
-  {
-    using namespace svg;
-    float width = 3000.0f;
-    float scale = width / (maxX - minX);
-    Dimensions dimensions(maxX - minX, maxY - minY);
-    Layout layout(dimensions, Layout::TopLeft, scale, svg::Point(-minX, -minY));
-
-    Document doc("voronoi.svg", layout);
-
-    // output lines of the Voronoi diagram
-    while (vdg.getNext(x1, y1, x2, y2))
-    {
-      printf("GOT Line (%f,%f)->(%f,%f)\n", x1, y1, x2, y2);
-      svg::Line line(
-        svg::Point(x1, y1), svg::Point(x2, y2),
-        svg::Stroke(0.5, svg::Color::Black));
-
-      doc << line;
-    }
-
-    // output the original sites
-    for (long i = 0; i < count; ++i)
-    {
-      printf("GOT Site (%f,%f)\n", xValues[i], yValues[i]);
-      doc << svg::Circle(svg::Point(xValues[i], yValues[i]), 3, svg::Fill(svg::Color::Red), svg::Stroke(1, svg::Color::Black));
-    }
-
-    // Save document and report status
-    if (doc.save())
-    {
-      std::cout << "File saved successfully." << std::endl;
-    }
-    else
-    {
-      std::cout << "Failed to save the file." << std::endl;
-    }
-  }
-}
 
 static void eigen_example()
 {
