@@ -65,8 +65,22 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t)
   // build triangles
   const auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
   // create two triangles
-  mesh.addTriangle(last_vertices.first, last_vertices.second, new_left_vertex_index);
-  mesh.addTriangle(new_left_vertex_index, last_vertices.second, new_right_vertex_index);
+  // split quad differently depending on which side is closer
+  if (last_vertices.first == last_vertices.second)
+  {
+    mesh.addTriangle(new_left_vertex_index, last_vertices.second, new_right_vertex_index);
+  }
+  else if (mesh.getVertices()[last_vertices.first][2] < mesh.getVertices()[last_vertices.second][2])
+  {
+    mesh.addTriangle(last_vertices.first, last_vertices.second, new_left_vertex_index);
+    mesh.addTriangle(new_left_vertex_index, last_vertices.second, new_right_vertex_index);
+  }
+  else
+  {
+    mesh.addTriangle(last_vertices.first, last_vertices.second, new_right_vertex_index);
+    mesh.addTriangle(last_vertices.first, new_right_vertex_index, new_left_vertex_index);
+  }
+
   // update last vertex indices
   segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index]
     = std::make_pair(new_left_vertex_index, new_right_vertex_index);
@@ -132,11 +146,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t)
 
   Mesh mesh;
 
-  // first sample spline at t
-  // Point<2> p = splines[strand_id].evaluate(t);
-  // mesh.addVertex(p[0], p[1], t);
   // we just create a triangle fan because the Voronoi cell is convex
-
   // iterate over all segment indices of the strand
   for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
   {
@@ -236,30 +246,7 @@ void SegmentBuilder::betweenSections(size_t index)
   size_t half_edge_count = graph.getHalfEdges().size();
   for (size_t i = 0; i < half_edge_count; i += 2)
   {
-    const auto& he = graph.getHalfEdges()[i];
-    size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[i];
-
-    // Get corresponding mesh
-    Mesh& mesh = meshes[segment_mesh_pair_index];
-
-    // Insert Voronoi vertex
-    Point<3> left_vertex = computeVoronoiVertex(i, index, segment_mesh_pair_index);
-    size_t new_left_vertex_index = mesh.addVertex(left_vertex[0], left_vertex[1], left_vertex[2]);
-
-    Point<3> right_vertex = computeVoronoiVertex(i ^ 1, index, segment_mesh_pair_index);
-    size_t new_right_vertex_index = mesh.addVertex(right_vertex[0], right_vertex[1], right_vertex[2]);
-
-    // build triangles
-    const auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
-    // create two triangles
-    if (last_vertices.first != last_vertices.second) // case of first insertion
-    {
-      mesh.addTriangle(last_vertices.first, last_vertices.second, new_left_vertex_index);
-    }
-    mesh.addTriangle(new_left_vertex_index, last_vertices.second, new_right_vertex_index);
-    // update last vertex indices
-    segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index]
-      = std::make_pair(new_left_vertex_index, new_right_vertex_index);
+    finishMesh(i, index);
   }
 }
 
@@ -398,7 +385,7 @@ void SegmentBuilder::finalize(double t)
     subdivision_index++;
   }
 
-  // Finalize the mesh by finishing all ruled surfaces
+  // Finalize the segments by finishing all meshes
   auto& graph = kin_del.getGraph();
   size_t half_edge_count = graph.getHalfEdges().size();
 
