@@ -1,7 +1,7 @@
 #pragma once
 #include "KineticDelaunay.hpp"
-#include "Mesh.hpp"
 #include "MeshStructure.hpp"
+#include "VoronoiMesh.hpp"
 namespace kinDS
 {
 
@@ -12,7 +12,7 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs; // Pairs of segments and their corresponding mesh data
   std::vector<size_t> half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
-  std::vector<Mesh> meshes; // List of all generated meshes
+  std::vector<VoronoiMesh> meshes; // List of all generated meshes
   std::vector<std::pair<size_t, size_t>> segment_mesh_pair_last_left_and_right_vertex;
 
   const KineticDelaunay& kin_del;
@@ -33,6 +33,7 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
 
  public:
   SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines, std::vector<std::pair<size_t, double>> subdivisions);
+  SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines);
 
   void init() override;
 
@@ -46,8 +47,8 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
 
   void finalize(double t) override;
 
-  std::vector<Mesh> extractMeshes() const;
+  std::vector<VoronoiMesh> extractMeshes() const;
 
-  std::vector<Mesh> extractSegmentMeshlets() const;
+  std::vector<VoronoiMesh> extractSegmentMeshlets() const;
 };
 } // namespace kinDS

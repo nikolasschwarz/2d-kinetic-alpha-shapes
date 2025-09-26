@@ -1,4 +1,4 @@
-#include "Mesh.hpp"
+#include "VoronoiMesh.hpp"
 
 namespace kinDS
 {
@@ -25,7 +25,7 @@ struct MeshStructure
   };
 
  private:
-  Mesh mesh;
+  VoronoiMesh mesh;
 
   std::vector<SegmentMeshPair> segment_pairs; // pairs of (start, end) indices into the index buffer for each meshlet
 };

@@ -6,12 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(kinDS-app main.cpp
 	"delaunay/Delaunator2D.cpp"
-	"kinDS/KineticDelaunay.cpp"
+	
 	"kinDS/Polynomial.cpp"
 	"kinDS/HalfEdgeDelaunayGraph.cpp"
-	"kinDS/Mesh.cpp"
+	"kinDS/VoronoiMesh.cpp"
 	"kinDS/Point.cpp"
-	"kinDS/RationalFunction.cpp"
 	"kinDS/SegmentBuilder.cpp"
 )
 

@@ -6,7 +6,7 @@
 namespace kinDS
 {
 
-class Mesh
+class VoronoiMesh
 {
  private:
   std::vector<Point<3>> vertices; // Stores vertex coordinates
@@ -17,8 +17,8 @@ class Mesh
   std::vector<size_t> group_offsets; // Offsets for groups of triangles, if needed
 
  public:
-  Mesh() = default;
-  Mesh(std::vector<Point<3>> vertices,
+  VoronoiMesh() = default;
+  VoronoiMesh(std::vector<Point<3>> vertices,
     std::vector<size_t> vertex_indices,
     std::vector<Vector<3>> normals = {},
     std::vector<Vector<2>> uvs = {},
@@ -37,7 +37,7 @@ class Mesh
     }
   }
 
-  ~Mesh() = default;
+  ~VoronoiMesh() = default;
 
   // Add methods to manipulate the mesh, such as adding vertices, triangles, normals, and UVs
   size_t addVertex(double x, double y, double z);
@@ -55,7 +55,7 @@ class Mesh
     group_offsets = offsets;
   }
 
-  Mesh& operator+=(const Mesh& other)
+  VoronoiMesh& operator+=(const VoronoiMesh& other)
   {
     size_t old_vertices_size = vertices.size();
     vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());

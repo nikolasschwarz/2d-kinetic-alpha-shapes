@@ -54,7 +54,7 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t)
 {
   size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[he_id];
   // Get corresponding mesh
-  Mesh& mesh = meshes[segment_mesh_pair_index];
+  VoronoiMesh& mesh = meshes[segment_mesh_pair_index];
   // Insert Voronoi vertex
   size_t new_left_vertex_index = mesh.getVertices().size();
   Point<3> left_vertex = computeVoronoiVertex(he_id & ~1, t, segment_mesh_pair_index);
@@ -102,6 +102,17 @@ SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<Cubic
   half_edge_index_to_segment_mesh_pair_index.resize(graph.getHalfEdges().size(), -1);
 }
 
+SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines)
+  : kin_del(kin_del)
+  , splines(splines)
+{
+  auto& graph = kin_del.getGraph();
+
+  size_t strand_count = graph.getVertexCount();
+  strand_to_segment_indices.resize(strand_count);
+  half_edge_index_to_segment_mesh_pair_index.resize(graph.getHalfEdges().size(), -1);
+}
+
 void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
 {
   size_t even_id = half_edge_id & ~1;
@@ -121,7 +132,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   segment_mesh_pairs.push_back(segment_mesh_pair);
 
   // For now also create a mesh, but this might be changed later
-  Mesh mesh;
+  VoronoiMesh mesh;
 
   Point<3> left_vertex = computeVoronoiVertex(even_id, t, half_edge_index_to_segment_mesh_pair_index[even_id]);
   Point<3> right_vertex = computeVoronoiVertex(odd_id, t, half_edge_index_to_segment_mesh_pair_index[even_id]);
@@ -144,7 +155,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t)
   MeshStructure::SegmentMeshPair segment_mesh_pair;
   segment_mesh_pairs.push_back(segment_mesh_pair);
 
-  Mesh mesh;
+  VoronoiMesh mesh;
 
   // we just create a triangle fan because the Voronoi cell is convex
   // iterate over all segment indices of the strand
@@ -262,7 +273,7 @@ void SegmentBuilder::beforeEvent(KineticDelaunay::Event& e)
   // Finish the segment mesh pair of the edge being flipped
   Point<3> event_point { e.position[0], e.position[1], e.time };
   size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[e.half_edge_id];
-  Mesh& mesh = meshes[segment_mesh_pair_index];
+  VoronoiMesh& mesh = meshes[segment_mesh_pair_index];
   size_t event_vertex_index = mesh.addVertex(event_point[0], event_point[1], event_point[2]);
   const auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
   // create one triangle to the event point
@@ -285,7 +296,7 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
   segment_mesh_pairs.push_back(segment_mesh_pair);
 
   // For now also create a mesh, but this might be changed later
-  Mesh mesh;
+  VoronoiMesh mesh;
   size_t index = mesh.addVertex(e.position[0], e.position[1], e.time);
 
   // add last vertex indices
@@ -303,7 +314,7 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
   for (size_t he_id : { he0_id, he1_id, he2_id, he3_id })
   {
     size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[he_id];
-    Mesh& mesh = meshes[segment_mesh_pair_index];
+    VoronoiMesh& mesh = meshes[segment_mesh_pair_index];
     size_t index = mesh.addVertex(e.position[0], e.position[1], e.time);
     const auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
     // create one triangle to the event point
@@ -359,7 +370,7 @@ void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
     auto& adjacent_he = graph.getHalfEdges()[adjacent_he_id];
     size_t adjacent_segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[adjacent_he_id];
     auto& adjacent_segment_mesh_pair = segment_mesh_pairs[adjacent_segment_mesh_pair_index];
-    Mesh& adjacent_mesh = meshes[adjacent_segment_mesh_pair_index];
+    VoronoiMesh& adjacent_mesh = meshes[adjacent_segment_mesh_pair_index];
     Point<3> vertex = computeVoronoiVertex(adjacent_he_id, t, adjacent_segment_mesh_pair_index);
     size_t new_vertex_index = adjacent_mesh.addVertex(vertex[0], vertex[1], vertex[2]);
     auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[adjacent_segment_mesh_pair_index];
@@ -409,18 +420,18 @@ void SegmentBuilder::finalize(double t)
   finalized = true; // Set the finalized flag to true
 }
 
-std::vector<Mesh> kinDS::SegmentBuilder::extractMeshes() const
+std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractMeshes() const
 {
   return meshes;
 }
 
-std::vector<Mesh> kinDS::SegmentBuilder::extractSegmentMeshlets() const
+std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractSegmentMeshlets() const
 {
-  std::vector<Mesh> meshlets;
+  std::vector<VoronoiMesh> meshlets;
 
   for (size_t segment_id = 0; segment_id < segment_properties.size(); ++segment_id)
   {
-    Mesh segment_mesh;
+    VoronoiMesh segment_mesh;
     const auto& properties = segment_properties[segment_id];
     for (size_t neighbor_index = 0; neighbor_index < properties.neighbor_count; ++neighbor_index)
     {

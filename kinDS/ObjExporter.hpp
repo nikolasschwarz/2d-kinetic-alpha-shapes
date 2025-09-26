@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Mesh.hpp"
+#include "VoronoiMesh.hpp"
 #include <fstream>
 #include <limits>
 #include <string>
@@ -10,7 +10,7 @@ namespace kinDS
 class ObjExporter
 {
  private:
-  static void writeFaces(std::ofstream& file, const Mesh& mesh, size_t lb, size_t ub)
+  static void writeFaces(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub)
   {
     const auto& indices = mesh.getVertexIndices();
     const auto& uv_indices = mesh.getUVIndices();
@@ -28,7 +28,7 @@ class ObjExporter
   }
 
  public:
-  static void writeMesh(const Mesh& mesh, const std::string& filename)
+  static void writeMesh(const VoronoiMesh& mesh, const std::string& filename)
   {
     std::ofstream file(filename);
     if (!file.is_open())
