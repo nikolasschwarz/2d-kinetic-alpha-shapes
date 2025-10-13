@@ -18,7 +18,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
   triangles.reserve(2 * (vertex_count - 1)); // Reserve space for faces, at most 2 * (V - 1) faces in a triangulation
   triangles.resize(num_tris);
 
-  std::vector<int> boundary_edge_map(vertex_count, -1);
+  std::vector<int> boundary_edge_map(vertex_count, -1); // Store outgoing edge along boundary from vertex, -1 for non-boundary vertices
 
   struct TmpHalfEdge
   {
@@ -149,7 +149,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
     }
   }
 
-  std::vector<int> incoming_edge_map(vertex_count, -1);
+  std::vector<int> incoming_edge_map(vertex_count, -1); // Store incoming edge from infinity to vertex, -1 for non-boundary vertices
 
   // at the boundary, create additional faces and half-edges that connect to a vertex at infinity
   for (size_t u = 0; u < vertex_count; ++u)
@@ -183,7 +183,10 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
   for (size_t u = 0; u < vertex_count; ++u)
   {
     int incoming_edge_index = incoming_edge_map[u];
-    assert(incoming_edge_index != -1);
+    if (incoming_edge_index == -1)
+    {
+      continue; // not a boundary vertex
+    }
     HalfEdge& incoming = half_edges[incoming_edge_index];
     HalfEdge& boundary = half_edges[incoming.next];
     assert(incoming.next == boundary_edge_map[u]);

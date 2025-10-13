@@ -161,6 +161,16 @@ class Polynomial
 
   std::vector<double> realRoots() const
   {
+    size_t deg = degree();
+    if (deg == 0)
+    {
+      return {};
+    }
+    else if (deg == -1)
+    {
+      return { std::numeric_limits<double>::quiet_NaN() };
+    }
+
     Eigen::PolynomialSolver<double, Eigen::Dynamic> solver;
     solver.compute(coeffs);
     const Eigen::VectorXcd& complex_roots = solver.roots();
@@ -201,25 +211,19 @@ class Polynomial
   // Utility: Remove leading zeros
   void trim()
   {
-    size_t trimmed_size = coeffs.size();
-    while (coeffs.size() != 0 && std::abs(*(coeffs.end() - 1)) < std::numeric_limits<double>::epsilon())
-    {
-      trimmed_size--;
-    }
-
-    coeffs.resize(trimmed_size);
+    coeffs.resize(degree());
   }
 
   // Polynomial degree, will return -1 for the zero polynomial
   int degree() const
   {
-    size_t trimmed_size = coeffs.size();
-    while (coeffs.size() != 0 && std::abs(*(coeffs.end() - 1)) < std::numeric_limits<double>::epsilon())
+    size_t deg = coeffs.size();
+    while (coeffs.size() != 0 && std::abs(*(coeffs.begin() + deg - 1)) < std::numeric_limits<double>::epsilon())
     {
-      trimmed_size--;
+      deg--;
     }
 
-    return (int)trimmed_size - 1;
+    return (int)deg - 1;
   }
 
   // Polynomial division: dividend = divisor * quotient + remainder

@@ -178,7 +178,7 @@ class KineticDelaunay
 
       event_trigger = inCircle(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);
     }
-
+    event_trigger.trim();
     auto zeros = event_trigger.realRoots();
 
     // print roots:
