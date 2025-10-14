@@ -221,7 +221,7 @@ class Polynomial
 
     for (size_t i = 0; i < coeffs.size(); ++i)
     {
-      if (std::abs(*(coeffs.end() - 1 - i)) >= std::numeric_limits<double>::epsilon())
+      if (std::abs(coeffs[i]) >= std::numeric_limits<double>::epsilon())
       {
         deg = i;
       }
