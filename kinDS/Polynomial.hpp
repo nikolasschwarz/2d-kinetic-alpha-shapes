@@ -211,7 +211,7 @@ class Polynomial
   // Utility: Remove leading zeros
   void trim()
   {
-    coeffs.resize(degree());
+    coeffs.resize(degree() + 1);
   }
 
   // Polynomial degree, will return -1 for the zero polynomial

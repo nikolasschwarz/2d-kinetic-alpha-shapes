@@ -184,6 +184,10 @@ class KineticDelaunay
     // print roots:
     for (const auto& root : zeros)
     {
+      if (isnan(root))
+      {
+        continue; // Skip NaN roots
+      }
       if (root > fraction && root <= 1)
       { // Check if the root is within the valid range
         double event_time = root + section;
