@@ -153,6 +153,20 @@ static void kinetic_delaunay_example()
     spline_D
   };
 
+  /* std::vector<std::vector<kinDS::Point<2>>> strand_guide_points = {
+    { kinDS::Point<2> { -0.989291, 0 }, kinDS::Point<2> { -0.989291, 0.0300001 }, kinDS::Point<2> { -0.989291, 0.0599997 } },
+    { kinDS::Point<2> { 0.776422, -1.19209e-07 }, kinDS::Point<2> { 0.776422, 0.0300002 }, kinDS::Point<2> { 0.776422, 0.059999 } },
+    { kinDS::Point<2> { -0.91605, 0 }, kinDS::Point<2> { -0.91605, 0.0299998 }, kinDS::Point<2> { -0.91605, 0.060001 } },
+    { kinDS::Point<2> { 0.865895, 2.98023e-08 }, kinDS::Point<2> { 0.865895, 0.0299999 }, kinDS::Point<2> { 0.865895, 0.0600004 } }
+  };
+
+  std::vector<kinDS::CubicHermiteSpline<2>> splines;
+
+  for (auto& points : strand_guide_points)
+  {
+    splines.emplace_back(points);
+  }*/
+
   // Test subdivisions for 4 strands
   std::vector<std::vector<double>> subdivisions = {
     { 0.42, 1.37, 2.89, 5.46 },
@@ -167,7 +181,7 @@ static void kinetic_delaunay_example()
   kinDS::KineticDelaunay kinetic_delaunay(splines);
 
   kinetic_delaunay.init();
-  kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, splines, sorted_subdivisions);
+  kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, splines);
   mesh_builder.init();
   auto points = kinetic_delaunay.getPointsAt(0.0);
   kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
