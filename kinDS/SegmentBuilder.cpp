@@ -322,7 +322,8 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
     // update last vertex indices
     const MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[segment_mesh_pair_index];
     // Determine whether we have to update the left or right vertex here
-    if (segment_mesh_pair.segment_index1 == strand_to_segment_indices[graph.getHalfEdges()[he_id].origin].back())
+    int origin = graph.getHalfEdges()[he_id].origin;
+    if (segment_mesh_pair.segment_index1 == strand_to_segment_indices[origin].back())
     {
       segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index] = std::make_pair(last_vertices.first, index);
     }
