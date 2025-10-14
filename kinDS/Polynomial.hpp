@@ -217,13 +217,17 @@ class Polynomial
   // Polynomial degree, will return -1 for the zero polynomial
   int degree() const
   {
-    size_t deg = coeffs.size();
-    while (coeffs.size() != 0 && std::abs(*(coeffs.begin() + deg - 1)) < std::numeric_limits<double>::epsilon())
+    int deg = -1;
+
+    for (size_t i = 0; i < coeffs.size(); ++i)
     {
-      deg--;
+      if (std::abs(*(coeffs.end() - 1 - i)) >= std::numeric_limits<double>::epsilon())
+      {
+        deg = i;
+      }
     }
 
-    return (int)deg - 1;
+    return deg;
   }
 
   // Polynomial division: dividend = divisor * quotient + remainder
