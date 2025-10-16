@@ -166,11 +166,11 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t)
   }
 
   // create triangles
-  size_t center_index = 0;
+  size_t apex_index = 0;
 
   for (size_t voronoi_index = 2; voronoi_index < mesh.getVertices().size(); ++voronoi_index)
   {
-    mesh.addTriangle(center_index, voronoi_index - 1, voronoi_index);
+    mesh.addTriangle(apex_index, voronoi_index - 1, voronoi_index);
   }
 
   size_t index = meshes.size();

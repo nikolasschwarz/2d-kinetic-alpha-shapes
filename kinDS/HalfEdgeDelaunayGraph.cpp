@@ -205,9 +205,16 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
     outgoing.face = triangles.size(); // assign the new face index to the outgoing half-edge
 
     triangles.push_back(new_face); // add the new face to the list
+  }
 
-    // finally, set the vertex to half-edge mapping for easy access
-    vertex_to_half_edge[u] = twin(incoming_edge_index);
+  // iterate over all edges to set vertex to half-edge mapping
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    const HalfEdge& he = half_edges[he_id];
+    if (he.origin != -1) // ignore edges from infinity
+    {
+      vertex_to_half_edge[he.origin] = he_id;
+    }
   }
 
   logger.log(INFO, "Half-edge mesh built with %zu half-edges and %zu faces.", half_edges.size(), triangles.size());
