@@ -5,8 +5,9 @@ using namespace kinDS;
 [[nodiscard]] Point<3> kinDS::SegmentBuilder::computeVoronoiVertex(size_t half_edge_id, double t, size_t segment_mesh_pair_index) const
 {
   const auto& graph = kin_del.getGraph();
-  const auto& he = graph.getHalfEdges()[half_edge_id];
-  const auto& twin_he = graph.getHalfEdges()[half_edge_id ^ 1];
+  const auto& half_edges = graph.getHalfEdges();
+  const auto& he = half_edges[half_edge_id];
+  const auto& twin_he = half_edges[half_edge_id ^ 1];
 
   // Compute the positions of the Voronoi vertices at t = 0.0
   // First get the two adjacent triangles
@@ -19,19 +20,18 @@ using namespace kinDS;
 
   std::vector<Point<2>> points;
 
-  if (triVertices[0] != -1)
-  {
-    points.push_back(splines[triVertices[0]].evaluate(t));
-  }
+  size_t infinite_vertex_index = -1;
 
-  if (triVertices[1] != -1)
+  for (size_t i = 0; i < 3; ++i)
   {
-    points.push_back(splines[triVertices[1]].evaluate(t));
-  }
-
-  if (triVertices[2] != -1)
-  {
-    points.push_back(splines[triVertices[2]].evaluate(t));
+    if (triVertices[i] != -1)
+    {
+      points.push_back(splines[triVertices[i]].evaluate(t));
+    }
+    else
+    {
+      infinite_vertex_index = i;
+    }
   }
 
   if (points.size() == 3)
@@ -42,8 +42,40 @@ using namespace kinDS;
   {
     infinite = true;
 
+    // get the triangle on the opposite side of the non-infinite edge
+    size_t finite_he_id = half_edge_id;
+
+    while (half_edges[finite_he_id].origin != -1)
+    {
+      finite_he_id = half_edges[finite_he_id].next;
+    }
+    finite_he_id = half_edges[finite_he_id].next;
+    size_t inner_twin = graph.twin(finite_he_id);
+    size_t opposite_vertex = graph.triangleOppositeVertex(inner_twin);
+    Point<2> opposite_point = splines[opposite_vertex].evaluate(t);
+
+    Point<2> neighboring_circumcenter = graph.circumcenter(points[0], points[1], opposite_point);
+
+    // make sure edge points in the correct direction
+    if (triVertices[1] == -1)
+    {
+      std::swap(points[0], points[1]);
+    }
+
     // For now just take the midpoint of the edge
-    circumcenter = (points[0] + points[1]) * 0.5;
+    // circumcenter = (points[0] + points[1]) * 0.5;
+
+    // move circumcenter far out in the direction perpendicular to the edge
+    Vector<2> edge_dir = (points[1] - points[0]).normalized();
+    Vector<2> perp_dir = Vector<2> { -edge_dir[1], edge_dir[0] };
+    double far_distance = 1.0;
+    circumcenter = neighboring_circumcenter - perp_dir * far_distance;
+  }
+
+  // sanity check if any coordinates are far out of range
+  if (std::abs(circumcenter[0]) > 100 || std::abs(circumcenter[1]) > 100)
+  {
+    logger.log(WARNING, "Adding vertex with large coordinate: (%f, %f, %f)", circumcenter[0], circumcenter[1], t);
   }
 
   // place circumcenters into the mesh
@@ -56,11 +88,20 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t)
   // Get corresponding mesh
   VoronoiMesh& mesh = meshes[segment_mesh_pair_index];
   // Insert Voronoi vertex
-  size_t new_left_vertex_index = mesh.getVertices().size();
+
   Point<3> left_vertex = computeVoronoiVertex(he_id & ~1, t, segment_mesh_pair_index);
+  Point<3> right_vertex = computeVoronoiVertex((he_id & ~1) + 1, t, segment_mesh_pair_index);
+
+  auto& he = kin_del.getGraph().getHalfEdges()[he_id & ~1];
+
+  if (he.origin == -1)
+  {
+    throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
+  }
+
+  size_t new_left_vertex_index = mesh.getVertices().size();
   mesh.addVertex(left_vertex[0], left_vertex[1], left_vertex[2]);
   size_t new_right_vertex_index = mesh.getVertices().size();
-  Point<3> right_vertex = computeVoronoiVertex((he_id & ~1) + 1, t, segment_mesh_pair_index);
   mesh.addVertex(right_vertex[0], right_vertex[1], right_vertex[2]);
   // build triangles
   const auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
@@ -94,23 +135,12 @@ SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<Cubic
   // Assert that the subdivisions are sorted by time
   assert(std::is_sorted(this->subdivisions.begin(), this->subdivisions.end(), [](const auto& a, const auto& b)
     { return a.second <= b.second; }));
-
-  auto& graph = kin_del.getGraph();
-
-  size_t strand_count = graph.getVertexCount();
-  strand_to_segment_indices.resize(strand_count);
-  half_edge_index_to_segment_mesh_pair_index.resize(graph.getHalfEdges().size(), -1);
 }
 
 SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines)
   : kin_del(kin_del)
   , splines(splines)
 {
-  auto& graph = kin_del.getGraph();
-
-  size_t strand_count = graph.getVertexCount();
-  strand_to_segment_indices.resize(strand_count);
-  half_edge_index_to_segment_mesh_pair_index.resize(graph.getHalfEdges().size(), -1);
 }
 
 void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
@@ -137,6 +167,11 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   Point<3> left_vertex = computeVoronoiVertex(even_id, t, half_edge_index_to_segment_mesh_pair_index[even_id]);
   Point<3> right_vertex = computeVoronoiVertex(odd_id, t, half_edge_index_to_segment_mesh_pair_index[even_id]);
 
+  if (he.origin == -1)
+  {
+    throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
+  }
+
   mesh.addVertex(left_vertex[0], left_vertex[1], left_vertex[2]);
   mesh.addVertex(right_vertex[0], right_vertex[1], right_vertex[2]);
   meshes.push_back(mesh);
@@ -146,6 +181,123 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
     std::make_pair(mesh.getVertices().size() - 2, mesh.getVertices().size() - 1));
 
   assert(segment_mesh_pairs.size() == segment_mesh_pair_last_left_and_right_vertex.size());
+}
+
+void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset)
+{
+  auto& graph = kin_del.getGraph();
+  size_t index = boundary_mesh.getVertices().size();
+  // add all vertices
+  for (size_t i = 0; i < graph.getVertexCount(); i++)
+  {
+    Point<2> vertex = splines[i].evaluate(t);
+    boundary_mesh.addVertex(vertex[0], vertex[1], t + offset);
+  }
+  // add all triangles
+  for (const auto& triangle : graph.getFaces())
+  {
+    auto vertices = graph.adjacentTriangleVertices(triangle.half_edges[0]);
+
+    // check for infinite vertices
+    if (vertices[0] == -1 || vertices[1] == -1 || vertices[2] == -1)
+    {
+      continue; // skip triangles with infinite vertices
+    }
+
+    if (invert_orientation)
+    {
+      std::swap(vertices[1], vertices[2]);
+    }
+    boundary_mesh.addTriangle(index + vertices[0], index + vertices[1], index + vertices[2]);
+  }
+
+  // add to last left and right vertex map
+  for (HalfEdgeDelaunayGraph::BoundaryEdgeIterator it = graph.boundaryEdgesBegin(); it != graph.boundaryEdgesEnd(); ++it)
+  {
+    size_t he_id = *it;
+
+    auto& left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
+    size_t left_vertex_index = graph.getHalfEdges()[he_id].origin + index;
+    size_t right_vertex_index = graph.getHalfEdges()[he_id ^ 1].origin + index;
+
+    // complete mesh from before
+    if (left_and_right.first != -1)
+    {
+      // create triangles
+      boundary_mesh.addTriangle(left_and_right.first, right_vertex_index, left_vertex_index);
+
+      if (left_and_right.second != -1)
+      {
+        boundary_mesh.addTriangle(left_and_right.second, right_vertex_index, left_and_right.first);
+      }
+    }
+    else
+    {
+      assert(left_and_right.second == -1);
+    }
+
+    left_and_right.first = left_vertex_index;
+    left_and_right.second = right_vertex_index;
+
+    boundary_mesh_last_left_and_right_vertex[he_id] = std::make_pair(left_vertex_index, right_vertex_index);
+  }
+}
+
+void kinDS::SegmentBuilder::traceBoundary(double t)
+{
+  auto& graph = kin_del.getGraph();
+
+  size_t last_he_id = -1;
+  size_t first_new_vertex_index = boundary_mesh.getVertices().size();
+
+  for (HalfEdgeDelaunayGraph::BoundaryEdgeIterator it = graph.boundaryEdgesBegin(), end = graph.boundaryEdgesEnd(); it != end; ++it)
+  {
+    size_t he_id = *it;
+    size_t strand_index = graph.getHalfEdges()[he_id].origin;
+
+    auto& left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
+    size_t left_vertex_index = boundary_mesh.getVertices().size();
+
+    boundary_mesh.addVertex(splines[strand_index].evaluate(t)[0], splines[strand_index].evaluate(t)[1], t);
+    size_t right_vertex_index = boundary_mesh.getVertices().size();
+
+    if (left_and_right.first != -1)
+    {
+      // create triangles
+      boundary_mesh.addTriangle(left_and_right.first, right_vertex_index, left_vertex_index);
+
+      if (left_and_right.second != -1)
+      {
+        boundary_mesh.addTriangle(left_and_right.second, right_vertex_index, left_and_right.first);
+      }
+    }
+    else
+    {
+      assert(left_and_right.second == -1);
+    }
+
+    left_and_right.first = left_vertex_index;
+    left_and_right.second = right_vertex_index;
+    last_he_id = he_id;
+  }
+
+  // fix last right vertex
+  if (last_he_id != -1)
+  {
+    boundary_mesh_last_left_and_right_vertex[last_he_id].second = first_new_vertex_index;
+
+    // update the last two triangles
+    size_t index_count = boundary_mesh.getVertexIndices().size();
+
+    if (index_count >= 2)
+    {
+      boundary_mesh.getVertexIndices()[index_count - 2] = first_new_vertex_index;
+    }
+    if (index_count >= 5)
+    {
+      boundary_mesh.getVertexIndices()[index_count - 5] = first_new_vertex_index;
+    }
+  }
 }
 
 size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t)
@@ -162,6 +314,8 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t)
   for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
   {
     Point<3> voronoi_vertex = computeVoronoiVertex(*it, t, half_edge_index_to_segment_mesh_pair_index[*it]);
+    Point<3> other_voronoi_vertex = computeVoronoiVertex(graph.twin(*it), t, half_edge_index_to_segment_mesh_pair_index[*it]);
+
     mesh.addVertex(voronoi_vertex[0], voronoi_vertex[1], voronoi_vertex[2]);
   }
 
@@ -215,15 +369,21 @@ void kinDS::SegmentBuilder::accumulateSegmentProperties()
 
 void SegmentBuilder::init()
 {
+  auto& graph = kin_del.getGraph();
+
+  size_t strand_count = graph.getVertexCount();
+  strand_to_segment_indices.resize(strand_count);
+  half_edge_index_to_segment_mesh_pair_index.resize(graph.getHalfEdges().size(), -1);
+  corner_to_cutoff_mesh_indices.resize(graph.getHalfEdges().size(), -1);
+
   // Initialize the strand geometries at t = 0.0
   double t = 0.0; // TODO: might be customized later
 
   // We need a ruled surface for each half-edge in the graph with the exeption of those having the infinite vertex as origin
-  auto& graph = kin_del.getGraph();
   size_t half_edge_count = graph.getHalfEdges().size();
 
   // initialize segment mesh properties for each strand
-  for (size_t strand_id = 0; strand_id < graph.getVertexCount(); ++strand_id)
+  for (size_t strand_id = 0; strand_id < strand_count; ++strand_id)
   {
     size_t new_segment_id = segment_properties.size();
     MeshStructure::SegmentProperties properties;
@@ -242,6 +402,10 @@ void SegmentBuilder::init()
   {
     startNewMesh(i, t);
   }
+
+  // initialize boundary mesh
+  boundary_mesh_last_left_and_right_vertex.resize(half_edge_count, std::make_pair(-1, -1));
+  addVoronoiTriangulationToBoundaryMesh(t, false, -0.01);
 }
 
 void SegmentBuilder::betweenSections(size_t index)
@@ -259,6 +423,8 @@ void SegmentBuilder::betweenSections(size_t index)
   {
     finishMesh(i, index);
   }
+
+  traceBoundary(index);
 }
 
 void SegmentBuilder::beforeEvent(KineticDelaunay::Event& e)
@@ -373,6 +539,8 @@ void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
     auto& adjacent_segment_mesh_pair = segment_mesh_pairs[adjacent_segment_mesh_pair_index];
     VoronoiMesh& adjacent_mesh = meshes[adjacent_segment_mesh_pair_index];
     Point<3> vertex = computeVoronoiVertex(adjacent_he_id, t, adjacent_segment_mesh_pair_index);
+    Point<3> other_vertex = computeVoronoiVertex(graph.twin(adjacent_he_id), t, adjacent_segment_mesh_pair_index);
+
     size_t new_vertex_index = adjacent_mesh.addVertex(vertex[0], vertex[1], vertex[2]);
     auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[adjacent_segment_mesh_pair_index];
     adjacent_mesh.addTriangle(last_vertices.first, last_vertices.second, new_vertex_index);
@@ -418,6 +586,8 @@ void SegmentBuilder::finalize(double t)
 
   accumulateSegmentProperties();
 
+  addVoronoiTriangulationToBoundaryMesh(t, true, 0.01);
+
   finalized = true; // Set the finalized flag to true
 }
 
@@ -438,12 +608,22 @@ std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractSegmentMeshlets() const
     {
       size_t mesh_pair_index = properties.mesh_pair_indices[neighbor_index];
       const auto& mesh_pair = segment_mesh_pairs[mesh_pair_index];
-      const auto& mesh = meshes[mesh_pair_index];
+      VoronoiMesh mesh = meshes[mesh_pair_index];
+      if (segment_mesh_pairs[mesh_pair_index].segment_index0 != segment_id)
+      {
+        mesh.flipOrientation();
+      }
       // Append the mesh to the segment mesh
       segment_mesh += mesh;
     }
+    segment_mesh.mergeDuplicateVertices(1e-4);
     meshlets.push_back(segment_mesh);
   }
 
   return meshlets;
+}
+
+const VoronoiMesh& kinDS::SegmentBuilder::getBoundaryMesh() const
+{
+  return boundary_mesh;
 }

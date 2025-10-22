@@ -16,6 +16,17 @@ class VoronoiMesh
   std::vector<size_t> uv_indices; // Stores indices of texture coordinates for faces
   std::vector<size_t> group_offsets; // Offsets for groups of triangles, if needed
 
+  struct Vec3iHash
+  {
+    std::size_t operator()(const Point<3>& v) const noexcept
+    {
+      std::size_t h1 = std::hash<int> {}(v[0]);
+      std::size_t h2 = std::hash<int> {}(v[1]);
+      std::size_t h3 = std::hash<int> {}(v[2]);
+      return h1 ^ (h2 << 1) ^ (h3 << 2);
+    }
+  };
+
  public:
   VoronoiMesh() = default;
   VoronoiMesh(std::vector<Point<3>> vertices,
@@ -45,62 +56,27 @@ class VoronoiMesh
   void addTriangle(size_t v1, size_t v2, size_t v3, size_t uv1, size_t uv2, size_t uv3);
   void addNormal(double nx, double ny, double nz);
   void addUV(double u, double v);
-  void startNewGroup()
-  {
-    group_offsets.push_back(vertex_indices.size()); // Store the current vertex index count as a new group offset
-  }
+  void startNewGroup();
+  void setGroupOffsets(const std::vector<size_t>& offsets);
 
-  void setGroupOffsets(const std::vector<size_t>& offsets)
-  {
-    group_offsets = offsets;
-  }
+  VoronoiMesh& operator+=(const VoronoiMesh& other);
 
-  VoronoiMesh& operator+=(const VoronoiMesh& other)
-  {
-    size_t old_vertices_size = vertices.size();
-    vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
+  void flipOrientation();
 
-    size_t old_vertex_indices_size = vertex_indices.size();
-    vertex_indices.insert(vertex_indices.end(), other.vertex_indices.begin(), other.vertex_indices.end());
-
-    std::transform(vertex_indices.begin() + old_vertex_indices_size,
-      vertex_indices.end(),
-      vertex_indices.begin() + old_vertex_indices_size,
-      [&](size_t index)
-      { return index + old_vertices_size; });
-
-    normals.insert(normals.end(), other.normals.begin(), other.normals.end());
-
-    size_t old_uvs_size = uvs.size();
-    uvs.insert(uvs.end(), other.uvs.begin(), other.uvs.end());
-
-    size_t old_uv_indices_size = uv_indices.size();
-    uv_indices.insert(uv_indices.end(), other.uv_indices.begin(), other.uv_indices.end());
-
-    std::transform(uv_indices.begin() + old_uv_indices_size,
-      uv_indices.end(),
-      uv_indices.begin() + old_uv_indices_size,
-      [&](size_t index)
-      { return index + old_uvs_size; });
-
-    size_t old_group_count = group_offsets.size();
-    group_offsets.insert(group_offsets.end(), other.group_offsets.begin(), other.group_offsets.end());
-
-    std::transform(group_offsets.begin() + old_group_count,
-      group_offsets.end(),
-      group_offsets.begin() + old_group_count,
-      [&](size_t offset)
-      { return offset + old_vertex_indices_size; });
-
-    return *this;
-  }
+  // Merge duplicate vertices (within epsilon) and update triangle indices
+  void mergeDuplicateVertices(double epsilon = 0.0);
 
   // Methods to retrieve mesh data
   const std::vector<Point<3>>& getVertices() const;
+  std::vector<Point<3>>& getVertices();
   const std::vector<size_t>& getVertexIndices() const;
+  std::vector<size_t>& getVertexIndices();
   const std::vector<Vector<3>>& getNormals() const;
   const std::vector<Vector<2>>& getUVs() const;
   const std::vector<size_t>& getUVIndices() const;
   const std::vector<size_t>& getGroupOffsets() const { return group_offsets; }
+
+  // debug methods
+  void checkForDegenerateTriangles() const;
 };
 }

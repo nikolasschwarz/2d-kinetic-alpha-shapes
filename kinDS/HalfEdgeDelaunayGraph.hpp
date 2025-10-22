@@ -61,7 +61,8 @@ class HalfEdgeDelaunayGraph
   int triangleOppositeVertex(size_t he_id) const;
 
   std::array<int, 3> adjacentTriangleVertices(size_t he_id) const;
-  size_t neighbor_edge_id(size_t he_id) const;
+  size_t neighborEdgeId(size_t he_id) const;
+  size_t nextOnBoundaryId(size_t he_id) const;
 
   static size_t twin(size_t he_id);
 
@@ -96,7 +97,7 @@ class HalfEdgeDelaunayGraph
       if (curr_he_ == npos)
         return *this; // already at end
 
-      curr_he_ = g_->neighbor_edge_id(curr_he_);
+      curr_he_ = g_->neighborEdgeId(curr_he_);
 
       // if we are back at start, mark as end
       if (curr_he_ == start_he_ && !first_)
@@ -142,6 +143,88 @@ class HalfEdgeDelaunayGraph
   IncidentEdgeIterator incidentEdgesEnd(size_t v) const
   {
     return IncidentEdgeIterator(this, v, true);
+  }
+
+  // ---------------- Iterator definition ----------------
+  class BoundaryEdgeIterator
+  {
+   public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = size_t; // returning halfedge indices
+    using difference_type = std::ptrdiff_t;
+    using pointer = const size_t*;
+    using reference = const size_t&;
+
+    BoundaryEdgeIterator(const HalfEdgeDelaunayGraph* g, size_t he_id, bool end = false)
+      : g_(g)
+      , start_he_(he_id)
+      , curr_he_(end ? npos : he_id)
+      , first_(true)
+    {
+    }
+
+    value_type operator*() const { return curr_he_; }
+
+    BoundaryEdgeIterator& operator++()
+    {
+      if (curr_he_ == npos)
+        return *this; // already at end
+
+      curr_he_ = g_->nextOnBoundaryId(curr_he_);
+
+      // if we are back at start, mark as end
+      if (curr_he_ == start_he_ && !first_)
+      {
+        curr_he_ = npos;
+      }
+      first_ = false;
+      return *this;
+    }
+
+    BoundaryEdgeIterator operator++(int)
+    {
+      BoundaryEdgeIterator tmp = *this;
+      ++(*this);
+      return tmp;
+    }
+
+    bool operator==(const BoundaryEdgeIterator& other) const
+    {
+      return curr_he_ == other.curr_he_ && g_ == other.g_;
+    }
+
+    bool operator!=(const BoundaryEdgeIterator& other) const
+    {
+      return !(*this == other);
+    }
+
+   private:
+    const HalfEdgeDelaunayGraph* g_;
+    size_t start_he_;
+    size_t curr_he_;
+    bool first_;
+    static constexpr size_t npos = static_cast<size_t>(-1);
+  };
+
+  // helper functions to get iterator ranges
+  BoundaryEdgeIterator boundaryEdgesBegin() const
+  {
+    size_t start_boundary_edge_index;
+
+    for (size_t i = 0; i < getHalfEdges().size(); i++)
+    {
+      if (isOnBoundary(i))
+      {
+        start_boundary_edge_index = i;
+        break;
+      }
+    }
+    return BoundaryEdgeIterator(this, start_boundary_edge_index, false);
+  }
+
+  BoundaryEdgeIterator boundaryEdgesEnd() const
+  {
+    return BoundaryEdgeIterator(this, 0, true);
   }
 };
 }

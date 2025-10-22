@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cmath>
+#include <stdexcept>
 #include <string>
 
 namespace kinDS
@@ -65,6 +66,21 @@ class Point : public std::array<double, dim>
   double dist(const Point<dim>& other) const
   {
     return std::sqrt(dist_sqr(other));
+  }
+
+  Point<dim> normalized() const
+  {
+    double length = len();
+    if (length == 0)
+    {
+      throw std::runtime_error("Cannot normalize a zero-length vector");
+    }
+    Point<dim> result {};
+    for (size_t i = 0; i < dim; ++i)
+    {
+      result[i] = (*this)[i] / length;
+    }
+    return result;
   }
 };
 

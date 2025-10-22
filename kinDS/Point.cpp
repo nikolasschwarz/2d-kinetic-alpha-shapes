@@ -2,7 +2,7 @@
 
 using namespace kinDS;
 // cross product for 3D points
-Point<3> operator%(const Point<3>& a, const Point<3>& b)
+Point<3> kinDS::operator%(const Point<3>& a, const Point<3>& b)
 {
   return Point<3> {
     a[1] * b[2] - a[2] * b[1],

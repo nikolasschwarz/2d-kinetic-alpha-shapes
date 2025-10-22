@@ -244,12 +244,12 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
   if (vertex_to_half_edge[u] == he_id)
   {
     // just set to next half-edge on the vertex
-    vertex_to_half_edge[u] = neighbor_edge_id(he_id);
+    vertex_to_half_edge[u] = neighborEdgeId(he_id);
   }
 
   if (vertex_to_half_edge[v] == HalfEdgeDelaunayGraph::twin(he_id))
   {
-    vertex_to_half_edge[v] = neighbor_edge_id(HalfEdgeDelaunayGraph::twin(he_id)); // update to point to the half-edge
+    vertex_to_half_edge[v] = neighborEdgeId(HalfEdgeDelaunayGraph::twin(he_id)); // update to point to the half-edge
   }
 
   int he_next_id = he.next;
@@ -482,9 +482,17 @@ std::array<int, 3> HalfEdgeDelaunayGraph::adjacentTriangleVertices(size_t he_id)
   return vertices;
 }
 
-size_t kinDS::HalfEdgeDelaunayGraph::neighbor_edge_id(size_t he_id) const
+size_t kinDS::HalfEdgeDelaunayGraph::neighborEdgeId(size_t he_id) const
 {
   return half_edges[twin(he_id)].next;
+}
+
+size_t kinDS::HalfEdgeDelaunayGraph::nextOnBoundaryId(size_t he_id) const
+{
+  size_t next_he_id = half_edges[he_id].next;
+  next_he_id = twin(next_he_id);
+  next_he_id = half_edges[next_he_id].next;
+  return next_he_id;
 }
 
 size_t HalfEdgeDelaunayGraph::twin(size_t he_id) { return he_id ^ 1; }

@@ -2,6 +2,7 @@
 #include "kinDS/CubicHermiteSpline.hpp"
 #include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
+#include "kinDS/MeshIntersection.hpp"
 #include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"
@@ -97,6 +98,8 @@ std::vector<std::pair<size_t, double>> merge_sorted_vectors(
 
 static void kinetic_delaunay_example()
 {
+// #define TEST_TRAJECTORIES
+#ifdef TEST_TRAJECTORIES
   std::vector<kinDS::Point<2>> trajectory_A = {
     { -0.420113, -0.558875 },
     { -0.432132, -0.426942 },
@@ -153,11 +156,18 @@ static void kinetic_delaunay_example()
     spline_D
   };
 
-  /* std::vector<std::vector<kinDS::Point<2>>> strand_guide_points = {
-    { kinDS::Point<2> { -0.989291, 0 }, kinDS::Point<2> { -0.989291, 0.0300001 }, kinDS::Point<2> { -0.989291, 0.0599997 } },
-    { kinDS::Point<2> { 0.776422, -1.19209e-07 }, kinDS::Point<2> { 0.776422, 0.0300002 }, kinDS::Point<2> { 0.776422, 0.059999 } },
-    { kinDS::Point<2> { -0.91605, 0 }, kinDS::Point<2> { -0.91605, 0.0299998 }, kinDS::Point<2> { -0.91605, 0.060001 } },
-    { kinDS::Point<2> { 0.865895, 2.98023e-08 }, kinDS::Point<2> { 0.865895, 0.0299999 }, kinDS::Point<2> { 0.865895, 0.0600004 } }
+#else
+  std::vector<std::vector<kinDS::Point<2>>> strand_guide_points = {
+    { kinDS::Point<2> { 1.18834, -2.4864 }, kinDS::Point<2> { 1.18834, -2.4864 }, kinDS::Point<2> { 1.18834, -2.4864 } },
+    { kinDS::Point<2> { 2.85395, -1.4172 }, kinDS::Point<2> { 2.85395, -1.4172 }, kinDS::Point<2> { 2.85395, -1.4172 } },
+    { kinDS::Point<2> { -0.437581, 2.5482 }, kinDS::Point<2> { -0.437581, 2.5482 }, kinDS::Point<2> { -0.437581, 2.5482 } },
+    { kinDS::Point<2> { 1.21216, 1.53291 }, kinDS::Point<2> { 1.21216, 1.53291 }, kinDS::Point<2> { 1.21216, 1.53291 } },
+    { kinDS::Point<2> { -0.399215, 0.527275 }, kinDS::Point<2> { -0.399215, 0.527275 }, kinDS::Point<2> { -0.399215, 0.527275 } },
+    { kinDS::Point<2> { -2.17474, 1.57956 }, kinDS::Point<2> { -2.17474, 1.57956 }, kinDS::Point<2> { -2.17474, 1.57956 } },
+    { kinDS::Point<2> { -0.576684, -1.41238 }, kinDS::Point<2> { -0.576684, -1.41237 }, kinDS::Point<2> { -0.576684, -1.41237 } },
+    { kinDS::Point<2> { -2.1812, -0.527052 }, kinDS::Point<2> { -2.1812, -0.527052 }, kinDS::Point<2> { -2.1812, -0.527052 } },
+    { kinDS::Point<2> { 2.84519, 0.530486 }, kinDS::Point<2> { 2.84519, 0.530486 }, kinDS::Point<2> { 2.84519, 0.530486 } },
+    { kinDS::Point<2> { 1.18232, -0.356776 }, kinDS::Point<2> { 1.18232, -0.356776 }, kinDS::Point<2> { 1.18232, -0.356776 } }
   };
 
   std::vector<kinDS::CubicHermiteSpline<2>> splines;
@@ -165,7 +175,20 @@ static void kinetic_delaunay_example()
   for (auto& points : strand_guide_points)
   {
     splines.emplace_back(points);
-  }*/
+  }
+#endif
+
+  // For debugging, print several samples along each spline
+  std::cout << "Spline evaluations:\n";
+  for (double t = 0.0; t <= 2.0; t += 0.25)
+  {
+    std::cout << "t = " << t << ":\n";
+    for (size_t i = 0; i < splines.size(); ++i)
+    {
+      auto p = splines[i].evaluate(t);
+      std::cout << "  Spline " << i << ": (" << p[0] << ", " << p[1] << ")\n";
+    }
+  }
 
   // Test subdivisions for 4 strands
   std::vector<std::vector<double>> subdivisions = {
@@ -214,6 +237,21 @@ static void kinetic_delaunay_example()
     kinDS::ObjExporter::writeMesh(meshes[i], filename);
     std::cout << "Mesh saved to " << filename << std::endl;
   }
+
+  auto& boundary_mesh = mesh_builder.getBoundaryMesh();
+  kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
+
+  boundary_mesh.checkForDegenerateTriangles();
+
+  // intersect all meshes with the boundary mesh and save the result
+  for (size_t i = 0; i < meshes.size(); ++i)
+  {
+    meshes[i].checkForDegenerateTriangles();
+    auto intersection = kinDS::MeshIntersection::intersect(meshes[i], boundary_mesh);
+    std::string filename = "intersection_" + std::to_string(i) + ".obj";
+    kinDS::ObjExporter::writeMesh(intersection, filename);
+    std::cout << "Intersection mesh saved to " << filename << std::endl;
+  }
 }
 
 int main()
@@ -223,4 +261,6 @@ int main()
   // voronoi_example();
 
   kinetic_delaunay_example();
+
+  // kinDS::MeshIntersection::test();
 }

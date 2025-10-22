@@ -14,6 +14,11 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   std::vector<size_t> half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
   std::vector<std::pair<size_t, size_t>> segment_mesh_pair_last_left_and_right_vertex;
+  std::vector<int> corner_to_cutoff_mesh_indices; // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no cutoff mesh exists
+
+  // for the boundary
+  VoronoiMesh boundary_mesh; // Mesh for the boundary cuts
+  std::vector<std::pair<size_t, size_t>> boundary_mesh_last_left_and_right_vertex;
 
   const KineticDelaunay& kin_del;
   const std::vector<CubicHermiteSpline<2>>& splines; // Reference to the splines used for the triangulation
@@ -26,6 +31,10 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   void finishMesh(size_t half_edge_id, double t);
 
   void startNewMesh(size_t half_edge_id, double t);
+
+  void addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset);
+
+  void traceBoundary(double t);
 
   size_t createClosingMesh(size_t strand_id, double t);
 
@@ -50,5 +59,7 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   std::vector<VoronoiMesh> extractMeshes() const;
 
   std::vector<VoronoiMesh> extractSegmentMeshlets() const;
+
+  const VoronoiMesh& getBoundaryMesh() const;
 };
 } // namespace kinDS
