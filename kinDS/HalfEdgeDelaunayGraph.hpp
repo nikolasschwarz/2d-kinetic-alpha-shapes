@@ -54,9 +54,21 @@ class HalfEdgeDelaunayGraph
   std::vector<std::pair<Point<2>, bool>> computeCircumcenters(const std::vector<Point<2>>& vertices) const;
 
   // utils
+
+  /**
+   * Determines whether a half-edge is outside the boundary. This includes all edges from/to infinity as well as the outer half-edges along the boundary.
+   */
   bool isOutsideBoundary(size_t he_id) const;
 
+  /**
+   * Determines whether a half-edge is on the boundary. This includes both, the inner and the outer half-edges along the boundary.
+   */
   bool isOnBoundary(size_t he_id) const;
+
+  /**
+   * Determines whether a half-edge is on the outer side along the boundary.
+   */
+  bool isOnBoundaryOutside(size_t he_id) const;
   inline int destination(size_t he_id) const;
   int triangleOppositeVertex(size_t he_id) const;
 
@@ -161,6 +173,10 @@ class HalfEdgeDelaunayGraph
       , curr_he_(end ? npos : he_id)
       , first_(true)
     {
+      if (!end)
+      {
+        assert(g_->triangleOppositeVertex(curr_he_) == -1 && "Iterator started on non-boundary half-edge!");
+      }
     }
 
     value_type operator*() const { return curr_he_; }
@@ -171,6 +187,8 @@ class HalfEdgeDelaunayGraph
         return *this; // already at end
 
       curr_he_ = g_->nextOnBoundaryId(curr_he_);
+
+      assert(g_->triangleOppositeVertex(curr_he_) == -1 && "Iterator moved to non-boundary half-edge!");
 
       // if we are back at start, mark as end
       if (curr_he_ == start_he_ && !first_)
@@ -209,17 +227,26 @@ class HalfEdgeDelaunayGraph
   // helper functions to get iterator ranges
   BoundaryEdgeIterator boundaryEdgesBegin() const
   {
-    size_t start_boundary_edge_index;
+    size_t start_boundary_edge_index = static_cast<size_t>(-1);
 
+    // TODO: this could be more efficient if we store and maintain a boundary edge
     for (size_t i = 0; i < getHalfEdges().size(); i++)
     {
-      if (isOnBoundary(i))
+      if (isOnBoundaryOutside(i))
       {
         start_boundary_edge_index = i;
         break;
       }
     }
-    return BoundaryEdgeIterator(this, start_boundary_edge_index, false);
+
+    if (start_boundary_edge_index != static_cast<size_t>(-1))
+    {
+      return BoundaryEdgeIterator(this, start_boundary_edge_index, false);
+    }
+    else
+    {
+      return boundaryEdgesEnd();
+    }
   }
 
   BoundaryEdgeIterator boundaryEdgesEnd() const

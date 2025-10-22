@@ -457,6 +457,11 @@ bool HalfEdgeDelaunayGraph::isOnBoundary(size_t he_id) const
   return isOutsideBoundary(he_id) != isOutsideBoundary(he_id ^ 1);
 }
 
+bool kinDS::HalfEdgeDelaunayGraph::isOnBoundaryOutside(size_t he_id) const
+{
+  return isOutsideBoundary(he_id) && isOnBoundary(he_id);
+}
+
 inline int HalfEdgeDelaunayGraph::destination(size_t he_id) const
 {
   return half_edges[he_id ^ 1].origin;
