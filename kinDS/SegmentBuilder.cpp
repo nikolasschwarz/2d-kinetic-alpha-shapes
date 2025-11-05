@@ -2,7 +2,8 @@
 
 using namespace kinDS;
 
-[[nodiscard]] Point<3> kinDS::SegmentBuilder::computeVoronoiVertex(size_t half_edge_id, double t, size_t segment_mesh_pair_index) const
+[[nodiscard]] Point<3> kinDS::SegmentBuilder::computeVoronoiVertex(
+  size_t half_edge_id, double t, size_t segment_mesh_pair_index) const
 {
   const auto& graph = kin_del.getGraph();
   const auto& half_edges = graph.getHalfEdges();
@@ -62,9 +63,6 @@ using namespace kinDS;
       std::swap(points[0], points[1]);
     }
 
-    // For now just take the midpoint of the edge
-    // circumcenter = (points[0] + points[1]) * 0.5;
-
     // move circumcenter far out in the direction perpendicular to the edge
     Vector<2> edge_dir = (points[1] - points[0]).normalized();
     Vector<2> perp_dir = Vector<2> { -edge_dir[1], edge_dir[0] };
@@ -96,7 +94,7 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t)
 
   if (he.origin == -1)
   {
-    throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
+    // throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
   }
 
   size_t new_left_vertex_index = mesh.getVertices().size();
@@ -127,14 +125,15 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t)
     = std::make_pair(new_left_vertex_index, new_right_vertex_index);
 }
 
-SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines, std::vector<std::pair<size_t, double>> subdivisions)
+SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines,
+  std::vector<std::pair<size_t, double>> subdivisions)
   : kin_del(kin_del)
   , splines(splines)
   , subdivisions(std::move(subdivisions))
 {
   // Assert that the subdivisions are sorted by time
-  assert(std::is_sorted(this->subdivisions.begin(), this->subdivisions.end(), [](const auto& a, const auto& b)
-    { return a.second <= b.second; }));
+  assert(std::is_sorted(this->subdivisions.begin(), this->subdivisions.end(),
+    [](const auto& a, const auto& b) { return a.second < b.second; }));
 }
 
 SegmentBuilder::SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines)
@@ -169,7 +168,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
 
   if (he.origin == -1)
   {
-    throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
+    // throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
   }
 
   mesh.addVertex(left_vertex[0], left_vertex[1], left_vertex[2]);
@@ -181,6 +180,39 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
     std::make_pair(mesh.getVertices().size() - 2, mesh.getVertices().size() - 1));
 
   assert(segment_mesh_pairs.size() == segment_mesh_pair_last_left_and_right_vertex.size());
+}
+
+void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right)
+{
+  const auto& last_left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
+  if (last_left_and_right.first != -1)
+  {
+    // distinguish the case that we have previously flipped an infinite edge that became a boundary edge
+    if (half_edge_to_boundary_vertex_index[he_id] == -1)
+    {
+
+      boundary_mesh.addTriangle(last_left_and_right.first, new_right, new_left);
+      if (last_left_and_right.second != -1)
+      {
+        boundary_mesh.addTriangle(last_left_and_right.second, new_right, last_left_and_right.first);
+      }
+    }
+    else
+    {
+      assert(last_left_and_right.second != -1);
+
+      boundary_mesh.addTriangle(last_left_and_right.second, new_right, half_edge_to_boundary_vertex_index[he_id]);
+      boundary_mesh.addTriangle(new_left, last_left_and_right.first, half_edge_to_boundary_vertex_index[he_id]);
+      boundary_mesh.addTriangle(new_left, half_edge_to_boundary_vertex_index[he_id], new_right);
+
+      // reset the half-edge to boundary vertex index
+      half_edge_to_boundary_vertex_index[he_id] = -1;
+    }
+  }
+  else
+  {
+    assert(last_left_and_right.second == -1);
+  }
 }
 
 void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset)
@@ -212,7 +244,8 @@ void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool
   }
 
   // add to last left and right vertex map
-  for (HalfEdgeDelaunayGraph::BoundaryEdgeIterator it = graph.boundaryEdgesBegin(); it != graph.boundaryEdgesEnd(); ++it)
+  for (HalfEdgeDelaunayGraph::BoundaryEdgeIterator it = graph.boundaryEdgesBegin(); it != graph.boundaryEdgesEnd();
+    ++it)
   {
     size_t he_id = *it;
 
@@ -220,21 +253,7 @@ void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool
     size_t left_vertex_index = graph.getHalfEdges()[he_id].origin + index;
     size_t right_vertex_index = graph.getHalfEdges()[he_id ^ 1].origin + index;
 
-    // complete mesh from before
-    if (left_and_right.first != -1)
-    {
-      // create triangles
-      boundary_mesh.addTriangle(left_and_right.first, right_vertex_index, left_vertex_index);
-
-      if (left_and_right.second != -1)
-      {
-        boundary_mesh.addTriangle(left_and_right.second, right_vertex_index, left_and_right.first);
-      }
-    }
-    else
-    {
-      assert(left_and_right.second == -1);
-    }
+    completeBoundaryMeshSection(he_id, left_vertex_index, right_vertex_index);
 
     left_and_right.first = left_vertex_index;
     left_and_right.second = right_vertex_index;
@@ -250,7 +269,8 @@ void kinDS::SegmentBuilder::traceBoundary(double t)
   size_t last_he_id = -1;
   size_t first_new_vertex_index = boundary_mesh.getVertices().size();
 
-  for (HalfEdgeDelaunayGraph::BoundaryEdgeIterator it = graph.boundaryEdgesBegin(), end = graph.boundaryEdgesEnd(); it != end; ++it)
+  for (HalfEdgeDelaunayGraph::BoundaryEdgeIterator it = graph.boundaryEdgesBegin(), end = graph.boundaryEdgesEnd();
+    it != end; ++it)
   {
     size_t he_id = *it;
     size_t strand_index = graph.getHalfEdges()[he_id].origin;
@@ -261,20 +281,7 @@ void kinDS::SegmentBuilder::traceBoundary(double t)
     boundary_mesh.addVertex(splines[strand_index].evaluate(t)[0], splines[strand_index].evaluate(t)[1], t);
     size_t right_vertex_index = boundary_mesh.getVertices().size();
 
-    if (left_and_right.first != -1)
-    {
-      // create triangles
-      boundary_mesh.addTriangle(left_and_right.first, right_vertex_index, left_vertex_index);
-
-      if (left_and_right.second != -1)
-      {
-        boundary_mesh.addTriangle(left_and_right.second, right_vertex_index, left_and_right.first);
-      }
-    }
-    else
-    {
-      assert(left_and_right.second == -1);
-    }
+    completeBoundaryMeshSection(he_id, left_vertex_index, right_vertex_index);
 
     left_and_right.first = left_vertex_index;
     left_and_right.second = right_vertex_index;
@@ -311,10 +318,13 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t)
 
   // we just create a triangle fan because the Voronoi cell is convex
   // iterate over all segment indices of the strand
-  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),
+                                                   end = graph.incidentEdgesEnd(strand_id);
+    it != end; ++it)
   {
     Point<3> voronoi_vertex = computeVoronoiVertex(*it, t, half_edge_index_to_segment_mesh_pair_index[*it]);
-    Point<3> other_voronoi_vertex = computeVoronoiVertex(graph.twin(*it), t, half_edge_index_to_segment_mesh_pair_index[*it]);
+    Point<3> other_voronoi_vertex
+      = computeVoronoiVertex(graph.twin(*it), t, half_edge_index_to_segment_mesh_pair_index[*it]);
 
     mesh.addVertex(voronoi_vertex[0], voronoi_vertex[1], voronoi_vertex[2]);
   }
@@ -379,7 +389,8 @@ void SegmentBuilder::init()
   // Initialize the strand geometries at t = 0.0
   double t = 0.0; // TODO: might be customized later
 
-  // We need a ruled surface for each half-edge in the graph with the exeption of those having the infinite vertex as origin
+  // We need a ruled surface for each half-edge in the graph with the exeption of those having the infinite vertex as
+  // origin
   size_t half_edge_count = graph.getHalfEdges().size();
 
   // initialize segment mesh properties for each strand
@@ -405,6 +416,7 @@ void SegmentBuilder::init()
 
   // initialize boundary mesh
   boundary_mesh_last_left_and_right_vertex.resize(half_edge_count, std::make_pair(-1, -1));
+  half_edge_to_boundary_vertex_index.resize(half_edge_count, -1);
   addVoronoiTriangulationToBoundaryMesh(t, false, -0.01);
 }
 
@@ -429,6 +441,7 @@ void SegmentBuilder::betweenSections(size_t index)
 
 void SegmentBuilder::beforeEvent(KineticDelaunay::Event& e)
 {
+  auto& graph = kin_del.getGraph();
   // Check if we need to insert a subdivision before handling this event
   while (subdivision_index < subdivisions.size() && subdivisions[subdivision_index].second <= e.time)
   {
@@ -444,6 +457,49 @@ void SegmentBuilder::beforeEvent(KineticDelaunay::Event& e)
   const auto& last_vertices = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
   // create one triangle to the event point
   mesh.addTriangle(last_vertices.first, last_vertices.second, event_vertex_index);
+
+  // For the boundary mesh, handle the case that a boundary edge is flipped. This means the opposite vertex becomes a
+  // boundary vertex
+  if (graph.isOnBoundary(e.half_edge_id))
+  {
+    /* The mesh will look like this here:
+     *
+     *  o-o-o  <-- boundary mesh after the flip consisting of two edges
+     *  |\|/|
+     *  | o |  <-- event point
+     *  |/ \|
+     *  o---o  <-- boundary mesh before the flip consisting of one edge
+     *
+     * In the following, we add the new boundary vertex at the event point and create the lower triangle.
+     * The mesh can later be completed as usual because we update the last left and right vertex indices accordingly.
+     */
+
+    size_t outer_he_id = graph.isOnBoundaryOutside(e.half_edge_id) ? e.half_edge_id : graph.twin(e.half_edge_id);
+    size_t inner_he_id = outer_he_id ^ 1;
+
+    size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
+    const auto& boundary_last_vertices = boundary_mesh_last_left_and_right_vertex[outer_he_id];
+
+    Point<2> new_boundary_vertex = splines[opposite_vertex].evaluate(e.time);
+
+    size_t new_boundary_vertex_index = boundary_mesh.getVertices().size();
+    boundary_mesh.addVertex(new_boundary_vertex[0], new_boundary_vertex[1], e.time);
+
+    // create one triangle to the event point
+    boundary_mesh.addTriangle(boundary_last_vertices.first, boundary_last_vertices.second, new_boundary_vertex_index);
+
+    // update last left and right indices of the other two half-edges of the triangle
+    size_t he1_id = graph.getHalfEdges()[inner_he_id].next;
+    size_t he2_id = graph.getHalfEdges()[he1_id].next;
+
+    boundary_mesh_last_left_and_right_vertex[he1_id]
+      = std::make_pair(boundary_last_vertices.first, new_boundary_vertex_index);
+    boundary_mesh_last_left_and_right_vertex[he2_id]
+      = std::make_pair(new_boundary_vertex_index, boundary_last_vertices.second);
+
+    // reset last left and right vertices of the half-edge because it is not on the boundary anymore
+    boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(-1, -1);
+  }
 }
 
 void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
@@ -487,16 +543,86 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
     mesh.addTriangle(last_vertices.first, last_vertices.second, index);
     // update last vertex indices
     const MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[segment_mesh_pair_index];
+
     // Determine whether we have to update the left or right vertex here
     int origin = graph.getHalfEdges()[he_id].origin;
-    if (segment_mesh_pair.segment_index1 == strand_to_segment_indices[origin].back())
+
+    if (origin != -1)
     {
-      segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index] = std::make_pair(last_vertices.first, index);
+      if (segment_mesh_pair.segment_index1 == strand_to_segment_indices[origin].back())
+      {
+        segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index]
+          = std::make_pair(last_vertices.first, index);
+      }
+      else
+      {
+        segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index]
+          = std::make_pair(index, last_vertices.second);
+      }
     }
     else
     {
-      segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index] = std::make_pair(index, last_vertices.second);
+      assert(graph.destination(he_id) != -1);
+      if (segment_mesh_pair.segment_index0 == strand_to_segment_indices[graph.destination(he_id)].back())
+      {
+        segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index]
+          = std::make_pair(last_vertices.first, index);
+      }
+      else
+      {
+        segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index]
+          = std::make_pair(index, last_vertices.second);
+      }
     }
+  }
+
+  // For the boundary mesh, handle the case that a formerly infinite edge is flipped to a boundary. This means the
+  // opposite vertex is no longer a boundary vertex
+  if (graph.isOnBoundary(e.half_edge_id))
+  {
+    /* The mesh will look like this here:
+     *
+     *  o---o  <-- boundary mesh after the flip consisting of one edge
+     *  |\ /|
+     *  | o |  <-- event point
+     *  |/|\|
+     *  o-o-o  <-- boundary mesh before the flip consisting of two edges
+     *
+     * In the follwowing, we insert the vertex at the event point and create the two lower triangles.
+     * To create the two side triangles and the upper one, we buffer the new vertex index and complete the mesh later.
+     */
+
+    size_t outer_he_id = graph.isOnBoundaryOutside(e.half_edge_id) ? e.half_edge_id : graph.twin(e.half_edge_id);
+    size_t inner_he_id = outer_he_id ^ 1;
+
+    size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
+    const auto& boundary_last_vertices = boundary_mesh_last_left_and_right_vertex[outer_he_id];
+
+    Point<2> old_boundary_vertex = splines[opposite_vertex].evaluate(e.time);
+
+    size_t old_boundary_vertex_index = boundary_mesh.getVertices().size();
+    boundary_mesh.addVertex(old_boundary_vertex[0], old_boundary_vertex[1], e.time);
+
+    size_t he1_id = graph.getHalfEdges()[inner_he_id].next;
+    size_t he2_id = graph.getHalfEdges()[he1_id].next;
+
+    // create two triangles to the event point
+    boundary_mesh.addTriangle(boundary_mesh_last_left_and_right_vertex[he1_id].first,
+      boundary_mesh_last_left_and_right_vertex[he1_id].second, old_boundary_vertex_index);
+    boundary_mesh.addTriangle(boundary_mesh_last_left_and_right_vertex[he2_id].first,
+      boundary_mesh_last_left_and_right_vertex[he2_id].second, old_boundary_vertex_index);
+
+    // Furthermore, we need to buffer this new vertex for the next event at the new boundary half-edge to complete the
+    // mesh
+    half_edge_to_boundary_vertex_index[outer_he_id] = old_boundary_vertex_index;
+    // TODO: actually take this into accourt when completing the mesh somewhere else in the code
+
+    boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(
+      boundary_mesh_last_left_and_right_vertex[he1_id].first, boundary_mesh_last_left_and_right_vertex[he2_id].second);
+
+    // reset last left and right vertices of the half-edges because it is not on the boundary anymore
+    boundary_mesh_last_left_and_right_vertex[he1_id] = std::make_pair(-1, -1);
+    boundary_mesh_last_left_and_right_vertex[he2_id] = std::make_pair(-1, -1);
   }
 }
 
@@ -507,7 +633,9 @@ void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
   auto& graph = kin_del.getGraph();
 
   // finish old meshes
-  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),
+                                                   end = graph.incidentEdgesEnd(strand_id);
+    it != end; ++it)
   {
     finishMesh(*it, t);
   }
@@ -526,7 +654,9 @@ void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
   strand_to_segment_indices[strand_id].push_back(new_segment_id);
 
   // Start new meshes
-  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),
+                                                   end = graph.incidentEdgesEnd(strand_id);
+    it != end; ++it)
   {
     startNewMesh(*it, t);
 
@@ -591,10 +721,7 @@ void SegmentBuilder::finalize(double t)
   finalized = true; // Set the finalized flag to true
 }
 
-std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractMeshes() const
-{
-  return meshes;
-}
+std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractMeshes() const { return meshes; }
 
 std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractSegmentMeshlets() const
 {
@@ -623,7 +750,4 @@ std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractSegmentMeshlets() const
   return meshlets;
 }
 
-const VoronoiMesh& kinDS::SegmentBuilder::getBoundaryMesh() const
-{
-  return boundary_mesh;
-}
+const VoronoiMesh& kinDS::SegmentBuilder::getBoundaryMesh() const { return boundary_mesh; }

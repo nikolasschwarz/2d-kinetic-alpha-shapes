@@ -8,17 +8,27 @@ namespace kinDS
 class SegmentBuilder : public KineticDelaunay::EventHandler
 {
  private:
-  std::vector<std::vector<size_t>> strand_to_segment_indices; // Maps strand IDs to their corresponding segment indices in correct order
+  // Maps strand IDs to their corresponding segment indices in correct order
+  std::vector<std::vector<size_t>> strand_to_segment_indices;
   std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs; // Pairs of segments and their corresponding mesh data
-  std::vector<size_t> half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
+  // Maps edge indices to their corresponding segment mesh pair indices
+  std::vector<size_t> half_edge_index_to_segment_mesh_pair_index;
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
   std::vector<std::pair<size_t, size_t>> segment_mesh_pair_last_left_and_right_vertex;
-  std::vector<int> corner_to_cutoff_mesh_indices; // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no cutoff mesh exists
+  // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no
+  // cutoff mesh exists
+  std::vector<int> corner_to_cutoff_mesh_indices;
 
   // for the boundary
   VoronoiMesh boundary_mesh; // Mesh for the boundary cuts
+
+  // last left and right vertex indices for the boundary mesh, left corresponds tothe origin of
+  // the half-edge and entries are only ever valid for half-edges on the boundary that lie outside
   std::vector<std::pair<size_t, size_t>> boundary_mesh_last_left_and_right_vertex;
+
+  // Map half-edges to a vertex index in the boundary mesh if a flip created a new boundary edge
+  std::vector<int> half_edge_to_boundary_vertex_index;
 
   const KineticDelaunay& kin_del;
   const std::vector<CubicHermiteSpline<2>>& splines; // Reference to the splines used for the triangulation
@@ -32,6 +42,8 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
 
   void startNewMesh(size_t half_edge_id, double t);
 
+  void completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right);
+
   void addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset);
 
   void traceBoundary(double t);
@@ -41,7 +53,8 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   void accumulateSegmentProperties();
 
  public:
-  SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines, std::vector<std::pair<size_t, double>> subdivisions);
+  SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines,
+    std::vector<std::pair<size_t, double>> subdivisions);
   SegmentBuilder(const KineticDelaunay& kin_del, std::vector<CubicHermiteSpline<2>>& splines);
 
   void init() override;

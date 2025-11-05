@@ -66,6 +66,11 @@ class HalfEdgeDelaunayGraph
   bool isOnBoundary(size_t he_id) const;
 
   /**
+   * Determines whether a half-edge is connected to the vertex at infinity.
+   */
+  bool isInfinite(size_t he_id) const;
+
+  /**
    * Determines whether a half-edge is on the outer side along the boundary.
    */
   bool isOnBoundaryOutside(size_t he_id) const;

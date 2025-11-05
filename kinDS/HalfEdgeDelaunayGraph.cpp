@@ -10,15 +10,19 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
   assert(index_buffer.size() % 3 == 0 && "Input must be a triangle index buffer.");
   const int num_tris = index_buffer.size() / 3;
 
-  // note that the following reserves are off by one compared to Euler's formula because there is an implicit vertex at infinity that is not counted in the vertex count
+  // note that the following reserves are off by one compared to Euler's formula because there is an implicit vertex at
+  // infinity that is not counted in the vertex count
   half_edges.clear();
-  half_edges.reserve(6 * (vertex_count - 1)); // Reserve space for half-edges, at most 6 * (V - 1) half-edges in a triangulation
+  half_edges.reserve(
+    6 * (vertex_count - 1)); // Reserve space for half-edges, at most 6 * (V - 1) half-edges in a triangulation
 
   triangles.clear();
-  triangles.reserve(2 * (vertex_count - 1)); // Reserve space for faces, at most 2 * (V - 1) faces in a triangulation
+  // Reserve space for faces, at most 2 * (V - 1) faces in a triangulation
+  triangles.reserve(2 * (vertex_count - 1));
   triangles.resize(num_tris);
 
-  std::vector<int> boundary_edge_map(vertex_count, -1); // Store outgoing edge along boundary from vertex, -1 for non-boundary vertices
+  // Store outgoing edge along boundary from vertex, -1 for non-boundary vertices
+  std::vector<int> boundary_edge_map(vertex_count, -1);
 
   struct TmpHalfEdge
   {
@@ -93,7 +97,8 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 
       if (he_up.face != -1)
       {
-        triangles[he_up.face].half_edges[up_it->j] = half_edges.size(); // store the half-edge index in the face
+        // store the half-edge index in the face
+        triangles[he_up.face].half_edges[up_it->j] = half_edges.size();
       }
       else
       {
@@ -148,8 +153,8 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
       }
     }
   }
-
-  std::vector<int> incoming_edge_map(vertex_count, -1); // Store incoming edge from infinity to vertex, -1 for non-boundary vertices
+  // Store incoming edge from infinity to vertex, -1 for non-boundary vertices
+  std::vector<int> incoming_edge_map(vertex_count, -1);
 
   // at the boundary, create additional faces and half-edges that connect to a vertex at infinity
   for (size_t u = 0; u < vertex_count; ++u)
@@ -241,13 +246,13 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
   }
 
   // check if edge is referenced in vertex_to_half_edge and update
-  if (vertex_to_half_edge[u] == he_id)
+  if ((u != -1) && (vertex_to_half_edge[u] == he_id))
   {
     // just set to next half-edge on the vertex
     vertex_to_half_edge[u] = neighborEdgeId(he_id);
   }
 
-  if (vertex_to_half_edge[v] == HalfEdgeDelaunayGraph::twin(he_id))
+  if ((v != -1) && (vertex_to_half_edge[v] == HalfEdgeDelaunayGraph::twin(he_id)))
   {
     vertex_to_half_edge[v] = neighborEdgeId(HalfEdgeDelaunayGraph::twin(he_id)); // update to point to the half-edge
   }
@@ -301,9 +306,7 @@ void HalfEdgeDelaunayGraph::printDebug() const
   for (size_t i = 0; i < half_edges.size(); ++i)
   {
     const HalfEdge& he = half_edges[i];
-    std::cout << "  [" << i << "] origin = " << he.origin
-              << ", next = " << he.next
-              << ", face = " << he.face
+    std::cout << "  [" << i << "] origin = " << he.origin << ", next = " << he.next << ", face = " << he.face
               << ", twin = " << (i ^ 1) << "\n";
   }
 
@@ -378,14 +381,20 @@ Point<2> HalfEdgeDelaunayGraph::circumcenter(const Point<2>& a, const Point<2>& 
     logger.log(ERROR, "Circumcenter calculation failed due to zero denominator. Points may be collinear.");
     return Point<2> { std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() };
   }
-  double Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1]) + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1])) / D;
-  double Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0]) + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0])) / D;
+  double Ux = ((a[0] * a[0] + a[1] * a[1]) * (b[1] - c[1]) + (b[0] * b[0] + b[1] * b[1]) * (c[1] - a[1])
+                + (c[0] * c[0] + c[1] * c[1]) * (a[1] - b[1]))
+    / D;
+  double Uy = ((a[0] * a[0] + a[1] * a[1]) * (c[0] - b[0]) + (b[0] * b[0] + b[1] * b[1]) * (a[0] - c[0])
+                + (c[0] * c[0] + c[1] * c[1]) * (b[0] - a[0]))
+    / D;
   return { Ux, Uy };
 }
 
-std::vector<std::pair<Point<2>, bool>> HalfEdgeDelaunayGraph::computeCircumcenters(const std::vector<Point<2>>& vertices) const
+std::vector<std::pair<Point<2>, bool>> HalfEdgeDelaunayGraph::computeCircumcenters(
+  const std::vector<Point<2>>& vertices) const
 {
-  // give either the position of the circumcenter or a direction vector if the triangle is infinite, the boolean indicates if the circumcenter is infinite
+  // give either the position of the circumcenter or a direction vector if the triangle is infinite, the boolean
+  // indicates if the circumcenter is infinite
   std::vector<std::pair<Point<2>, bool>> circumcenters(triangles.size());
 
   for (size_t triangle_id = 0; triangle_id < triangles.size(); triangle_id++)
@@ -457,15 +466,17 @@ bool HalfEdgeDelaunayGraph::isOnBoundary(size_t he_id) const
   return isOutsideBoundary(he_id) != isOutsideBoundary(he_id ^ 1);
 }
 
+bool kinDS::HalfEdgeDelaunayGraph::isInfinite(size_t he_id) const
+{
+  return (half_edges[he_id].origin == -1) || (destination(he_id) == -1);
+}
+
 bool kinDS::HalfEdgeDelaunayGraph::isOnBoundaryOutside(size_t he_id) const
 {
   return isOutsideBoundary(he_id) && isOnBoundary(he_id);
 }
 
-inline int HalfEdgeDelaunayGraph::destination(size_t he_id) const
-{
-  return half_edges[he_id ^ 1].origin;
-}
+inline int HalfEdgeDelaunayGraph::destination(size_t he_id) const { return half_edges[he_id ^ 1].origin; }
 
 int HalfEdgeDelaunayGraph::triangleOppositeVertex(size_t he_id) const
 {
@@ -487,10 +498,7 @@ std::array<int, 3> HalfEdgeDelaunayGraph::adjacentTriangleVertices(size_t he_id)
   return vertices;
 }
 
-size_t kinDS::HalfEdgeDelaunayGraph::neighborEdgeId(size_t he_id) const
-{
-  return half_edges[twin(he_id)].next;
-}
+size_t kinDS::HalfEdgeDelaunayGraph::neighborEdgeId(size_t he_id) const { return half_edges[twin(he_id)].next; }
 
 size_t kinDS::HalfEdgeDelaunayGraph::nextOnBoundaryId(size_t he_id) const
 {

@@ -16,10 +16,7 @@ struct Monomial
   }
 
   // unary minus for CoefficientTerm
-  Monomial operator-() const
-  {
-    return { -coefficient, exponent };
-  }
+  Monomial operator-() const { return { -coefficient, exponent }; }
 };
 
 // Allow polyonomials to be expressed symbolically
@@ -32,10 +29,7 @@ struct Var
   }
 
   // allow X by itself: X == X^1
-  operator Monomial() const
-  {
-    return { 1, 1 };
-  }
+  operator Monomial() const { return { 1, 1 }; }
 };
 
 // allow multiplication: 3 * (X^2)
@@ -83,10 +77,7 @@ class Polynomial
   }
 
  public:
-  Polynomial()
-  {
-    assert(coeffs.size() == 0 && "Default constructor should not initialize coefficients.");
-  }
+  Polynomial() { assert(coeffs.size() == 0 && "Default constructor should not initialize coefficients."); }
 
   Polynomial(const Eigen::VectorXd& c)
     : coeffs(c)
@@ -203,16 +194,13 @@ class Polynomial
         derived_coeffs[j - 1] = derived_coeffs[j] * j;
       }
       derived_coeffs.tail(1).setZero(); // Set the last coefficient to zero after differentiation
-      derived_coeffs.resize(derived_coeffs.size() - 1);
+      derived_coeffs.conservativeResize(derived_coeffs.size() - 1);
     }
     return Polynomial(derived_coeffs);
   }
 
   // Utility: Remove leading zeros
-  void trim()
-  {
-    coeffs.resize(degree() + 1);
-  }
+  void trim() { coeffs.conservativeResize(degree() + 1); }
 
   // Polynomial degree, will return -1 for the zero polynomial
   int degree() const
@@ -305,29 +293,16 @@ class Polynomial
     q = quotient;
   }
 
-  Polynomial operator+(const Polynomial& other) const
-  {
-    return Polynomial(add_poly(coeffs, other.coeffs));
-  }
-  Polynomial operator-(const Polynomial& other) const
-  {
-    return Polynomial(add_poly(coeffs, -other.coeffs));
-  }
+  Polynomial operator+(const Polynomial& other) const { return Polynomial(add_poly(coeffs, other.coeffs)); }
+  Polynomial operator-(const Polynomial& other) const { return Polynomial(add_poly(coeffs, -other.coeffs)); }
 
   // unary minus
-  Polynomial operator-() const
-  {
-    return Polynomial(-coeffs);
-  }
+  Polynomial operator-() const { return Polynomial(-coeffs); }
 
-  Polynomial operator*(const Polynomial& other) const
-  {
-    return Polynomial(multiply_poly(coeffs, other.coeffs));
-  }
+  Polynomial operator*(const Polynomial& other) const { return Polynomial(multiply_poly(coeffs, other.coeffs)); }
 
   // allow multiplication with a scalar
-  template<typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
-  Polynomial operator*(T scalar) const
+  template<typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0> Polynomial operator*(T scalar) const
   {
     return Polynomial(coeffs * scalar);
   }
@@ -361,8 +336,7 @@ class Polynomial
     {
       if (coeffs[i] != 0)
       {
-        result += (i != coeffs.size() - 1 && coeffs[i] > 0 ? "+" : "")
-          + std::to_string(coeffs[i]);
+        result += (i != coeffs.size() - 1 && coeffs[i] > 0 ? "+" : "") + std::to_string(coeffs[i]);
 
         if (i > 1)
           result += "x^" + std::to_string(i) + " ";
@@ -374,16 +348,10 @@ class Polynomial
     return result.empty() ? "0" : result; // If all coefficients are zero, return "0"
   }
 
-  void print(std::ostream& stringstream = std::cout) const
-  {
-    stringstream << to_string() << "\n";
-  }
+  void print(std::ostream& stringstream = std::cout) const { stringstream << to_string() << "\n"; }
 
   // getter
-  const Eigen::VectorXd& getCoefficients() const
-  {
-    return coeffs;
-  }
+  const Eigen::VectorXd& getCoefficients() const { return coeffs; }
 };
 
 // combine coeffient terms to a polynomial
@@ -391,10 +359,7 @@ Polynomial operator+(const Monomial& term1, const Monomial& term2);
 
 Polynomial operator-(const Monomial& term1, const Monomial& term2);
 
-inline std::ostream& operator<<(std::ostream& os, const Polynomial& p)
-{
-  return os << p.to_string();
-}
+inline std::ostream& operator<<(std::ostream& os, const Polynomial& p) { return os << p.to_string(); }
 
 #define POLYNOMIAL(expr) kinDS::Polynomial([&](kinDS::Var x) { return (kinDS::Polynomial { (expr) }); })
 } // namespace kinDS

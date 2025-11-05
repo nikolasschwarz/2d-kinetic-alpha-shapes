@@ -53,7 +53,8 @@ class HalfEdgeDelaunayGraphToSVG
     return BoundingBox(min_x, min_y, max_x, max_y);
   }
 
-  static svg::Document setupDocument(const std::vector<Point<2>> points, const std::string& filename, const BoundingBox& bb)
+  static svg::Document setupDocument(
+    const std::vector<Point<2>> points, const std::string& filename, const BoundingBox& bb)
   {
     // Create an SVG document with the bounding box
     double width = bb.max_x - bb.min_x;
@@ -61,7 +62,8 @@ class HalfEdgeDelaunayGraphToSVG
 
     svg::Dimensions dimensions(width, height);
 
-    return svg::Document(filename, svg::Layout(dimensions, svg::Layout::TopLeft, 1.0, svg::Point(-bb.min_x, -bb.min_y)));
+    return svg::Document(
+      filename, svg::Layout(dimensions, svg::Layout::TopLeft, 1.0, svg::Point(-bb.min_x, -bb.min_y)));
   }
 
   /**
@@ -70,7 +72,8 @@ class HalfEdgeDelaunayGraphToSVG
    * @param graph The half-edge Delaunay graph to convert.
    * @param filename The name of the output SVG file.
    */
-  static void write(const std::vector<Point<2>> points, const HalfEdgeDelaunayGraph& graph, const std::string& filename, double margin = 0.0)
+  static void write(const std::vector<Point<2>> points, const HalfEdgeDelaunayGraph& graph, const std::string& filename,
+    double margin = 0.0)
   {
     BoundingBox bb = computeBoundingBox(points, margin);
     svg::Document doc = setupDocument(points, filename, bb);
@@ -78,41 +81,62 @@ class HalfEdgeDelaunayGraphToSVG
     for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
     {
       const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
-      if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
+      if (he.origin != -1
+        && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
       {
         Point<2> start = points[graph.getHalfEdges()[he_id].origin];
         Point<2> end = points[graph.getHalfEdges()[he_id ^ 1].origin];
-        doc << svg::Line(svg::Point(start[0], start[1]), svg::Point(end[0], end[1]),
-          svg::Stroke(0.01, svg::Color::Black));
+        doc << svg::Line(
+          svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
       }
     }
 
     // Draw vertices
     for (auto& point : points)
     {
-      doc << svg::Circle(svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
+      doc << svg::Circle(
+        svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
     }
     doc.save();
   }
 
-  static void writeVoronoi(const std::vector<Point<2>> points, const HalfEdgeDelaunayGraph& graph, const std::string& filename, double margin = 0.0)
+  static void writeVoronoi(const std::vector<Point<2>> points, const HalfEdgeDelaunayGraph& graph,
+    const std::string& filename, bool also_draw_delaunay, double margin = 0.0)
   {
     auto circumcenters = graph.computeCircumcenters(points);
 
-    BoundingBox bb = computeBoundingBox(points, margin);
+    const std::vector<Point<2>> allFinitePoints = [&]()
+    {
+      std::vector<Point<2>> finitePoints;
+
+      std::copy(points.begin(), points.end(), std::back_inserter(finitePoints));
+
+      for (const auto& cc : circumcenters)
+      {
+        if (!cc.second) // only finite points
+        {
+          finitePoints.push_back(cc.first);
+        }
+      }
+      return finitePoints;
+    }();
+
+    BoundingBox bb = computeBoundingBox(allFinitePoints, margin);
     svg::Document doc = setupDocument(points, filename, bb);
 
     // Draw vertices
     for (auto& point : points)
     {
-      doc << svg::Circle(svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
+      doc << svg::Circle(
+        svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
     }
 
     // Draw Voronoi edges
     for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
     {
       const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
-      if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
+      if (he.origin != -1
+        && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
       {
         auto start = circumcenters[graph.getHalfEdges()[he_id].face];
         auto end = circumcenters[graph.getHalfEdges()[he_id ^ 1].face];
@@ -121,21 +145,21 @@ class HalfEdgeDelaunayGraphToSVG
         {
 
           doc << svg::Line(svg::Point(start.first[0], start.first[1]), svg::Point(end.first[0], end.first[1]),
-            svg::Stroke(0.01, svg::Color::Black));
+            svg::Stroke(0.01, svg::Color::Red));
         }
         else if (start.second && !end.second)
         {
           // Draw a line to infinity in the direction of the circumcenter
           svg::Point end_point(end.first[0], end.first[1]);
           svg::Point start_point(end.first[0] + 1000 * start.first[0], end.first[1] + 1000 * start.first[1]);
-          doc << svg::Line(start_point, end_point, svg::Stroke(0.01, svg::Color::Black));
+          doc << svg::Line(start_point, end_point, svg::Stroke(0.01, svg::Color::Red));
         }
         else if (!start.second && end.second)
         {
           // Draw a line to infinity in the direction of the circumcenter
           svg::Point start_point(start.first[0], start.first[1]);
           svg::Point end_point(start.first[0] + 1000 * end.first[0], start.first[1] + 1000 * end.first[1]);
-          doc << svg::Line(start_point, end_point, svg::Stroke(0.01, svg::Color::Black));
+          doc << svg::Line(start_point, end_point, svg::Stroke(0.01, svg::Color::Red));
         }
         else
         {
@@ -152,7 +176,32 @@ class HalfEdgeDelaunayGraphToSVG
     {
       if (!circumcenter.second) // Only draw finite vertices
       {
-        doc << svg::Circle(svg::Point(circumcenter.first[0], circumcenter.first[1]), 0.02, svg::Fill(svg::Color::Red), svg::Stroke(0.0, svg::Color::Black));
+        doc << svg::Circle(svg::Point(circumcenter.first[0], circumcenter.first[1]), 0.02, svg::Fill(svg::Color::Red),
+          svg::Stroke(0.0, svg::Color::Black));
+      }
+    }
+
+    if (also_draw_delaunay)
+    {
+      // Draw edges
+      for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+      {
+        const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
+        if (he.origin != -1
+          && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
+        {
+          Point<2> start = points[graph.getHalfEdges()[he_id].origin];
+          Point<2> end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+          doc << svg::Line(
+            svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
+        }
+      }
+
+      // Draw vertices
+      for (auto& point : points)
+      {
+        doc << svg::Circle(
+          svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
       }
     }
 
