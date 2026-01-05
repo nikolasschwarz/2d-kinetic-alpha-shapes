@@ -2,32 +2,39 @@
 #include "Point.hpp"
 #include "Polynomial.hpp"
 
+#define LINEAR_MODE
+
 namespace kinDS
 {
 
-template<size_t dim>
-using Trajectory = std::array<Polynomial, dim>;
+template<size_t dim> using Trajectory = std::array<Polynomial, dim>;
 
-template<size_t dim>
-class CubicHermiteSpline
+template<size_t dim> class CubicHermiteSpline
 {
 
  private:
   std::vector<Point<dim>> points; // Control points
 
-  static Trajectory<dim> createPiece(const Point<dim>& P0, const Point<dim>& M0, const Point<dim>& P1, const Point<dim>& M1)
+  static Trajectory<dim> createPiece(
+    const Point<dim>& P0, const Point<dim>& M0, const Point<dim>& P1, const Point<dim>& M1)
   {
     Trajectory<dim> result {};
+
+#ifndef LINEAR_MODE
     // Create the cubic Hermite spline polynomials for each dimension
     for (int i = 0; i < dim; ++i)
     {
 
-      result[i] = POLYNOMIAL(
-        (2 * (x ^ 3) - 3 * (x ^ 2) + 1) * P0[i]
-        + ((x ^ 3) - 2 * (x ^ 2) + x) * M0[i]
-        + ((-2 * (x ^ 3)) + 3 * (x ^ 2)) * P1[i]
-        + ((x ^ 3) - (x ^ 2)) * M1[i]);
+      result[i] = POLYNOMIAL((2 * (x ^ 3) - 3 * (x ^ 2) + 1) * P0[i] + ((x ^ 3) - 2 * (x ^ 2) + x) * M0[i]
+        + ((-2 * (x ^ 3)) + 3 * (x ^ 2)) * P1[i] + ((x ^ 3) - (x ^ 2)) * M1[i]);
     }
+#else
+    // Create linear polynomials for each dimension
+    for (int i = 0; i < dim; ++i)
+    {
+      result[i] = POLYNOMIAL(P0[i] + (P1[i] - P0[i]) * x);
+    }
+#endif // LINEAR_MODE
     return result;
   }
 
@@ -38,10 +45,7 @@ class CubicHermiteSpline
   {
   }
 
-  void addControlPoint(const Point<dim>& point)
-  {
-    points.push_back(point);
-  }
+  void addControlPoint(const Point<dim>& point) { points.push_back(point); }
 
   void addControlPoints(const std::vector<Point<dim>>& newPoints)
   {
@@ -98,9 +102,6 @@ class CubicHermiteSpline
     return result;
   }
 
-  size_t pointCount() const
-  {
-    return points.size();
-  }
+  size_t pointCount() const { return points.size(); }
 };
 } // namespace kinDS

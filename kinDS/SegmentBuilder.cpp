@@ -94,7 +94,7 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t)
 
   if (he.origin == -1)
   {
-    // throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
+    throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
   }
 
   size_t new_left_vertex_index = mesh.getVertices().size();
@@ -168,7 +168,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
 
   if (he.origin == -1)
   {
-    // throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
+    throw std::runtime_error("Cannot create segment mesh for half-edge with infinite origin.");
   }
 
   mesh.addVertex(left_vertex[0], left_vertex[1], left_vertex[2]);

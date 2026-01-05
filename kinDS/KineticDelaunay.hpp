@@ -27,11 +27,18 @@ class KineticDelaunay
     double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
     Point<2> position; // Position of the event
 
-    Event(double t, size_t he_id, double creation_time, Point<2> position)
+    enum Type
+    {
+      SWAP,
+      BOUNDARY
+    } type;
+
+    Event(double t, size_t he_id, double creation_time, Point<2> position, Type type)
       : time(t)
       , half_edge_id(he_id)
       , creation_time(creation_time)
       , position(position)
+      , type(type)
     {
     }
     bool operator<(const Event& other) const
@@ -79,10 +86,11 @@ class KineticDelaunay
   EventQueue events;
   size_t sections_advanced = 0; // Counter for the number of sections advanced
 
-  /* Compare to Leonidas Guibas and Jorge Stolfi. 1985. Primitives for the manipulation of general subdivisions and the computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74–123. https://doi.org/10.1145/282918.282923
+  /* Compare to Leonidas Guibas and Jorge Stolfi. 1985. Primitives for the manipulation of general subdivisions and the
+   * computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74–123. https://doi.org/10.1145/282918.282923
    */
-  static Polynomial inCircle(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by, const Polynomial& cx, const Polynomial& cy,
-    const Polynomial& px, const Polynomial& py)
+  static Polynomial inCircle(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by,
+    const Polynomial& cx, const Polynomial& cy, const Polynomial& px, const Polynomial& py)
   {
     const Polynomial dx = ax - px;
     const Polynomial dy = ay - py;
@@ -109,12 +117,91 @@ class KineticDelaunay
     return (dx * (ey * cp - bp * fy) - dy * (ex * cp - bp * fx) + ap * (ex * fy - ey * fx));
   }
 
-  static Polynomial ccw(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by, const Polynomial& cx, const Polynomial& cy)
+  static Polynomial ccw(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by,
+    const Polynomial& cx, const Polynomial& cy)
   {
     return (ax * by) + (bx * cy) + (cx * ay) - (ay * bx) - (by * cx) - (cy * ax);
   }
 
-  void computeEvents(double t, size_t quad_id)
+  // Polynomial that evaluates to zero iff the distance from A to the circumcenter equals the value r
+  static Polynomial circumradiusEquals(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx,
+    const Polynomial& by, const Polynomial& cx, const Polynomial& cy, double r)
+  {
+    // We first do the same computations as for the circumcenter
+    Polynomial D = (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by)) * 2.0;
+
+    // only compute the numerators
+    Polynomial Nx
+      = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by));
+    Polynomial Ny
+      = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax));
+
+    // By taking the distance formula between the circumcenter and the point A and setting it equal to r, we get the
+    // following after rearranging:
+    Polynomial circumradius_eq = (Nx - ax * D) * (Nx - ax * D) + (Ny - ay * D) * (Ny - ay * D) - (D * D * (r * r));
+    return circumradius_eq;
+  }
+
+  void computeBoundaryEvents(double t, size_t he_id)
+  {
+    const size_t section = static_cast<size_t>(t);
+    const float fraction = t - section;
+
+    size_t face_id = graph.getHalfEdges()[he_id].face;
+    size_t u = graph.getHalfEdges()[he_id].origin;
+    size_t v = graph.destination(he_id);
+    size_t w = graph.triangleOppositeVertex(he_id);
+
+    if (u == -1 || v == -1 || w == -1)
+    {
+      // one of the vertices is at infinity, no event possible
+      return;
+    }
+
+    std::vector<Trajectory<2>> trajs;
+
+    trajs.push_back(splines[u].getPiecePolynomial(section));
+    trajs.push_back(splines[v].getPiecePolynomial(section));
+    trajs.push_back(splines[w].getPiecePolynomial(section));
+
+    double cutoff = 1.0;
+    Polynomial event_trigger
+      = circumradiusEquals(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], cutoff);
+
+    event_trigger.trim();
+    auto zeros = event_trigger.realRoots();
+
+    // print roots:
+    for (const auto& root : zeros)
+    {
+      if (isnan(root))
+      {
+        continue; // Skip NaN roots
+      }
+      if (root > fraction && root <= 1)
+      { // Check if the root is within the valid range
+        double event_time = root + section;
+        // std::cout << "Root found at t = " << event_time << std::endl;
+
+        Point<2> center {};
+
+        for (const auto& traj : trajs)
+        {
+          center[0] += traj[0](root);
+          center[1] += traj[1](root);
+        }
+        center[0] /= trajs.size();
+        center[1] /= trajs.size();
+        logger.log(DEBUG, "Boundary Event at time %f for half-edge ID %zu at center position %s", event_time, he_id,
+          center.toString().c_str());
+
+        events.emplace(
+          Event(event_time, he_id, t, center, Event::BOUNDARY)); // Store the event with the time and half-edge index
+      }
+    }
+  }
+
+  void computeSwapEvents(double t, size_t quad_id)
   {
     const size_t section = static_cast<size_t>(t);
     const float fraction = t - section;
@@ -124,8 +211,11 @@ class KineticDelaunay
 
     std::vector<Trajectory<2>> trajs;
 
+    bool boundary_case = false;
+
     if (graph.isOnBoundary(he_id) || graph.isOutsideBoundary(he_id))
     {
+      boundary_case = true;
       // boundary edges must be treated separately using ccw
 
       // need to get the inner half-edge so we have access to the triangle
@@ -135,7 +225,8 @@ class KineticDelaunay
         he_id = he_id ^ 1; // use the twin half-edge if the current one is on the boundary
       }
 
-      // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter it out
+      // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter
+      // it out
       int indices[4];
       indices[0] = graph.getHalfEdges()[he_id].origin; // First vertex
       indices[1] = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
@@ -144,9 +235,8 @@ class KineticDelaunay
 
       std::vector<int> filtered_indices;
 
-      std::copy_if(indices, indices + 4, std::back_inserter(filtered_indices),
-        [this](int index)
-        { return index != -1; });
+      std::copy_if(
+        indices, indices + 4, std::back_inserter(filtered_indices), [this](int index) { return index != -1; });
 
       int& a = filtered_indices[0]; // First vertex
       int& b = filtered_indices[1]; // Second vertex
@@ -176,7 +266,8 @@ class KineticDelaunay
       trajs.push_back(splines[c].getPiecePolynomial(section));
       trajs.push_back(splines[d].getPiecePolynomial(section));
 
-      event_trigger = inCircle(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);
+      event_trigger = inCircle(
+        trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);
     }
     event_trigger.trim();
     auto zeros = event_trigger.realRoots();
@@ -202,21 +293,80 @@ class KineticDelaunay
         }
         center[0] /= trajs.size();
         center[1] /= trajs.size();
-        logger.log(DEBUG, "Event at time %f for half-edge ID %zu at center position %s", event_time, he_id, center.toString().c_str());
+        logger.log(DEBUG, "Swap Event of type %s at time %f for half-edge ID %zu at center position %s",
+          boundary_case ? "boundary" : "interior", event_time, he_id, center.toString().c_str());
 
-        events.emplace(Event(event_time, he_id, t, center)); // Store the event with the time and half-edge index
+        events.emplace(
+          Event(event_time, he_id, t, center, Event::SWAP)); // Store the event with the time and half-edge index
       }
     }
   }
 
   void precomputeStep(double t)
   {
-    // TODO: Make sure it works where no change of sign occurs in the polynomial, i.e., roots that do not lead to a change in the triangulation.
+    // TODO: Make sure it works where no change of sign occurs in the polynomial, i.e., roots that do not lead to a
+    // change in the triangulation.
     size_t quad_count = graph.getHalfEdges().size() / 2;
     for (size_t i = 0; i < quad_count; i++)
     {
-      computeEvents(t, i);
+      computeSwapEvents(t, i);
     }
+
+    size_t he_count = graph.getHalfEdges().size();
+    for (size_t i = 0; i < he_count; i++)
+    {
+      computeBoundaryEvents(t, i);
+    }
+  }
+
+  void handleSwapEvent(EventHandler& event_handler, Event& event, std::vector<double>& quadrilateral_last_updated)
+  {
+    assert(event.type == Event::SWAP);
+
+    // Check if the event is still valid
+    if (event.creation_time < quadrilateral_last_updated[event.half_edge_id / 2])
+    {
+      // This event is outdated, skip it
+      return;
+    }
+
+    // Process the event at the given time
+    logger.log(DEBUG, "Processing event at time %f for half-edge ID %zu", event.time, event.half_edge_id);
+
+    // Call the event handler if provided
+    event_handler.beforeEvent(event);
+
+    graph.flipEdge(event.half_edge_id);
+
+    // After flipping the edge, we need to recompute the events for all surrounding half-edges
+    size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
+    size_t next2 = graph.getHalfEdges()[next1].next;
+
+    size_t twin_next1 = graph.getHalfEdges()[event.half_edge_id ^ 1].next;
+    size_t twin_next2 = graph.getHalfEdges()[twin_next1].next;
+
+    computeSwapEvents(event.time, next1 / 2);
+    quadrilateral_last_updated[next1 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+    computeSwapEvents(event.time, next2 / 2);
+    quadrilateral_last_updated[next2 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+    computeSwapEvents(event.time, twin_next1 / 2);
+    quadrilateral_last_updated[twin_next1 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+    computeSwapEvents(event.time, twin_next2 / 2);
+    quadrilateral_last_updated[twin_next2 / 2] = event.time; // Update the last updated time for the quadrilateral
+
+    event_handler.afterEvent(event); // Call the event handler after processing the event
+  }
+
+  void handleBoundaryEvent(EventHandler& event_handler, Event& event)
+  {
+    assert(event.type == Event::BOUNDARY);
+    // Process the event at the given time
+    logger.log(DEBUG, "Processing boundary event at time %f for half-edge ID %zu", event.time, event.half_edge_id);
+    // Call the event handler if provided
+    // TODO
   }
 
   void handleEvents(EventHandler& event_handler)
@@ -228,41 +378,15 @@ class KineticDelaunay
       Event event = events.top();
       events.pop();
 
-      // Check if the event is still valid
-      if (event.creation_time < quadrilateral_last_updated[event.half_edge_id / 2])
+      switch (event.type)
       {
-        // This event is outdated, skip it
-        continue;
+      case Event::SWAP:
+        handleSwapEvent(event_handler, event, quadrilateral_last_updated);
+        break;
+      case Event::BOUNDARY:
+        handleBoundaryEvent(event_handler, event);
+        break;
       }
-
-      // Process the event at the given time
-      logger.log(DEBUG, "Processing event at time %f for half-edge ID %zu", event.time, event.half_edge_id);
-
-      // Call the event handler if provided
-      event_handler.beforeEvent(event);
-
-      graph.flipEdge(event.half_edge_id);
-
-      // After flipping the edge, we need to recompute the events for all surrounding half-edges
-      size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
-      size_t next2 = graph.getHalfEdges()[next1].next;
-
-      size_t twin_next1 = graph.getHalfEdges()[event.half_edge_id ^ 1].next;
-      size_t twin_next2 = graph.getHalfEdges()[twin_next1].next;
-
-      computeEvents(event.time, next1 / 2);
-      quadrilateral_last_updated[next1 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-      computeEvents(event.time, next2 / 2);
-      quadrilateral_last_updated[next2 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-      computeEvents(event.time, twin_next1 / 2);
-      quadrilateral_last_updated[twin_next1 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-      computeEvents(event.time, twin_next2 / 2);
-      quadrilateral_last_updated[twin_next2 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-      event_handler.afterEvent(event); // Call the event handler after processing the event
     }
   }
 
@@ -305,10 +429,7 @@ class KineticDelaunay
     return graph;
   }
 
-  const HalfEdgeDelaunayGraph& getGraph() const
-  {
-    return graph;
-  }
+  const HalfEdgeDelaunayGraph& getGraph() const { return graph; }
 
   size_t getSectionCount() const
   {
