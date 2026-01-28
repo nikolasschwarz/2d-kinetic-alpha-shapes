@@ -13,7 +13,8 @@ set(KINDS_SOURCES
 	"kinDS/SegmentBuilder.cpp"
 	"kinDS/TreeMesher.cpp"
 	"kinDS/VoronoiMesh.cpp"
- "kinDS/PlaneProjector.cpp")
+	"kinDS/PlaneProjector.cpp"
+	"kinDS/MeshIntersection.cpp")
 
 add_executable(kinDS-app main.cpp
 	${KINDS_SOURCES})
@@ -25,7 +26,13 @@ add_definitions(-D GLM_ENABLE_EXPERIMENTAL)
 
 # CGAL
 find_package(CGAL REQUIRED)
-target_link_libraries(kinDS-app CGAL::CGAL)
+if(CGAL_FOUND)
+	target_link_libraries(kinDS-app CGAL::CGAL)
+	add_compile_definitions(USE_CGAL)
+	MESSAGE(STATUS "EcoSysLab Plugin: CGAL found and linked.")
+	else()
+	MESSAGE(WARNING "EcoSysLab Plugin: CGAL not found. Some features may be disabled.")
+endif()
 
 include(CTest)
 enable_testing()

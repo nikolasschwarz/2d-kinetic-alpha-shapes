@@ -1,22 +1,69 @@
 #include "TreeMesher.hpp"
 
+#include "IndexIterator.hpp"
 #include "KineticDelaunay.hpp"
-#include "ObjExporter.hpp"
-
 #include "MeshIntersection.hpp"
-#include <glm/glm.hpp>
-#include <vector>
+#include "ObjExporter.hpp"
+#include "SegmentBuilder.hpp"
 
+#include <execution>
 #include <set>
 
 using namespace kinDS;
-/*
+
+std::vector<std::pair<size_t, double>> MergeSortedVectors(const std::vector<std::vector<double>>& inputs)
+{
+  using Entry = std::pair<size_t, double>; // (index of input vector, value)
+  std::vector<std::pair<size_t, double>> result;
+
+  struct HeapNode
+  {
+    size_t vec_idx; // which input vector
+    size_t elem_idx; // index inside that vector
+    double value; // value itself
+
+    bool operator>(const HeapNode& other) const
+    {
+      return value > other.value; // for min-heap
+    }
+  };
+
+  std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<>> min_heap;
+
+  // Initialize heap with the first element of each vector
+  for (size_t i = 0; i < inputs.size(); ++i)
+  {
+    if (!inputs[i].empty())
+    {
+      min_heap.push({ i, 0, inputs[i][0] });
+    }
+  }
+
+  while (!min_heap.empty())
+  {
+    auto node = min_heap.top();
+    min_heap.pop();
+
+    // record (vector index, value)
+    result.emplace_back(node.vec_idx, node.value);
+
+    // advance in that vector
+    if (node.elem_idx + 1 < inputs[node.vec_idx].size())
+    {
+      min_heap.push({ node.vec_idx, node.elem_idx + 1, inputs[node.vec_idx][node.elem_idx + 1] });
+    }
+  }
+
+  return result;
+}
+
 void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>& support_points,
   std::vector<std::vector<double>>& subdivisions_by_strand,
   std::vector<std::vector<int>>& physics_strand_to_segment_indices,
-  const std::vector<std::vector<glm::mat4>>& transforms_by_height_and_branch, const GlobalTransform& root_transform,
+  const std::vector<std::vector<glm::mat4>>& transforms_by_height_and_branch,
   const std::vector<std::vector<size_t>>& branch_indices,
-  std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id)
+  std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id,
+  std::vector<float>& boundary_distance_by_segment_id, double alpha_cutoff)
 {
   bool recompute_segment_pairs = false; // TODO: expose as option?
 
@@ -41,8 +88,8 @@ void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>&
     int bottom_segment_id = physics_strand_to_segment_indices[strand_id].front();
     int top_segment_id = physics_strand_to_segment_indices[strand_id].back();
 
-    bottom_boundary_distances_by_strand_id[strand_id] = dynamic_strands->segments[bottom_segment_id].boundary_distance;
-    top_boundary_distances_by_strand_id[strand_id] = dynamic_strands->segments[top_segment_id].boundary_distance;
+    bottom_boundary_distances_by_strand_id[strand_id] = boundary_distance_by_segment_id[bottom_segment_id];
+    top_boundary_distances_by_strand_id[strand_id] = boundary_distance_by_segment_id[top_segment_id];
   }
 
   // sort subdivisions into a single array
@@ -51,7 +98,7 @@ void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>&
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing...");
   kinDS::KineticDelaunay kinetic_delaunay(
     kinDS::BranchTrajectories(support_points, transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
-    render_settings.segment_meshlet_render_parameters.alpha_cutoff, false, branch_indices, strands_by_branch_id);
+    alpha_cutoff, false, branch_indices, strands_by_branch_id);
 
   bool transform_mesh_at_construction = false;
 
@@ -63,7 +110,7 @@ void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>&
   size_t section_count = kinetic_delaunay.getSectionCount();
 
   ProgressBar section_progress_bar(
-    0, section_count, "Computing Kinetic Voronoi Sections", evo_engine::ProgressBar::Display::Absolute);
+    0, section_count, "Computing Kinetic Voronoi Sections", ProgressBar::Display::Absolute);
   for (size_t i = 0; i < section_count; ++i)
   {
     section_progress_bar.Update(i);
@@ -98,8 +145,8 @@ void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>&
   //                                       ProgressBar::Display::Absolute, 50);
 
   std::atomic<int> progress_counter { 0 };
-  Jobs::RunParallelFor(meshes.size(),
-    [&](const size_t mesh_index)
+  std::for_each(std::execution::par, IndexIterator { 0 }, IndexIterator { meshes.size() },
+    [&](auto mesh_index)
     {
       progress_counter.fetch_add(1, std::memory_order_relaxed);
       // intersection_progress_bar.Update(progress_counter);
@@ -328,305 +375,6 @@ void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>&
     }
   }
 
-  std::vector<DynamicStrands::GpuSegmentData>& segment_data_list = dynamic_strands->segment_data_list;
-  std::vector<DynamicStrands::GpuSegmentPair>& segment_pairs = dynamic_strands->segment_pairs;
-
-  if (recompute_segment_pairs)
-  {
-    segment_pairs.clear();
-
-    std::vector<size_t> pair_handle_offsets(segment_data_list.size(), 0);
-
-    // clear existing pair handles in segment data
-    for (auto& segment_data : segment_data_list)
-    {
-      for (auto& pair_handle : segment_data.pair_handles)
-      {
-        pair_handle = -1;
-      }
-    }
-
-    for (size_t strand_id = 0; strand_id < physics_strand_to_segment_indices.size(); ++strand_id)
-    {
-      for (size_t segment_no = 0; segment_no < meshing_strand_to_segment_indices[strand_id].size(); ++segment_no)
-      {
-        size_t meshing_segment_id = meshing_strand_to_segment_indices[strand_id][segment_no];
-        auto& mesh = meshes[meshing_segment_id];
-        int physics_segment_id = physics_strand_to_segment_indices[strand_id][segment_no];
-        const auto& triangles = mesh.getTriangles();
-
-        std::set<int> neighbor_set;
-        for (size_t triangle_vertex_index = 0; triangle_vertex_index < triangles.size(); triangle_vertex_index += 3)
-        {
-          int meshing_neighbor_segment_index = meshing_neighbor_indices[meshing_segment_id][triangle_vertex_index / 3];
-          if (meshing_neighbor_segment_index >= 0)
-          {
-            int physics_neighbor_segment_index = meshing_to_physics_segment_indices[meshing_neighbor_segment_index];
-            if (physics_neighbor_segment_index != -1)
-            {
-              neighbor_set.insert(physics_neighbor_segment_index);
-            }
-          }
-        }
-
-        // create a new segment pair for each neighbor if the neighbor index is greater to avoid duplicates from
-        // symmetry
-        for (auto& physics_neighbor_segment_index : neighbor_set)
-        {
-          if (physics_neighbor_segment_index > physics_segment_id)
-          {
-            DynamicStrands::GpuSegmentPair segment_pair;
-            segment_pair.segment0_handle = physics_segment_id;
-            segment_pair.segment1_handle = physics_neighbor_segment_index;
-
-            // TODO: other properties
-
-            int pair_handle = static_cast<int>(segment_pairs.size());
-            segment_data_list[physics_segment_id].pair_handles[pair_handle_offsets[physics_segment_id]] = pair_handle;
-            pair_handle_offsets[physics_segment_id]++;
-
-            segment_data_list[physics_neighbor_segment_index]
-              .pair_handles[pair_handle_offsets[physics_neighbor_segment_index]]
-              = pair_handle;
-            pair_handle_offsets[physics_neighbor_segment_index]++;
-
-            segment_pairs.emplace_back(segment_pair);
-          }
-        }
-      }
-    }
-  }
-
-  for (size_t strand_id = 0; strand_id < physics_strand_to_segment_indices.size(); ++strand_id)
-  {
-    // Verify segment count:
-    if (meshing_strand_to_segment_indices[strand_id].size() != physics_strand_to_segment_indices[strand_id].size())
-    {
-      KINDS_WARNING("Meshing algorithm resulted in "
-        << meshing_strand_to_segment_indices[strand_id].size() << " segments for strand " << strand_id
-        << ", but the physics simulation has " << physics_strand_to_segment_indices[strand_id].size() << ". There are "
-        << subdivisions_by_strand[strand_id].size() << " subdivision parameters in range ["
-        << subdivisions_by_strand[strand_id].front() << ", " << subdivisions_by_strand[strand_id].back() << "].");
-    }
-
-    for (size_t segment_no = 0; segment_no < meshing_strand_to_segment_indices[strand_id].size(); ++segment_no)
-    {
-      // Get mesh using the segment id from the meshing algorithm.
-      // Note that this is different from the original segment id from the strand model because it is assigned in the
-      // order of creation of the segments.
-      size_t meshing_segment_id = meshing_strand_to_segment_indices[strand_id][segment_no];
-      if (meshing_segment_id >= meshes.size())
-      {
-        KINDS_ERROR(
-          "meshing_segment_id out of bounds: " << meshing_segment_id << "; upper bound is: " << meshes.size())
-        continue;
-      }
-      auto& mesh = meshes[meshing_segment_id];
-      int physics_segment_id = physics_strand_to_segment_indices[strand_id][segment_no];
-      // get original segment id from strand model
-
-      // store in the buffers
-      size_t vertex_offset = segment_meshlet_vertices.size();
-      for (const auto& v : mesh.getVertices())
-      {
-        // v is a relative position in 2D, we need to convert it to 3D
-
-        GpuSegmentMeshletVertex vertex;
-
-        // Convert from profile to global 3D position
-
-        if (!transform_mesh_at_construction)
-        {
-          vertex.x0 = root_transform.TransformPoint(
-            ProfileToModelCoordinates(transforms_by_height_and_branch, v, v[2], branch_indices[strand_id]));
-        }
-        else
-        {
-          vertex.x0 = root_transform.TransformPoint(glm::vec3(v[0], v[1], v[2]));
-        }
-        vertex.x = vertex.x0;
-        vertex.segment_index = physics_segment_id;
-        segment_meshlet_vertices.push_back(vertex);
-      }
-
-      const auto& triangles = mesh.getTriangles();
-
-      for (size_t triangle_vertex_index = 0; triangle_vertex_index < triangles.size(); triangle_vertex_index += 3)
-      {
-        GpuSegmentMeshletTriangle triangle;
-        triangle.vertex_index0 = static_cast<unsigned int>(triangles[triangle_vertex_index] + vertex_offset);
-        triangle.vertex_index1 = static_cast<unsigned int>(triangles[triangle_vertex_index + 1] + vertex_offset);
-        triangle.vertex_index2 = static_cast<unsigned int>(triangles[triangle_vertex_index + 2] + vertex_offset);
-        int meshing_neighbor_segment_index = meshing_neighbor_indices[meshing_segment_id][triangle_vertex_index / 3];
-        if (meshing_neighbor_segment_index >= static_cast<long>(meshing_to_physics_segment_indices.size()))
-        {
-          KINDS_ERROR("meshing_neighbor_segment_index out of bounds: "
-            << meshing_neighbor_segment_index << "; upper bound is: " << meshing_to_physics_segment_indices.size())
-        }
-        else if (meshing_neighbor_segment_index >= 0)
-        {
-          triangle.neighbor_segment_index = meshing_to_physics_segment_indices[meshing_neighbor_segment_index];
-        }
-        else
-        {
-          triangle.neighbor_segment_index = meshing_neighbor_segment_index;
-        }
-
-        // Just assume the transformations (without translations) are orthogonal
-        for (size_t j = 0; j < 3; j++)
-        {
-          auto source_tri_vertex_index = mesh.getTriangles()[triangle_vertex_index + j];
-          auto normal = mesh.getNormal(triangle_vertex_index + j);
-          if (!transform_mesh_at_construction)
-          {
-            triangle.normal0[j] = triangle.normal[j] = glm::vec4(
-              root_transform.TransformVector(ProfileToModelCoordinates(normal_transforms_by_height_and_branch, normal,
-                mesh.getVertices()[source_tri_vertex_index][2], branch_indices[strand_id], 0.0f)),
-              0.0f);
-          }
-          else
-          {
-            triangle.normal0[j] = triangle.normal[j]
-              = glm::vec4(root_transform.TransformVector(glm::vec3(normal[0], normal[1], normal[2])), 0.0f);
-          }
-
-          if (mesh.hasValidUVIndex(triangle_vertex_index + j))
-          {
-            triangle.uv[j] = glm::vec4(mesh.getUV(triangle_vertex_index + j), 0.0);
-          }
-          else
-          {
-            triangle.uv[j] = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
-          }
-        }
-
-        triangle.segment_pair_index = -1;
-
-        if (triangle.neighbor_segment_index >= 0)
-        {
-          // find segment pair index (TODO: this is not very efficient, perhaps we can improve it in the future)
-          for (int pair_handle : segment_data_list[physics_segment_id].pair_handles)
-          {
-            if (pair_handle == -1)
-            {
-              continue;
-            }
-            if (segment_pairs[pair_handle].segment0_handle != physics_segment_id
-              && segment_pairs[pair_handle].segment1_handle != physics_segment_id)
-            {
-              KINDS_ERROR("Segment pair incorrectly referenced!");
-            }
-            if (segment_pairs[pair_handle].segment0_handle == triangle.neighbor_segment_index
-              || segment_pairs[pair_handle].segment1_handle == triangle.neighbor_segment_index)
-            {
-              triangle.segment_pair_index = static_cast<int>(pair_handle);
-              break;
-            }
-          }
-
-        }
-
-        segment_meshlet_triangles.push_back(triangle);
-      }
-    }
-  }
-
-  boundary_distances_by_vertex.resize(boundary_mesh.getVertexCount(), 0.0f);
-  for (size_t i = 0; i < boundary_mesh.getVertexCount(); i++)
-  {
-    size_t strand_id = boundary_vertex_to_strand_id[i];
-
-    // as a heuristic, just use the bottom boundary distance if height is <= 0, otherwise use the top boundary distance
-    float height = boundary_mesh.getVertices()[i][2];
-    if (height <= 0.0f)
-    {
-      boundary_distances_by_vertex[i] = bottom_boundary_distances_by_strand_id[strand_id];
-    }
-    else
-    {
-      boundary_distances_by_vertex[i] = top_boundary_distances_by_strand_id[strand_id];
-    }
-  }
-
-  transformed_boundary_mesh = TransformBoundaryMesh(boundary_mesh, transforms_by_height_and_branch,
-    normal_transforms_by_height_and_branch, root_transform, branch_indices, boundary_vertex_to_strand_id);
-
-  if (!debug_export_meshes)
-  {
-    KINDS_INFO("Kinetic Delaunay Voronoi Meshing completed.");
-    return;
-  }
-  KINDS_INFO("Exporting Kinetic Delaunay Voronoi Meshes for Debugging...");
-  kinDS::VoronoiMesh transformed_mesh({}, kinDS::PerTriangleCorner); // also build transformed mesh for debugging
-  for (size_t strand_id = 0; strand_id < physics_strand_to_segment_indices.size(); ++strand_id)
-  {
-    for (size_t segment_no = 0; segment_no < meshing_strand_to_segment_indices[strand_id].size(); ++segment_no)
-    {
-      // Get mesh using the segment id from the meshing algorithm.
-      // Note that this is different from the original segment id from the strand model because it is assigned in the
-      // order of creation of the segments.
-      auto& mesh = meshes[meshing_strand_to_segment_indices[strand_id][segment_no]];
-
-      // get original segment id from strand model
-      size_t segment_id = meshing_strand_to_segment_indices[strand_id][segment_no];
-
-      // store in the buffers
-      size_t vertex_offset = transformed_mesh.getVertexCount();
-      for (const auto& v : mesh.getVertices())
-      {
-        // v is a relative position in 2D, we need to convert it to 3D
-        if (branch_indices.size() <= strand_id)
-        {
-          KINDS_ERROR("strand id out if bounds: " << strand_id << " vector length is: " << branch_indices.size());
-        }
-        glm::vec3 global_pos;
-        if (!transform_mesh_at_construction)
-        {
-          global_pos = root_transform.TransformPoint(
-            ProfileToModelCoordinates(transforms_by_height_and_branch, v, v[2], branch_indices[strand_id]));
-        }
-        else
-        {
-          global_pos = root_transform.TransformPoint(glm::vec3(v[0], v[1], v[2]));
-        }
-        transformed_mesh.addVertex(global_pos[0], global_pos[1], global_pos[2]);
-      }
-
-      const auto& triangles = mesh.getTriangles();
-      for (size_t triangle_vertex_index = 0; triangle_vertex_index < triangles.size(); triangle_vertex_index += 3)
-      {
-        size_t dest_tri_vertex_index = 3
-          * transformed_mesh.addTriangle(triangles[triangle_vertex_index] + vertex_offset,
-            triangles[triangle_vertex_index + 1] + vertex_offset, triangles[triangle_vertex_index + 2] + vertex_offset);
-
-        for (size_t j = 0; j < 3; j++)
-        {
-          auto source_tri_vertex_index = mesh.getTriangles()[triangle_vertex_index + j];
-          auto untransformed_normal = mesh.getNormal(triangle_vertex_index + j);
-          glm::vec3 normal;
-          if (!transform_mesh_at_construction)
-          {
-            normal = glm::vec3(root_transform.TransformVector(
-              ProfileToModelCoordinates(normal_transforms_by_height_and_branch, untransformed_normal,
-                mesh.getVertices()[source_tri_vertex_index][2], branch_indices[strand_id], 0.0f)));
-          }
-          else
-          {
-            normal = glm::vec3(root_transform.TransformVector(
-              glm::vec3(untransformed_normal[0], untransformed_normal[1], untransformed_normal[2])));
-          }
-          size_t normal_index = transformed_mesh.addNormal(normal.x, normal.y, normal.z);
-
-          if (mesh.hasValidUVIndex(triangle_vertex_index + j))
-          {
-            size_t uv_index = transformed_mesh.addUV(mesh.getUV(triangle_vertex_index + j));
-            transformed_mesh.getUVIndices()[dest_tri_vertex_index + j] = uv_index;
-          }
-        }
-      }
-    }
-  }
-
   // for now, just combine all meshes into one
   kinDS::VoronoiMesh combined_mesh;
   for (const auto& mesh : meshes)
@@ -646,4 +394,4 @@ void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>&
   // kinDS::ObjExporter::writeMesh(transformed_boundary_mesh, "transformed_boundary_mesh.obj");
   // kinDS::ObjExporter::writeMesh(combined_mesh, "meshtest_subdivided.obj");
   KINDS_INFO("Kinetic Delaunay Voronoi Meshes exported.");
-}*/
+}
