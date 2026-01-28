@@ -1,7 +1,14 @@
 #pragma once
+#include <iostream>
+
+// resolve a macro conflict with /usr/include/X11/X.h:350:21
+#pragma push_macro("Success")
+#undef Success
+
 #include "../eigen/Eigen/Dense"
 #include "../eigen/unsupported/Eigen/Polynomials"
-#include <iostream>
+
+#pragma pop_macro("Success")
 
 namespace kinDS
 {
@@ -294,6 +301,7 @@ class Polynomial
   }
 
   Polynomial operator+(const Polynomial& other) const { return Polynomial(add_poly(coeffs, other.coeffs)); }
+
   Polynomial operator-(const Polynomial& other) const { return Polynomial(add_poly(coeffs, -other.coeffs)); }
 
   // unary minus

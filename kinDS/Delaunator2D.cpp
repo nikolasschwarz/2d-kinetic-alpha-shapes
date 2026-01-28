@@ -1,14 +1,11 @@
 #include "Delaunator2D.hpp"
-#include "../kinDS/Logger.hpp"
+#include "Logger.hpp"
 
 using namespace Delaunator;
 
 //@see
 // https://stackoverflow.com/questions/33333363/built-in-mod-vs-custom-mod-function-improve-the-performance-of-modulus-op/33333636#33333636
-inline size_t fast_mod(const size_t i, const size_t c)
-{
-  return i >= c ? i % c : i;
-}
+inline size_t fast_mod(const size_t i, const size_t c) { return i >= c ? i % c : i; }
 
 // Kahan and Babuska summation, Neumaier variant; accumulates less FP error
 inline float sum(const std::vector<float>& x)
@@ -33,8 +30,8 @@ inline float dist(const float ax, const float ay, const float bx, const float by
   return dx * dx + dy * dy;
 }
 
-inline float circumradius(const float ax, const float ay, const float bx, const float by, const float cx,
-  const float cy)
+inline float circumradius(
+  const float ax, const float ay, const float bx, const float by, const float cx, const float cy)
 {
   const float dx = bx - ax;
   const float dy = by - ay;
@@ -63,8 +60,8 @@ inline bool orient(const float px, const float py, const float qx, const float q
   return (qy - py) * (rx - qx) - (qx - px) * (ry - qy) < 0.0;
 }
 
-inline std::pair<float, float> circumcenter(const float ax, const float ay, const float bx, const float by,
-  const float cx, const float cy)
+inline std::pair<float, float> circumcenter(
+  const float ax, const float ay, const float bx, const float by, const float cx, const float cy)
 {
   const float dx = bx - ax;
   const float dy = by - ay;
@@ -102,7 +99,8 @@ constexpr std::size_t INVALID_INDEX = std::numeric_limits<std::size_t>::max();
 
 inline bool check_pts_equal(float x1, float y1, float x2, float y2)
 {
-  return std::fabs(x1 - x2) <= std::numeric_limits<float>::epsilon() && std::fabs(y1 - y2) <= std::numeric_limits<float>::epsilon();
+  return std::fabs(x1 - x2) <= std::numeric_limits<float>::epsilon()
+    && std::fabs(y1 - y2) <= std::numeric_limits<float>::epsilon();
 }
 
 // monotonically increases with real angle, but doesn't need expensive trigonometry
@@ -232,7 +230,7 @@ Delaunator2D::Delaunator2D(std::vector<float> const& inCoords)
 
   if (!(min_radius < std::numeric_limits<float>::max()))
   {
-    logger.log(ERROR, "not triangulation");
+    kinDS::logger.log(kinDS::ERROR, "not triangulation");
     return;
   }
 
@@ -336,8 +334,7 @@ Delaunator2D::Delaunator2D(std::vector<float> const& inCoords)
 
     // walk forward through the hull, adding more triangles and flipping recursively
     std::size_t next = hull_next[e];
-    while (q = hull_next[next],
-      orient(x, y, coords[2 * next], coords[2 * next + 1], coords[2 * q], coords[2 * q + 1]))
+    while (q = hull_next[next], orient(x, y, coords[2 * next], coords[2 * next + 1], coords[2 * q], coords[2 * q + 1]))
     {
       t = add_triangle(next, i, q, hull_tri[i], INVALID_INDEX, hull_tri[next]);
       hull_tri[i] = legalize(t + 2);
@@ -378,7 +375,8 @@ float Delaunator2D::get_hull_area()
   size_t e = hull_start;
   do
   {
-    hull_area.push_back((coords[2 * e] - coords[2 * hull_prev[e]]) * (coords[2 * e + 1] + coords[2 * hull_prev[e] + 1]));
+    hull_area.push_back(
+      (coords[2 * e] - coords[2 * hull_prev[e]]) * (coords[2 * e + 1] + coords[2 * hull_prev[e] + 1]));
     e = hull_next[e];
   } while (e != hull_start);
   return sum(hull_area);
@@ -502,8 +500,8 @@ inline std::size_t Delaunator2D::hash_key(const float x, const float y) const
     m_hash_size);
 }
 
-std::size_t Delaunator2D::add_triangle(std::size_t i0, std::size_t i1, std::size_t i2, std::size_t a, std::size_t b,
-  std::size_t c)
+std::size_t Delaunator2D::add_triangle(
+  std::size_t i0, std::size_t i1, std::size_t i2, std::size_t a, std::size_t b, std::size_t c)
 {
   std::size_t t = triangles.size();
   triangles.push_back(i0);

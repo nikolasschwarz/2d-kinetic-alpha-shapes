@@ -1,12 +1,10 @@
 #include "eigen/Eigen/Dense"
-#include "kinDS/CubicHermiteSpline.hpp"
 #include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
-#include "kinDS/MeshIntersection.hpp"
 #include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"
-#include "simple_svg.hpp"
+#include "kinDS/simple_svg.hpp"
 #include <iostream>
 
 static void eigen_example()
@@ -97,7 +95,7 @@ static void kinetic_delaunay_example()
 {
 #define TEST_TRAJECTORIES
 #ifdef TEST_TRAJECTORIES
-  std::vector<kinDS::Point<2>> trajectory_A = {
+  std::vector<glm::dvec2> trajectory_A = {
     //{ -0.420113, -0.558875 },
     { -0.432132, -0.426942 },
     { -0.447292, -0.580708 },
@@ -108,7 +106,7 @@ static void kinetic_delaunay_example()
     { -0.536664, -0.465019 },
   };
 
-  std::vector<kinDS::Point<2>> trajectory_B = {
+  std::vector<glm::dvec2> trajectory_B = {
     //{ -0.200000, -0.500000 },
     { -0.150887, -0.424968 },
     { -0.101774, -0.349936 },
@@ -119,7 +117,7 @@ static void kinetic_delaunay_example()
     { 0.143791, 0.025224 },
   };
 
-  std::vector<kinDS::Point<2>> trajectory_C = {
+  std::vector<glm::dvec2> trajectory_C = {
     //{ 0.100000, -0.400000 },
     { -0.048665, -0.333097 },
     { -0.197330, -0.266194 },
@@ -130,7 +128,7 @@ static void kinetic_delaunay_example()
     { -0.940656, 0.068321 },
   };
 
-  std::vector<kinDS::Point<2>> trajectory_D = {
+  std::vector<glm::dvec2> trajectory_D = {
     //{ 0.500000, 0.200000 },
     { 0.467745, 0.111272 },
     { 0.435490, 0.022544 },
@@ -141,7 +139,7 @@ static void kinetic_delaunay_example()
     { 0.274215, -0.421091 },
   };
 
-  /* std::vector<kinDS::Point<2>> trajectory_B = {
+  /* std::vector<glm::dvec2> trajectory_B = {
     { 0.556188, -0.476838 },
     { 0.572065, -0.428676 },
     { 0.478597, -0.594223 },
@@ -163,7 +161,7 @@ static void kinetic_delaunay_example()
     { 0.447700, 0.444491 },
   };
 
-  std::vector<kinDS::Point<2>> trajectory_D = {
+  std::vector<glm::dvec2> trajectory_D = {
     { -0.559656, 0.421442 },
     { -0.464952, 0.428177 },
     { -0.578349, 0.568869 },
@@ -174,15 +172,10 @@ static void kinetic_delaunay_example()
     { -0.428599, 0.554348 },
   };*/
 
-  kinDS::CubicHermiteSpline<2> spline_A(trajectory_A);
-  kinDS::CubicHermiteSpline<2> spline_B(trajectory_B);
-  kinDS::CubicHermiteSpline<2> spline_C(trajectory_C);
-  kinDS::CubicHermiteSpline<2> spline_D(trajectory_D);
-
-  std::vector<kinDS::CubicHermiteSpline<2>> splines = { spline_A, spline_B, spline_C, spline_D };
+  std::vector<std::vector<glm::dvec2>> support_points { trajectory_A, trajectory_B, trajectory_C, trajectory_D };
 
 #else
-  std::vector<std::vector<kinDS::Point<2>>> strand_guide_points = {
+  std::vector<std::vector<glm::dvec2>> strand_guide_points = {
     { kinDS::Point<2> { 4.12703, -1.57022 }, kinDS::Point<2> { 4.12703, -1.57022 },
       kinDS::Point<2> { 4.12703, -1.57022 } },
     { kinDS::Point<2> { 4.3178, -3.52816 }, kinDS::Point<2> { 4.3178, -3.52816 },
@@ -251,32 +244,22 @@ static void kinetic_delaunay_example()
   }
 #endif
 
-  // For debugging, print several samples along each spline
-  std::cout << "Spline evaluations:\n";
-  for (double t = 0.0; t <= 2.0; t += 0.25)
-  {
-    std::cout << "t = " << t << ":\n";
-    for (size_t i = 0; i < splines.size(); ++i)
-    {
-      auto p = splines[i].evaluate(t);
-      std::cout << "  Spline " << i << ": (" << p[0] << ", " << p[1] << ")\n";
-    }
-  }
-
-  // Test subdivisions for 4 strands
-  /*std::vector<std::vector<double>> subdivisions = { { 0.42, 1.37, 2.89, 5.46 }, { 0.15, 1.92, 3.08, 4.61, 6.73 },
-    { 0.08, 2.14, 2.95, 4.22, 6.11 }, { 0.33, 1.25, 2.67, 4.19, 5.78, 6.92 } };*/
-
   std::vector<std::vector<double>> subdivisions
     = { { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 } };
 
   // Sort subdivisions into pairs of strand index and parameter
   std::vector<std::pair<size_t, double>> sorted_subdivisions = merge_sorted_vectors(subdivisions);
+  const std::vector<std::vector<size_t>> branch_indices; // TODO: empty for now
+  std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch; // TODO: empty for now
+  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch; // TODO: empty for now
+  std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id; // TODO: empty for now
 
-  kinDS::KineticDelaunay kinetic_delaunay(splines);
+  kinDS::KineticDelaunay kinetic_delaunay(
+    kinDS::BranchTrajectories(support_points, transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
+    10.0, false, branch_indices, strands_by_branch_id);
 
   kinetic_delaunay.init();
-  kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, splines, sorted_subdivisions);
+  kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);
   mesh_builder.init();
   auto points = kinetic_delaunay.getPointsAt(0.0);
   kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
@@ -308,10 +291,10 @@ static void kinetic_delaunay_example()
   auto meshes = mesh_builder.extractSegmentMeshlets();
   //(0.1, 0.01, subdivisions);
 
-  for (size_t i = 0; i < meshes.size(); ++i)
+  for (size_t i = 0; i < meshes.first.size(); ++i)
   {
     std::string filename = "mesh_" + std::to_string(i) + ".obj";
-    kinDS::ObjExporter::writeMesh(meshes[i], filename);
+    kinDS::ObjExporter::writeMesh(meshes.first[i], filename);
     std::cout << "Mesh saved to " << filename << std::endl;
   }
 

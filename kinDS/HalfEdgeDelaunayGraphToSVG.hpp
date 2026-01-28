@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../simple_svg.hpp"
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "Logger.hpp"
+#include "simple_svg.hpp"
 
 namespace kinDS
 {
@@ -28,7 +28,7 @@ class HalfEdgeDelaunayGraphToSVG
     }
   };
 
-  static BoundingBox computeBoundingBox(const std::vector<Point<2>>& points, double margin = 0.0)
+  static BoundingBox computeBoundingBox(const std::vector<glm::dvec2>& points, double margin = 0.0)
   {
     double min_x = std::numeric_limits<double>::max();
     double min_y = std::numeric_limits<double>::max();
@@ -54,7 +54,7 @@ class HalfEdgeDelaunayGraphToSVG
   }
 
   static svg::Document setupDocument(
-    const std::vector<Point<2>> points, const std::string& filename, const BoundingBox& bb)
+    const std::vector<glm::dvec2> points, const std::string& filename, const BoundingBox& bb)
   {
     // Create an SVG document with the bounding box
     double width = bb.max_x - bb.min_x;
@@ -72,8 +72,8 @@ class HalfEdgeDelaunayGraphToSVG
    * @param graph The half-edge Delaunay graph to convert.
    * @param filename The name of the output SVG file.
    */
-  static void write(const std::vector<Point<2>> points, const HalfEdgeDelaunayGraph& graph, const std::string& filename,
-    double margin = 0.0)
+  static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
+    const std::string& filename, double margin = 0.0)
   {
     BoundingBox bb = computeBoundingBox(points, margin);
     svg::Document doc = setupDocument(points, filename, bb);
@@ -84,8 +84,8 @@ class HalfEdgeDelaunayGraphToSVG
       if (he.origin != -1
         && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
       {
-        Point<2> start = points[graph.getHalfEdges()[he_id].origin];
-        Point<2> end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+        glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
+        glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
         doc << svg::Line(
           svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
       }
@@ -100,14 +100,14 @@ class HalfEdgeDelaunayGraphToSVG
     doc.save();
   }
 
-  static void writeVoronoi(const std::vector<Point<2>> points, const HalfEdgeDelaunayGraph& graph,
+  static void writeVoronoi(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
     const std::string& filename, bool also_draw_delaunay, double margin = 0.0)
   {
     auto circumcenters = graph.computeCircumcenters(points);
 
-    const std::vector<Point<2>> allFinitePoints = [&]()
+    const std::vector<glm::dvec2> allFinitePoints = [&]()
     {
-      std::vector<Point<2>> finitePoints;
+      std::vector<glm::dvec2> finitePoints;
 
       std::copy(points.begin(), points.end(), std::back_inserter(finitePoints));
 
@@ -190,8 +190,8 @@ class HalfEdgeDelaunayGraphToSVG
         if (he.origin != -1
           && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
         {
-          Point<2> start = points[graph.getHalfEdges()[he_id].origin];
-          Point<2> end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+          glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
+          glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
           doc << svg::Line(
             svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
         }

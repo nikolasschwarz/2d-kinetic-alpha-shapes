@@ -1,153 +1,134 @@
+#include "MeshCGAL.hpp"
 #include "VoronoiMesh.hpp"
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 
-// Polygon Mesh Processing (PMP) functions
-#include <CGAL/Polygon_mesh_processing/corefinement.h> // for corefine_and_compute_intersection()
-#include <CGAL/Polygon_mesh_processing/measure.h> // optional area/volume utils
-#include <CGAL/Polygon_mesh_processing/orientation.h> // for orient_to_bound_a_volume()
-#include <CGAL/Polygon_mesh_processing/repair.h> // for merge_duplicate_vertices(), remove_isolated_vertices()
-#include <CGAL/Polygon_mesh_processing/repair_degeneracies.h> // for remove_degenerate_faces()
-#include <CGAL/Polygon_mesh_processing/stitch_borders.h> // for stitch_borders()
-#include <CGAL/Polygon_mesh_processing/triangulate_faces.h> // (optional) triangulate_face if needed
-#include <CGAL/Surface_mesh.h>
-#include <array>
-#include <iostream>
-#include <vector>
-
+#ifdef USE_CGAL
+#  include <CGAL/AABB_face_graph_triangle_primitive.h>
+#  include <CGAL/AABB_traits.h>
+#  include <CGAL/AABB_tree.h>
+#  include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#  include <CGAL/Polygon_mesh_processing/connected_components.h>
+#  include <CGAL/Polygon_mesh_processing/corefinement.h>  // for corefine_and_compute_intersection()
+#  include <CGAL/Polygon_mesh_processing/measure.h>       // optional area/volume utils
+#  include <CGAL/Polygon_mesh_processing/orientation.h>   // for orient_to_bound_a_volume()
+#  include <CGAL/Polygon_mesh_processing/repair.h>        // for merge_duplicate_vertices(), remove_isolated_vertices()
+#  include <CGAL/Polygon_mesh_processing/repair_degeneracies.h>  // for remove_degenerate_faces()
+#  include <CGAL/Polygon_mesh_processing/stitch_borders.h>       // for stitch_borders()
+#  include <CGAL/Polygon_mesh_processing/triangulate_faces.h>    // (optional) triangulate_face if needed
+#  include <CGAL/Surface_mesh.h>
+#endif
+namespace kinDS {
+#ifdef USE_CGAL
+using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
+using Point_3 = Kernel::Point_3;
+using Primitive = CGAL::AABB_face_graph_triangle_primitive<MeshCGAL_internal>;
+using Traits = CGAL::AABB_traits<Kernel, Primitive>;
+using TreeCGAL = CGAL::AABB_tree<Traits>;
 namespace PMP = CGAL::Polygon_mesh_processing;
 
-using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
-using PointCGAL = Kernel::Point_3;
-using MeshCGAL = CGAL::Surface_mesh<PointCGAL>;
+typedef Kernel::Triangle_3 Triangle_3;
+typedef std::vector<Triangle_3> TriangleList;
 
-namespace kinDS
-{
+struct FaceProperties {
+  int face_id;
+  int test0;
+  size_t test1;
+};
 
-class MeshIntersection
-{
- public:
-  // Convert from std::vector-based mesh data to CGAL Surface_mesh
-  static void vectorToCgalMesh(
-    const std::vector<std::array<double, 3>>& vertices,
-    const std::vector<std::array<size_t, 3>>& triangles,
-    MeshCGAL& mesh)
-  {
-    std::vector<MeshCGAL::Vertex_index> vmap(vertices.size());
-    for (size_t i = 0; i < vertices.size(); ++i)
-    {
-      vmap[i] = mesh.add_vertex(PointCGAL(
-        vertices[i][0],
-        vertices[i][1],
-        vertices[i][2]));
-    }
+// Small POD to record origin
+struct Origin {
+  int mesh_index;       // 0 -> m1, 1 -> m2
+  std::size_t face_id;  // id assigned on the source mesh via face_index_map
+};
 
-    for (const auto& t : triangles)
-      mesh.add_face(vmap[t[0]], vmap[t[1]], vmap[t[2]]);
+//
+// Visitor that records mapping from output face -> Origin
+//
+struct RecordingVisitor : public PMP::Corefinement::Default_visitor<MeshCGAL_internal> {
+  using FaceDescriptor = MeshCGAL_internal::Face_index;
+
+  Origin current_origin{-1, 0};
+
+  // input face index maps
+  const MeshCGAL<Origin>& m0;
+  const MeshCGAL<Origin>& m1;
+  MeshCGAL<Origin>& result;
+
+  RecordingVisitor(const MeshCGAL<Origin>& m0, const MeshCGAL<Origin>& m1, MeshCGAL<Origin>& result)
+      : m0(m0), m1(m1), result(result) {
   }
 
-  static void voronoiMeshToCgalMesh(
-    const VoronoiMesh& input_mesh,
-    MeshCGAL& output_mesh)
-  {
-    auto& vertices = input_mesh.getVertices();
-    std::vector<MeshCGAL::Vertex_index> vmap(vertices.size());
-    for (size_t i = 0; i < vertices.size(); ++i)
-    {
-      vmap[i] = output_mesh.add_vertex(PointCGAL(
-        vertices[i][0],
-        vertices[i][1],
-        vertices[i][2]));
+  void after_face_copy(FaceDescriptor f_src, const MeshCGAL_internal& tm_src, FaceDescriptor f_tgt,
+                       MeshCGAL_internal& tm_tgt) {
+    auto [fmap, ok] = tm_tgt.property_map<FaceDescriptor, Origin>(result.property_name);
+
+    if (!ok) {
+      KINDS_ERROR("after_face_copy: Could not retrieve property map!");
+      return;
     }
 
-    auto& vertex_indices = input_mesh.getVertexIndices();
-    for (size_t i = 0; i < vertex_indices.size(); i += 3)
-    {
-      output_mesh.add_face(vmap[vertex_indices[i]], vmap[vertex_indices[i + 1]], vmap[vertex_indices[i + 2]]);
+    if (&tm_src == &m0.mesh) {
+      fmap[f_tgt] = m0.fidx[f_src];
+    } else if (&tm_src == &m1.mesh) {
+      fmap[f_tgt] = m1.fidx[f_src];
     }
   }
 
-  static VoronoiMesh intersect(const VoronoiMesh& meshA,
-    const VoronoiMesh& meshB)
-  {
-    MeshCGAL cgalMeshA, cgalMeshB, cgalMeshIntersection;
-    voronoiMeshToCgalMesh(meshA, cgalMeshA);
-    voronoiMeshToCgalMesh(meshB, cgalMeshB);
-
-    PMP::orient_to_bound_a_volume(cgalMeshA);
-    PMP::orient_to_bound_a_volume(cgalMeshB);
-
-    bool success = PMP::corefine_and_compute_intersection(cgalMeshA, cgalMeshB, cgalMeshIntersection);
-
-    VoronoiMesh meshIntersection;
-    if (!success)
-    {
-      std::cerr << "Intersection failed - make sure both meshes are closed.\n";
-      return meshIntersection; // empty mesh
+  void before_subface_creations(FaceDescriptor f_old, MeshCGAL_internal& tm_src) {
+    if (&tm_src == &m0.mesh) {
+      current_origin = m0.fidx[f_old];
+    } else {
+      current_origin = m1.fidx[f_old];
     }
-    // Convert back to VoronoiMesh
-    std::vector<std::array<double, 3>> vertices;
-    std::vector<std::array<size_t, 3>> triangles;
-
-    for (const auto& v : cgalMeshIntersection.vertices())
-    {
-      const PointCGAL& p = cgalMeshIntersection.point(v);
-      meshIntersection.addVertex(CGAL::to_double(p.x()), CGAL::to_double(p.y()), CGAL::to_double(p.z()));
-    }
-
-    for (const auto& f : cgalMeshIntersection.faces())
-    {
-      std::array<size_t, 3> tri;
-      size_t idx = 0;
-      for (const auto& v : CGAL::vertices_around_face(cgalMeshIntersection.halfedge(f), cgalMeshIntersection))
-      {
-        tri[idx++] = static_cast<size_t>(v);
-      }
-      meshIntersection.addTriangle(tri[0], tri[1], tri[2]);
-    }
-
-    return meshIntersection;
   }
 
-  static void test()
-  {
-    // Simple test: two overlapping tetrahedra
-    std::vector<std::array<double, 3>> verticesA = {
-      { 0.0, 0.0, 0.0 },
-      { 1.0, 0.0, 0.0 },
-      { 0.0, 1.0, 0.0 },
-      { 0.0, 0.0, 1.0 }
-    };
+  void after_subface_created(FaceDescriptor f_new, MeshCGAL_internal& tm_tgt) {
+    auto property_map_pair = tm_tgt.property_map<FaceDescriptor, Origin>(m0.property_name);
 
-    std::vector<std::array<size_t, 3>> trianglesA = {
-      { 0, 2, 1 }, // ABC
-      { 0, 1, 3 }, // ABD
-      { 0, 3, 2 }, // ACD
-      { 1, 2, 3 } // BCD
-    };
-
-    std::vector<std::array<double, 3>> verticesB = {
-      { 0.5, 0.0, 0.0 },
-      { 1.5, 0.0, 0.0 },
-      { 0.5, 1.0, 0.0 },
-      { 0.5, 0.0, 1.0 }
-    };
-
-    std::vector<std::array<size_t, 3>> trianglesB = trianglesA;
-
-    MeshCGAL meshA, meshB, meshIntersection;
-    vectorToCgalMesh(verticesA, trianglesA, meshA);
-    vectorToCgalMesh(verticesB, trianglesB, meshB);
-
-    bool success = PMP::corefine_and_compute_intersection(meshA, meshB, meshIntersection);
-
-    if (!success)
-    {
-      std::cerr << "Intersection failed - make sure both meshes are closed.\n";
+    if (!property_map_pair.second) {
+      KINDS_ERROR("after_subface_created: Could not retrieve property map!");
+      return;
     }
 
-    std::cout << "Intersection computed successfully.\n";
-    std::cout << "  Vertices: " << num_vertices(meshIntersection) << "\n";
-    std::cout << "  Faces:    " << num_faces(meshIntersection) << "\n";
+    property_map_pair.first[f_new] = current_origin;
   }
 };
-} // namespace kinDS
+
+#endif
+
+struct MatchResult {
+  bool hit = false;
+  size_t triangle_index;
+  double u, v, w;  // barycentric
+};
+
+class MeshIntersection {
+ public:
+  MeshIntersection(const VoronoiMesh& static_mesh);
+
+  std::pair<VoronoiMesh, std::vector<int>> Intersect(const VoronoiMesh& mesh,
+                                                     const std::vector<int>& neighbor_segments = {});
+
+  MatchResult MatchPointOnSurface(const glm::dvec3& p, double epsilon = 1e-6);
+
+  enum class MeshRelation { INSIDE, OUTSIDE, INTERSECTING, UNDEFINED };
+
+  /**
+   * Classify the relation of the input with respect to the internal mesh, can be INSIDE, OUTSIDE or INTERSECTING.
+   * If CGAL is not available, UNDEFINED will always be returned.
+   *
+   * \param mesh The mesh to classify in relation to the internal mesh.
+   * \param assume_inside If set to true, it will be assumed that the mesh is entirely inside if no intersections are
+   * found. This is useful for the Voronoi meshing algortihm because we know that all cells are at least partially
+   * inside.
+   * \return the relation of the mesh to the internal mesh.
+   */
+  MeshRelation ClassifyMeshRelation(const VoronoiMesh& mesh, bool assume_inside = false);
+
+ private:
+#ifdef USE_CGAL
+  VoronoiMesh boundary_mesh_voronoi;  // We need to store this too for interpolating properties
+  MeshCGAL<Origin> boundary_mesh;
+  TreeCGAL tree;
+#endif
+};
+}  // namespace kinDS
