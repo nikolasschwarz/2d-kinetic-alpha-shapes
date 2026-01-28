@@ -308,8 +308,7 @@ static void kinetic_delaunay_example()
   kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
   kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi.svg", 0.1);
 
-  size_t section_count = 1;
-  // kinetic_delaunay.getSectionCount();
+  size_t section_count = kinetic_delaunay.getSectionCount();
 
   for (size_t i = 0; i < section_count; ++i)
   {

@@ -167,6 +167,13 @@ class Logger
 
 static Logger logger("kinDS_logfile.txt");
 
+#define KINDS_DEBUG(msg)                                                                                               \
+  {                                                                                                                    \
+    std::stringstream ss;                                                                                              \
+    ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
+    logger.log(LogLevel::DEBUG, ss.str());                                                                             \
+  }
+
 #define KINDS_INFO(msg)                                                                                                \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
@@ -174,17 +181,17 @@ static Logger logger("kinDS_logfile.txt");
     logger.log(LogLevel::INFO, ss.str());                                                                              \
   }
 
-#define KINDS_ERROR(msg)                                                                                               \
-  {                                                                                                                    \
-    std::stringstream ss;                                                                                              \
-    ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::ERROR, ss.str());                                                                             \
-  }
-
 #define KINDS_WARNING(msg)                                                                                             \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
     logger.log(LogLevel::WARNING, ss.str());                                                                           \
+  }
+
+#define KINDS_ERROR(msg)                                                                                               \
+  {                                                                                                                    \
+    std::stringstream ss;                                                                                              \
+    ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
+    logger.log(LogLevel::ERROR, ss.str());                                                                             \
   }
 }

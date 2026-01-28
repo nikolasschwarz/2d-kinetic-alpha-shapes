@@ -6,6 +6,7 @@
 #include "ProgressBar.hpp"
 #include <format>
 #include <glm/gtx/exterior_product.hpp>
+#include <glm/gtx/string_cast.hpp>
 #include <queue>
 #include <string>
 
@@ -308,7 +309,7 @@ class KineticDelaunay
         }
         center[0] /= trajs.size();
         center[1] /= trajs.size();
-        /*KINDS_INFO("Right Angle Event at time " << event_time << " for half-edge ID " << he_id
+        /*KINDS_DEBUG("Right Angle Event at time " << event_time << " for half-edge ID " << he_id
                                                    << " at center position " << center.toString().c_str());*/
 
         events.emplace(Event(event_time, he_id, t, center,
@@ -372,9 +373,8 @@ class KineticDelaunay
         }
         center[0] /= trajs.size();
         center[1] /= trajs.size();
-        /*KINDS_INFO("Boundary Event at time " << event_time << " for half-edge ID " << he_id << " at center position
-           "
-                                                << center.toString().c_str());*/
+        KINDS_DEBUG("Boundary Event at time " << event_time << " for half-edge ID " << he_id << " at center position"
+                                              << glm::to_string(center));
 
         events.emplace(
           Event(event_time, he_id, t, center, Event::BOUNDARY)); // Store the event with the time and half-edge index
@@ -474,8 +474,8 @@ class KineticDelaunay
         center[0] /= trajs.size();
         center[1] /= trajs.size();
 
-        /*KINDS_INFO("Swap Event at time " << event_time << " for half-edge ID " << he_id << " at center position "
-                                            << center.toString().c_str());*/
+        KINDS_DEBUG("Swap Event at time " << event_time << " for half-edge ID " << he_id << " at center position "
+                                          << glm::to_string(center));
 
         events.emplace(
           Event(event_time, he_id, t, center, Event::SWAP)); // Store the event with the time and half-edge index
@@ -518,9 +518,9 @@ class KineticDelaunay
     // Process the event at the given time
     size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
     size_t twin_face_id = graph.getHalfEdges()[event.half_edge_id ^ 1].face;
-    /*KINDS_INFO("Processing swap event at time " << event.time << " for half-edge ID " << event.half_edge_id
-                                                   << ". Faces inside " << face_inside[face_id] << " | "
-                                                   << face_inside[twin_face_id]);*/
+    KINDS_DEBUG("Processing swap event at time " << event.time << " for half-edge ID " << event.half_edge_id
+                                                 << ". Faces inside " << face_inside[face_id] << " | "
+                                                 << face_inside[twin_face_id]);
 
     // Call the event handler if provided
     event_handler.beforeEvent(event);
@@ -528,24 +528,24 @@ class KineticDelaunay
     // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
     if (graph.getHalfEdges()[event.half_edge_id].origin == -1)
     {
-      /*KINDS_INFO("Swapping face of half-edge " << event.half_edge_id << " to the inside at t = " << event.time);
-      face_inside[twin_face_id] = (cutoff == std::numeric_limits<double>::infinity());*/
+      KINDS_DEBUG("Swapping face of half-edge " << event.half_edge_id << " to the inside at t = " << event.time);
+      face_inside[twin_face_id] = (cutoff == std::numeric_limits<double>::infinity());
     }
 
     if (graph.getHalfEdges()[event.half_edge_id ^ 1].origin == -1)
     {
-      /*KINDS_INFO("Swapping face of twin half-edge " << (event.half_edge_id ^ 1)
-                                                       << " to the inside at t = " << event.time);*/
+      KINDS_DEBUG(
+        "Swapping face of twin half-edge " << (event.half_edge_id ^ 1) << " to the inside at t = " << event.time);
       face_inside[face_id] = (cutoff == std::numeric_limits<double>::infinity());
     }
 
-    /*KINDS_INFO("Pre-flip: " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
-                               << face_inside[face_id] << " | " << face_inside[twin_face_id]);*/
+    KINDS_DEBUG("Pre-flip: " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
+                             << face_inside[face_id] << " | " << face_inside[twin_face_id]);
 
     graph.flipEdge(event.half_edge_id);
 
-    /*KINDS_INFO("Post-flip:  " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
-                                 << face_inside[face_id] << " | " << face_inside[twin_face_id]);*/
+    KINDS_DEBUG("Post-flip:  " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
+                               << face_inside[face_id] << " | " << face_inside[twin_face_id]);
 
     // one of the triangles might have been swapped outside
     auto tri_verts1 = graph.adjacentTriangleVertices(event.half_edge_id);
@@ -555,8 +555,8 @@ class KineticDelaunay
       if (v == -1)
       {
         size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
-        /*KINDS_INFO("Swapped face " << face_id << " of half-edge " << event.half_edge_id
-                                      << " to the outside at t = " << event.time);*/
+        KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << event.half_edge_id
+                                    << " to the outside at t = " << event.time);
         setFaceInside(face_id, false);
       }
     }
@@ -567,15 +567,15 @@ class KineticDelaunay
       if (v == -1)
       {
         size_t face_id = graph.getHalfEdges()[event.half_edge_id ^ 1].face;
-        /*KINDS_INFO("Swapped face " << face_id << " of half-edge " << (event.half_edge_id ^ 1)
-                                      << " to the outside at t = " << event.time);*/
+        KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << (event.half_edge_id ^ 1)
+                                    << " to the outside at t = " << event.time);
         setFaceInside(face_id, false);
       }
     }
 
-    /*KINDS_INFO("Processed swap event at time " << event.time << " for half-edge ID " << event.half_edge_id
-                                                  << ". Faces inside " << face_inside[face_id] << " | "
-                                                  << face_inside[twin_face_id]);*/
+    KINDS_DEBUG("Processed swap event at time " << event.time << " for half-edge ID " << event.half_edge_id
+                                                << ". Faces inside " << face_inside[face_id] << " | "
+                                                << face_inside[twin_face_id]);
 
     // After flipping the edge, we need to recompute the events for all surrounding half-edges
     size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
@@ -603,7 +603,7 @@ class KineticDelaunay
   {
     assert(event.type == Event::BOUNDARY);
     // Process the event at the given time
-    // KINDS_INFO("Processing boundary event at time " << event.time << " for half-edge ID " << event.half_edge_id);
+    KINDS_DEBUG("Processing boundary event at time " << event.time << " for half-edge ID " << event.half_edge_id);
     // Call the event handler if provided
     event_handler.beforeBoundaryEvent(event);
     size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
@@ -747,7 +747,7 @@ class KineticDelaunay
   {
     auto& graph = getGraph();
     component_data.components = extractConnectedComponents();
-    KINDS_INFO("Extracted " << component_data.components.size() << " components.");
+    KINDS_DEBUG("Extracted " << component_data.components.size() << " components.");
     component_data.component_map = buildComponentMap(component_data.components, graph.getVertexCount());
     component_data.component_boundaries.resize(component_data.components.size());
 
@@ -816,7 +816,7 @@ class KineticDelaunay
       }
 
       double r = circumradius(points[0], points[1], points[2]);
-      // KINDS_INFO("Circumradius: " << r);
+      KINDS_DEBUG("Circumradius: " << r);
       if (r < cutoff)
       {
         setFaceInside(face_index, true);
@@ -831,7 +831,7 @@ class KineticDelaunay
   {
     size_t section_count = branch_trajs.getHeight();
     assert(sections_advanced < section_count); // Ensure we do not exceed the number of sections
-    // KINDS_INFO("Advancing to section " << (sections_advanced + 1) << " of " << section_count);
+    KINDS_DEBUG("Advancing to section " << (sections_advanced + 1) << " of " << section_count);
 
     // update delaunay graph according to the components
     // For now we assume they can never be merged again
@@ -1003,7 +1003,7 @@ class KineticDelaunay
   std::vector<std::vector<BoundaryPoint>> extractComponentBoundaries(
     const std::vector<size_t>& component, double t, std::vector<bool>& he_visited) const
   {
-    // KINDS_INFO("Extracting component boundaries at t = " << t);
+    KINDS_DEBUG("Extracting component boundaries at t = " << t);
     if (component.size() < 3)
     {
       return { {} };

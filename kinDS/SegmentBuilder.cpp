@@ -233,7 +233,7 @@ bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
 
   if (left_inside && !right_inside)
   {
-    KINDS_INFO(
+    KINDS_DEBUG(
       "Clamping right vertex: (" << right_vertex[0] << ", " << right_vertex[1] << ", " << right_vertex[2] << ")");
     // clamp right to the boundary
     glm::dvec2 origin { left_vertex[0], left_vertex[1] };
@@ -252,12 +252,12 @@ bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
 
     auto right_vertex_2d = origin + s_min * dir;
     right_vertex = glm::dvec3 { right_vertex_2d[0], right_vertex_2d[1], right_vertex[2] };
-    KINDS_INFO(
+    KINDS_DEBUG(
       "Clamped right vertex to: (" << right_vertex[0] << ", " << right_vertex[1] << ", " << right_vertex[2] << ")");
   }
   else if (!left_inside && right_inside)
   {
-    KINDS_INFO("Clamping left vertex: (" << left_vertex[0] << ", " << left_vertex[1] << ", " << left_vertex[2] << ")");
+    KINDS_DEBUG("Clamping left vertex: (" << left_vertex[0] << ", " << left_vertex[1] << ", " << left_vertex[2] << ")");
     // clamp left to the boundary
     glm::dvec2 origin { right_vertex[0], right_vertex[1] };
     glm::dvec2 dir { left_vertex[0] - right_vertex[0], left_vertex[1] - right_vertex[1] };
@@ -275,7 +275,7 @@ bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
 
     auto left_vertex_2d = origin + s_min * dir;
     left_vertex = glm::dvec3 { left_vertex_2d[0], left_vertex_2d[1], left_vertex[2] };
-    KINDS_INFO(
+    KINDS_DEBUG(
       "Clamped left vertex to: (" << left_vertex[0] << ", " << left_vertex[1] << ", " << left_vertex[2] << ")");
   }
   else if (!left_inside && !right_inside)
@@ -388,7 +388,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   bool inside = clampVoronoiVertices(left_vertex, right_vertex, boundary_polygon, centroid);
 
   /*if (!inside) {
-    KINDS_INFO("Both points outside, couldn't clamp:\n(" << left_vertex[0] << ", " << left_vertex[1] << ", "
+    KINDS_DEBUG("Both points outside, couldn't clamp:\n(" << left_vertex[0] << ", " << left_vertex[1] << ", "
                                                             << left_vertex[2] << ")\n(" << right_vertex[0] << ", "
                                                             << right_vertex[1] << ", " << right_vertex[2] << ")");
     meshes.push_back(mesh);  // push empty mesh
@@ -465,7 +465,7 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w)
   glm::dvec3 uv_w = { boundary_mesh_raw_uvs[w][0], boundary_mesh_raw_uvs[w][1], 0.0 };
 
   // output UVs
-  /*KINDS_INFO("Adding boundary triangle with raw UVs: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1])
+  /*KINDS_DEBUG("Adding boundary triangle with raw UVs: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1])
      +
                 "), v(" + std::to_string(uv_v[0]) + ", " + std::to_string(uv_v[1]) + "), w(" + std::to_string(uv_w[0]) +
                 ", " + std::to_string(uv_w[1]) + ")");*/
@@ -495,7 +495,7 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w)
   size_t uv_index_v = boundary_mesh.addUV(uv_v);
   size_t uv_index_w = boundary_mesh.addUV(uv_w);
 
-  /*KINDS_INFO("UVs after adjustment: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1]) + "), v(" +
+  /*KINDS_DEBUG("UVs after adjustment: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1]) + "), v(" +
                 std::to_string(uv_v[0]) + ", " + std::to_string(uv_v[1]) + "), w(" + std::to_string(uv_w[0]) + ", " +
                 std::to_string(uv_w[1]) + ")");*/
   return boundary_mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, 0);
@@ -562,7 +562,7 @@ void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool
     auto& centroid = kin_del.component_data.component_centroids[component_index];
 
     addBoundaryVertex(glm::dvec3 { vertex[0], vertex[1], t + offset }, centroid, i, t);
-    // KINDS_INFO("New raw uv: " << raw_uv[0] << ", " << raw_uv[1] << " for vertex: " << vertex_index);
+    // KINDS_DEBUG("New raw uv: " << raw_uv[0] << ", " << raw_uv[1] << " for vertex: " << vertex_index);
 
     double rel_dist = relativeDistanceFromCenter(boundary_polygon, centroid, vertex);
     relative_center_distances.push_back(rel_dist);
@@ -582,7 +582,7 @@ void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool
       if (kin_del.isOnComponentBoundaryOutside(he_ids[i]))
       {
         completeBoundaryMeshSection(he_ids[i], index_offset + vertices[i], index_offset + vertices[(i + 1) % 3]);
-        // KINDS_INFO("Assigning boundary last vertices for he_id " << he_ids[i]);
+        KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_ids[i]);
         boundary_mesh_last_left_and_right_vertex[he_ids[i]]
           = std::make_pair(index_offset + vertices[i], index_offset + vertices[(i + 1) % 3]);
       }
@@ -660,7 +660,7 @@ void kinDS::SegmentBuilder::advanceBoundaryMesh(
     auto& left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
     completeBoundaryMeshSection(he_id, left_vertex_index, right_vertex_index);
 
-    // KINDS_INFO("Assigning boundary last vertices for he_id " << he_id);
+    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_id);
     left_and_right.first = left_vertex_index;
     left_and_right.second = right_vertex_index;
   }
@@ -1026,15 +1026,15 @@ void SegmentBuilder::beforeEvent(KineticDelaunay::Event& e)
     size_t he1_id = graph.getHalfEdges()[inner_he_id].next;
     size_t he2_id = graph.getHalfEdges()[he1_id].next;
 
-    // KINDS_INFO("Assigning boundary last vertices for he_id " << he1_id);
+    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id]
       = std::make_pair(boundary_last_vertices.first, new_boundary_vertex_index);
-    // KINDS_INFO("Assigning boundary last vertices for he_id " << he2_id);
+    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id]
       = std::make_pair(new_boundary_vertex_index, boundary_last_vertices.second);
 
     // reset last left and right vertices of the half-edge because it is not on the boundary anymore
-    // KINDS_INFO("Resetting boundary last vertices for he_id " << outer_he_id);
+    KINDS_DEBUG("Resetting boundary last vertices for he_id " << outer_he_id);
     boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(-1, -1);
   }
 }
@@ -1166,12 +1166,12 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
     // print info if there was an error
     if (index == size_t(-1))
     {
-      KINDS_INFO("\he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1)
-                             << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id].first << ", "
-                             << boundary_mesh_last_left_and_right_vertex[he1_id].second
-                             << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].first
-                             << ", " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].second
-                             << "\nopposite: " << opposite_vertex);
+      KINDS_DEBUG("\he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1)
+                              << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id].first << ", "
+                              << boundary_mesh_last_left_and_right_vertex[he1_id].second
+                              << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].first
+                              << ", " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].second
+                              << "\nopposite: " << opposite_vertex);
     }
 
     index = addBoundaryTriangle(boundary_mesh_last_left_and_right_vertex[he2_id].first,
@@ -1179,26 +1179,26 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
 
     if (index == size_t(-1))
     {
-      KINDS_INFO("\he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1)
-                             << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id].first << ", "
-                             << boundary_mesh_last_left_and_right_vertex[he2_id].second
-                             << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].first
-                             << ", " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].second
-                             << "\nopposite: " << opposite_vertex);
+      KINDS_DEBUG("\he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1)
+                              << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id].first << ", "
+                              << boundary_mesh_last_left_and_right_vertex[he2_id].second
+                              << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].first
+                              << ", " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].second
+                              << "\nopposite: " << opposite_vertex);
     }
 
     // Furthermore, we need to buffer this new vertex for the next event at the new boundary half-edge to complete the
     // mesh
     half_edge_to_boundary_vertex_index[outer_he_id] = old_boundary_vertex_index;
 
-    // KINDS_INFO("Assigning boundary last vertices for he_id " << outer_he_id);
+    KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
     boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(
       boundary_mesh_last_left_and_right_vertex[he1_id].first, boundary_mesh_last_left_and_right_vertex[he2_id].second);
 
     // reset last left and right vertices of the half-edges because it is not on the boundary anymore
-    // KINDS_INFO("Resetting boundary last vertices for he_id " << he1_id);
+    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id] = std::make_pair(-1, -1);
-    // KINDS_INFO("Resetting boundary last vertices for he_id " << he2_id);
+    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id] = std::make_pair(-1, -1);
   }
 
@@ -1216,7 +1216,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
   // Build the boundary mesh at the event time
   size_t face_id = kin_del.getGraph().getHalfEdges()[e.half_edge_id].face;
   bool is_inside = kin_del.getFaceInside(face_id);
-  // KINDS_INFO("Face inside: " << is_inside << ", face id: " << face_id);
+  KINDS_DEBUG("Face inside: " << is_inside << ", face id: " << face_id);
   // For each half-edge of the face, check if it is on the boundary
   auto& graph = kin_del.getGraph();
   const auto& half_edges = graph.getFaces()[face_id].half_edges;
@@ -1233,7 +1233,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
     }
   }
 
-  // KINDS_INFO("Boundary case " << boundary_edge_count);
+  KINDS_DEBUG("Boundary case " << boundary_edge_count);
   switch (boundary_edge_count)
   {
   case 0:
@@ -1264,7 +1264,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
     {
       for (size_t i = 0; i < 3; ++i)
       {
-        // KINDS_INFO("Assigning boundary last vertices for he_id " << half_edges[i]);
+        KINDS_DEBUG("Assigning boundary last vertices for he_id " << half_edges[i]);
         boundary_mesh_last_left_and_right_vertex[half_edges[i]] = std::make_pair(new_vertex_index, new_vertex_index);
       }
     }
@@ -1273,7 +1273,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
       for (size_t i = 0; i < 3; ++i)
       {
         size_t outer_he_id = half_edges[i] ^ 1;
-        // KINDS_INFO("Assigning boundary last vertices for he_id " << outer_he_id);
+        KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
         boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(new_vertex_index, new_vertex_index);
       }
     }
@@ -1343,12 +1343,12 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
     // print info if there was an error
     if (index == size_t(-1))
     {
-      KINDS_INFO("\ninner_he_id: " << inner_he_id << "\nouter_he_id: " << outer_he_id
-                                   << "\nlast_vertices: " << boundary_last_vertices.first << ", "
-                                   << boundary_last_vertices.second << "\ninner last vertices: "
-                                   << boundary_mesh_last_left_and_right_vertex[inner_he_id].first << ", "
-                                   << boundary_mesh_last_left_and_right_vertex[inner_he_id].second << "\nu: " << u
-                                   << ", v: " << v << ", opposite: " << opposite_vertex);
+      KINDS_DEBUG("\ninner_he_id: " << inner_he_id << "\nouter_he_id: " << outer_he_id
+                                    << "\nlast_vertices: " << boundary_last_vertices.first << ", "
+                                    << boundary_last_vertices.second << "\ninner last vertices: "
+                                    << boundary_mesh_last_left_and_right_vertex[inner_he_id].first << ", "
+                                    << boundary_mesh_last_left_and_right_vertex[inner_he_id].second << "\nu: " << u
+                                    << ", v: " << v << ", opposite: " << opposite_vertex);
     }
 
     // update last left and right indices of the other two half-edges of the triangle
@@ -1361,16 +1361,16 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
       he2_id = he2_id ^ 1;
     }
 
-    // KINDS_INFO("Assigning boundary last vertices for he_id " << he1_id);
+    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id]
       = std::make_pair(boundary_last_vertices.first, new_boundary_vertex_index);
 
-    // KINDS_INFO("Assigning boundary last vertices for he_id " << he2_id);
+    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id]
       = std::make_pair(new_boundary_vertex_index, boundary_last_vertices.second);
 
     // reset last left and right vertices of the half-edge because it is not on the boundary anymore
-    // KINDS_INFO("Resetting boundary last vertices for he_id " << boundary_he_id);
+    KINDS_DEBUG("Resetting boundary last vertices for he_id " << boundary_he_id);
     boundary_mesh_last_left_and_right_vertex[boundary_he_id] = std::make_pair(-1, -1);
 
     break;
@@ -1440,12 +1440,12 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
 
     if (index == size_t(-1))
     {
-      KINDS_INFO("\he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1)
-                             << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id].first << ", "
-                             << boundary_mesh_last_left_and_right_vertex[he1_id].second
-                             << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].first
-                             << ", " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].second
-                             << "\nopposite: " << opposite_vertex);
+      KINDS_DEBUG("\he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1)
+                              << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id].first << ", "
+                              << boundary_mesh_last_left_and_right_vertex[he1_id].second
+                              << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].first
+                              << ", " << boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].second
+                              << "\nopposite: " << opposite_vertex);
     }
 
     index = addBoundaryTriangle(boundary_mesh_last_left_and_right_vertex[he2_id].first,
@@ -1453,12 +1453,12 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
 
     if (index == size_t(-1))
     {
-      KINDS_INFO("\he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1)
-                             << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id].first << ", "
-                             << boundary_mesh_last_left_and_right_vertex[he2_id].second
-                             << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].first
-                             << ", " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].second
-                             << "\nopposite: " << opposite_vertex);
+      KINDS_DEBUG("\he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1)
+                              << "\nlast_vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id].first << ", "
+                              << boundary_mesh_last_left_and_right_vertex[he2_id].second
+                              << "\ntwin last vertices: " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].first
+                              << ", " << boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].second
+                              << "\nopposite: " << opposite_vertex);
     }
 
     // Furthermore, we need to buffer this new vertex for the next event at the new boundary half-edge to complete the
@@ -1467,23 +1467,23 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
 
     if (!is_inside)
     {
-      // KINDS_INFO("Assigning boundary last vertices for he_id " << outer_he_id);
+      KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
       boundary_mesh_last_left_and_right_vertex[outer_he_id]
         = std::make_pair(boundary_mesh_last_left_and_right_vertex[he1_id].first,
           boundary_mesh_last_left_and_right_vertex[he2_id].second);
     }
     else
     {
-      // KINDS_INFO("Assigning boundary last vertices for he_id " << inner_he_id);
+      KINDS_DEBUG("Assigning boundary last vertices for he_id " << inner_he_id);
       boundary_mesh_last_left_and_right_vertex[inner_he_id]
         = std::make_pair(boundary_mesh_last_left_and_right_vertex[he2_id].second,
           boundary_mesh_last_left_and_right_vertex[he1_id].first);
     }
 
     // reset last left and right vertices of the half-edges because it is not on the boundary anymore
-    // KINDS_INFO("Resetting boundary last vertices for he_id " << he1_id);
+    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id] = std::make_pair(-1, -1);
-    // KINDS_INFO("Resetting boundary last vertices for he_id " << he2_id);
+    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id] = std::make_pair(-1, -1);
 
     break;
@@ -1542,7 +1542,7 @@ void kinDS::SegmentBuilder::afterBoundaryEvent(KineticDelaunay::Event& e)
 
 void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
 {
-  // KINDS_INFO("Inserting subdivision for strand " << strand_id << " at t = " << t);
+  KINDS_DEBUG("Inserting subdivision for strand " << strand_id << " at t = " << t);
   //  Traverse all half-edges around this strand and insert a new vertex into the corresponding segment meshes
   auto& graph = kin_del.getGraph();
 
