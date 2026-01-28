@@ -1,11 +1,13 @@
-#include "eigen/Eigen/Dense"
 #include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
 #include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"
-#include "kinDS/simple_svg.hpp"
 #include <iostream>
+#include <map>
+#include <queue>
+#include <utility> // for std::pair
+#include <vector>
 
 static void eigen_example()
 {
@@ -40,10 +42,6 @@ static void eigen_example()
 
   std::cout << "Roots of the polynomial: " << roots << std::endl; // Outputs the roots of the polynomial
 }
-
-#include <queue>
-#include <utility> // for std::pair
-#include <vector>
 
 std::vector<std::pair<size_t, double>> merge_sorted_vectors(const std::vector<std::vector<double>>& inputs)
 {
@@ -249,10 +247,55 @@ static void kinetic_delaunay_example()
 
   // Sort subdivisions into pairs of strand index and parameter
   std::vector<std::pair<size_t, double>> sorted_subdivisions = merge_sorted_vectors(subdivisions);
-  const std::vector<std::vector<size_t>> branch_indices; // TODO: empty for now
-  std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch; // TODO: empty for now
-  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch; // TODO: empty for now
-  std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id; // TODO: empty for now
+
+  // Create a branch index lookup using branch_indices[strand_id][h] = branch_id
+  const std::vector<std::vector<size_t>> branch_indices(
+    support_points.size(), std::vector<size_t>(support_points.front().size(), 0));
+
+  // Maintain the branches as strands_by_branch_id[h][branch_id][strand_no] = strand_id
+  std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
+
+  // build strans_by_branch_id from branch_indices
+  for (size_t h = 0; h < support_points.front().size(); ++h)
+  {
+    std::map<size_t, std::vector<size_t>> branch_to_strands;
+    for (size_t strand_id = 0; strand_id < support_points.size(); ++strand_id)
+    {
+      size_t branch_id = branch_indices[strand_id][h];
+      branch_to_strands[branch_id].push_back(strand_id);
+    }
+    std::vector<std::vector<size_t>> strands_in_branches;
+    for (auto& [branch_id, strands] : branch_to_strands)
+    {
+      strands_in_branches.push_back(strands);
+    }
+    strands_by_branch_id.push_back(strands_in_branches);
+  }
+
+  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch;
+  for (size_t h = 0; h < support_points.front().size(); ++h)
+  {
+    std::vector<glm::mat4> transforms_at_height;
+    size_t branch_count = strands_by_branch_id[h].size();
+    for (size_t b = 0; b < branch_count; ++b)
+    {
+      transforms_at_height.push_back(glm::mat4(1.0)); // identity
+    }
+    transforms_by_height_and_branch.push_back(transforms_at_height);
+  }
+
+  std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch(transforms_by_height_and_branch.size());
+
+  for (size_t i = 0; i < transforms_by_height_and_branch.size(); i++)
+  {
+    normal_transforms_by_height_and_branch[i].resize(transforms_by_height_and_branch[i].size());
+    for (size_t j = 0; j < normal_transforms_by_height_and_branch[i].size(); j++)
+    {
+      normal_transforms_by_height_and_branch[i][j]
+        = glm::transpose(glm::inverse(transforms_by_height_and_branch[i][j]));
+      normal_transforms_by_height_and_branch[i][j][3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+  }
 
   kinDS::KineticDelaunay kinetic_delaunay(
     kinDS::BranchTrajectories(support_points, transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
@@ -302,16 +345,6 @@ static void kinetic_delaunay_example()
   kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
 
   boundary_mesh.checkForDegenerateTriangles();
-
-  // intersect all meshes with the boundary mesh and save the result
-  /* for (size_t i = 0; i < meshes.size(); ++i)
-  {
-    meshes[i].checkForDegenerateTriangles();
-    auto intersection = kinDS::MeshIntersection::intersect(meshes[i], boundary_mesh);
-    std::string filename = "intersection_" + std::to_string(i) + ".obj";
-    kinDS::ObjExporter::writeMesh(intersection, filename);
-    std::cout << "Intersection mesh saved to " << filename << std::endl;
-  }*/
 }
 
 int main()
