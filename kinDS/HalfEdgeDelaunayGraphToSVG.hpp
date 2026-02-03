@@ -3,9 +3,28 @@
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "Logger.hpp"
 #include "simple_svg.hpp"
+#include <glm/glm.hpp>
 
 namespace kinDS
 {
+
+// use this for font placement
+static glm::dvec2 triangleIncenter(const glm::dvec2& A, const glm::dvec2& B, const glm::dvec2& C)
+{
+  const double a = glm::length(B - C); // opposite A
+  const double b = glm::length(C - A); // opposite B
+  const double c = glm::length(A - B); // opposite C
+
+  const double sum = a + b + c;
+
+  // Degenerate triangle guard (optional but recommended)
+  if (sum == 0.0)
+  {
+    return A; // or any reasonable fallback
+  }
+
+  return (a * A + b * B + c * C) / sum;
+}
 
 class HalfEdgeDelaunayGraphToSVG
 {
@@ -73,10 +92,49 @@ class HalfEdgeDelaunayGraphToSVG
    * @param filename The name of the output SVG file.
    */
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
-    const std::string& filename, double margin = 0.0)
+    const std::string& filename, double margin = 0.0, std::vector<bool>* face_inside = nullptr)
   {
     BoundingBox bb = computeBoundingBox(points, margin);
     svg::Document doc = setupDocument(points, filename, bb);
+
+    // Draw faces
+    for (size_t face_id = 0; face_id < graph.getFaces().size(); face_id++)
+    {
+      auto face_vertex_indices = graph.getTriangleVertexIndices(face_id);
+
+      // If any vertex is infinite, skip the face
+      if (face_vertex_indices[0] == -1 || face_vertex_indices[1] == -1 || face_vertex_indices[2] == -1)
+      {
+        // assert that face is outside
+        if (face_inside)
+        {
+          assert(!(*face_inside)[face_id] && "Face is inside despite being infinite!");
+        }
+        continue;
+      }
+
+      svg::Color face_color { svg::Color::Green };
+
+      if (face_inside && !(*face_inside)[face_id])
+      {
+        face_color = svg::Color { svg::Color::Red };
+      }
+
+      std::array<glm::dvec2, 3> face_vertices
+        = { points[face_vertex_indices[0]], points[face_vertex_indices[1]], points[face_vertex_indices[2]] };
+
+      svg::Polygon face { svg::Fill(face_color) };
+      face << svg::Point(face_vertices[0][0], face_vertices[0][1])
+           << svg::Point(face_vertices[1][0], face_vertices[1][1])
+           << svg::Point(face_vertices[2][0], face_vertices[2][1]);
+      doc << face;
+
+      // Draw face id at incenter
+      glm::dvec2 incenter = triangleIncenter(face_vertices[0], face_vertices[1], face_vertices[2]);
+      doc << svg::Text(
+        svg::Point(incenter[0], incenter[1]), std::to_string(face_id), svg::Fill(svg::Color::White), svg::Font(0.01));
+    }
+
     // Draw edges
     for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
     {

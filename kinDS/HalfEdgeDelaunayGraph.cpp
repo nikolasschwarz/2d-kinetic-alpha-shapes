@@ -519,6 +519,10 @@ int HalfEdgeDelaunayGraph::destination(size_t he_id) const { return half_edges[h
 
 int HalfEdgeDelaunayGraph::triangleOppositeVertex(size_t he_id) const
 {
+  // For debugging, get the half-edge and triangle
+  auto& half_edge = half_edges[he_id];
+  auto& triangle = triangles[half_edge.face];
+
   // Returns the vertex opposite to the half-edge in its triangle
   size_t next_he_id = half_edges[he_id].next;
   next_he_id = half_edges[next_he_id].next;
@@ -583,6 +587,18 @@ size_t kinDS::HalfEdgeDelaunayGraph::nextOnConvexBoundaryId(size_t he_id) const
 }
 
 size_t HalfEdgeDelaunayGraph::twin(size_t he_id) { return he_id ^ 1; }
+
+std::array<size_t, 3> kinDS::HalfEdgeDelaunayGraph::getTriangleVertexIndices(size_t face_id) const
+{
+  std::array<size_t, 3> result;
+
+  for (size_t i = 0; i < 3; i++)
+  {
+    size_t he_id = triangles[face_id].half_edges[i];
+    result[i] = half_edges[he_id].origin;
+  }
+  return result;
+}
 
 // getters
 const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& HalfEdgeDelaunayGraph::getHalfEdges() const { return half_edges; }

@@ -1219,13 +1219,13 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
   KINDS_DEBUG("Face inside: " << is_inside << ", face id: " << face_id);
   // For each half-edge of the face, check if it is on the boundary
   auto& graph = kin_del.getGraph();
-  const auto& half_edges = graph.getFaces()[face_id].half_edges;
+  const auto& face_half_edges = graph.getFaces()[face_id].half_edges;
 
   std::array<bool, 3> is_boundary_edge;
   size_t boundary_edge_count = 0;
   for (size_t i = 0; i < 3; ++i)
   {
-    size_t he_id = half_edges[i];
+    size_t he_id = face_half_edges[i];
     is_boundary_edge[i] = kin_del.isOnComponentBoundary(he_id);
     if (is_boundary_edge[i])
     {
@@ -1243,7 +1243,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
     size_t vertices[3];
     for (size_t i = 0; i < 3; ++i)
     {
-      vertices[i] = graph.getHalfEdges()[half_edges[i]].origin;
+      vertices[i] = graph.getHalfEdges()[face_half_edges[i]].origin;
 
       if (vertices[i] == size_t(-1))
       {
@@ -1264,15 +1264,16 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
     {
       for (size_t i = 0; i < 3; ++i)
       {
-        KINDS_DEBUG("Assigning boundary last vertices for he_id " << half_edges[i]);
-        boundary_mesh_last_left_and_right_vertex[half_edges[i]] = std::make_pair(new_vertex_index, new_vertex_index);
+        KINDS_DEBUG("Assigning boundary last vertices for he_id " << face_half_edges[i]);
+        boundary_mesh_last_left_and_right_vertex[face_half_edges[i]]
+          = std::make_pair(new_vertex_index, new_vertex_index);
       }
     }
     else
     {
       for (size_t i = 0; i < 3; ++i)
       {
-        size_t outer_he_id = half_edges[i] ^ 1;
+        size_t outer_he_id = face_half_edges[i] ^ 1;
         KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
         boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(new_vertex_index, new_vertex_index);
       }
@@ -1304,7 +1305,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
       }
     }
 
-    size_t inner_he_id = half_edges[boundary_he_index];
+    size_t inner_he_id = face_half_edges[boundary_he_index];
     size_t outer_he_id = inner_he_id ^ 1;
 
     // get the opposite vertex
@@ -1399,7 +1400,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
       }
     }
 
-    size_t inner_he_id = half_edges[non_boundary_he_index];
+    size_t inner_he_id = face_half_edges[non_boundary_he_index];
     size_t outer_he_id = inner_he_id ^ 1;
 
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
@@ -1495,7 +1496,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
     size_t vertices[3];
     for (size_t i = 0; i < 3; ++i)
     {
-      vertices[i] = graph.getHalfEdges()[half_edges[i]].origin;
+      vertices[i] = graph.getHalfEdges()[face_half_edges[i]].origin;
     }
     glm::dvec2 p0 = kin_del.getPointAt(e.time, vertices[0]);
     glm::dvec2 p1 = kin_del.getPointAt(e.time, vertices[1]);
@@ -1509,7 +1510,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
     // connect to all last left and right vertices
     for (size_t i = 0; i < 3; ++i)
     {
-      const auto& last_vertices = boundary_mesh_last_left_and_right_vertex[half_edges[i]];
+      const auto& last_vertices = boundary_mesh_last_left_and_right_vertex[face_half_edges[i]];
       addBoundaryTriangle(last_vertices.first, last_vertices.second, new_vertex_index);
     }
 

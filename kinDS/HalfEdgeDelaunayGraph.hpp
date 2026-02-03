@@ -104,6 +104,8 @@ class HalfEdgeDelaunayGraph
 
   static size_t twin(size_t he_id);
 
+  std::array<size_t, 3> getTriangleVertexIndices(size_t face_id) const;
+
   // getters
   const std::vector<HalfEdge>& getHalfEdges() const;
   const std::vector<Triangle>& getFaces() const;
