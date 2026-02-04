@@ -1,6 +1,6 @@
-# Kinetic Data Structures (kinDS)
+# 2D Kinetic Alpha Shapes
 
-A C++20 library for kinetic data structures, including kinetic Delaunay triangulation and related algorithms.
+A C++20 library for 2D kinetic alpha shapes, including kinetic Delaunay triangulation and related algorithms.
 
 ## Prerequisites
 
