@@ -15,8 +15,25 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Add Eigen as subdirectory
-add_subdirectory(eigen)
+# Add Eigen as subdirectory only if not already provided by parent project
+# Check if Eigen3::Eigen target already exists (from parent project)
+if(NOT TARGET Eigen3::Eigen)
+    # Eigen not found, add our submodule version
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/eigen/CMakeLists.txt)
+        add_subdirectory(eigen)
+        message(STATUS "kinDS: Using bundled Eigen submodule.")
+    else()
+        # Try to find Eigen via find_package
+        find_package(Eigen3 QUIET)
+        if(NOT Eigen3_FOUND)
+            message(FATAL_ERROR "kinDS: Eigen not found. Either provide Eigen3::Eigen target in parent project, or ensure the eigen submodule is initialized.")
+        else()
+            message(STATUS "kinDS: Using Eigen from find_package.")
+        endif()
+    endif()
+else()
+    message(STATUS "kinDS: Using Eigen provided by parent project.")
+endif()
 
 # ============================================================================
 # kinDS Library

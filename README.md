@@ -109,7 +109,7 @@ This project can be used as a Git submodule in other CMake projects:
 1. **Add as a submodule:**
    ```bash
    git submodule add <repository-url> path/to/kinDS
-   git submodule update --init --recursive
+   git submodule update --init path/to/kinDS
    ```
 
 2. **In your CMakeLists.txt:**
@@ -127,6 +127,11 @@ This project can be used as a Git submodule in other CMake projects:
    #include "kinDS/Polynomial.hpp"
    // ... use kinDS namespace
    ```
+
+**Note on Eigen dependency:**
+- If your project already provides Eigen (via `add_subdirectory` or `find_package`), kinDS will automatically use your Eigen installation
+- If Eigen is not found, kinDS will use its bundled Eigen submodule (make sure to initialize it with `git submodule update --init path/to/kinDS`)
+- The library automatically handles this detection, so no additional configuration is needed
 
 The library will automatically handle its dependencies (glm, CGAL, Eigen) when used as a submodule.
 
