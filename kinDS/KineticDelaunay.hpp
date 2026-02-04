@@ -753,7 +753,7 @@ class KineticDelaunay
     // get point transformed such that all points in the same component match
     size_t component_id = component_data.component_map[v];
     size_t representative_vertex = component_data.components[component_id].front();
-    size_t reference_branch = branch_indices[std::ceil(t)][representative_vertex];
+    size_t reference_branch = branch_indices[representative_vertex][std::ceil(t)];
 
     return branch_trajs.evaluateTransformed(v, t, reference_branch);
   }

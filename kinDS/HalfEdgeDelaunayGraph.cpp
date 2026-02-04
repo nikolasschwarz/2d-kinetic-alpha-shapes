@@ -249,15 +249,22 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
   }
 
   // check if edge is referenced in vertex_to_half_edge and update
-  if (vertex_to_half_edge[u] == he_id)
+  if (u != size_t(-1))
   {
-    // just set to next half-edge on the vertex
-    vertex_to_half_edge[u] = neighborEdgeId(he_id);
+
+    if (vertex_to_half_edge[u] == he_id)
+    {
+      // just set to next half-edge on the vertex
+      vertex_to_half_edge[u] = neighborEdgeId(he_id);
+    }
   }
 
-  if (vertex_to_half_edge[v] == HalfEdgeDelaunayGraph::twin(he_id))
+  if (v != size_t(-1))
   {
-    vertex_to_half_edge[v] = neighborEdgeId(HalfEdgeDelaunayGraph::twin(he_id)); // update to point to the half-edge
+    if (vertex_to_half_edge[v] == HalfEdgeDelaunayGraph::twin(he_id))
+    {
+      vertex_to_half_edge[v] = neighborEdgeId(HalfEdgeDelaunayGraph::twin(he_id)); // update to point to the half-edge
+    }
   }
 
   int he_next_id = he.next;

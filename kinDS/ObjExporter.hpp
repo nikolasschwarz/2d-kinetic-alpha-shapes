@@ -181,20 +181,29 @@ class ObjExporter
     file << "# UVs\n";
     for (size_t i = 0; i < mesh.getTriangleCount(); i++)
     {
-      int material = mesh.getMaterialIDs()[i];
+      int material = -1;
+
+      if (i < mesh.getMaterialIDs().size())
+      {
+        material = mesh.getMaterialIDs()[i];
+      }
 
       for (size_t j = 0; j < 3; j++)
       {
         auto uv = mesh.getUV(3 * i + j);
 
-        if (material == 0)
+        if (material != -1)
         {
-          uv[0] *= uv_circum_factor;
-          uv[1] *= uv_height_factor;
-        }
-        else
-        {
-          uv[2] *= uv_height_factor;
+
+          if (material == 0)
+          {
+            uv[0] *= uv_circum_factor;
+            uv[1] *= uv_height_factor;
+          }
+          else
+          {
+            uv[2] *= uv_height_factor;
+          }
         }
         file << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
       }
