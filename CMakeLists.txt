@@ -52,12 +52,26 @@ set(KINDS_SOURCES
 # Create the library target
 add_library(kinDS ${KINDS_SOURCES})
 
-# Set include directories - allows both #include "kinDS/..." and #include "..."
+# Set include directories
+# When used as submodule: allows #include "kinDS/Header.hpp" to work correctly
+# When used standalone: allows #include "kinDS/Header.hpp" to work correctly
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    # Standalone build - only need project root
+    set(KINDS_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+    # Used as submodule - add both parent directory and project root
+    # This allows #include "kinDS/Header.hpp" to work regardless of how
+    # the parent project sets up include paths
+    get_filename_component(KINDS_PARENT_DIR ${CMAKE_CURRENT_SOURCE_DIR} DIRECTORY)
+    set(KINDS_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} ${KINDS_PARENT_DIR})
+endif()
+
 target_include_directories(kinDS
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${KINDS_INCLUDE_DIRS}>
         $<INSTALL_INTERFACE:include>
     PRIVATE
+        # For internal includes within the library
         ${CMAKE_CURRENT_SOURCE_DIR}/kinDS
 )
 
