@@ -176,6 +176,8 @@ class KineticDelaunay
   std::vector<std::vector<std::vector<size_t>>>
     strands_by_branch_id; // Maintain the branches as [h][branch_id][strand_no]
   size_t prev_component_count = 1;
+  std::vector<double> quadrilateral_last_updated;
+  std::vector<double> face_last_updated;
 
   /* Compare to Leonidas Guibas and Jorge Stolfi. 1985. Primitives for the manipulation of general subdivisions and the
    * computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74–123. https://doi.org/10.1145/282918.282923
@@ -507,7 +509,7 @@ class KineticDelaunay
     }
   }
 
-  void handleSwapEvent(EventHandler& event_handler, Event& event, std::vector<double>& quadrilateral_last_updated)
+  void handleSwapEvent(EventHandler& event_handler, Event& event)
   {
     // Check if the event is still valid
     if (event.creation_time < quadrilateral_last_updated[event.half_edge_id / 2])
@@ -605,12 +607,28 @@ class KineticDelaunay
     computeSwapEvents(event.time, twin_next2 / 2);
     quadrilateral_last_updated[twin_next2 / 2] = event.time; // Update the last updated time for the quadrilateral
 
+    // re-compute boundary events for both triangles
+    computeBoundaryEvents(event.time, event.half_edge_id);
+    face_last_updated[face_id] = event.time;
+
+    computeBoundaryEvents(event.time, event.half_edge_id ^ 1);
+    face_last_updated[twin_face_id] = event.time;
+
     event_handler.afterEvent(event); // Call the event handler after processing the event
   }
 
   void handleBoundaryEvent(EventHandler& event_handler, Event& event)
   {
     assert(event.type == Event::BOUNDARY);
+
+    // Check if the event is still valid
+    size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
+    if (event.creation_time < face_last_updated[face_id])
+    {
+      // This event is outdated, skip it
+      return;
+    }
+
     // Process the event at the given time
     KINDS_DEBUG("Processing boundary event at time " << event.time << " for half-edge ID " << event.half_edge_id);
     kinDS::HalfEdgeDelaunayGraphToSVG::write(
@@ -618,7 +636,7 @@ class KineticDelaunay
     std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;
     // Call the event handler if provided
     event_handler.beforeBoundaryEvent(event);
-    size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
+
     setFaceInside(face_id, !face_inside[face_id]);
 
     event_handler.afterBoundaryEvent(event);
@@ -629,7 +647,7 @@ class KineticDelaunay
 
   void handleEvents(EventHandler& event_handler)
   {
-    std::vector<double> quadrilateral_last_updated(graph.getHalfEdges().size() / 2, 0.0);
+
     while (!events.empty())
     {
       Event event = events.top();
@@ -638,7 +656,7 @@ class KineticDelaunay
       switch (event.type)
       {
       case Event::SWAP:
-        handleSwapEvent(event_handler, event, quadrilateral_last_updated);
+        handleSwapEvent(event_handler, event);
         break;
       case Event::BOUNDARY:
         handleBoundaryEvent(event_handler, event);
@@ -804,7 +822,13 @@ class KineticDelaunay
     graph.init(branch_trajs.getPoints());
     sections_advanced = 0; // Reset the section counter
 
+    face_inside.clear();
+    quadrilateral_last_updated.clear();
+    face_last_updated.clear();
+
     face_inside.resize(graph.getFaces().size(), false);
+    quadrilateral_last_updated.resize(graph.getHalfEdges().size() / 2, 0.0);
+    face_last_updated.resize(graph.getFaces().size(), 0.0);
 
     for (size_t face_index = 0; face_index < graph.getFaces().size(); face_index++)
     {

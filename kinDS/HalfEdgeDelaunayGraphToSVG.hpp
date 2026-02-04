@@ -150,10 +150,39 @@ class HalfEdgeDelaunayGraphToSVG
     }
 
     // Draw vertices
-    for (auto& point : points)
+    for (size_t v = 0; v < points.size(); v++)
     {
+      auto& point = points[v];
       doc << svg::Circle(
         svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
+
+      // Draw vertex id
+      doc << svg::Text(svg::Point(point[0] - 0.005, point[1] - 0.005), std::to_string(v), svg::Fill(svg::Color::White),
+        svg::Font(0.01));
+    }
+
+    for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+    {
+      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
+      // Draw half-edge id at midpoint but slightly offset to the left in the direction of the edge normal
+
+      if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1)
+      {
+        // Do this for both half-edges
+        for (size_t i = 0; i < 2; i++)
+        {
+
+          glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
+          glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+          glm::dvec2 midpoint = (start + end) / 2.0;
+          glm::dvec2 edge_dir = glm::normalize(end - start);
+          glm::dvec2 edge_normal(-edge_dir[1], edge_dir[0]); // Rotate 90 degrees to get normal
+          glm::dvec2 label_pos
+            = midpoint + std::pow(-1, i) * 0.01 * edge_normal - glm::dvec2(0.005, 0.005); // Offset by 0.02 units
+          doc << svg::Text(svg::Point(label_pos[0], label_pos[1]), std::to_string(he_id + i),
+            svg::Fill(svg::Color::Yellow), svg::Font(0.01));
+        }
+      }
     }
     doc.save();
   }
