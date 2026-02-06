@@ -1,10 +1,10 @@
 #pragma once
-#include "BranchTrajectories.hpp"
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "Logger.hpp"
 #include "Polynomial.hpp"
 #include "ProgressBar.hpp"
+#include "StrandTree.hpp"
 #include <format>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
@@ -163,7 +163,7 @@ class KineticDelaunay
  private:
   typedef std::priority_queue<Event> EventQueue;
 
-  BranchTrajectories branch_trajs;
+  StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
   EventQueue events;
   size_t sections_advanced = 0; // Counter for the number of sections advanced
@@ -172,15 +172,12 @@ class KineticDelaunay
   std::vector<std::vector<size_t>> branches; // track which vertices/splines belong to which branch
   std::vector<glm::dvec2> dummy_boundary;
   bool add_dummy_boundary;
-  const std::vector<std::vector<size_t>> branch_indices; // Create a branch index lookup using [strand_id][h]
-  std::vector<std::vector<std::vector<size_t>>>
-    strands_by_branch_id; // Maintain the branches as [h][branch_id][strand_no]
   size_t prev_component_count = 1;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
 
   /* Compare to Leonidas Guibas and Jorge Stolfi. 1985. Primitives for the manipulation of general subdivisions and the
-   * computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74–123. https://doi.org/10.1145/282918.282923
+   * computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74ï¿½123. https://doi.org/10.1145/282918.282923
    */
   static Polynomial inCircle(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by,
     const Polynomial& cx, const Polynomial& cy, const Polynomial& px, const Polynomial& py)
@@ -666,21 +663,20 @@ class KineticDelaunay
     }
   }
 
-  size_t getBranchIndex(size_t strand_id, size_t t) const { return branch_indices[strand_id][t]; }
+  size_t getBranchIndex(size_t strand_id, size_t t) const { return branch_trajs.getBranchIndex(strand_id, t); }
 
-  const std::vector<std::vector<size_t>>& getBranches(size_t t) const { return strands_by_branch_id[t]; }
+  const std::vector<std::vector<size_t>>& getBranches(size_t t) const { return branch_trajs.getStrandsByBranchId()[t]; }
 
-  const std::vector<size_t>& getBranchStrands(size_t t, size_t branch_id) { return strands_by_branch_id[t][branch_id]; }
+  const std::vector<size_t>& getBranchStrands(size_t t, size_t branch_id)
+  {
+    return branch_trajs.getStrandsByBranchId()[t][branch_id];
+  }
 
  public:
-  KineticDelaunay(const BranchTrajectories& branch_trajs, double cutoff, bool add_dummy_splines,
-    const std::vector<std::vector<size_t>>& branch_indices,
-    const std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id)
+  KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines)
     : branch_trajs(branch_trajs)
     , cutoff(cutoff)
     , add_dummy_boundary(add_dummy_splines)
-    , branch_indices(branch_indices)
-    , strands_by_branch_id(strands_by_branch_id)
   {
     if (add_dummy_splines)
     {
@@ -753,7 +749,7 @@ class KineticDelaunay
     // get point transformed such that all points in the same component match
     size_t component_id = component_data.component_map[v];
     size_t representative_vertex = component_data.components[component_id].front();
-    size_t reference_branch = branch_indices[representative_vertex][std::ceil(t)];
+    size_t reference_branch = branch_trajs.getBranchIndex(representative_vertex, std::ceil(t));
 
     return branch_trajs.evaluateTransformed(v, t, reference_branch);
   }
@@ -774,7 +770,7 @@ class KineticDelaunay
 
   glm::dvec3 getPointInObjectSpace(size_t v, double t) const { return branch_trajs.getPointInObjectSpace(v, t); }
 
-  const BranchTrajectories& getBranchTrajectories() const { return branch_trajs; }
+  const StrandTree& getStrandTree() const { return branch_trajs; }
 
   void computeComponentData(double t)
   {

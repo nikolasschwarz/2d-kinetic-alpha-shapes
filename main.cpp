@@ -284,7 +284,7 @@ static void kinetic_delaunay_example()
     transforms_by_height_and_branch.push_back(transforms_at_height);
   }
 
-  std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch(transforms_by_height_and_branch.size());
+  /*std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch(transforms_by_height_and_branch.size());
 
   for (size_t i = 0; i < transforms_by_height_and_branch.size(); i++)
   {
@@ -295,11 +295,11 @@ static void kinetic_delaunay_example()
         = glm::transpose(glm::inverse(transforms_by_height_and_branch[i][j]));
       normal_transforms_by_height_and_branch[i][j][3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     }
-  }
+  }*/
 
   kinDS::KineticDelaunay kinetic_delaunay(
-    kinDS::BranchTrajectories(support_points, transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
-    10.0, false, branch_indices, strands_by_branch_id);
+    kinDS::StrandTree(support_points, subdivisions, {}, transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
+    10.0, false);
 
   kinetic_delaunay.init();
   kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);

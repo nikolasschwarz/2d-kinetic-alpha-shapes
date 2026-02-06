@@ -98,7 +98,7 @@ class Logger
 
     // Create log entry
     ostringstream logEntry;
-    logEntry << "[" << timestamp << "] " << levelToString(level) << ": " << message << endl;
+    logEntry << "[kinDS] [" << timestamp << "] " << levelToString(level) << ": " << message << endl;
 
     // Output to console
     cout << logEntry.str();

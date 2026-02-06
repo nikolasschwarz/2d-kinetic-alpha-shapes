@@ -1,85 +1,64 @@
-#pragma once
-#include "PlaneProjector.hpp"
-#include "Polynomial.hpp"
+#include "StrandTree.hpp"
 
-#include <array>
-#include <string>
-#include <vector>
-
-namespace kinDS
-{
-
-template<size_t dim> using Trajectory = std::array<Polynomial, dim>;
+using namespace kinDS;
 
 static glm::dvec3 ProfileToModelCoordinatesBranch(
-  const std::vector<std::vector<glm::mat4>>& profile_to_model_transforms, glm::dvec3 point, float t,
-  const std::vector<size_t>& branch_indices, float w = 1.0f)
+    const std::vector<std::vector<glm::mat4>>& profile_to_model_transforms, glm::dvec3 point, float t,
+    const std::vector<size_t>& branch_indices, float w = 1.0f)
 {
-  size_t lower_section_index = static_cast<size_t>(std::max(0.0f, glm::floor(t)));
+size_t lower_section_index = static_cast<size_t>(std::max(0.0f, glm::floor(t)));
 
-  size_t upper_section_index = std::min(profile_to_model_transforms.size() - 1, static_cast<size_t>(glm::ceil(t)));
+size_t upper_section_index = std::min(profile_to_model_transforms.size() - 1, static_cast<size_t>(glm::ceil(t)));
 
-  // check range
-  auto coord_str = std::to_string(t);
-  if (lower_section_index >= profile_to_model_transforms.size())
-  {
+// check range
+auto coord_str = std::to_string(t);
+if (lower_section_index >= profile_to_model_transforms.size())
+{
     std::cout << ("ProfileToModelCoordinates: lower bound of point z-coordinate out of range: " + coord_str).c_str()
-              << std::endl;
-  }
-  if (upper_section_index >= profile_to_model_transforms.size())
-  {
+            << std::endl;
+}
+if (upper_section_index >= profile_to_model_transforms.size())
+{
     std::cout << ("ProfileToModelCoordinates: upper bound of point z-coordinate out of range: " + coord_str).c_str()
-              << std::endl;
-  }
+            << std::endl;
+}
 
-  // only set second coordinate to 0 for points, not for normal vectors
-  // TODO: I actually wanted to get rid of this coordinate swap at some point
-  glm::vec4 local_pos(point[0], (1.0f - w) * point[2], point[1], w);
-  if (lower_section_index >= branch_indices.size())
-  {
+// only set second coordinate to 0 for points, not for normal vectors
+// TODO: I actually wanted to get rid of this coordinate swap at some point
+glm::vec4 local_pos(point[0], (1.0f - w) * point[2], point[1], w);
+if (lower_section_index >= branch_indices.size())
+{
     std::cout << ("ProfileToModelCoordinates: lower bound of point z-coordinate out of range: " + coord_str).c_str()
-              << ", index: " << lower_section_index << ", size: " << branch_indices.size() << std::endl;
-  }
-  size_t lower_branch_index = branch_indices[lower_section_index];
-  glm::vec4 global_pos = profile_to_model_transforms[lower_section_index][lower_branch_index] * local_pos;
+            << ", index: " << lower_section_index << ", size: " << branch_indices.size() << std::endl;
+}
+size_t lower_branch_index = branch_indices[lower_section_index];
+glm::vec4 global_pos = profile_to_model_transforms[lower_section_index][lower_branch_index] * local_pos;
 
-  if (upper_section_index != lower_section_index)
-  {
+if (upper_section_index != lower_section_index)
+{
     size_t upper_branch_index = branch_indices[upper_section_index];
     glm::vec4 upper_global_pos = profile_to_model_transforms[upper_section_index][upper_branch_index] * local_pos;
     double frac = t - static_cast<double>(lower_section_index);
     global_pos = glm::mix(global_pos, upper_global_pos, frac);
-  }
-
-  if (w == 0.0f)
-  {
-    global_pos = glm::normalize(global_pos);
-  }
-
-  return { global_pos.x, global_pos.y, global_pos.z };
 }
 
-/**
- * This class handles the trajectories of strands according to branches, allowing to easily get points in a different
- * frame of reference as needed
- */
-class BranchTrajectories
+if (w == 0.0f)
 {
- private:
-  std::vector<std::vector<glm::dvec2>> support_points;
-  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch;
+    global_pos = glm::normalize(global_pos);
+}
 
-  // Create a branch index lookup using [strand_id][h]
-  std::vector<std::vector<size_t>> branch_indices;
-  std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
-  size_t height = 0;
+return { global_pos.x, global_pos.y, global_pos.z };
+}
 
- public:
-  BranchTrajectories(const std::vector<std::vector<glm::dvec2>>& support_points,
+StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_points,
+    const std::vector<std::vector<double>>& subdivisions_by_strand,
+    const std::vector<std::vector<int>>& physics_strand_to_segment_indices,
     const std::vector<std::vector<glm::mat4>>& transforms_by_height_and_branch,
     const std::vector<std::vector<size_t>>& branch_indices,
     const std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id)
     : support_points(support_points)
+    , subdivisions_by_strand(subdivisions_by_strand)
+    , physics_strand_to_segment_indices(physics_strand_to_segment_indices)
     , transforms_by_height_and_branch(transforms_by_height_and_branch)
     , branch_indices(branch_indices)
     , strands_by_branch_id(strands_by_branch_id)
@@ -92,18 +71,18 @@ class BranchTrajectories
     }
   }
 
-  const std::vector<std::vector<glm::dvec2>>& getPoints() const { return support_points; }
+  const std::vector<std::vector<glm::dvec2>>& StrandTree::getPoints() const { return support_points; }
 
-  size_t getHeight() const { return height; }
+  size_t StrandTree::getHeight() const { return height; }
 
-  size_t addTrajectory(const std::vector<glm::dvec2>& traj)
+  size_t StrandTree::addTrajectory(const std::vector<glm::dvec2>& traj)
   {
     size_t index = support_points.size();
     support_points.push_back(traj);
     return index;
   }
 
-  glm::dvec2 evaluate(size_t strand_id, double t) const
+  glm::dvec2 StrandTree::evaluate(size_t strand_id, double t) const
   {
     if (t < 0)
     {
@@ -131,7 +110,7 @@ class BranchTrajectories
     return lower * (1.0 - frac) + upper * frac;
   }
 
-  glm::dvec2 getPointTransformed(size_t strand_id, size_t index, size_t reference_branch) const
+  glm::dvec2 StrandTree::getPointTransformed(size_t strand_id, size_t index, size_t reference_branch) const
   {
     size_t actual_branch;
     // dummy strands might not be mapped to a branch:
@@ -157,7 +136,7 @@ class BranchTrajectories
     return glm::dvec2 { result.x, result.y };
   }
 
-  glm::dvec2 evaluateTransformed(size_t strand_id, double t, size_t reference_branch) const
+  glm::dvec2 StrandTree::evaluateTransformed(size_t strand_id, double t, size_t reference_branch) const
   {
     if (t < 0)
     {
@@ -185,7 +164,7 @@ class BranchTrajectories
     return lower * (1.0 - frac) + upper * frac;
   }
 
-  glm::dvec3 getPointInObjectSpace(size_t strand_id, double t) const
+  glm::dvec3 StrandTree::getPointInObjectSpace(size_t strand_id, double t) const
   {
     glm::dvec2 v = evaluate(strand_id, t);
 
@@ -193,13 +172,13 @@ class BranchTrajectories
     return ProfileToModelCoordinatesBranch(transforms_by_height_and_branch, v_3d, t, branch_indices[strand_id]);
   }
 
-  glm::dvec3 transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const
+  glm::dvec3 StrandTree::transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const
   {
     return ProfileToModelCoordinatesBranch(transforms_by_height_and_branch, v_3d, t, branch_indices[strand_id]);
   }
 
   // TODO: also adjust to different reference frame
-  std::array<Polynomial, 2> getPiecePolynomial(size_t strand_id, size_t index) const
+  std::array<Polynomial, 2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index) const
   {
     if (strand_id >= support_points.size())
     {
@@ -222,5 +201,3 @@ class BranchTrajectories
 
     return result;
   }
-};
-}; // namespace kinDS

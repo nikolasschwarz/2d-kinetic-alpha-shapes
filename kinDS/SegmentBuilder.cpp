@@ -508,7 +508,7 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(glm::dvec3 vertex, glm::dvec2 ce
   glm::dvec2 raw_uv { angle / (2.0 * glm::pi<double>()), vertex[2] };
   if (create_transformed_mesh)
   {
-    vertex = kin_del.getBranchTrajectories().transformToObjectSpace(vertex, strand_id, t);
+    vertex = kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
   }
 
   size_t index = boundary_mesh.addVertex(vertex);
@@ -529,7 +529,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
 {
   if (create_transformed_mesh)
   {
-    vertex = kin_del.getBranchTrajectories().transformToObjectSpace(vertex, strand_id, t);
+    vertex = kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
   }
   size_t index = mesh.addVertex(vertex);
   double rel_dist = relativeDistanceFromCenter(boundary_polygon, centroid, glm::dvec2 { vertex[0], vertex[1] });

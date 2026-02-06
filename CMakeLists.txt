@@ -40,6 +40,7 @@ endif()
 # ============================================================================
 
 set(KINDS_SOURCES
+	"kinDS/StrandTree.cpp"
 	"kinDS/Delaunator2D.cpp"
 	"kinDS/HalfEdgeDelaunayGraph.cpp"
 	"kinDS/Polynomial.cpp"

@@ -57,48 +57,42 @@ std::vector<std::pair<size_t, double>> MergeSortedVectors(const std::vector<std:
   return result;
 }
 
-void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>& support_points,
-  std::vector<std::vector<double>>& subdivisions_by_strand,
-  std::vector<std::vector<int>>& physics_strand_to_segment_indices,
-  const std::vector<std::vector<glm::mat4>>& transforms_by_height_and_branch,
-  const std::vector<std::vector<size_t>>& branch_indices,
-  std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id,
-  std::vector<float>& boundary_distance_by_segment_id, double alpha_cutoff)
+void TreeMesher::RunMeshingAlgorithm(
+  StrandTree& strand_tree, std::vector<float>& boundary_distance_by_segment_id, double alpha_cutoff)
 {
   bool recompute_segment_pairs = false; // TODO: expose as option?
 
-  std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch(transforms_by_height_and_branch.size());
+  std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch(
+    strand_tree.getTransformsByHeightAndBranch().size());
 
-  for (size_t i = 0; i < transforms_by_height_and_branch.size(); i++)
+  for (size_t i = 0; i < strand_tree.getTransformsByHeightAndBranch().size(); i++)
   {
-    normal_transforms_by_height_and_branch[i].resize(transforms_by_height_and_branch[i].size());
+    normal_transforms_by_height_and_branch[i].resize(strand_tree.getTransformsByHeightAndBranch()[i].size());
     for (size_t j = 0; j < normal_transforms_by_height_and_branch[i].size(); j++)
     {
       normal_transforms_by_height_and_branch[i][j]
-        = glm::transpose(glm::inverse(transforms_by_height_and_branch[i][j]));
+        = glm::transpose(glm::inverse(strand_tree.getTransformsByHeightAndBranch()[i][j]));
       normal_transforms_by_height_and_branch[i][j][3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     }
   }
 
-  std::vector<float> bottom_boundary_distances_by_strand_id(physics_strand_to_segment_indices.size());
-  std::vector<float> top_boundary_distances_by_strand_id(physics_strand_to_segment_indices.size());
+  std::vector<float> bottom_boundary_distances_by_strand_id(strand_tree.getPhysicsStrandToSegmentIndices().size());
+  std::vector<float> top_boundary_distances_by_strand_id(strand_tree.getPhysicsStrandToSegmentIndices().size());
 
-  for (size_t strand_id = 0; strand_id < physics_strand_to_segment_indices.size(); strand_id++)
+  for (size_t strand_id = 0; strand_id < strand_tree.getPhysicsStrandToSegmentIndices().size(); strand_id++)
   {
-    int bottom_segment_id = physics_strand_to_segment_indices[strand_id].front();
-    int top_segment_id = physics_strand_to_segment_indices[strand_id].back();
+    int bottom_segment_id = strand_tree.getPhysicsStrandToSegmentIndices()[strand_id].front();
+    int top_segment_id = strand_tree.getPhysicsStrandToSegmentIndices()[strand_id].back();
 
     bottom_boundary_distances_by_strand_id[strand_id] = boundary_distance_by_segment_id[bottom_segment_id];
     top_boundary_distances_by_strand_id[strand_id] = boundary_distance_by_segment_id[top_segment_id];
   }
 
   // sort subdivisions into a single array
-  std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(subdivisions_by_strand);
+  std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing...");
-  kinDS::KineticDelaunay kinetic_delaunay(
-    kinDS::BranchTrajectories(support_points, transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
-    alpha_cutoff, false, branch_indices, strands_by_branch_id);
+  kinDS::KineticDelaunay kinetic_delaunay(strand_tree, alpha_cutoff, false);
 
   bool transform_mesh_at_construction = false;
 
@@ -365,12 +359,12 @@ void TreeMesher::RunMeshingAlgorithm(const std::vector<std::vector<glm::dvec2>>&
   }
 
   std::vector<size_t> meshing_to_physics_segment_indices(max_meshing_id + 1, -1);
-  for (size_t strand_id = 0; strand_id < physics_strand_to_segment_indices.size(); ++strand_id)
+  for (size_t strand_id = 0; strand_id < strand_tree.getPhysicsStrandToSegmentIndices().size(); ++strand_id)
   {
     for (size_t segment_no = 0; segment_no < meshing_strand_to_segment_indices[strand_id].size(); ++segment_no)
     {
       size_t meshing_segment_id = meshing_strand_to_segment_indices[strand_id][segment_no];
-      int physics_segment_id = physics_strand_to_segment_indices[strand_id][segment_no];
+      int physics_segment_id = strand_tree.getPhysicsStrandToSegmentIndices()[strand_id][segment_no];
       meshing_to_physics_segment_indices[meshing_segment_id] = physics_segment_id;
     }
   }
