@@ -16,13 +16,13 @@ namespace kinDS
 {
 using namespace std;
 // Enum to represent log levels
-enum LogLevel : unsigned int
+enum class LogLevel : unsigned int
 {
-  DEBUG = 1,
-  INFO = 2,
-  WARNING = 4,
-  ERROR = 8,
-  CRITICAL = 16
+  Debug = 1,
+  Info = 2,
+  Warning = 4,
+  Error = 8,
+  Critical = 16
 };
 
 inline LogLevel operator|(LogLevel a, LogLevel b)
@@ -52,7 +52,7 @@ inline LogLevel operator~(LogLevel a) { return static_cast<LogLevel>(~static_cas
 class Logger
 {
  private:
-  LogLevel log_level = DEBUG | INFO | WARNING | ERROR | CRITICAL;
+  LogLevel log_level = LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
 
  public:
   // Constructor: Opens the log file in append mode
@@ -86,7 +86,7 @@ class Logger
   // Logs a message with a given log level
   void log(LogLevel level, const string& message)
   {
-    if (!(log_level & level))
+    if (!static_cast<unsigned>(log_level & level))
     {
       return; // Log level not enabled
     }
@@ -114,7 +114,7 @@ class Logger
   void log(LogLevel level, const char* fmt, ...)
   {
 
-    if (!(log_level & level))
+    if (!static_cast<unsigned>(log_level & level))
     {
       return; // Log level not enabled
     }
@@ -149,15 +149,15 @@ class Logger
   {
     switch (level)
     {
-    case DEBUG:
+    case LogLevel::Debug:
       return "DEBUG";
-    case INFO:
+    case LogLevel::Info:
       return "INFO";
-    case WARNING:
+    case LogLevel::Warning:
       return "WARNING";
-    case ERROR:
+    case LogLevel::Error:
       return "ERROR";
-    case CRITICAL:
+    case LogLevel::Critical:
       return "CRITICAL";
     default:
       return "UNKNOWN";
@@ -165,33 +165,33 @@ class Logger
   }
 };
 
-static Logger logger("kinDS_logfile.txt");
+inline Logger logger("kinDS_logfile.txt");
 
 #define KINDS_DEBUG(msg)                                                                                               \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::DEBUG, ss.str());                                                                             \
+    logger.log(LogLevel::Debug, ss.str());                                                                             \
   }
 
 #define KINDS_INFO(msg)                                                                                                \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::INFO, ss.str());                                                                              \
+    logger.log(LogLevel::Info, ss.str());                                                                              \
   }
 
 #define KINDS_WARNING(msg)                                                                                             \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::WARNING, ss.str());                                                                           \
+    logger.log(LogLevel::Warning, ss.str());                                                                           \
   }
 
 #define KINDS_ERROR(msg)                                                                                               \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::ERROR, ss.str());                                                                             \
+    logger.log(LogLevel::Error, ss.str());                                                                             \
   }
 }

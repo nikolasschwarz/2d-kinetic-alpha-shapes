@@ -376,7 +376,7 @@ void HalfEdgeDelaunayGraph::init(const std::vector<std::vector<glm::dvec2>>& spl
     coords.push_back(point[1]);
   }
 
-  Delaunator::Delaunator2D delaunator(coords);
+  Delaunator2D delaunator(coords);
 
   build(delaunator.triangles);
 }
@@ -400,7 +400,7 @@ void kinDS::HalfEdgeDelaunayGraph::update(
       coords.push_back(point[1]);
     }
 
-    Delaunator::Delaunator2D delaunator(coords);
+    Delaunator2D delaunator(coords);
 
     for (size_t i : delaunator.triangles)
     {

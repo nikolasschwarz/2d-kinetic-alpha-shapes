@@ -1,7 +1,7 @@
 #include "Delaunator2D.hpp"
 #include "Logger.hpp"
 
-using namespace Delaunator;
+using namespace kinDS;
 
 //@see
 // https://stackoverflow.com/questions/33333363/built-in-mod-vs-custom-mod-function-improve-the-performance-of-modulus-op/33333636#33333636
@@ -230,7 +230,7 @@ Delaunator2D::Delaunator2D(std::vector<float> const& inCoords)
 
   if (!(min_radius < std::numeric_limits<float>::max()))
   {
-    kinDS::logger.log(kinDS::ERROR, "not triangulation");
+    KINDS_ERROR("not triangulation");
     return;
   }
 

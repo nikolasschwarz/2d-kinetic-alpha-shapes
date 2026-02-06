@@ -525,9 +525,9 @@ class KineticDelaunay
                                                  << ". Faces inside " << face_inside[face_id] << " | "
                                                  << face_inside[twin_face_id]);
 
-    kinDS::HalfEdgeDelaunayGraphToSVG::write(
+    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
       getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + "_before.svg", 0.1);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;
+    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;*/
 
     // Call the event handler if provided
     event_handler.beforeEvent(event);
@@ -584,9 +584,9 @@ class KineticDelaunay
                                                 << ". Faces inside " << face_inside[face_id] << " | "
                                                 << face_inside[twin_face_id]);
 
-    kinDS::HalfEdgeDelaunayGraphToSVG::write(
+    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
       getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + ".svg", 0.1, &face_inside);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;
+    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;*/
 
     // After flipping the edge, we need to recompute the events for all surrounding half-edges
     size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
@@ -631,18 +631,18 @@ class KineticDelaunay
 
     // Process the event at the given time
     KINDS_DEBUG("Processing boundary event at time " << event.time << " for half-edge ID " << event.half_edge_id);
-    kinDS::HalfEdgeDelaunayGraphToSVG::write(
+    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
       getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + "_before.svg", 0.1, &face_inside);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;
+    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;*/
     // Call the event handler if provided
     event_handler.beforeBoundaryEvent(event);
 
     setFaceInside(face_id, !face_inside[face_id]);
 
     event_handler.afterBoundaryEvent(event);
-    kinDS::HalfEdgeDelaunayGraphToSVG::write(
+    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
       getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + ".svg", 0.1, &face_inside);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;
+    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;*/
   }
 
   void handleEvents(EventHandler& event_handler)

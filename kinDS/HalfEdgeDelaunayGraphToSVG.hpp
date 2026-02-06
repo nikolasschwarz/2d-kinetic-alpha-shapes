@@ -251,7 +251,7 @@ class HalfEdgeDelaunayGraphToSVG
         else
         {
           // This should only happen if all points lie on one line, maybe we should implement it later
-          logger.log(WARNING, "Both circumcenters are infinite, skipping edge.");
+          KINDS_WARNING("Both circumcenters are infinite, skipping edge.");
         }
 
         // TODO:: Handle infinite edges

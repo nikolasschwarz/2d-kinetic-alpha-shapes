@@ -1,19 +1,9 @@
 #include "VoronoiMesh.hpp"
-#include <unordered_map>
-
-// resolve a macro conflict with /usr/include/X11/X.h:350:21
-#pragma push_macro("Success")
-#undef Success
-
-#include "../eigen/Eigen/Dense"
 #include "Logger.hpp"
 #include "glm/gtx/norm.hpp"
-
-#pragma pop_macro("Success")
-
+#include <unordered_map>
 #ifdef USE_CGAL
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
-#include <CGAL/Simple_cartesian.h>
 #include <CGAL/Surface_mesh.h>
 
 #include <vector>

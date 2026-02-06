@@ -58,6 +58,94 @@ add_library(kinDS ${KINDS_SOURCES})
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     # Standalone build - only need project root
     set(KINDS_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
+    
+    # For standalone builds: create directory structure to support "eigen/eigen/Eigen/..." includes
+    # Create a directory junction/symlink in the build directory that maps eigen/eigen -> eigen
+    # This allows the same include paths to work in both standalone and parent project builds
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/eigen/CMakeLists.txt)
+        set(EIGEN_EIGEN_LINK_DIR ${CMAKE_BINARY_DIR}/eigen/eigen)
+        set(EIGEN_TARGET_DIR ${CMAKE_CURRENT_SOURCE_DIR}/eigen)
+        
+        # Create parent directory
+        file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/eigen)
+        
+        # Create symlink/directory junction (platform-specific)
+        set(LINK_CREATED FALSE)
+        if(WIN32)
+            # On Windows, try to create a directory junction
+            # Note: This may require admin privileges or developer mode
+            # First, remove the directory if it exists (as a regular directory)
+            if(EXISTS ${EIGEN_EIGEN_LINK_DIR})
+                file(REMOVE_RECURSE ${EIGEN_EIGEN_LINK_DIR})
+            endif()
+            execute_process(
+                COMMAND cmd /c mklink /J "${EIGEN_EIGEN_LINK_DIR}" "${EIGEN_TARGET_DIR}"
+                ERROR_QUIET
+                OUTPUT_QUIET
+                RESULT_VARIABLE JUNCTION_RESULT
+            )
+            if(JUNCTION_RESULT EQUAL 0)
+                set(LINK_CREATED TRUE)
+                message(STATUS "kinDS: Created directory junction for eigen/eigen -> eigen")
+            else()
+                message(STATUS "kinDS: Could not create directory junction (may require admin/dev mode). Using alternative include path setup.")
+            endif()
+        else()
+            # On Unix, create a symlink
+            if(EXISTS ${EIGEN_EIGEN_LINK_DIR})
+                file(REMOVE ${EIGEN_EIGEN_LINK_DIR})
+            endif()
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E create_symlink "${EIGEN_TARGET_DIR}" "${EIGEN_EIGEN_LINK_DIR}"
+                ERROR_QUIET
+                OUTPUT_QUIET
+                RESULT_VARIABLE SYMLINK_RESULT
+            )
+            if(SYMLINK_RESULT EQUAL 0)
+                set(LINK_CREATED TRUE)
+                message(STATUS "kinDS: Created symlink for eigen/eigen -> eigen")
+            else()
+                message(STATUS "kinDS: Could not create symlink. Using alternative include path setup.")
+            endif()
+        endif()
+        
+        # Add build directory to include paths so eigen/eigen can be resolved
+        # This allows "eigen/eigen/Eigen/..." to work in standalone builds
+        list(APPEND KINDS_INCLUDE_DIRS ${CMAKE_BINARY_DIR})
+        
+        # If link creation failed at configure time, create a custom command to create it at build time
+        if(NOT LINK_CREATED)
+            if(WIN32)
+                # Use a PowerShell script file to properly handle paths with spaces
+                set(PS_SCRIPT ${CMAKE_BINARY_DIR}/create_eigen_link.ps1)
+                file(TO_NATIVE_PATH "${EIGEN_EIGEN_LINK_DIR}" EIGEN_EIGEN_LINK_DIR_NATIVE)
+                file(TO_NATIVE_PATH "${EIGEN_TARGET_DIR}" EIGEN_TARGET_DIR_NATIVE)
+                file(WRITE ${PS_SCRIPT}
+                    "if (Test-Path '${EIGEN_EIGEN_LINK_DIR_NATIVE}') {\n"
+                    "    Remove-Item -Path '${EIGEN_EIGEN_LINK_DIR_NATIVE}' -Force -Recurse\n"
+                    "}\n"
+                    "New-Item -ItemType Junction -Path '${EIGEN_EIGEN_LINK_DIR_NATIVE}' -Target '${EIGEN_TARGET_DIR_NATIVE}'\n"
+                )
+                add_custom_command(
+                    OUTPUT ${EIGEN_EIGEN_LINK_DIR}
+                    COMMAND PowerShell -ExecutionPolicy Bypass -File "${PS_SCRIPT}"
+                    COMMENT "Creating directory junction for eigen/eigen -> eigen"
+                    VERBATIM
+                )
+            else()
+                add_custom_command(
+                    OUTPUT ${EIGEN_EIGEN_LINK_DIR}
+                    COMMAND ${CMAKE_COMMAND} -E remove ${EIGEN_EIGEN_LINK_DIR}
+                    COMMAND ${CMAKE_COMMAND} -E create_symlink "${EIGEN_TARGET_DIR}" "${EIGEN_EIGEN_LINK_DIR}"
+                    COMMENT "Creating symlink for eigen/eigen -> eigen"
+                    VERBATIM
+                )
+            endif()
+            # Make the link a dependency of the kinDS target so it's created before compilation
+            add_custom_target(create_eigen_link DEPENDS ${EIGEN_EIGEN_LINK_DIR})
+            add_dependencies(kinDS create_eigen_link)
+        endif()
+    endif()
 else()
     # Used as submodule - add both parent directory and project root
     # This allows #include "kinDS/Header.hpp" to work regardless of how

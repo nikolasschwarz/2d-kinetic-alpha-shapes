@@ -1,12 +1,14 @@
 #pragma once
+#include <assert.h>
 #include <iostream>
 
 // resolve a macro conflict with /usr/include/X11/X.h:350:21
 #pragma push_macro("Success")
 #undef Success
 
-#include "../eigen/Eigen/Dense"
-#include "../eigen/unsupported/Eigen/Polynomials"
+#include "eigen/eigen/Eigen/Core"
+#include "eigen/eigen/Eigen/Dense"
+#include "eigen/eigen/unsupported/Eigen/Polynomials"
 
 #pragma pop_macro("Success")
 
