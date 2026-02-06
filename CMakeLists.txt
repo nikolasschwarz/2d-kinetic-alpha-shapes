@@ -164,7 +164,10 @@ target_include_directories(kinDS
 )
 
 # Find and link dependencies
-find_package(glm REQUIRED)
+# glm: allow parent project to provide glm::glm target if it already uses glm
+if(NOT TARGET glm::glm)
+    find_package(glm REQUIRED)
+endif()
 target_link_libraries(kinDS PUBLIC glm::glm)
 target_compile_definitions(kinDS PUBLIC GLM_ENABLE_EXPERIMENTAL)
 
