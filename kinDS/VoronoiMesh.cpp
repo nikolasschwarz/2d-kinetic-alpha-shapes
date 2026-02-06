@@ -625,10 +625,8 @@ void kinDS::VoronoiMesh::checkForDegenerateTriangles() const
     const auto& p2 = vertices[triangles[i + 2]];
 
     // compute squared area via cross product
-    Eigen::Vector3d v0(p0[0], p0[1], p0[2]);
-    Eigen::Vector3d v1(p1[0], p1[1], p1[2]);
-    Eigen::Vector3d v2(p2[0], p2[1], p2[2]);
-    double area2 = ((v1 - v0).cross(v2 - v0)).squaredNorm();
+
+    double area2 = glm::length2(glm::cross((p1 - p0),(p2 - p0)));
 
     if (area2 < 1e-20)
     {
