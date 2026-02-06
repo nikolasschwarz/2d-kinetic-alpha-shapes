@@ -2,6 +2,7 @@
 #include "Logger.hpp"
 #include "glm/gtx/norm.hpp"
 #include <unordered_map>
+#include <array>
 #ifdef USE_CGAL
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
 #include <CGAL/Surface_mesh.h>
