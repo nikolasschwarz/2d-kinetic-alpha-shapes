@@ -2,32 +2,15 @@
     "version": 3,
     "configurePresets": [
       {
-        "name": "vs2022-x64",
-        "displayName": "Visual Studio 2022 (x64) - Auto vcpkg",
-        "generator": "Visual Studio 17 2022",
-        "architecture": "x64",
-        "binaryDir": "${sourceDir}/build"
-      },
-      {
         "name": "vcpkg-x64",
         "displayName": "vcpkg (x64) - MSVC",
         "generator": "Visual Studio 17 2022",
         "architecture": "x64",
         "binaryDir": "${sourceDir}/build",
         "cacheVariables": {
-          "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+          "CMAKE_TOOLCHAIN_FILE": "C:/src/vcpkg/scripts/buildsystems/vcpkg.cmake"
         }
-      },
-      {
-        "name": "vcpkg-x64-ninja",
-        "displayName": "vcpkg (x64) - Ninja with MSVC",
-        "generator": "Ninja",
-        "binaryDir": "${sourceDir}/build",
-        "cacheVariables": {
-          "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-          "CMAKE_C_COMPILER": "cl",
-          "CMAKE_CXX_COMPILER": "cl"
-        }
+      
       }
     ]
   }
