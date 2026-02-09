@@ -43,6 +43,7 @@ set(KINDS_SOURCES
 	"kinDS/StrandTree.cpp"
 	"kinDS/Delaunator2D.cpp"
 	"kinDS/HalfEdgeDelaunayGraph.cpp"
+    "kinDS/KineticDelaunay.cpp"
 	"kinDS/Polynomial.cpp"
 	"kinDS/SegmentBuilder.cpp"
 	"kinDS/TreeMesher.cpp"
