@@ -213,3 +213,32 @@ endif()
 include(CTest)
 enable_testing()
 
+# Only build tests if this is the main project (not a submodule)
+if(KINDS_BUILD_DEMO)
+    # Use FetchContent to get Catch2 (header-only, no installation needed)
+    include(FetchContent)
+    FetchContent_Declare(
+        Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG        v3.5.0
+    )
+    FetchContent_MakeAvailable(Catch2)
+    
+    # Create test executable
+    file(GLOB TEST_SOURCES "tests/*.cpp")
+    if(TEST_SOURCES)
+        add_executable(kinDS-tests ${TEST_SOURCES})
+        target_link_libraries(kinDS-tests PRIVATE kinDS Catch2::Catch2WithMain)
+        target_include_directories(kinDS-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        
+        # Register with CTest using Catch2's test discovery
+        list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+        include(Catch)
+        catch_discover_tests(kinDS-tests)
+        
+        message(STATUS "kinDS: Tests enabled. Run with: ctest")
+    else()
+        message(STATUS "kinDS: No test files found in tests/ directory")
+    endif()
+endif()
+

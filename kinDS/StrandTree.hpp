@@ -21,11 +21,11 @@ class StrandTree
   std::vector<std::vector<glm::dvec2>> support_points;
   std::vector<std::vector<double>> subdivisions_by_strand; // subdivisions for each strand [strand_id][subdivisions]
   std::vector<std::vector<int>> physics_strand_to_segment_indices; // physics strand to segment indices [strand_id]
-  std::vector<std::vector<glm::mat4>>
-    transforms_by_height_and_branch; // transforms for each height and branch [height][branch_id]
+  // transforms for each height and branch [height][branch_id]
+  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch;
   std::vector<std::vector<size_t>> branch_indices; // branch indices for each strand [strand_id][height]
-  std::vector<std::vector<std::vector<size_t>>>
-    strands_by_branch_id; // strands by branch id [height][branch_id][strand_no]
+  // strands by branch id [height][branch_id][strand_no]
+  std::vector<std::vector<std::vector<size_t>>>strands_by_branch_id;
 
   size_t height = 0;
 
@@ -90,5 +90,11 @@ class StrandTree
   }
   const std::vector<std::vector<size_t>>& getBranchIndices() const { return branch_indices; }
   const std::vector<std::vector<std::vector<size_t>>>& getStrandsByBranchId() const { return strands_by_branch_id; }
+
+  /** Save all members to a text file. */
+  void saveToFile(const std::string& path) const;
+
+  /** Load from a text file and return a new StrandTree. */
+  static StrandTree loadFromFile(const std::string& path);
 };
 }; // namespace kinDS
