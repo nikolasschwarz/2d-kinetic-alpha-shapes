@@ -2,6 +2,13 @@
     "version": 3,
     "configurePresets": [
       {
+        "name": "vs2022-x64",
+        "displayName": "Visual Studio 2022 (x64) - Auto vcpkg",
+        "generator": "Visual Studio 17 2022",
+        "architecture": "x64",
+        "binaryDir": "${sourceDir}/build"
+      },
+      {
         "name": "vcpkg-x64",
         "displayName": "vcpkg (x64) - MSVC",
         "generator": "Visual Studio 17 2022",
