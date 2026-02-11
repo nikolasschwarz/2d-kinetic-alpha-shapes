@@ -15,6 +15,23 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Report build type for visibility (important when used as submodule)
+if(CMAKE_BUILD_TYPE)
+    message(STATUS "kinDS: Build type = ${CMAKE_BUILD_TYPE}")
+else()
+    if(CMAKE_CONFIGURATION_TYPES)
+        message(STATUS "kinDS: Multi-config generator (e.g. Visual Studio); build type chosen at build time (--config). Available: ${CMAKE_CONFIGURATION_TYPES}")
+    else()
+        message(STATUS "kinDS: Build type not set (CMAKE_BUILD_TYPE empty); default may apply depending on generator")
+    endif()
+endif()
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    message(STATUS "kinDS: Standalone = TRUE")
+else()
+    message(STATUS "kinDS: Standalone = FALSE")
+endif()
+
 # Add Eigen as subdirectory only if not already provided by parent project
 # Check if Eigen3::Eigen target already exists (from parent project)
 if(NOT TARGET Eigen3::Eigen)
@@ -232,11 +249,20 @@ if(KINDS_BUILD_DEMO)
         target_include_directories(kinDS-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
         
         # Register with CTest using Catch2's test discovery
-        list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+        # Catch2 v3 provides the Catch.cmake module
+        list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
         include(Catch)
-        catch_discover_tests(kinDS-tests)
         
-        message(STATUS "kinDS: Tests enabled. Run with: ctest")
+        # Try to use catch_discover_tests, fallback to manual registration if it fails
+        if(COMMAND catch_discover_tests)
+            catch_discover_tests(kinDS-tests)
+        else()
+            # Fallback: manually register the test executable
+            add_test(NAME kinDS-tests COMMAND kinDS-tests)
+            message(STATUS "kinDS: Using manual test registration (catch_discover_tests not available)")
+        endif()
+        
+        message(STATUS "kinDS: Tests enabled. Run with: ctest (from build directory)")
     else()
         message(STATUS "kinDS: No test files found in tests/ directory")
     endif()

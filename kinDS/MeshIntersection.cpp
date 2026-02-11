@@ -486,7 +486,7 @@ kinDS::MeshIntersection::MeshRelation kinDS::MeshIntersection::ClassifyMeshRelat
 #endif
 }
 
-MatchResult MeshIntersection::MatchPointOnSurface(const glm::dvec3& p, double epsilon)
+MatchResult MeshIntersection::MatchPointOnSurface(const glm::dvec3& p, double epsilon) const
 {
 #ifdef USE_CGAL
   const CGAL::Surface_mesh<Point_CGAL>& mesh = boundary_mesh.mesh;

@@ -9,40 +9,6 @@
 #include <utility> // for std::pair
 #include <vector>
 
-static void eigen_example()
-{
-  Eigen::VectorXd a(3);
-  a << 1, 2, 3; // 1 + 2x + 3x^2
-  Eigen::VectorXd b(2);
-  b << 4, 5; // 4 + 5x
-
-  kinDS::Polynomial p1(a), p2(b);
-  kinDS::Polynomial sum = p1 + p2;
-  kinDS::Polynomial prod = p1 * p2;
-
-  sum.print(); // e.g. 3x^2 + 7x + 5
-  prod.print(); // e.g. 15x^3 + 22x^2 + 13x + 4
-
-  // Test evaluation
-  double x = 2.0;
-  double result_sum = sum(x);
-  double result_prod = prod(x);
-  std::cout << "Sum evaluated at x = " << x << ": " << result_sum << std::endl; // e.g. 3*2^2 + 7*2 + 5
-  std::cout << "Product evaluated at x = " << x << ": " << result_prod << std::endl; // e.g. 15*2^3 + 22*2^2 + 13*2 + 4
-
-  Eigen::VectorXd c(3);
-  c << 4, 5, -2; // 4 + 5x - 2x^2
-
-  auto test = POLYNOMIAL(x ^ 2); // X^2
-  kinDS::Polynomial p3
-    = kinDS::Polynomial([&](kinDS::Var x) { return (kinDS::Polynomial { (10 * (x ^ 4) + 4 * (x ^ 2) + 2) }); });
-  p3.print();
-
-  Eigen::VectorXcd roots = p3.roots();
-
-  std::cout << "Roots of the polynomial: " << roots << std::endl; // Outputs the roots of the polynomial
-}
-
 std::vector<std::pair<size_t, double>> merge_sorted_vectors(const std::vector<std::vector<double>>& inputs)
 {
   using Entry = std::pair<size_t, double>; // (index of input vector, value)
@@ -348,11 +314,5 @@ static void kinetic_delaunay_example()
 
 int main()
 {
-  // eigen_example();
-
-  // voronoi_example();
-
   kinetic_delaunay_example();
-
-  // kinDS::MeshIntersection::test();
 }

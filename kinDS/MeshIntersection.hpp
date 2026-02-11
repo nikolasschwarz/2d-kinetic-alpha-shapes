@@ -1,3 +1,4 @@
+#pragma once
 #include "Logger.hpp"
 #include "MeshCGAL.hpp"
 #include "VoronoiMesh.hpp"
@@ -129,7 +130,7 @@ class MeshIntersection
   std::pair<VoronoiMesh, std::vector<int>> Intersect(
     const VoronoiMesh& mesh, const std::vector<int>& neighbor_segments = {});
 
-  MatchResult MatchPointOnSurface(const glm::dvec3& p, double epsilon = 1e-6);
+  MatchResult MatchPointOnSurface(const glm::dvec3& p, double epsilon = 1e-6) const;
 
   enum class MeshRelation
   {
