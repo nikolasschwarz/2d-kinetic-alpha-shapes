@@ -3,6 +3,7 @@
 #include "StrandTree.hpp"
 #include "VoronoiMesh.hpp"
 #include <glm/glm.hpp>
+#include <memory>
 #include <vector>
 
 namespace kinDS

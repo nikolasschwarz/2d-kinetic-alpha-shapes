@@ -3,9 +3,12 @@
 #include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"
+#include "kinDS/StrandTree.hpp"
+#include "kinDS/TreeMesher.hpp"
 #include <iostream>
 #include <map>
 #include <queue>
+#include <string>
 #include <utility> // for std::pair
 #include <vector>
 
@@ -312,7 +315,88 @@ static void kinetic_delaunay_example()
   boundary_mesh.checkForDegenerateTriangles();
 }
 
-int main()
+static void print_usage(const char* program_name)
 {
-  kinetic_delaunay_example();
+  std::cout << "Usage: " << program_name << " [OPTIONS]\n"
+            << "\n"
+            << "Options:\n"
+            << "  --demo                    Run the kinetic Delaunay example\n"
+            << "  --mesh <file>             Load StrandTree from file and run TreeMesher\n"
+            << "  --help, -h                Show this help message\n"
+            << "\n"
+            << "Examples:\n"
+            << "  " << program_name << " --demo\n"
+            << "  " << program_name << " --mesh strandtree.txt\n";
+}
+
+static void mesh_from_file(const std::string& filename)
+{
+  std::cout << "Loading StrandTree from: " << filename << std::endl;
+  
+  try
+  {
+    kinDS::StrandTree strand_tree = kinDS::StrandTree::loadFromFile(filename);
+    std::cout << "StrandTree loaded successfully. Height: " << strand_tree.getHeight() 
+              << ", Number of strands: " << strand_tree.getPoints().size() << std::endl;
+    
+    std::cout << "Running TreeMesher..." << std::endl;
+    kinDS::TreeMesher mesher(strand_tree);
+    const auto& meshes = mesher.runMeshingAlgorithm();
+    
+    std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
+    
+    // Export the combined mesh
+    mesher.exportCombinedMesh();
+    
+    // Export boundary mesh
+    const auto& boundary_mesh = mesher.getBoundaryMesh();
+    kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
+    std::cout << "Boundary mesh exported to: boundary_mesh.obj" << std::endl;
+    
+    std::cout << "Meshing complete!" << std::endl;
+  }
+  catch (const std::exception& e)
+  {
+    std::cerr << "Error: " << e.what() << std::endl;
+    std::exit(1);
+  }
+}
+
+int main(int argc, char* argv[])
+{
+  if (argc < 2)
+  {
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  std::string command = argv[1];
+
+  if (command == "--demo")
+  {
+    kinetic_delaunay_example();
+  }
+  else if (command == "--mesh")
+  {
+    if (argc < 3)
+    {
+      std::cerr << "Error: --mesh requires a filename argument." << std::endl;
+      print_usage(argv[0]);
+      return 1;
+    }
+    mesh_from_file(argv[2]);
+  }
+  else if (command == "--help" || command == "-h")
+  {
+    print_usage(argv[0]);
+    return 0;
+  }
+  else
+  {
+    std::cerr << "Error: Unknown command: " << command << std::endl;
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  return 0;
 }

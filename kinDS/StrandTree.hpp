@@ -3,6 +3,7 @@
 #include "Polynomial.hpp"
 
 #include <array>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,7 @@ class StrandTree
   std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch;
   std::vector<std::vector<size_t>> branch_indices; // branch indices for each strand [strand_id][height]
   // strands by branch id [height][branch_id][strand_no]
-  std::vector<std::vector<std::vector<size_t>>>strands_by_branch_id;
+  std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
 
   size_t height = 0;
 
@@ -92,9 +93,9 @@ class StrandTree
   const std::vector<std::vector<std::vector<size_t>>>& getStrandsByBranchId() const { return strands_by_branch_id; }
 
   /** Save all members to a text file. */
-  void saveToFile(const std::string& path) const;
+  void saveToFile(const std::filesystem::path& path) const;
 
   /** Load from a text file and return a new StrandTree. */
-  static StrandTree loadFromFile(const std::string& path);
+  static StrandTree loadFromFile(const std::filesystem::path& path);
 };
 }; // namespace kinDS
