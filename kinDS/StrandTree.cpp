@@ -9,8 +9,8 @@
 using namespace kinDS;
 
 static glm::dvec3 ProfileToModelCoordinatesBranch(
-  const std::vector<std::vector<glm::mat4>>& profile_to_model_transforms, glm::dvec3 point, float t,
-  const std::vector<size_t>& branch_indices, float w = 1.0f)
+  const std::vector<std::vector<glm::dmat4>>& profile_to_model_transforms, glm::dvec3 point, float t,
+  const std::vector<size_t>& branch_indices, double w = 1.0)
 {
   size_t lower_section_index = static_cast<size_t>(std::max(0.0f, glm::floor(t)));
 
@@ -31,19 +31,19 @@ static glm::dvec3 ProfileToModelCoordinatesBranch(
 
   // only set second coordinate to 0 for points, not for normal vectors
   // TODO: I actually wanted to get rid of this coordinate swap at some point
-  glm::vec4 local_pos(point[0], (1.0f - w) * point[2], point[1], w);
+  glm::dvec4 local_pos(point[0], (1.0f - w) * point[2], point[1], w);
   if (lower_section_index >= branch_indices.size())
   {
     std::cout << ("ProfileToModelCoordinates: lower bound of point z-coordinate out of range: " + coord_str).c_str()
               << ", index: " << lower_section_index << ", size: " << branch_indices.size() << std::endl;
   }
   size_t lower_branch_index = branch_indices[lower_section_index];
-  glm::vec4 global_pos = profile_to_model_transforms[lower_section_index][lower_branch_index] * local_pos;
+  glm::dvec4 global_pos = profile_to_model_transforms[lower_section_index][lower_branch_index] * local_pos;
 
   if (upper_section_index != lower_section_index)
   {
     size_t upper_branch_index = branch_indices[upper_section_index];
-    glm::vec4 upper_global_pos = profile_to_model_transforms[upper_section_index][upper_branch_index] * local_pos;
+    glm::dvec4 upper_global_pos = profile_to_model_transforms[upper_section_index][upper_branch_index] * local_pos;
     double frac = t - static_cast<double>(lower_section_index);
     global_pos = glm::mix(global_pos, upper_global_pos, frac);
   }
@@ -59,7 +59,7 @@ static glm::dvec3 ProfileToModelCoordinatesBranch(
 StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_points,
   const std::vector<std::vector<double>>& subdivisions_by_strand,
   const std::vector<std::vector<int>>& physics_strand_to_segment_indices,
-  const std::vector<std::vector<glm::mat4>>& transforms_by_height_and_branch,
+  const std::vector<std::vector<glm::dmat4>>& transforms_by_height_and_branch,
   const std::vector<std::vector<size_t>>& branch_indices,
   const std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id)
   : support_points(support_points)
@@ -73,13 +73,14 @@ StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_point
   for (const auto& pts : support_points)
   {
     // always one less than size because the parameter is in range from smallest to largest index
-    height = std::max(height, pts.size() - 1);
+    tree_height = std::max(tree_height, pts.size() - 1);
+    computeNormalTransforms();
   }
 }
 
 const std::vector<std::vector<glm::dvec2>>& StrandTree::getPoints() const { return support_points; }
 
-size_t StrandTree::getHeight() const { return height; }
+size_t StrandTree::getHeight() const { return tree_height; }
 
 size_t StrandTree::addTrajectory(const std::vector<glm::dvec2>& traj)
 {
@@ -224,7 +225,7 @@ void writeMat4(std::ostream& out, const glm::mat4& m)
   out << '\n';
 }
 
-void readMat4(std::istream& in, glm::mat4& m)
+void readDMat4(std::istream& in, glm::dmat4& m)
 {
   for (int row = 0; row < 4; ++row)
     for (int col = 0; col < 4; ++col)
@@ -239,7 +240,7 @@ void StrandTree::saveToFile(const std::filesystem::path& path) const
     throw std::runtime_error(
       std::string("StrandTree::saveToFile: cannot open ") + path.string() + std::string(" for writing"));
   out << FORMAT_MAGIC << '\n';
-  out << height << '\n';
+  out << tree_height << '\n';
   out << support_points.size() << '\n';
 
   out << "support_points\n";
@@ -393,7 +394,7 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
     physics_strand_to_segment_indices.push_back(std::move(strand));
   }
 
-  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch;
+  std::vector<std::vector<glm::dmat4>> transforms_by_height_and_branch;
   if (!getLine())
     throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
   expect("transforms_by_height_and_branch");
@@ -408,15 +409,15 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
       throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (transforms branch count)");
     size_t num_branches = 0;
     std::istringstream(line) >> num_branches;
-    std::vector<glm::mat4> by_branch;
+    std::vector<glm::dmat4> by_branch;
     by_branch.reserve(num_branches);
     for (size_t b = 0; b < num_branches; ++b)
     {
       if (!getLine())
         throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (transform matrix)");
-      glm::mat4 m;
+      glm::dmat4 m;
       std::istringstream iss(line);
-      readMat4(iss, m);
+      readDMat4(iss, m);
       by_branch.push_back(m);
     }
     transforms_by_height_and_branch.push_back(std::move(by_branch));
@@ -492,4 +493,20 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
   }
 
   return tree;
+}
+
+void StrandTree::computeNormalTransforms()
+{
+  normal_transforms_by_height_and_branch.resize(getTransformsByHeightAndBranch().size());
+
+  for (size_t i = 0; i < getTransformsByHeightAndBranch().size(); i++)
+  {
+    normal_transforms_by_height_and_branch[i].resize(getTransformsByHeightAndBranch()[i].size());
+    for (size_t j = 0; j < normal_transforms_by_height_and_branch[i].size(); j++)
+    {
+      normal_transforms_by_height_and_branch[i][j]
+        = glm::transpose(glm::inverse(getTransformsByHeightAndBranch()[i][j]));
+      normal_transforms_by_height_and_branch[i][j][3] = glm::dvec4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+  }
 }

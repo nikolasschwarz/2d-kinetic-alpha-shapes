@@ -23,18 +23,20 @@ class StrandTree
   std::vector<std::vector<double>> subdivisions_by_strand; // subdivisions for each strand [strand_id][subdivisions]
   std::vector<std::vector<int>> physics_strand_to_segment_indices; // physics strand to segment indices [strand_id]
   // transforms for each height and branch [height][branch_id]
-  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch;
+  std::vector<std::vector<glm::dmat4>> transforms_by_height_and_branch;
+  // normal transforms for each height and branch [height][branch_id]
+  std::vector<std::vector<glm::dmat4>> normal_transforms_by_height_and_branch;
   std::vector<std::vector<size_t>> branch_indices; // branch indices for each strand [strand_id][height]
   // strands by branch id [height][branch_id][strand_no]
   std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
 
-  size_t height = 0;
+  size_t tree_height = 0;
 
  public:
   StrandTree(const std::vector<std::vector<glm::dvec2>>& support_points,
     const std::vector<std::vector<double>>& subdivisions_by_strand,
     const std::vector<std::vector<int>>& physics_strand_to_segment_indices,
-    const std::vector<std::vector<glm::mat4>>& transforms_by_height_and_branch,
+    const std::vector<std::vector<glm::dmat4>>& transforms_by_height_and_branch,
     const std::vector<std::vector<size_t>>& branch_indices,
     const std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id);
 
@@ -63,7 +65,7 @@ class StrandTree
   {
     return physics_strand_to_segment_indices[strand_id];
   }
-  const glm::mat4& getTransformByHeightAndBranch(size_t height, size_t branch_id) const
+  const glm::dmat4& getTransformByHeightAndBranch(size_t height, size_t branch_id) const
   {
     return transforms_by_height_and_branch[height][branch_id];
   }
@@ -85,17 +87,24 @@ class StrandTree
   {
     return physics_strand_to_segment_indices;
   }
-  const std::vector<std::vector<glm::mat4>>& getTransformsByHeightAndBranch() const
+  const std::vector<std::vector<glm::dmat4>>& getTransformsByHeightAndBranch() const
   {
     return transforms_by_height_and_branch;
   }
   const std::vector<std::vector<size_t>>& getBranchIndices() const { return branch_indices; }
   const std::vector<std::vector<std::vector<size_t>>>& getStrandsByBranchId() const { return strands_by_branch_id; }
+  const std::vector<std::vector<glm::dmat4>>& getNormalTransformsByHeightAndBranch() const
+  {
+    return normal_transforms_by_height_and_branch;
+  }
 
   /** Save all members to a text file. */
   void saveToFile(const std::filesystem::path& path) const;
 
   /** Load from a text file and return a new StrandTree. */
   static StrandTree loadFromFile(const std::filesystem::path& path);
+
+ private:
+  void computeNormalTransforms();
 };
 }; // namespace kinDS

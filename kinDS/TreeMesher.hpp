@@ -43,10 +43,10 @@ class TreeMesher
   const std::vector<size_t>& getMeshingToPhysicsSegmentIndices() const;
   const std::vector<std::vector<size_t>>& getMeshingStrandToSegmentIndices() const;
   const std::vector<size_t>& getBoundaryVertexToStrandId() const;
+  void transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const glm::dmat4& root_transform = glm::dmat4(1));
+  void transformToWorldSpace(
+    VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform = glm::dmat4(1)) const;
   const std::vector<VoronoiMesh>& getSegmentMeshlets() const { return segment_meshlets; }
-
-  // TODO: perhaps this should be moved to StrandTree
-  std::vector<std::vector<glm::mat4>> computeNormalTransforms();
 
   void exportCombinedMesh() const;
   void truncateToBoundary(const VoronoiMesh& boundary_mesh);

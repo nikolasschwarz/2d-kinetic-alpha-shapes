@@ -3,6 +3,7 @@
 #include "KineticDelaunay.hpp"
 #include "ObjExporter.hpp"
 #include "SegmentBuilder.hpp"
+#include "TreeMesher.hpp"
 #include <execution>
 
 #ifdef _DEBUG
@@ -322,25 +323,6 @@ void TreeMesher::fixFailedSegments(const MeshIntersection& boundary_intersector)
   KINDS_INFO("Fixed " << fixed_mesh_count << " out of " << empty_mesh_indices.size() << " meshes.");
 }
 
-std::vector<std::vector<glm::mat4>> TreeMesher::computeNormalTransforms()
-{
-  std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch(
-    strand_tree.getTransformsByHeightAndBranch().size());
-
-  for (size_t i = 0; i < strand_tree.getTransformsByHeightAndBranch().size(); i++)
-  {
-    normal_transforms_by_height_and_branch[i].resize(strand_tree.getTransformsByHeightAndBranch()[i].size());
-    for (size_t j = 0; j < normal_transforms_by_height_and_branch[i].size(); j++)
-    {
-      normal_transforms_by_height_and_branch[i][j]
-        = glm::transpose(glm::inverse(strand_tree.getTransformsByHeightAndBranch()[i][j]));
-      normal_transforms_by_height_and_branch[i][j][3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    }
-  }
-
-  return normal_transforms_by_height_and_branch;
-}
-
 std::pair<std::vector<float>, std::vector<float>> TreeMesher::computeTopAndBottomBoundaryDistances(
   const std::vector<float>& boundary_distance_by_segment_id)
 {
@@ -400,11 +382,11 @@ void TreeMesher::mapMeshingToPhysicsSegmentIndices()
   const auto& meshing_strand_to_segment_indices = mesh_builder->getStrandToSegmentIndices();
 
   size_t max_meshing_id = 0;
-  for (size_t strand_id = 0; strand_id < meshing_strand_to_segment_indices.size(); ++strand_id)
+  for (const auto& meshing_strand_to_segment_indice : meshing_strand_to_segment_indices)
   {
-    for (size_t segment_no = 0; segment_no < meshing_strand_to_segment_indices[strand_id].size(); ++segment_no)
+    for (size_t segment_no = 0; segment_no < meshing_strand_to_segment_indice.size(); ++segment_no)
     {
-      size_t meshing_segment_id = meshing_strand_to_segment_indices[strand_id][segment_no];
+      size_t meshing_segment_id = meshing_strand_to_segment_indice[segment_no];
       max_meshing_id = std::max(max_meshing_id, meshing_segment_id);
     }
   }
@@ -472,4 +454,106 @@ const std::vector<std::vector<size_t>>& kinDS::TreeMesher::getMeshingStrandToSeg
 const std::vector<size_t>& TreeMesher::getBoundaryVertexToStrandId() const
 {
   return mesh_builder->getBoundaryVertexToStrandId();
+}
+
+static glm::dvec3 ProfileToModelCoordinates(const std::vector<std::vector<glm::dmat4>>& profile_to_model_transforms,
+  glm::dvec3 point, double t, const std::vector<size_t>& branch_indices, double w = 1.0f)
+{
+  size_t lower_section_index = static_cast<size_t>(std::max(0.0, glm::floor(t)));
+
+  size_t upper_section_index = std::min(profile_to_model_transforms.size() - 1, static_cast<size_t>(glm::ceil(t)));
+
+  // check range
+  auto coord_str = std::to_string(t);
+  if (lower_section_index >= profile_to_model_transforms.size())
+  {
+    std::cout << ("ProfileToModelCoordinates: lower bound of point z-coordinate out of range: " + coord_str).c_str()
+              << std::endl;
+  }
+  if (upper_section_index >= profile_to_model_transforms.size())
+  {
+    std::cout << ("ProfileToModelCoordinates: upper bound of point z-coordinate out of range: " + coord_str).c_str()
+              << std::endl;
+  }
+
+  // only set second coordinate to 0 for points, not for normal vectors
+  // TODO: I actually wanted to get rid of this coordinate swap at some point
+  glm::dvec4 local_pos(point[0], (1.0f - w) * point[2], point[1], w);
+  size_t lower_branch_index = branch_indices[lower_section_index];
+  glm::dvec4 global_pos = profile_to_model_transforms[lower_section_index][lower_branch_index] * local_pos;
+
+  if (upper_section_index != lower_section_index)
+  {
+    size_t upper_branch_index = branch_indices[upper_section_index];
+    glm::dvec4 upper_global_pos = profile_to_model_transforms[upper_section_index][upper_branch_index] * local_pos;
+    float frac = static_cast<float>(t - static_cast<double>(lower_section_index));
+    global_pos = glm::mix(global_pos, upper_global_pos, frac);
+  }
+
+  if (w == 0.0f)
+  {
+    global_pos = glm::normalize(global_pos);
+  }
+
+  return glm::dvec3(global_pos);
+}
+
+void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const glm::dmat4& root_transform)
+{
+  auto& branch_indices = strand_tree.getBranchIndices();
+  auto& vertices = boundary_mesh.getVertices();
+  for (size_t i = 0; i < vertices.size(); i++)
+  {
+    size_t strand_id = getBoundaryVertexToStrandId()[i];
+    auto& v = vertices[i];
+    // v is a relative position in 2D, we need to convert it to 3D
+    v = glm::dvec3(root_transform
+      * glm::dvec4(
+        ProfileToModelCoordinates(strand_tree.getTransformsByHeightAndBranch(), v, v[2], branch_indices[strand_id]),
+        1.0));
+  }
+
+  const auto& triangles = boundary_mesh.getTriangles();
+  for (size_t triangle_vertex_index = 0; triangle_vertex_index < triangles.size(); triangle_vertex_index += 3)
+  {
+    size_t material_id = boundary_mesh.getMaterialIDs()[triangle_vertex_index / 3];
+
+    for (size_t j = 0; j < 3; j++)
+    {
+      auto source_tri_vertex_index = boundary_mesh.getTriangles()[triangle_vertex_index + j];
+
+      size_t strand_id = getBoundaryVertexToStrandId()[source_tri_vertex_index];
+      size_t normal_index = triangle_vertex_index + j;
+      const glm::vec3& old_normal = boundary_mesh.getNormal(normal_index);
+      glm::vec3 transformed_normal = root_transform
+        * glm::vec4(ProfileToModelCoordinates(strand_tree.getNormalTransformsByHeightAndBranch(), old_normal,
+                      boundary_mesh.getVertices()[source_tri_vertex_index][2], branch_indices[strand_id], 0.0f),
+          0.0f);
+      boundary_mesh.replaceNormal(normal_index, transformed_normal);
+    }
+  }
+}
+
+void TreeMesher::transformToWorldSpace(VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform) const
+{
+
+  // transform points
+  for (auto& v : mesh.getVertices())
+  {
+    v = root_transform
+      * glm::dvec4(ProfileToModelCoordinates(
+                     strand_tree.getTransformsByHeightAndBranch(), v, v.z, strand_tree.getBranchIndices(strand_id)),
+        1.0);
+  }
+
+  auto& normal_transforms = strand_tree.getNormalTransformsByHeightAndBranch();
+  // transform normals
+  for (auto& n : mesh.getNormals())
+  {
+    // The root transform is assumed to be orthogonal, so we can apply it directly to the normal vector without using
+    // the inverse transpose
+    n = root_transform
+      * glm::dvec4(
+        ProfileToModelCoordinates(normal_transforms, n, n.z, strand_tree.getBranchIndices(strand_id), 0.0f), 0.0);
+  }
 }

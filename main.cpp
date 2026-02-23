@@ -1,13 +1,16 @@
 #include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
+#include "kinDS/Logger.hpp"
 #include "kinDS/ObjExporter.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"
 #include "kinDS/StrandTree.hpp"
 #include "kinDS/TreeMesher.hpp"
+#include <algorithm>
 #include <iostream>
 #include <map>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <utility> // for std::pair
 #include <vector>
@@ -241,19 +244,19 @@ static void kinetic_delaunay_example()
     strands_by_branch_id.push_back(strands_in_branches);
   }
 
-  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch;
+  std::vector<std::vector<glm::dmat4>> transforms_by_height_and_branch;
   for (size_t h = 0; h < support_points.front().size(); ++h)
   {
-    std::vector<glm::mat4> transforms_at_height;
+    std::vector<glm::dmat4> transforms_at_height;
     size_t branch_count = strands_by_branch_id[h].size();
     for (size_t b = 0; b < branch_count; ++b)
     {
-      transforms_at_height.push_back(glm::mat4(1.0)); // identity
+      transforms_at_height.push_back(glm::dmat4(1.0)); // identity
     }
     transforms_by_height_and_branch.push_back(transforms_at_height);
   }
 
-  /*std::vector<std::vector<glm::mat4>> normal_transforms_by_height_and_branch(transforms_by_height_and_branch.size());
+  /*std::vector<std::vector<glm::dmat4>> normal_transforms_by_height_and_branch(transforms_by_height_and_branch.size());
 
   for (size_t i = 0; i < transforms_by_height_and_branch.size(); i++)
   {
@@ -266,8 +269,8 @@ static void kinetic_delaunay_example()
     }
   }*/
 
-  kinDS::KineticDelaunay kinetic_delaunay(
-    kinDS::StrandTree(support_points, subdivisions, {}, transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
+  kinDS::KineticDelaunay kinetic_delaunay(kinDS::StrandTree(support_points, subdivisions, {},
+                                            transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
     10.0, false);
 
   kinetic_delaunay.init();
@@ -315,44 +318,127 @@ static void kinetic_delaunay_example()
   boundary_mesh.checkForDegenerateTriangles();
 }
 
+// Helper: enable/disable specific log levels (relative to current)
+static bool modify_log_level(const std::string& levels_str, bool enable)
+{
+  using namespace kinDS;
+
+  // Parse comma-separated list
+  std::stringstream ss(levels_str);
+  std::string level;
+  bool found_any = false;
+
+  while (std::getline(ss, level, ','))
+  {
+    // Trim whitespace
+    level.erase(0, level.find_first_not_of(" \t"));
+    level.erase(level.find_last_not_of(" \t") + 1);
+
+    // Convert to lowercase for case-insensitive matching
+    std::string level_lower = level;
+    std::transform(level_lower.begin(), level_lower.end(), level_lower.begin(), ::tolower);
+
+    if (level_lower == "debug")
+    {
+      logger.setLogLevel(LogLevel::Debug, enable);
+      found_any = true;
+    }
+    else if (level_lower == "info")
+    {
+      logger.setLogLevel(LogLevel::Info, enable);
+      found_any = true;
+    }
+    else if (level_lower == "warning" || level_lower == "warn")
+    {
+      logger.setLogLevel(LogLevel::Warning, enable);
+      found_any = true;
+    }
+    else if (level_lower == "error")
+    {
+      logger.setLogLevel(LogLevel::Error, enable);
+      found_any = true;
+    }
+    else if (level_lower == "critical")
+    {
+      logger.setLogLevel(LogLevel::Critical, enable);
+      found_any = true;
+    }
+    else
+    {
+      std::cerr << "Warning: Unknown log level: " << level << std::endl;
+    }
+  }
+
+  return found_any;
+}
+
+// Absolute setter: replace current levels with exactly the ones given
+static void set_log_level(const std::string& levels_str)
+{
+  using namespace kinDS;
+
+  // First disable all known levels
+  logger.setLogLevel(
+    LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical, false);
+
+  bool ok = modify_log_level(levels_str, true);
+
+  if (!ok)
+  {
+    std::cerr << "Warning: No valid log levels specified. Using default (info,warning,error,critical)." << std::endl;
+    // Restore default: everything except Debug
+    logger.setLogLevel(LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical, true);
+  }
+}
+
 static void print_usage(const char* program_name)
 {
-  std::cout << "Usage: " << program_name << " [OPTIONS]\n"
+  std::cout << "Usage: " << program_name << " [OPTIONS] COMMAND\n"
             << "\n"
             << "Options:\n"
+            << "  --log-level <levels>      Set log levels (comma-separated: debug,info,warning,error,critical)\n"
+            << "                            Replaces current levels. Default: info,warning,error,critical (no debug)\n"
+            << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
+            << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
+            << "  --log-file <path>         Write logs to file (default: no log file, console only)\n"
+            << "\n"
+            << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
             << "  --mesh <file>             Load StrandTree from file and run TreeMesher\n"
             << "  --help, -h                Show this help message\n"
             << "\n"
             << "Examples:\n"
             << "  " << program_name << " --demo\n"
-            << "  " << program_name << " --mesh strandtree.txt\n";
+            << "  " << program_name << " --mesh strandtree.txt\n"
+            << "  " << program_name << " --log-file output.log --demo\n"
+            << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
+            << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n";
 }
 
 static void mesh_from_file(const std::string& filename)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
-  
+
   try
   {
     kinDS::StrandTree strand_tree = kinDS::StrandTree::loadFromFile(filename);
-    std::cout << "StrandTree loaded successfully. Height: " << strand_tree.getHeight() 
+    std::cout << "StrandTree loaded successfully. Height: " << strand_tree.getHeight()
               << ", Number of strands: " << strand_tree.getPoints().size() << std::endl;
-    
+
     std::cout << "Running TreeMesher..." << std::endl;
     kinDS::TreeMesher mesher(strand_tree);
     const auto& meshes = mesher.runMeshingAlgorithm();
-    
+
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
-    
+
     // Export the combined mesh
     mesher.exportCombinedMesh();
-    
+
     // Export boundary mesh
     const auto& boundary_mesh = mesher.getBoundaryMesh();
     kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
     std::cout << "Boundary mesh exported to: boundary_mesh.obj" << std::endl;
-    
+
     std::cout << "Meshing complete!" << std::endl;
   }
   catch (const std::exception& e)
@@ -370,33 +456,93 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  std::string command = argv[1];
+  // Parse options (before commands)
+  int arg_idx = 1;
+  while (arg_idx < argc)
+  {
+    std::string arg = argv[arg_idx];
 
-  if (command == "--demo")
-  {
-    kinetic_delaunay_example();
-  }
-  else if (command == "--mesh")
-  {
-    if (argc < 3)
+    if (arg == "--log-level")
     {
-      std::cerr << "Error: --mesh requires a filename argument." << std::endl;
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --log-level requires a value." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      set_log_level(argv[arg_idx + 1]);
+      arg_idx += 2; // Skip both --log-level and its value
+    }
+    else if (arg == "--log-add")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --log-add requires a value." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      if (!modify_log_level(argv[arg_idx + 1], true))
+      {
+        std::cerr << "Warning: --log-add did not recognize any valid log levels." << std::endl;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--log-remove")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --log-remove requires a value." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      if (!modify_log_level(argv[arg_idx + 1], false))
+      {
+        std::cerr << "Warning: --log-remove did not recognize any valid log levels." << std::endl;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--log-file")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --log-file requires a file path." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      kinDS::logger.setLogFile(argv[arg_idx + 1]);
+      arg_idx += 2;
+    }
+    else if (arg == "--help" || arg == "-h")
+    {
+      print_usage(argv[0]);
+      return 0;
+    }
+    else if (arg == "--demo")
+    {
+      kinetic_delaunay_example();
+      return 0;
+    }
+    else if (arg == "--mesh")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --mesh requires a filename argument." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      mesh_from_file(argv[arg_idx + 1]);
+      return 0;
+    }
+    else
+    {
+      std::cerr << "Error: Unknown option or command: " << arg << std::endl;
       print_usage(argv[0]);
       return 1;
     }
-    mesh_from_file(argv[2]);
-  }
-  else if (command == "--help" || command == "-h")
-  {
-    print_usage(argv[0]);
-    return 0;
-  }
-  else
-  {
-    std::cerr << "Error: Unknown command: " << command << std::endl;
-    print_usage(argv[0]);
-    return 1;
   }
 
-  return 0;
+  // If we get here, no command was provided
+  std::cerr << "Error: No command specified." << std::endl;
+  print_usage(argv[0]);
+  return 1;
 }

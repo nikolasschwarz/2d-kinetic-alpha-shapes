@@ -78,12 +78,13 @@ class KineticDelaunay
     size_t half_edge_id; // Half-edge index associated with the event
     double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
     glm::dvec2 position; // Position of the event
+    size_t voronoi_vertex_id; // Voronoi vertex index associated with the event, only used for crossing events
 
     enum Type
     {
-      SWAP,
-      BOUNDARY,
-      RIGHT_ANGLED
+      FLIP,
+      RADIUS,
+      CROSSING
     } type;
 
     Event(double t, size_t he_id, double creation_time, glm::dvec2 position, Type type)
@@ -92,6 +93,20 @@ class KineticDelaunay
       , creation_time(creation_time)
       , position(position)
       , type(type)
+    {
+      if (type == Event::CROSSING)
+      {
+        throw std::invalid_argument("Crossing events must be created with a voronoi vertex id");
+      }
+    }
+
+    Event(double t, size_t he_id, double creation_time, glm::dvec2 position, size_t voronoi_vertex_id, Type type)
+      : time(t)
+      , half_edge_id(he_id)
+      , creation_time(creation_time)
+      , position(position)
+      , type(type)
+      , voronoi_vertex_id(voronoi_vertex_id)
     {
     }
 
@@ -107,32 +122,36 @@ class KineticDelaunay
    public:
     virtual ~EventHandler() = default;
     /**
-     * \brief Handle a SWAP event before it is processed, i.e. before any edges are swapped
+     * \brief Handle a FLIP event before it is processed, i.e. before any edges are swapped
      *
      * @param e The event to handle.
      */
-    virtual void beforeEvent(Event& e) { }
+    virtual void beforeFlipEvent(Event& e) { }
 
     /**
-     * \brief Handle a SWAP event after it is processed, i.e. after edges are swapped
+     * \brief Handle a FLIP event after it is processed, i.e. after edges are swapped
      *
      * @param e The event to handle.
      */
-    virtual void afterEvent(Event& e) { }
+    virtual void afterFlipEvent(Event& e) { }
 
     /**
-     * \brief Handle a BOUNDARY event before it is processed
+     * \brief Handle a RADIUS event before it is processed
      *
      * @param e The event to handle
      */
-    virtual void beforeBoundaryEvent(Event& e) { }
+    virtual void beforeRadiusEvent(Event& e) { }
 
     /**
-     * \brief Handle a BOUNDARY event after it is processed
+     * \brief Handle a RADIUS event after it is processed
      *
      * @param e The event to handle
      */
-    virtual void afterBoundaryEvent(Event& e) { }
+    virtual void afterRadiusEvent(Event& e) { }
+
+    virtual void beforeCrossingEvent(Event& e) { }
+
+    virtual void afterCrossingEvent(Event& e) { }
 
     virtual void betweenSections(size_t index) { }
 
@@ -169,24 +188,90 @@ class KineticDelaunay
   size_t sections_advanced = 0; // Counter for the number of sections advanced
   double cutoff; // Cutoff radius for boundary events
   std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
+
   std::vector<std::vector<size_t>> branches; // track which vertices/splines belong to which branch
   std::vector<glm::dvec2> dummy_boundary;
   bool add_dummy_boundary;
   size_t prev_component_count = 1;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
+  bool on_the_fly_boundary = false;
 
-  void computeRightAngleEvents(double t, size_t he_id);
+  // crossing-related data
+  struct CrossingData
+  {
+   private:
+    std::vector<size_t> voronoi_vertex_to_containing_tri_id;
+    std::vector<std::list<size_t>> tri_id_to_voronoi_vertices;
+    std::vector<std::list<size_t>::iterator> voronoi_vertex_to_iterator;
 
-  void computeBoundaryEvents(double t, size_t he_id);
+   public:
+    std::vector<double> last_crossing;
 
-  void computeSwapEvents(double t, size_t quad_id);
+    void init(size_t face_count)
+    {
+      voronoi_vertex_to_containing_tri_id.clear();
+      voronoi_vertex_to_containing_tri_id.resize(face_count, -1);
+
+      tri_id_to_voronoi_vertices.clear();
+      tri_id_to_voronoi_vertices.resize(face_count);
+
+      voronoi_vertex_to_iterator.clear();
+      voronoi_vertex_to_iterator.resize(face_count);
+    }
+
+    void setVoronoiVertexTriId(size_t voronoi_vertex_id, size_t tri_id)
+    {
+      voronoi_vertex_to_containing_tri_id[voronoi_vertex_id] = tri_id;
+      voronoi_vertex_to_iterator[voronoi_vertex_id]
+        = tri_id_to_voronoi_vertices[tri_id].emplace(tri_id_to_voronoi_vertices[tri_id].end(), voronoi_vertex_id);
+    }
+
+    void moveVertex(size_t voronoi_vertex_id, size_t target_tri_id)
+    {
+      std::list<size_t>::iterator v_it = voronoi_vertex_to_iterator[voronoi_vertex_id];
+      size_t current_tri_id = voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
+
+      if (current_tri_id == target_tri_id)
+      {
+        return;
+      }
+
+      tri_id_to_voronoi_vertices[current_tri_id].erase(v_it);
+
+      setVoronoiVertexTriId(voronoi_vertex_id, target_tri_id);
+    }
+
+    size_t getContainingTriId(size_t voronoi_vertex_id) const
+    {
+      return voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
+    }
+
+    // Note: we copy this into a vector because we need this for reassigning Voronoi vertices in a quadrilateral and we
+    // will be modifying the underlying list while iterating
+    std::vector<size_t> getVoronoiVerticesInTri(size_t tri_id) const
+    {
+      std::vector<size_t> result(tri_id_to_voronoi_vertices[tri_id].begin(), tri_id_to_voronoi_vertices[tri_id].end());
+      return result;
+    }
+
+  } crossing_data;
+
+  void computeCrossingEvents(double t, size_t voronoi_vertex_id);
+
+  void reassignVoronoiVerticesInQuadrilateral(size_t quad_index, double t);
+
+  void computeRadiusEvents(double t, size_t he_id);
+
+  void computeFlipEvents(double t, size_t quad_id);
 
   void precomputeStep(double t);
 
-  void handleSwapEvent(EventHandler& event_handler, Event& event);
+  void handleFlipEvent(EventHandler& event_handler, Event& event);
 
-  void handleBoundaryEvent(EventHandler& event_handler, Event& event);
+  void handleRadiusEvent(EventHandler& event_handler, Event& event);
+
+  void handleCrossingEvent(EventHandler& event_handler, Event& event);
 
   void handleEvents(EventHandler& event_handler);
 

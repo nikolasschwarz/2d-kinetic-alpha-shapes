@@ -958,7 +958,7 @@ void SegmentBuilder::betweenSections(size_t index)
   }
 }
 
-void SegmentBuilder::beforeEvent(KineticDelaunay::Event& e)
+void SegmentBuilder::beforeFlipEvent(KineticDelaunay::Event& e)
 {
   auto& graph = kin_del.getGraph();
   // Check if we need to insert a subdivision before handling this event
@@ -1039,7 +1039,7 @@ void SegmentBuilder::beforeEvent(KineticDelaunay::Event& e)
   }
 }
 
-void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
+void SegmentBuilder::afterFlipEvent(KineticDelaunay::Event& e)
 {
   updateBoundaries(e.time);
   auto& graph = kin_del.getGraph();
@@ -1211,7 +1211,7 @@ void SegmentBuilder::afterEvent(KineticDelaunay::Event& e)
   kin_del.component_data.component_last_updated[component_id] = e.time;
 }
 
-void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
+void kinDS::SegmentBuilder::beforeRadiusEvent(KineticDelaunay::Event& e)
 {
   // Build the boundary mesh at the event time
   size_t face_id = kin_del.getGraph().getHalfEdges()[e.half_edge_id].face;
@@ -1519,7 +1519,7 @@ void kinDS::SegmentBuilder::beforeBoundaryEvent(KineticDelaunay::Event& e)
   }
 }
 
-void kinDS::SegmentBuilder::afterBoundaryEvent(KineticDelaunay::Event& e)
+void kinDS::SegmentBuilder::afterRadiusEvent(KineticDelaunay::Event& e)
 {
   // update the component data structure
   auto& graph = kin_del.getGraph();
@@ -1540,6 +1540,10 @@ void kinDS::SegmentBuilder::afterBoundaryEvent(KineticDelaunay::Event& e)
     kin_del.component_data.component_last_updated[component_id] = e.time;
   }
 }
+
+void SegmentBuilder::beforeCrossingEvent(KineticDelaunay::Event& e) { }
+
+void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e) { }
 
 void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
 {

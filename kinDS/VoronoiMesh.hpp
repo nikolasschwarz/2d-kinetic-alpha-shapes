@@ -69,10 +69,12 @@ class VoronoiMesh
   // methods to manipulate the mesh, such as adding vertices, triangles, normals, and UVs
   size_t addVertex(double x, double y, double z);
   size_t addVertex(const glm::dvec3& p);
+  void replaceVertex(size_t index, const glm::dvec3& new_position);
   size_t addTriangle(size_t v1, size_t v2, size_t v3, int material_id = -1);
   size_t addTriangle(size_t v1, size_t v2, size_t v3, size_t uv1, size_t uv2, size_t uv3, int material_id = -1);
   size_t addNormal(double nx, double ny, double nz);
   size_t addNormal(const glm::dvec3& n);
+  void replaceNormal(size_t index, const glm::dvec3& new_normal);
   size_t addUV(double u, double v, double w);
   size_t addUV(glm::dvec3 uv);
   void startNewGroup();
