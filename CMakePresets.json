@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 5,
   "configurePresets": [
     {
       "name": "vcpkg-x64",
@@ -16,7 +16,13 @@
     {
       "name": "vcpkg-x64-debug",
       "configurePreset": "vcpkg-x64",
-      "configuration": "Debug"
+      "configuration": "Debug",
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "debuggerCommandArguments": "--demo",
+          "debuggerWorkingDirectory": "${sourceDir}"
+        }
+      }
     },
     {
       "name": "vcpkg-x64-release",

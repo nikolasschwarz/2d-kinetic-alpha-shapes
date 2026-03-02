@@ -582,7 +582,7 @@ void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool
       if (kin_del.isOnComponentBoundaryOutside(he_ids[i]))
       {
         completeBoundaryMeshSection(he_ids[i], index_offset + vertices[i], index_offset + vertices[(i + 1) % 3]);
-        KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_ids[i]);
+        //KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_ids[i]);
         boundary_mesh_last_left_and_right_vertex[he_ids[i]]
           = std::make_pair(index_offset + vertices[i], index_offset + vertices[(i + 1) % 3]);
       }
@@ -660,7 +660,7 @@ void kinDS::SegmentBuilder::advanceBoundaryMesh(
     auto& left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
     completeBoundaryMeshSection(he_id, left_vertex_index, right_vertex_index);
 
-    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_id);
+    //KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_id);
     left_and_right.first = left_vertex_index;
     left_and_right.second = right_vertex_index;
   }
@@ -1026,15 +1026,15 @@ void SegmentBuilder::beforeFlipEvent(KineticDelaunay::Event& e)
     size_t he1_id = graph.getHalfEdges()[inner_he_id].next;
     size_t he2_id = graph.getHalfEdges()[he1_id].next;
 
-    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he1_id);
+    //KINDS_DEBUG("Assigning boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id]
       = std::make_pair(boundary_last_vertices.first, new_boundary_vertex_index);
-    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he2_id);
+    //KINDS_DEBUG("Assigning boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id]
       = std::make_pair(new_boundary_vertex_index, boundary_last_vertices.second);
 
     // reset last left and right vertices of the half-edge because it is not on the boundary anymore
-    KINDS_DEBUG("Resetting boundary last vertices for he_id " << outer_he_id);
+    //KINDS_DEBUG("Resetting boundary last vertices for he_id " << outer_he_id);
     boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(-1, -1);
   }
 }
@@ -1191,14 +1191,14 @@ void SegmentBuilder::afterFlipEvent(KineticDelaunay::Event& e)
     // mesh
     half_edge_to_boundary_vertex_index[outer_he_id] = old_boundary_vertex_index;
 
-    KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
+    //KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
     boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(
       boundary_mesh_last_left_and_right_vertex[he1_id].first, boundary_mesh_last_left_and_right_vertex[he2_id].second);
 
     // reset last left and right vertices of the half-edges because it is not on the boundary anymore
-    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he1_id);
+    //KINDS_DEBUG("Resetting boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id] = std::make_pair(-1, -1);
-    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he2_id);
+    //KINDS_DEBUG("Resetting boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id] = std::make_pair(-1, -1);
   }
 
@@ -1233,7 +1233,7 @@ void kinDS::SegmentBuilder::beforeRadiusEvent(KineticDelaunay::Event& e)
     }
   }
 
-  KINDS_DEBUG("Boundary case " << boundary_edge_count);
+  //KINDS_DEBUG("Boundary case " << boundary_edge_count);
   switch (boundary_edge_count)
   {
   case 0:
@@ -1264,7 +1264,7 @@ void kinDS::SegmentBuilder::beforeRadiusEvent(KineticDelaunay::Event& e)
     {
       for (size_t i = 0; i < 3; ++i)
       {
-        KINDS_DEBUG("Assigning boundary last vertices for he_id " << face_half_edges[i]);
+        //KINDS_DEBUG("Assigning boundary last vertices for he_id " << face_half_edges[i]);
         boundary_mesh_last_left_and_right_vertex[face_half_edges[i]]
           = std::make_pair(new_vertex_index, new_vertex_index);
       }
@@ -1274,7 +1274,7 @@ void kinDS::SegmentBuilder::beforeRadiusEvent(KineticDelaunay::Event& e)
       for (size_t i = 0; i < 3; ++i)
       {
         size_t outer_he_id = face_half_edges[i] ^ 1;
-        KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
+        //KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
         boundary_mesh_last_left_and_right_vertex[outer_he_id] = std::make_pair(new_vertex_index, new_vertex_index);
       }
     }
@@ -1362,16 +1362,16 @@ void kinDS::SegmentBuilder::beforeRadiusEvent(KineticDelaunay::Event& e)
       he2_id = he2_id ^ 1;
     }
 
-    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he1_id);
+    //KINDS_DEBUG("Assigning boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id]
       = std::make_pair(boundary_last_vertices.first, new_boundary_vertex_index);
 
-    KINDS_DEBUG("Assigning boundary last vertices for he_id " << he2_id);
+    //KINDS_DEBUG("Assigning boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id]
       = std::make_pair(new_boundary_vertex_index, boundary_last_vertices.second);
 
     // reset last left and right vertices of the half-edge because it is not on the boundary anymore
-    KINDS_DEBUG("Resetting boundary last vertices for he_id " << boundary_he_id);
+    //KINDS_DEBUG("Resetting boundary last vertices for he_id " << boundary_he_id);
     boundary_mesh_last_left_and_right_vertex[boundary_he_id] = std::make_pair(-1, -1);
 
     break;
@@ -1468,23 +1468,23 @@ void kinDS::SegmentBuilder::beforeRadiusEvent(KineticDelaunay::Event& e)
 
     if (!is_inside)
     {
-      KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
+      //KINDS_DEBUG("Assigning boundary last vertices for he_id " << outer_he_id);
       boundary_mesh_last_left_and_right_vertex[outer_he_id]
         = std::make_pair(boundary_mesh_last_left_and_right_vertex[he1_id].first,
           boundary_mesh_last_left_and_right_vertex[he2_id].second);
     }
     else
     {
-      KINDS_DEBUG("Assigning boundary last vertices for he_id " << inner_he_id);
+      //KINDS_DEBUG("Assigning boundary last vertices for he_id " << inner_he_id);
       boundary_mesh_last_left_and_right_vertex[inner_he_id]
         = std::make_pair(boundary_mesh_last_left_and_right_vertex[he2_id].second,
           boundary_mesh_last_left_and_right_vertex[he1_id].first);
     }
 
     // reset last left and right vertices of the half-edges because it is not on the boundary anymore
-    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he1_id);
+    //KINDS_DEBUG("Resetting boundary last vertices for he_id " << he1_id);
     boundary_mesh_last_left_and_right_vertex[he1_id] = std::make_pair(-1, -1);
-    KINDS_DEBUG("Resetting boundary last vertices for he_id " << he2_id);
+    //KINDS_DEBUG("Resetting boundary last vertices for he_id " << he2_id);
     boundary_mesh_last_left_and_right_vertex[he2_id] = std::make_pair(-1, -1);
 
     break;

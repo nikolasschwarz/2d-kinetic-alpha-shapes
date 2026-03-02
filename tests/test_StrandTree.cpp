@@ -26,9 +26,9 @@ TEST_CASE("StrandTree serialization", "[StrandTree]")
   };
 
   // Create identity matrices for transforms
-  std::vector<std::vector<glm::mat4>> transforms_by_height_and_branch = {
-    { glm::mat4(1.0) }, // height 0, branch 0
-    { glm::mat4(1.0) }  // height 1, branch 0
+  std::vector<std::vector<glm::dmat4>> transforms_by_height_and_branch = {
+    { glm::dmat4(1.0) }, // height 0, branch 0
+    { glm::dmat4(1.0) }  // height 1, branch 0
   };
 
   std::vector<std::vector<size_t>> branch_indices = {
@@ -114,7 +114,7 @@ TEST_CASE("StrandTree empty tree", "[StrandTree]")
   std::vector<std::vector<glm::dvec2>> empty_points;
   std::vector<std::vector<double>> empty_subdivs;
   std::vector<std::vector<int>> empty_physics;
-  std::vector<std::vector<glm::mat4>> empty_transforms;
+  std::vector<std::vector<glm::dmat4>> empty_transforms;
   std::vector<std::vector<size_t>> empty_branches;
   std::vector<std::vector<std::vector<size_t>>> empty_strands_by_branch;
 

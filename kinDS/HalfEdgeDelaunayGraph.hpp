@@ -99,12 +99,17 @@ class HalfEdgeDelaunayGraph
   size_t neighborEdgeId(size_t he_id) const;
   size_t nextOnConvexBoundaryId(size_t he_id) const;
 
+  size_t prevOnConvexBoundaryId(size_t he_id) const;
+
   std::vector<size_t> neighbors(size_t v);
   std::vector<size_t> inducedNeighbors(size_t v, const std::vector<bool>& face_inside) const;
 
   static size_t twin(size_t he_id);
 
+  size_t prev(size_t he_id) const;
+
   std::array<size_t, 3> getTriangleVertexIndices(size_t face_id) const;
+  std::array<size_t, 3> getTriangleHalfEdgeIndices(size_t start_he_id) const;
 
   // getters
   const std::vector<HalfEdge>& getHalfEdges() const;

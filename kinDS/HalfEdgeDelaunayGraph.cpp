@@ -593,7 +593,17 @@ size_t kinDS::HalfEdgeDelaunayGraph::nextOnConvexBoundaryId(size_t he_id) const
   return next_he_id;
 }
 
+size_t kinDS::HalfEdgeDelaunayGraph::prevOnConvexBoundaryId(size_t he_id) const
+{
+  size_t prev_he_id = prev(he_id);
+  prev_he_id = twin(prev_he_id);
+  prev_he_id = prev(prev_he_id);
+  return prev_he_id;
+}
+
 size_t HalfEdgeDelaunayGraph::twin(size_t he_id) { return he_id ^ 1; }
+
+size_t HalfEdgeDelaunayGraph::prev(size_t he_id) const { return twin(half_edges[twin(he_id)].next); }
 
 std::array<size_t, 3> kinDS::HalfEdgeDelaunayGraph::getTriangleVertexIndices(size_t face_id) const
 {
@@ -603,6 +613,18 @@ std::array<size_t, 3> kinDS::HalfEdgeDelaunayGraph::getTriangleVertexIndices(siz
   {
     size_t he_id = triangles[face_id].half_edges[i];
     result[i] = half_edges[he_id].origin;
+  }
+  return result;
+}
+
+std::array<size_t, 3> kinDS::HalfEdgeDelaunayGraph::getTriangleHalfEdgeIndices(size_t start_he_id) const
+{
+  std::array<size_t, 3> result;
+  size_t he_id = start_he_id;
+  for (size_t i = 0; i < 3; i++)
+  {
+    result[i] = he_id;
+    he_id = half_edges[he_id].next;
   }
   return result;
 }

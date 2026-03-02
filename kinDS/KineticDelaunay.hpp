@@ -195,7 +195,7 @@ class KineticDelaunay
   size_t prev_component_count = 1;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
-  bool on_the_fly_boundary = false;
+  bool on_the_fly_boundary = true;
 
   // crossing-related data
   struct CrossingData
@@ -218,6 +218,9 @@ class KineticDelaunay
 
       voronoi_vertex_to_iterator.clear();
       voronoi_vertex_to_iterator.resize(face_count);
+
+      last_crossing.clear();
+      last_crossing.resize(face_count, 0.0);
     }
 
     void setVoronoiVertexTriId(size_t voronoi_vertex_id, size_t tri_id)
@@ -256,6 +259,8 @@ class KineticDelaunay
     }
 
   } crossing_data;
+
+  glm::dvec3 computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t) const;
 
   void computeCrossingEvents(double t, size_t voronoi_vertex_id);
 

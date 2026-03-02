@@ -372,6 +372,42 @@ static bool modify_log_level(const std::string& levels_str, bool enable)
   return found_any;
 }
 
+// Helper: describe currently enabled log levels as a comma-separated string
+static std::string get_enabled_log_levels()
+{
+  using namespace kinDS;
+  LogLevel mask = logger.getLogLevel();
+  std::vector<std::string> names;
+
+  auto add_if = [&](LogLevel lvl, const char* name)
+  {
+    if (static_cast<unsigned>(mask & lvl))
+    {
+      names.emplace_back(name);
+    }
+  };
+
+  add_if(LogLevel::Debug, "debug");
+  add_if(LogLevel::Info, "info");
+  add_if(LogLevel::Warning, "warning");
+  add_if(LogLevel::Error, "error");
+  add_if(LogLevel::Critical, "critical");
+
+  if (names.empty())
+  {
+    return "none";
+  }
+
+  std::string result;
+  for (size_t i = 0; i < names.size(); ++i)
+  {
+    if (i > 0)
+      result += ",";
+    result += names[i];
+  }
+  return result;
+}
+
 // Absolute setter: replace current levels with exactly the ones given
 static void set_log_level(const std::string& levels_str)
 {
@@ -389,6 +425,8 @@ static void set_log_level(const std::string& levels_str)
     // Restore default: everything except Debug
     logger.setLogLevel(LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical, true);
   }
+
+  std::cout << "Set log levels to: " << get_enabled_log_levels() << std::endl;
 }
 
 static void print_usage(const char* program_name)
@@ -450,13 +488,24 @@ static void mesh_from_file(const std::string& filename)
 
 int main(int argc, char* argv[])
 {
+  // Sanity check: print all command line arguments
+  std::cout << "Arguments (" << argc << "):";
+  for (int i = 0; i < argc; ++i)
+  {
+    std::cout << " [" << i << "]=\"" << argv[i] << "\"";
+  }
+  std::cout << std::endl;
+
   if (argc < 2)
   {
     print_usage(argv[0]);
     return 1;
   }
 
-  // Parse options (before commands)
+  // First pass: parse all options, remember the command (order-independent)
+  std::string command;      // "demo", "mesh", "help"
+  std::string mesh_file;    // for --mesh
+
   int arg_idx = 1;
   while (arg_idx < argc)
   {
@@ -485,6 +534,11 @@ int main(int argc, char* argv[])
       {
         std::cerr << "Warning: --log-add did not recognize any valid log levels." << std::endl;
       }
+      else
+      {
+        std::cout << "Added log levels: " << argv[arg_idx + 1]
+                  << " -> now enabled: " << get_enabled_log_levels() << std::endl;
+      }
       arg_idx += 2;
     }
     else if (arg == "--log-remove")
@@ -499,6 +553,11 @@ int main(int argc, char* argv[])
       {
         std::cerr << "Warning: --log-remove did not recognize any valid log levels." << std::endl;
       }
+      else
+      {
+        std::cout << "Removed log levels: " << argv[arg_idx + 1]
+                  << " -> now enabled: " << get_enabled_log_levels() << std::endl;
+      }
       arg_idx += 2;
     }
     else if (arg == "--log-file")
@@ -510,17 +569,30 @@ int main(int argc, char* argv[])
         return 1;
       }
       kinDS::logger.setLogFile(argv[arg_idx + 1]);
+      std::cout << "Log file set to: " << argv[arg_idx + 1] << std::endl;
       arg_idx += 2;
     }
     else if (arg == "--help" || arg == "-h")
     {
-      print_usage(argv[0]);
-      return 0;
+      if (!command.empty() && command != "help")
+      {
+        std::cerr << "Error: Multiple commands specified (existing: " << command << ", new: help)." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      command = "help";
+      ++arg_idx;
     }
     else if (arg == "--demo")
     {
-      kinetic_delaunay_example();
-      return 0;
+      if (!command.empty() && command != "demo")
+      {
+        std::cerr << "Error: Multiple commands specified (existing: " << command << ", new: demo)." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      command = "demo";
+      ++arg_idx;
     }
     else if (arg == "--mesh")
     {
@@ -530,8 +602,15 @@ int main(int argc, char* argv[])
         print_usage(argv[0]);
         return 1;
       }
-      mesh_from_file(argv[arg_idx + 1]);
-      return 0;
+      if (!command.empty() && command != "mesh")
+      {
+        std::cerr << "Error: Multiple commands specified (existing: " << command << ", new: mesh)." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      command = "mesh";
+      mesh_file = argv[arg_idx + 1];
+      arg_idx += 2;
     }
     else
     {
@@ -541,8 +620,33 @@ int main(int argc, char* argv[])
     }
   }
 
-  // If we get here, no command was provided
-  std::cerr << "Error: No command specified." << std::endl;
-  print_usage(argv[0]);
+  if (command.empty())
+  {
+    std::cerr << "Error: No command specified." << std::endl;
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  // Second pass: execute the chosen command (options already applied)
+  if (command == "help")
+  {
+    print_usage(argv[0]);
+    return 0;
+  }
+  else if (command == "demo")
+  {
+    std::cout << "Running demo (kinetic_delaunay_example)..." << std::endl;
+    kinetic_delaunay_example();
+    return 0;
+  }
+  else if (command == "mesh")
+  {
+    std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
+    mesh_from_file(mesh_file);
+    return 0;
+  }
+
+  // Should not reach here
+  std::cerr << "Error: Unknown command state: " << command << std::endl;
   return 1;
 }
