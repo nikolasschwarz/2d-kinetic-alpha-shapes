@@ -1,4 +1,5 @@
 #include "kinDS/StrandTree.hpp"
+#include "kinDS/Logger.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -7,8 +8,15 @@
 
 using namespace kinDS;
 
+static void enable_all_log_levels_for_test()
+{
+  logger.setLogLevelMask(
+    LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical);
+}
+
 TEST_CASE("StrandTree serialization", "[StrandTree]")
 {
+  enable_all_log_levels_for_test();
   // Create a simple test StrandTree
   std::vector<std::vector<glm::dvec2>> support_points = {
     { { 0.0, 0.0 }, { 1.0, 1.0 }, { 2.0, 0.0 } }, // strand 0
@@ -110,6 +118,7 @@ TEST_CASE("StrandTree serialization", "[StrandTree]")
 
 TEST_CASE("StrandTree empty tree", "[StrandTree]")
 {
+  enable_all_log_levels_for_test();
   // Test with empty vectors
   std::vector<std::vector<glm::dvec2>> empty_points;
   std::vector<std::vector<double>> empty_subdivs;

@@ -43,6 +43,7 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
 
   KineticDelaunay& kin_del;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
+  bool visual_debug = true; // Always-on visual debug for now (SVG exports)
   std::vector<std::pair<size_t, double>> subdivisions;
   size_t subdivision_index = 0;
 

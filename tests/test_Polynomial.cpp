@@ -1,4 +1,5 @@
 #include "kinDS/Polynomial.hpp"
+#include "kinDS/Logger.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -6,8 +7,15 @@
 using namespace kinDS;
 using Catch::Approx;
 
+static void enable_all_log_levels_for_test()
+{
+  logger.setLogLevelMask(
+    LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical);
+}
+
 TEST_CASE("Polynomial creation from Eigen vectors", "[Polynomial]")
 {
+  enable_all_log_levels_for_test();
   Eigen::VectorXd a(3);
   a << 1, 2, 3; // 1 + 2x + 3x^2
   Eigen::VectorXd b(2);
@@ -27,6 +35,7 @@ TEST_CASE("Polynomial creation from Eigen vectors", "[Polynomial]")
 
 TEST_CASE("Polynomial addition", "[Polynomial]")
 {
+  enable_all_log_levels_for_test();
   Eigen::VectorXd a(3);
   a << 1, 2, 3; // 1 + 2x + 3x^2
   Eigen::VectorXd b(2);
@@ -44,6 +53,7 @@ TEST_CASE("Polynomial addition", "[Polynomial]")
 
 TEST_CASE("Polynomial multiplication", "[Polynomial]")
 {
+  enable_all_log_levels_for_test();
   Eigen::VectorXd a(3);
   a << 1, 2, 3; // 1 + 2x + 3x^2
   Eigen::VectorXd b(2);
@@ -63,6 +73,7 @@ TEST_CASE("Polynomial multiplication", "[Polynomial]")
 
 TEST_CASE("Polynomial evaluation", "[Polynomial]")
 {
+  enable_all_log_levels_for_test();
   Eigen::VectorXd a(3);
   a << 1, 2, 3; // 1 + 2x + 3x^2
   Eigen::VectorXd b(2);

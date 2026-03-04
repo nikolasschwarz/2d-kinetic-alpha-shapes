@@ -47,6 +47,84 @@ class HalfEdgeDelaunayGraphToSVG
     }
   };
 
+  // Check if a point lies within the (optionally slightly expanded) bounding box.
+  static bool isWithinBoundingBox(const glm::dvec2& p, const BoundingBox& bb, double tolerance = 0.0)
+  {
+    const double min_x = bb.min_x - tolerance;
+    const double max_x = bb.max_x + tolerance;
+    const double min_y = bb.min_y - tolerance;
+    const double max_y = bb.max_y + tolerance;
+    return (p.x >= min_x && p.x <= max_x && p.y >= min_y && p.y <= max_y);
+  }
+
+  // Clip a line segment to the bounding box using Liang–Barsky. Returns false if it lies completely outside.
+  static bool clipSegmentToBoundingBox(glm::dvec2& p0, glm::dvec2& p1, const BoundingBox& bb, double tolerance = 0.0)
+  {
+    double x_min = bb.min_x - tolerance;
+    double x_max = bb.max_x + tolerance;
+    double y_min = bb.min_y - tolerance;
+    double y_max = bb.max_y + tolerance;
+
+    double dx = p1.x - p0.x;
+    double dy = p1.y - p0.y;
+
+    double u1 = 0.0;
+    double u2 = 1.0;
+
+    auto clip = [&](double p, double q) -> bool
+    {
+      if (p == 0.0)
+      {
+        if (q < 0.0)
+        {
+          return false;
+        }
+        return true;
+      }
+      double r = q / p;
+      if (p < 0.0)
+      {
+        if (r > u2)
+        {
+          return false;
+        }
+        if (r > u1)
+        {
+          u1 = r;
+        }
+      }
+      else if (p > 0.0)
+      {
+        if (r < u1)
+        {
+          return false;
+        }
+        if (r < u2)
+        {
+          u2 = r;
+        }
+      }
+      return true;
+    };
+
+    if (!clip(-dx, p0.x - x_min))
+      return false;
+    if (!clip(dx, x_max - p0.x))
+      return false;
+    if (!clip(-dy, p0.y - y_min))
+      return false;
+    if (!clip(dy, y_max - p0.y))
+      return false;
+    if (u2 < u1)
+      return false;
+
+    glm::dvec2 new_p0 = p0 + u1 * glm::dvec2(dx, dy);
+    glm::dvec2 new_p1 = p0 + u2 * glm::dvec2(dx, dy);
+    p0 = new_p0;
+    p1 = new_p1;
+    return true;
+  }
+
   static BoundingBox computeBoundingBox(const std::vector<glm::dvec2>& points, double margin = 0.0)
   {
     double min_x = std::numeric_limits<double>::max();
@@ -88,21 +166,44 @@ class HalfEdgeDelaunayGraphToSVG
   /**
    * @brief Converts the half-edge Delaunay graph to an SVG representation.
    *
+   * @param points Vertex positions.
    * @param graph The half-edge Delaunay graph to convert.
    * @param filename The name of the output SVG file.
+   * @param margin Margin around the bounding box (from points only).
+   * @param face_inside Optional: per-face inside flag for coloring.
+   * @param draw_voronoi_edges If true, draw Voronoi edges in red (bbox unchanged; edges may extend beyond it).
+   * @param voronoi_vertex_to_tri Optional: mapping from Voronoi vertex id (index into circumcenters)
+   *        to containing triangle id. If provided, Voronoi vertices are labeled as "id/tri".
+   *        If not provided, only "id" is used (no slash).
    */
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
-    const std::string& filename, double margin = 0.0, std::vector<bool>* face_inside = nullptr)
+    const std::string& filename, double margin = 0.0, std::vector<bool>* face_inside = nullptr,
+    bool draw_voronoi_edges = false, const std::vector<size_t>* voronoi_vertex_to_tri = nullptr)
   {
     BoundingBox bb = computeBoundingBox(points, margin);
     svg::Document doc = setupDocument(points, filename, bb);
+
+    struct Label
+    {
+      double x;
+      double y;
+      std::string text;
+      svg::Color color;
+      double font_size;
+      Label(double x_, double y_, std::string text_, const svg::Color& color_, double font_size_)
+        : x(x_), y(y_), text(std::move(text_)), color(color_), font_size(font_size_)
+      {
+      }
+    };
+    std::vector<Label> labels;
 
     // Draw faces
     for (size_t face_id = 0; face_id < graph.getFaces().size(); face_id++)
     {
       auto face_vertex_indices = graph.getTriangleVertexIndices(face_id);
 
-      // If any vertex is infinite, skip the face
+      // If any vertex is infinite, we still want to label the (infinite) face,
+      // but we do not draw a filled triangle.
       if (face_vertex_indices[0] == -1 || face_vertex_indices[1] == -1 || face_vertex_indices[2] == -1)
       {
         // assert that face is outside
@@ -110,6 +211,50 @@ class HalfEdgeDelaunayGraphToSVG
         {
           assert(!(*face_inside)[face_id] && "Face is inside despite being infinite!");
         }
+
+        // Find the two finite vertices (the edge opposite the infinite vertex).
+        int finite_indices[2];
+        int count = 0;
+        for (int k = 0; k < 3; ++k)
+        {
+          if (face_vertex_indices[k] != -1)
+          {
+            finite_indices[count++] = face_vertex_indices[k];
+          }
+        }
+        if (count == 2)
+        {
+
+          if(face_vertex_indices[1] == -1)
+          {
+            std::swap(finite_indices[0], finite_indices[1]);
+          }
+          glm::dvec2 a = points[finite_indices[0]];
+          glm::dvec2 b = points[finite_indices[1]];
+          glm::dvec2 midpoint = 0.5 * (a + b);
+
+          // Offset the label along a vector orthogonal to the edge (consistent side).
+          glm::dvec2 edge_dir = b - a;
+          double len2 = glm::dot(edge_dir, edge_dir);
+          if (len2 == 0.0)
+          {
+            edge_dir = glm::dvec2(1.0, 0.0);
+          }
+          else
+          {
+            edge_dir /= std::sqrt(len2);
+          }
+          glm::dvec2 edge_normal(edge_dir.y, -edge_dir.x);
+          glm::dvec2 label_pos = midpoint + 0.03 * edge_normal;
+
+          labels.push_back(Label(
+            label_pos.x,
+            label_pos.y,
+            std::to_string(face_id),
+            svg::Color(svg::Color::Black),
+            0.01));
+        }
+
         continue;
       }
 
@@ -131,8 +276,7 @@ class HalfEdgeDelaunayGraphToSVG
 
       // Draw face id at incenter
       glm::dvec2 incenter = triangleIncenter(face_vertices[0], face_vertices[1], face_vertices[2]);
-      doc << svg::Text(
-        svg::Point(incenter[0], incenter[1]), std::to_string(face_id), svg::Fill(svg::Color::White), svg::Font(0.01));
+      labels.push_back(Label(incenter[0], incenter[1], std::to_string(face_id), svg::Color(svg::Color::White), 0.01));
     }
 
     // Draw edges
@@ -144,21 +288,27 @@ class HalfEdgeDelaunayGraphToSVG
       {
         glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
         glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
-        doc << svg::Line(
-          svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
+        if (clipSegmentToBoundingBox(start, end, bb))
+        {
+          doc << svg::Line(
+            svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
+        }
       }
     }
 
-    // Draw vertices
+    // Draw vertices (filter out extreme outliers)
     for (size_t v = 0; v < points.size(); v++)
     {
-      auto& point = points[v];
+      glm::dvec2 point = points[v];
+      if (!isWithinBoundingBox(point, bb))
+      {
+        continue;
+      }
       doc << svg::Circle(
         svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
 
       // Draw vertex id
-      doc << svg::Text(svg::Point(point[0] - 0.005, point[1] - 0.005), std::to_string(v), svg::Fill(svg::Color::White),
-        svg::Font(0.01));
+      labels.push_back(Label(point[0] - 0.005, point[1] - 0.005, std::to_string(v), svg::Color(svg::Color::White), 0.01));
     }
 
     for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
@@ -176,14 +326,107 @@ class HalfEdgeDelaunayGraphToSVG
           glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
           glm::dvec2 midpoint = (start + end) / 2.0;
           glm::dvec2 edge_dir = glm::normalize(end - start);
-          glm::dvec2 edge_normal(-edge_dir[1], edge_dir[0]); // Rotate 90 degrees to get normal
+          glm::dvec2 edge_normal(edge_dir[1], -edge_dir[0]); // Rotate 90 degrees to get normal
           glm::dvec2 label_pos
             = midpoint + std::pow(-1, i) * 0.01 * edge_normal - glm::dvec2(0.005, 0.005); // Offset by 0.02 units
-          doc << svg::Text(svg::Point(label_pos[0], label_pos[1]), std::to_string(he_id + i),
-            svg::Fill(svg::Color::Yellow), svg::Font(0.01));
+          labels.push_back(
+            Label(label_pos[0], label_pos[1], std::to_string(he_id + i), svg::Color(svg::Color::Yellow), 0.01));
         }
       }
     }
+
+    if (draw_voronoi_edges)
+    {
+      auto circumcenters = graph.computeCircumcenters(points);
+      svg::Color purple(128, 0, 128);
+      for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+      {
+        const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
+        if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1)
+        {
+          auto start = circumcenters[graph.getHalfEdges()[he_id].face];
+          auto end = circumcenters[graph.getHalfEdges()[he_id ^ 1].face];
+          glm::dvec2 p0, p1;
+          if (!start.second && !end.second)
+          {
+            p0 = start.first;
+            p1 = end.first;
+          }
+          else if (start.second && !end.second)
+          {
+            // start.first is a direction, end.first is a finite point
+            p1 = end.first;
+            p0 = end.first + 1000.0 * start.first;
+          }
+          else if (!start.second && end.second)
+          {
+            // start.first is a finite point, end.first is a direction
+            p0 = start.first;
+            p1 = start.first + 1000.0 * end.first;
+          }
+          else
+          {
+            KINDS_WARNING("Both circumcenters are infinite, skipping edge.");
+            continue;
+          }
+
+          if (clipSegmentToBoundingBox(p0, p1, bb))
+          {
+            doc << svg::Line(
+              svg::Point(p0.x, p0.y), svg::Point(p1.x, p1.y), svg::Stroke(0.005, svg::Color::Red));
+          }
+        }
+      }
+
+      constexpr size_t invalid_id = static_cast<size_t>(-1);
+      for (size_t i = 0; i < circumcenters.size(); ++i)
+      {
+        const auto& cc = circumcenters[i];
+        if (!cc.second && isWithinBoundingBox(cc.first, bb))
+        {
+          doc << svg::Circle(
+            svg::Point(cc.first[0], cc.first[1]), 0.02, svg::Fill(purple), svg::Stroke(0.0, svg::Color::Black));
+
+          // Label Voronoi vertex. If crossing data is provided, use "id/containingTriId".
+          // Otherwise, just use "id" (no slash).
+          std::string label_text;
+          if (voronoi_vertex_to_tri && i < voronoi_vertex_to_tri->size())
+          {
+            size_t tri_id = (*voronoi_vertex_to_tri)[i];
+            if (tri_id != invalid_id)
+            {
+              label_text = std::to_string(i) + "/" + std::to_string(tri_id);
+            }
+            else
+            {
+              label_text = std::to_string(i);
+            }
+          }
+          else
+          {
+            label_text = std::to_string(i);
+          }
+
+          labels.push_back(Label(
+            cc.first[0] - 0.005,
+            cc.first[1] - 0.005,
+            label_text,
+            svg::Color(svg::Color::White),
+            0.01));
+        }
+      }
+    }
+
+    for (const auto& label : labels)
+    {
+      if (!isWithinBoundingBox(glm::dvec2(label.x, label.y), bb, 0.01))
+      {
+        continue;
+      }
+      doc << svg::Text(
+        svg::Point(label.x, label.y), label.text, svg::Fill(label.color), svg::Font(label.font_size));
+    }
+
     doc.save();
   }
 
@@ -223,48 +466,49 @@ class HalfEdgeDelaunayGraphToSVG
     {
       const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
       if (he.origin != -1
-        && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
+        && graph.getHalfEdges()[he_id ^ 1].origin != -1)
       {
         auto start = circumcenters[graph.getHalfEdges()[he_id].face];
         auto end = circumcenters[graph.getHalfEdges()[he_id ^ 1].face];
 
-        if (!start.second && !end.second) // Only draw finite lines
+        if (!start.second && !end.second)
         {
-
           doc << svg::Line(svg::Point(start.first[0], start.first[1]), svg::Point(end.first[0], end.first[1]),
-            svg::Stroke(0.01, svg::Color::Red));
+            svg::Stroke(0.005, svg::Color::Red));
         }
         else if (start.second && !end.second)
         {
-          // Draw a line to infinity in the direction of the circumcenter
           svg::Point end_point(end.first[0], end.first[1]);
           svg::Point start_point(end.first[0] + 1000 * start.first[0], end.first[1] + 1000 * start.first[1]);
-          doc << svg::Line(start_point, end_point, svg::Stroke(0.01, svg::Color::Red));
+          doc << svg::Line(start_point, end_point, svg::Stroke(0.005, svg::Color::Red));
         }
         else if (!start.second && end.second)
         {
-          // Draw a line to infinity in the direction of the circumcenter
           svg::Point start_point(start.first[0], start.first[1]);
           svg::Point end_point(start.first[0] + 1000 * end.first[0], start.first[1] + 1000 * end.first[1]);
-          doc << svg::Line(start_point, end_point, svg::Stroke(0.01, svg::Color::Red));
+          doc << svg::Line(start_point, end_point, svg::Stroke(0.005, svg::Color::Red));
         }
         else
         {
-          // This should only happen if all points lie on one line, maybe we should implement it later
           KINDS_WARNING("Both circumcenters are infinite, skipping edge.");
         }
-
-        // TODO:: Handle infinite edges
       }
     }
 
     // Draw Voronoi vertices
-    for (const auto& circumcenter : circumcenters)
+    svg::Color purple(128, 0, 128);
+    for (size_t i = 0; i < circumcenters.size(); ++i)
     {
-      if (!circumcenter.second) // Only draw finite vertices
+      const auto& circumcenter = circumcenters[i];
+      if (!circumcenter.second)
       {
-        doc << svg::Circle(svg::Point(circumcenter.first[0], circumcenter.first[1]), 0.02, svg::Fill(svg::Color::Red),
-          svg::Stroke(0.0, svg::Color::Black));
+        doc << svg::Circle(svg::Point(circumcenter.first[0], circumcenter.first[1]), 0.02,
+          svg::Fill(purple), svg::Stroke(0.0, svg::Color::Black));
+
+        // Label Voronoi vertex with "id/triId". For the generic Voronoi writer, we label with "i/i".
+        std::string label_text = std::to_string(i) + "/" + std::to_string(i);
+        doc << svg::Text(svg::Point(circumcenter.first[0] - 0.005, circumcenter.first[1] - 0.005),
+          label_text, svg::Fill(svg::Color::White), svg::Font(0.01));
       }
     }
 

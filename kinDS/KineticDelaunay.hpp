@@ -230,7 +230,7 @@ class KineticDelaunay
         = tri_id_to_voronoi_vertices[tri_id].emplace(tri_id_to_voronoi_vertices[tri_id].end(), voronoi_vertex_id);
     }
 
-    void moveVertex(size_t voronoi_vertex_id, size_t target_tri_id)
+    void moveVertex(size_t voronoi_vertex_id, size_t target_tri_id, double t)
     {
       std::list<size_t>::iterator v_it = voronoi_vertex_to_iterator[voronoi_vertex_id];
       size_t current_tri_id = voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
@@ -243,6 +243,9 @@ class KineticDelaunay
       tri_id_to_voronoi_vertices[current_tri_id].erase(v_it);
 
       setVoronoiVertexTriId(voronoi_vertex_id, target_tri_id);
+
+      KINDS_DEBUG("Voronoi vertex " << voronoi_vertex_id << " moved from triangle " << current_tri_id << " to "
+                                    << target_tri_id << " at t = " << t);
     }
 
     size_t getContainingTriId(size_t voronoi_vertex_id) const
@@ -338,5 +341,10 @@ class KineticDelaunay
   bool isOnComponentBoundaryOutside(size_t he_id) const;
 
   size_t nextOnComponentBoundaryId(size_t he_id) const;
+
+  // Getters for CrossingData (for testing/validation)
+  size_t getCrossingDataContainingTriId(size_t voronoi_vertex_id) const;
+  std::vector<size_t> getCrossingDataVoronoiVerticesInTri(size_t tri_id) const;
+  glm::dvec3 getVoronoiVertexHomogeneous(size_t voronoi_vertex_id, double t) const;
 };
 } // namespace kinDS

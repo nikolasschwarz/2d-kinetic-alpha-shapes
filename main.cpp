@@ -277,8 +277,21 @@ static void kinetic_delaunay_example()
   kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);
   mesh_builder.init();
   auto points = kinetic_delaunay.getPointsAt(0.0);
-  kinDS::HalfEdgeDelaunayGraphToSVG::write(points, kinetic_delaunay.getGraph(), "test.svg", 0.1);
-  kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "test_voronoi.svg", 0.1);
+
+  // Build Voronoi vertex -> containing triangle mapping from CrossingData for SVG labeling.
+  const kinDS::HalfEdgeDelaunayGraph& demo_graph = kinetic_delaunay.getGraph();
+  const size_t demo_face_count = demo_graph.getFaces().size();
+  std::vector<size_t> demo_voronoi_vertex_to_tri(demo_face_count);
+  constexpr size_t demo_invalid_id = static_cast<size_t>(-1);
+  for (size_t vid = 0; vid < demo_face_count; ++vid)
+  {
+    demo_voronoi_vertex_to_tri[vid] = kinetic_delaunay.getCrossingDataContainingTriId(vid);
+  }
+
+  // t=0 snapshot
+  kinDS::HalfEdgeDelaunayGraphToSVG::write(
+    points, demo_graph, "t0_demo.svg", 0.1, nullptr, true, &demo_voronoi_vertex_to_tri);
+  kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "t0_demo_voronoi.svg", 0.1);
 
   size_t section_count = kinetic_delaunay.getSectionCount();
 
@@ -289,12 +302,27 @@ static void kinetic_delaunay_example()
     kinetic_delaunay.advanceOneSection(mesh_builder);
     // kinetic_delaunay.getGraph().printDebug();
     points = kinetic_delaunay.getPointsAt(static_cast<double>(i + 1));
-    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-      points, kinetic_delaunay.getGraph(), "test_" + std::to_string(i + 1) + ".svg", 0.1);
-    std::cout << "Wrote " << ("test_" + std::to_string(i + 1) + ".svg") << std::endl;
+    
+    // Export SVG snapshots between sections with Voronoi vertex labels "id/containingTriId".
+    const kinDS::HalfEdgeDelaunayGraph& section_graph = kinetic_delaunay.getGraph();
+    const size_t section_face_count = section_graph.getFaces().size();
+    std::vector<size_t> section_voronoi_vertex_to_tri(section_face_count);
+    constexpr size_t section_invalid_id = static_cast<size_t>(-1);
+    for (size_t vid = 0; vid < section_face_count; ++vid)
+    {
+      section_voronoi_vertex_to_tri[vid] = kinetic_delaunay.getCrossingDataContainingTriId(vid);
+    }
+
+    double t = static_cast<double>(i + 1);
+    std::string delaunay_name = "t" + std::to_string(t) + "_demo_section_" + std::to_string(i + 1) + ".svg";
+    kinDS::HalfEdgeDelaunayGraphToSVG::write(
+      points, section_graph, delaunay_name, 0.1, nullptr, true, &section_voronoi_vertex_to_tri);
+    std::cout << "Wrote " << delaunay_name << std::endl;
+
+    std::string voronoi_name = "t" + std::to_string(t) + "_demo_voronoi_section_" + std::to_string(i + 1) + ".svg";
     kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(
-      points, kinetic_delaunay.getGraph(), "test_voronoi_" + std::to_string(i + 1) + ".svg", 0.1);
-    std::cout << "Wrote " << ("test_voronoi_" + std::to_string(i + 1) + ".svg") << std::endl;*/
+      points, section_graph, voronoi_name, 0.1);
+    std::cout << "Wrote " << voronoi_name << std::endl;
   }
 
   mesh_builder.finalize(section_count);

@@ -185,7 +185,7 @@ glm::dvec3 StrandTree::transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id
 }
 
 // TODO: also adjust to different reference frame
-std::array<Polynomial, 2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index) const
+Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index) const
 {
   if (strand_id >= support_points.size())
   {
@@ -199,7 +199,7 @@ std::array<Polynomial, 2> StrandTree::getPiecePolynomial(size_t strand_id, size_
   const auto& P0 = support_points[strand_id][index];
   const auto& P1 = support_points[strand_id][index + 1];
 
-  std::array<Polynomial, 2> result;
+  Trajectory<2> result;
   // Create linear polynomials for each dimension
   for (int i = 0; i < 2; ++i)
   {

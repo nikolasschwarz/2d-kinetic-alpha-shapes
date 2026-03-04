@@ -212,7 +212,7 @@ static bool isInside(const std::vector<BoundaryPoint>& polygon, const glm::dvec2
 
     if (t_min == std::numeric_limits<double>::infinity())
     {
-      KINDS_ERROR("Found no suitable hit!");
+      //KINDS_ERROR("Found no suitable hit!");
     }
 
     circumcenter = neighboring_circumcenter - perp_dir * t_min;
@@ -956,6 +956,24 @@ void SegmentBuilder::betweenSections(size_t index)
 
     finishMesh(i, index, boundary_points);
   }
+
+  // Visual debug: export SVG with Voronoi vertex labels at section boundaries.
+  if (visual_debug)
+  {
+    double t = static_cast<double>(index);
+    std::vector<glm::dvec2> points = kin_del.getPointsAt(t);
+    const HalfEdgeDelaunayGraph& dbg_graph = kin_del.getGraph();
+    const size_t dbg_face_count = dbg_graph.getFaces().size();
+    std::vector<size_t> voronoi_vertex_to_tri(dbg_face_count);
+    constexpr size_t invalid_id = static_cast<size_t>(-1);
+    for (size_t vid = 0; vid < dbg_face_count; ++vid)
+    {
+      voronoi_vertex_to_tri[vid] = kin_del.getCrossingDataContainingTriId(vid);
+    }
+    std::string filename = "t" + std::to_string(t) + "_segmentbuilder_between_section_" + std::to_string(index) + ".svg";
+    HalfEdgeDelaunayGraphToSVG::write(points, dbg_graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri);
+    KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
+  }
 }
 
 void SegmentBuilder::beforeFlipEvent(KineticDelaunay::Event& e)
@@ -1125,6 +1143,24 @@ void SegmentBuilder::afterFlipEvent(KineticDelaunay::Event& e)
       }
     }
   }
+
+  // Visual debug: export SVG after flip event with Voronoi vertex labels.
+  if (visual_debug)
+  {
+    std::vector<glm::dvec2> points = kin_del.getPointsAt(e.time);
+    const HalfEdgeDelaunayGraph& dbg_graph = kin_del.getGraph();
+    const size_t dbg_face_count = dbg_graph.getFaces().size();
+    std::vector<size_t> voronoi_vertex_to_tri(dbg_face_count);
+    constexpr size_t invalid_id = static_cast<size_t>(-1);
+    for (size_t vid = 0; vid < dbg_face_count; ++vid)
+    {
+      voronoi_vertex_to_tri[vid] = kin_del.getCrossingDataContainingTriId(vid);
+    }
+    std::string filename = "t" + std::to_string(e.time)
+      + "_segmentbuilder_after_flip_he" + std::to_string(e.half_edge_id) + ".svg";
+    HalfEdgeDelaunayGraphToSVG::write(points, dbg_graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri);
+    KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
+  }
   // For the boundary mesh, handle the case that a formerly infinite edge is flipped to a boundary. This means the
   // opposite vertex is no longer a boundary vertex
   // Only applies if the edge is on the component boundary as well
@@ -1216,7 +1252,7 @@ void kinDS::SegmentBuilder::beforeRadiusEvent(KineticDelaunay::Event& e)
   // Build the boundary mesh at the event time
   size_t face_id = kin_del.getGraph().getHalfEdges()[e.half_edge_id].face;
   bool is_inside = kin_del.getFaceInside(face_id);
-  KINDS_DEBUG("Face inside: " << is_inside << ", face id: " << face_id);
+  //KINDS_DEBUG("Face inside: " << is_inside << ", face id: " << face_id);
   // For each half-edge of the face, check if it is on the boundary
   auto& graph = kin_del.getGraph();
   const auto& face_half_edges = graph.getFaces()[face_id].half_edges;
@@ -1543,11 +1579,36 @@ void kinDS::SegmentBuilder::afterRadiusEvent(KineticDelaunay::Event& e)
 
 void SegmentBuilder::beforeCrossingEvent(KineticDelaunay::Event& e) { }
 
-void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e) { }
+void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
+{
+  // Visual debug: export SVG after crossing event with Voronoi vertex labels.
+  if (!visual_debug)
+  {
+    return;
+  }
+
+  std::vector<glm::dvec2> points = kin_del.getPointsAt(e.time);
+  const HalfEdgeDelaunayGraph& dbg_graph = kin_del.getGraph();
+  const size_t dbg_face_count = dbg_graph.getFaces().size();
+  std::vector<size_t> voronoi_vertex_to_tri(dbg_face_count);
+  constexpr size_t invalid_id = static_cast<size_t>(-1);
+  for (size_t vid = 0; vid < dbg_face_count; ++vid)
+  {
+    voronoi_vertex_to_tri[vid] = kin_del.getCrossingDataContainingTriId(vid);
+  }
+  const auto& graph = dbg_graph;
+  size_t old_tri = graph.getHalfEdges()[e.half_edge_id].face;
+  size_t new_tri = graph.getHalfEdges()[e.half_edge_id ^ 1].face;
+  std::string filename = "t" + std::to_string(e.time)
+    + "_segmentbuilder_after_crossing_v" + std::to_string(e.voronoi_vertex_id)
+    + "_" + std::to_string(old_tri) + "_to_" + std::to_string(new_tri) + ".svg";
+  HalfEdgeDelaunayGraphToSVG::write(points, dbg_graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri);
+  KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
+}
 
 void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
 {
-  KINDS_DEBUG("Inserting subdivision for strand " << strand_id << " at t = " << t);
+  //KINDS_DEBUG("Inserting subdivision for strand " << strand_id << " at t = " << t);
   //  Traverse all half-edges around this strand and insert a new vertex into the corresponding segment meshes
   auto& graph = kin_del.getGraph();
 

@@ -1,6 +1,6 @@
 #pragma once
 #include "PlaneProjector.hpp"
-#include "Polynomial.hpp"
+#include "Trajectory.hpp"
 
 #include <array>
 #include <filesystem>
@@ -9,8 +9,6 @@
 
 namespace kinDS
 {
-
-template<size_t dim> using Trajectory = std::array<Polynomial, dim>;
 
 /**
  * This class handles the trajectories of strands according to branches, allowing to easily get points in a different
@@ -56,7 +54,7 @@ class StrandTree
   glm::dvec3 transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const;
 
   // TODO: also adjust to different reference frame
-  std::array<Polynomial, 2> getPiecePolynomial(size_t strand_id, size_t index) const;
+  Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index) const;
 
   // getters with named indices
   const std::vector<glm::dvec2>& getSupportPoints(size_t strand_id) const { return support_points[strand_id]; }
