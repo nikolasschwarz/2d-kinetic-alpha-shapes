@@ -289,6 +289,8 @@ class KineticDelaunay
 
   const std::vector<size_t>& getBranchStrands(size_t t, size_t branch_id);
 
+  std::vector<double> findEvents(Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative = false);
+
  public:
   KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);
 

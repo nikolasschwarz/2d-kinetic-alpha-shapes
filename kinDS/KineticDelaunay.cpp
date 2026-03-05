@@ -108,7 +108,7 @@ void KineticDelaunay::computeRadiusEvents(double t, size_t he_id)
   Polynomial event_trigger
     = circumradiusEquals(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], cutoff);
 
-  event_trigger.trim();
+  /*event_trigger.trim();
   auto zeros = event_trigger.realRoots();
 
   // print roots:
@@ -138,6 +138,23 @@ void KineticDelaunay::computeRadiusEvents(double t, size_t he_id)
       events.emplace(
         Event(event_time, he_id, t, center, Event::RADIUS)); // Store the event with the time and half-edge index
     }
+  }*/
+  auto event_times = findEvents(event_trigger, fraction);
+  for (const auto& event_time : event_times)
+  {    glm::dvec2 center {};
+  
+    for (const auto& traj : trajs)
+    {
+      center[0] += traj[0](event_time);
+      center[1] += traj[1](event_time);
+    }
+    center[0] /= trajs.size();
+    center[1] /= trajs.size();
+    //KINDS_DEBUG("Boundary Event at time " << event_time + section << " for half-edge ID " << he_id << " at center position"
+    //                                      << glm::to_string(center));
+
+    events.emplace(
+      Event(event_time + section, he_id, t, center, Event::RADIUS)); // Store the event with the time and half-edge index
   }
 }
 
@@ -205,7 +222,7 @@ void KineticDelaunay::computeFlipEvents(double t, size_t quad_id)
     event_trigger = inCircle(
       trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);
   }
-  event_trigger.trim();
+  /*event_trigger.trim();
   auto zeros = event_trigger.realRoots();
 
   for (const auto& root : zeros)
@@ -237,7 +254,27 @@ void KineticDelaunay::computeFlipEvents(double t, size_t quad_id)
       events.emplace(
         Event(event_time, he_id, t, center, Event::FLIP)); // Store the event with the time and half-edge index
     }
-  }
+  }*/
+
+  auto event_times = findEvents(event_trigger, fraction);
+  for (const auto& event_time : event_times)
+  {
+    glm::dvec2 center {};
+
+    for (const auto& traj : trajs)
+    {
+      center[0] += traj[0](event_time);
+      center[1] += traj[1](event_time);
+    }
+    center[0] /= trajs.size();
+    center[1] /= trajs.size();
+
+    //KINDS_DEBUG("Event at time " << event_time + section << " for half-edge ID " << he_id << " at center position "
+    //                                  << glm::to_string(center));
+
+    events.emplace(
+      Event(event_time + section, he_id, t, center, Event::FLIP)); // Store the event with the time and half-edge index
+    }
 }
 
 glm::dvec3 kinDS::KineticDelaunay::computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t) const
@@ -283,6 +320,79 @@ std::vector<size_t> KineticDelaunay::getCrossingDataVoronoiVerticesInTri(size_t 
 glm::dvec3 KineticDelaunay::getVoronoiVertexHomogeneous(size_t voronoi_vertex_id, double t) const
 {
   return computeVoronoiVertexHomogenous(voronoi_vertex_id, t);
+}
+
+std::vector<double> KineticDelaunay::findEvents(Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative)
+{
+  if(event_trigger.degree() == -1){
+    // No events possible, return empty vector
+    return {};
+  }
+
+  event_trigger.trim();
+  auto zeros = event_trigger.realRoots();
+  std::vector<double> filtered_sorted_zeros;
+
+  for (const auto& root : zeros)
+  {
+    if (isnan(root))
+    {
+      continue; // Skip NaN roots
+    }
+
+    if (root > min_fraction && root <= 1)
+    {
+      double event_time = root;
+      filtered_sorted_zeros.emplace_back(event_time);
+    }
+  }
+
+  if(filtered_sorted_zeros.empty()){
+    // No valid events found, return empty vector
+    return {};
+  }
+
+  // Sort events ascending by time
+  std::sort(filtered_sorted_zeros.begin(), filtered_sorted_zeros.end());
+
+  // Determine sign changes for each root
+  std::vector<double> interval_signs(filtered_sorted_zeros.size() + 1);
+  double test_point = (min_fraction + filtered_sorted_zeros[0]) / 2.0; // Start with a test point before the first root
+  interval_signs[0] = event_trigger(test_point) > 0 ? 1 : -1;
+
+
+  for (size_t i = 0; i < filtered_sorted_zeros.size(); ++i)
+  {
+    test_point = (filtered_sorted_zeros[i] + (i + 1 < filtered_sorted_zeros.size() ? filtered_sorted_zeros[i + 1] : 1.0)) / 2.0;
+    interval_signs[i + 1] = event_trigger(test_point) > 0 ? 1 : -1;
+  }
+
+  std::vector<double> found_event_times;
+
+  for (size_t i = 0; i < filtered_sorted_zeros.size(); ++i)
+  {
+    if (interval_signs[i] != interval_signs[i + 1])
+    {
+      if(only_positive_to_negative && interval_signs[i] < 0)
+      {
+        KINDS_DEBUG("Sign change from negative to positive at root " << filtered_sorted_zeros[i] << ", skipping event creation due to only_positive_to_negative flag.");
+        continue; // Skip if we only want positive to negative sign changes
+      }
+      else
+      {
+      // Sign change detected, create an event
+      double event_time = filtered_sorted_zeros[i];
+      found_event_times.push_back(event_time);
+      KINDS_DEBUG("Event found at time " << event_time << " with sign change from " << interval_signs[i] << " to " << interval_signs[i + 1]);
+      }
+    }
+    else
+    {
+      KINDS_DEBUG("No sign change at root " << filtered_sorted_zeros[i] << ", skipping event creation.");
+    }
+  }
+
+  return found_event_times;
 }
 
 void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vertex_id)
@@ -335,7 +445,6 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     }
   }
 
-  Polynomial event_trigger;
   if(adjacent){
 
     // re-assign vertices
@@ -354,38 +463,20 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     vector_ik[0] = traj_k[0] - traj_i[0];
     vector_ik[1] = traj_k[1] - traj_i[1];
 
-    event_trigger = vector_ij[0] * vector_ik[0] + vector_ij[1] * vector_ik[1];
-    double event_time = std::numeric_limits<double>::infinity();
-    size_t event_he_id = -1;
+    Polynomial event_trigger = -(vector_ij[0] * vector_ik[0] + vector_ij[1] * vector_ik[1]);
+    auto fractional_event_times = findEvents(event_trigger, fraction, true);
 
-    event_trigger.trim();
-    auto zeros = event_trigger.realRoots();
-
-    for (const auto& root : zeros)
-    {
-      if (isnan(root))
-      {
-        continue; // Skip NaN roots
-      }
-
-      if (root > fraction && root <= 1)
-      {
-        if(root + section < event_time){
-          event_time = root + section;
-          event_he_id = finite_he_id;
-        }
-      }
-    }
-
-    if (event_time != std::numeric_limits<double>::infinity())
-    {
+    // Only need the first event as any following events will be invalidated by the first crossing event. TODO: The exception is the edge being crossed, but that would make this more complex. We can optimize this later if needed.
+    if(!fractional_event_times.empty()){
+      double fractional_event_time = fractional_event_times.front();
+      double event_time = fractional_event_time + section;
       // Position must be the midpoint of the two vertices
-      glm::dvec2 position = glm::vec2((traj_j[0](event_time) + traj_k[0](event_time)) / 2.0, (traj_j[1](event_time) + traj_k[1](event_time)) / 2.0);
+      glm::dvec2 position = glm::vec2((traj_j[0](fractional_event_time) + traj_k[0](fractional_event_time)) / 2.0, (traj_j[1](fractional_event_time) + traj_k[1](fractional_event_time)) / 2.0);
 
       KINDS_DEBUG("Crossing (right angle) Event at time " << event_time << " for Voronoi vertex ID " << voronoi_vertex_id
-                                            << " crossing half-edge ID " << event_he_id << " at position "
+                                            << " crossing half-edge ID " << finite_he_id << " at position "
                                             << glm::to_string(position));
-      events.emplace(event_time, event_he_id, t, position, voronoi_vertex_id, Event::CROSSING);
+      events.emplace(event_time, finite_he_id, t, position, voronoi_vertex_id, Event::CROSSING);
     }
 
   }
@@ -411,7 +502,7 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     // needed.
     double event_time = std::numeric_limits<double>::infinity();
     size_t event_he_id = -1;
-
+    Polynomial event_trigger;
     // Construct polynomial predicates for each of the three edges of the containing triangle
     for (size_t edge_index = 0; edge_index < 3; edge_index++)
     {
@@ -475,26 +566,15 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
         }
       }
 
-      event_trigger.trim();
-      auto zeros = event_trigger.realRoots();
-
-      Polynomial derivative = event_trigger.derivative();
-
-      for (const auto& root : zeros)
+      auto fractional_event_times = findEvents(event_trigger, fraction, true);
+      if (!fractional_event_times.empty())
       {
-        if (isnan(root))
+        double fractional_event_time = fractional_event_times.front();
+        double candidate_event_time = fractional_event_time + section;
+        if (candidate_event_time < event_time)
         {
-          continue; // Skip NaN roots
-        }
-
-        if (root > fraction && root <= 1)
-        {
-          if(root + section < event_time){
-            double dydt = derivative(root);
-            KINDS_DEBUG("Crossing event trigger derivative at root: " << dydt);
-            event_time = root + section;
-            event_he_id = he_id;
-          }
+          event_time = candidate_event_time;
+          event_he_id = he_id;
         }
       }
     }
@@ -799,10 +879,10 @@ void KineticDelaunay::handleCrossingEvent(EventHandler& event_handler, Event& ev
   crossing_data.last_crossing[event.voronoi_vertex_id]
     = event.time; // Update the last crossing time for this Voronoi vertex
 
-  // move to neighboring triangle
-  graph.printDebug();
   KINDS_DEBUG("Processing crossing event at time " << event.time << " for Voronoi vertex ID " << event.voronoi_vertex_id
                                                << " crossing half-edge ID " << event.half_edge_id);
+
+  // move to neighboring triangle
   KINDS_DEBUG("Moving Voronoi vertex " << event.voronoi_vertex_id << " from triangle " << containing_tri_id << " to triangle " << graph.getHalfEdges()[event.half_edge_id ^ 1].face);
   crossing_data.moveVertex(event.voronoi_vertex_id, graph.getHalfEdges()[event.half_edge_id ^ 1].face, event.time);
 
