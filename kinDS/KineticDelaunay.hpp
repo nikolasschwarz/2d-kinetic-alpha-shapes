@@ -179,6 +179,14 @@ class KineticDelaunay
 
   ComponentData component_data;
 
+  /**
+   * \brief Compute the half-edges crossed by the Voronoi edge between the given start point and destination, starting from the given face.
+   * 
+   * Currently assumes that the start face is finite and that the destination lies outside of only one edge of the start triangle.
+   */
+  std::vector<size_t> computeCrossedHalfEdges(
+  size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point);
+
  private:
   typedef std::priority_queue<Event> EventQueue;
 
@@ -295,6 +303,8 @@ class KineticDelaunay
   KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);
 
   bool isDummyBoundary(size_t v);
+
+  bool computeBoundaryOnTheFly() const;
 
   glm::dvec2 getPointAt(size_t v, double t) const;
 

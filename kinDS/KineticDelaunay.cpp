@@ -108,37 +108,6 @@ void KineticDelaunay::computeRadiusEvents(double t, size_t he_id)
   Polynomial event_trigger
     = circumradiusEquals(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], cutoff);
 
-  /*event_trigger.trim();
-  auto zeros = event_trigger.realRoots();
-
-  // print roots:
-  for (const auto& root : zeros)
-  {
-    if (isnan(root))
-    {
-      continue; // Skip NaN roots
-    }
-    if (root > fraction && root <= 1)
-    { // Check if the root is within the valid range
-      double event_time = root + section;
-      // std::cout << "Root found at t = " << event_time << std::endl;
-
-      glm::dvec2 center {};
-
-      for (const auto& traj : trajs)
-      {
-        center[0] += traj[0](root);
-        center[1] += traj[1](root);
-      }
-      center[0] /= trajs.size();
-      center[1] /= trajs.size();
-      //KINDS_DEBUG("Boundary Event at time " << event_time << " for half-edge ID " << he_id << " at center position"
-      //                                      << glm::to_string(center));
-
-      events.emplace(
-        Event(event_time, he_id, t, center, Event::RADIUS)); // Store the event with the time and half-edge index
-    }
-  }*/
   auto event_times = findEvents(event_trigger, fraction);
   for (const auto& event_time : event_times)
   {    glm::dvec2 center {};
@@ -222,39 +191,6 @@ void KineticDelaunay::computeFlipEvents(double t, size_t quad_id)
     event_trigger = inCircle(
       trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);
   }
-  /*event_trigger.trim();
-  auto zeros = event_trigger.realRoots();
-
-  for (const auto& root : zeros)
-  {
-    if (isnan(root))
-    {
-      continue; // Skip NaN roots
-    }
-
-    if (root > fraction && root <= 1)
-    {
-      // Check if the root is within the valid range
-      double event_time = root + section;
-      // std::cout << "Root found at t = " << event_time << std::endl;
-
-      glm::dvec2 center {};
-
-      for (const auto& traj : trajs)
-      {
-        center[0] += traj[0](root);
-        center[1] += traj[1](root);
-      }
-      center[0] /= trajs.size();
-      center[1] /= trajs.size();
-
-      //KINDS_DEBUG("Flip Event at time " << event_time << " for half-edge ID " << he_id << " at center position "
-      //                                  << glm::to_string(center));
-
-      events.emplace(
-        Event(event_time, he_id, t, center, Event::FLIP)); // Store the event with the time and half-edge index
-    }
-  }*/
 
   auto event_times = findEvents(event_trigger, fraction);
   for (const auto& event_time : event_times)
@@ -1073,6 +1009,175 @@ void KineticDelaunay::computeComponentData(double t)
   component_data.component_last_updated.resize(component_data.components.size(), t);
 }
 
+bool KineticDelaunay::computeBoundaryOnTheFly() const
+{
+  return on_the_fly_boundary;
+}
+
+std::vector<size_t> KineticDelaunay::computeCrossedHalfEdges(
+  size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point)
+{
+  std::vector<size_t> crossed_half_edge_ids;
+
+  const HalfEdgeDelaunayGraph::Triangle& tri = graph.getFaces()[start_face_id];
+
+  auto vertices = graph.adjacentTriangleVertices(tri.half_edges[0]);
+  std::vector<glm::dvec2> points;
+  for (const auto& v : vertices)
+  {
+    if (v == -1)
+    {
+      return crossed_half_edge_ids;
+    }
+    points.push_back(branch_trajs.evaluate(v, 0.0));
+  }
+
+  auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
+  { return -((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)); };
+
+  auto edge_function_01 = edge_function(points[0], points[1], destination);
+  auto edge_function_12 = edge_function(points[1], points[2], destination);
+  auto edge_function_20 = edge_function(points[2], points[0], destination);
+
+  glm::dvec2 midpoint = start_point;
+  size_t next_crossed_edge_id = static_cast<size_t>(-1);
+  bool inside_triangle = false;
+
+  if (edge_function_01 < 0)
+  {
+    next_crossed_edge_id = tri.half_edges[0];
+  }
+  else if (edge_function_12 < 0)
+  {
+    next_crossed_edge_id = tri.half_edges[1];
+  }
+  else if (edge_function_20 < 0)
+  {
+    next_crossed_edge_id = tri.half_edges[2];
+  }
+  else
+  {
+    inside_triangle = true;
+  }
+
+  while (!inside_triangle)
+  {
+    // Record the edge we are about to cross
+    crossed_half_edge_ids.push_back(next_crossed_edge_id);
+
+    size_t next_face_id = graph.getHalfEdges()[next_crossed_edge_id ^ 1].face;
+
+    auto next_vertices = graph.adjacentTriangleVertices(next_crossed_edge_id ^ 1);
+    std::vector<glm::dvec2> next_points;
+    bool outer_face = false;
+    for (int i = 0; i < next_vertices.size(); i++)
+    {
+      const auto& v = next_vertices[i];
+      if (v == -1)
+      {
+        outer_face = true;
+        break;
+      }
+      next_points.push_back(branch_trajs.evaluate(v, 0.0));
+    }
+
+    if (outer_face)
+    {
+      size_t finite_he_id = next_crossed_edge_id ^ 1;
+
+      {
+        size_t prev_he_id = graph.prevOnConvexBoundaryId(finite_he_id);
+        size_t a = graph.getHalfEdges()[finite_he_id].origin;
+        size_t c = graph.destination(finite_he_id);
+        size_t c_prime = graph.getHalfEdges()[prev_he_id].origin;
+
+        glm::dvec2 p_a = branch_trajs.evaluate(a, 0.0);
+        glm::dvec2 p_c = branch_trajs.evaluate(c, 0.0);
+        glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, 0.0);
+
+        glm::dvec3 edge { p_c_prime.x - p_c.x, p_c_prime.y - p_c.y,
+          -(p_c_prime.x - p_c.x) * p_a.x - (p_c_prime.y - p_c.y) * p_a.y };
+
+        double ef = -glm::dot(edge, glm::dvec3(destination, 1.0));
+
+        if (ef < 0)
+        {
+          next_crossed_edge_id = prev_he_id ^ 1;
+          continue;
+        }
+      }
+
+      {
+        size_t next_he_id = graph.nextOnConvexBoundaryId(finite_he_id);
+        size_t a = graph.destination(finite_he_id);
+        size_t c = graph.getHalfEdges()[finite_he_id].origin;
+        size_t c_prime = graph.destination(next_he_id);
+
+        glm::dvec2 p_a = branch_trajs.evaluate(a, 0.0);
+        glm::dvec2 p_c = branch_trajs.evaluate(c, 0.0);
+        glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, 0.0);
+
+        glm::dvec3 edge { p_c_prime.x - p_c.x, p_c_prime.y - p_c.y,
+          -(p_c_prime.x - p_c.x) * p_a.x - (p_c_prime.y - p_c.y) * p_a.y };
+
+        double ef = -glm::dot(edge, glm::dvec3(destination, 1.0));
+
+        if (ef < 0)
+        {
+          next_crossed_edge_id = next_he_id ^ 1;
+          continue;
+        }
+      }
+
+      inside_triangle = true;
+      break;
+    }
+
+    auto next_tri_half_edges = graph.getTriangleHalfEdgeIndices(next_crossed_edge_id ^ 1);
+
+    edge_function_12 = edge_function(next_points[1], next_points[2], destination);
+    edge_function_20 = edge_function(next_points[2], next_points[0], destination);
+
+    if (edge_function_12 >= 0 && edge_function_20 >= 0)
+    {
+      inside_triangle = true;
+    }
+    else
+    {
+      if (edge_function_12 < 0 && edge_function_20 < 0)
+      {
+        auto check_v0 = edge_function(midpoint, destination, next_points[0]);
+        auto check_v1 = edge_function(midpoint, destination, next_points[1]);
+        auto check_v2 = edge_function(midpoint, destination, next_points[2]);
+
+        if (std::signbit(check_v0) != std::signbit(check_v1))
+        {
+          next_crossed_edge_id = next_tri_half_edges[0];
+        }
+        else if (std::signbit(check_v1) != std::signbit(check_v2))
+        {
+          next_crossed_edge_id = next_tri_half_edges[1];
+        }
+        else
+        {
+          throw std::runtime_error(
+            "This should not happen, check_v0, check_v1 and check_v2 cannot all have the same sign");
+        }
+      }
+      else if (edge_function_12 < 0)
+      {
+        next_crossed_edge_id = next_tri_half_edges[1];
+      }
+      else if (edge_function_20 < 0)
+      {
+        next_crossed_edge_id = next_tri_half_edges[2];
+      }
+    }
+  }
+
+  return crossed_half_edge_ids;
+}
+
 const HalfEdgeDelaunayGraph& KineticDelaunay::init()
 {
   graph.init(branch_trajs.getPoints());
@@ -1121,210 +1226,69 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init()
       }
     }
 
-    if (on_the_fly_boundary)
+    //KINDS_DEBUG("Computing containing triangle for Voronoi vertex " << face_index);
+    if (outer_face)
     {
-      //KINDS_DEBUG("Computing containing triangle for Voronoi vertex " << face_index);
-      if (outer_face)
+      // The voronoi vertices dual to the outer face are always within it, so we just set it to itself, no events
+      // necessary.
+      crossing_data.setVoronoiVertexTriId(face_index, face_index);
+      continue;
+    }
+
+    //KINDS_DEBUG("Initial face has vertices at positions: " << glm::to_string(points[0]) << ", " << glm::to_string(points[1]) << ", "
+    //                           << glm::to_string(points[2]));
+    //KINDS_DEBUG("Vertex IDs: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2]);
+    // initialize voronoi_vertex_to_tri_id:
+    // We can use the edge functions from Pineda's algorithm to find if the circumcenter is inside and if not which
+    // edge must be crossed. First compute the circumcenter:
+    glm::dvec2 circumcenter = HalfEdgeDelaunayGraph::circumcenter(points[0], points[1], points[2]);
+
+    auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
+    { return -((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)); };
+
+    auto edge_function_01 = edge_function(points[0], points[1], circumcenter);
+    auto edge_function_12 = edge_function(points[1], points[2], circumcenter);
+    auto edge_function_20 = edge_function(points[2], points[0], circumcenter);
+
+    bool inside_triangle = false;
+    glm::dvec2 start_point;
+
+    if (edge_function_01 < 0)
+    {
+      start_point = (points[0] + points[1]) / 2.0;
+    }
+    else if (edge_function_12 < 0)
+    {
+      start_point = (points[1] + points[2]) / 2.0;
+    }
+    else if (edge_function_20 < 0)
+    {
+      start_point = (points[2] + points[0]) / 2.0;
+    }
+    else
+    {
+      inside_triangle = true;
+    }
+
+    if (inside_triangle)
+    {
+      // Circumcenter lies within the initial triangle
+      crossing_data.setVoronoiVertexTriId(face_index, face_index);
+    }
+    else
+    {
+      auto crossed_half_edges = computeCrossedHalfEdges(face_index, circumcenter, start_point);
+
+      if (crossed_half_edges.empty())
       {
-        // The voronoi vertices dual to the outer face are always within it, so we just set it to itself, no events
-        // necessary.
+        // Fallback: if no edges were reported as crossed, treat as inside start triangle
         crossing_data.setVoronoiVertexTriId(face_index, face_index);
-        continue;
-      }
-
-      //KINDS_DEBUG("Initial face has vertices at positions: " << glm::to_string(points[0]) << ", " << glm::to_string(points[1]) << ", "
-      //                           << glm::to_string(points[2]));
-      //KINDS_DEBUG("Vertex IDs: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2]);
-      // initialize voronoi_vertex_to_tri_id:
-      // We can use the edge functions from Pineda's algorithm to find if the circumcenter is inside and if not which
-      // edge must be crossed. First compute the circumcenter:
-      glm::dvec2 circumcenter = HalfEdgeDelaunayGraph::circumcenter(points[0], points[1], points[2]);
-      bool inside_triangle = false;
-
-      // define a general edge function that takes the two points of the edge and the circumcenter as input. The sign of
-      // the edge function determines on which side of the edge the circumcenter lies.
-      auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
-      { return -((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)); };
-
-      auto edge_function_01 = edge_function(points[0], points[1], circumcenter);
-      auto edge_function_12 = edge_function(points[1], points[2], circumcenter);
-      auto edge_function_20 = edge_function(points[2], points[0], circumcenter);
-
-      //KINDS_DEBUG("Edge functions: " << edge_function_01 << ", " << edge_function_12 << ", " << edge_function_20);
-
-      // note that only one of the edge functions can be negative by construction of the Delaunay triangulation
-      glm::dvec2 midpoint;
-      size_t next_crossed_edge_id = -1;
-      if (edge_function_01 < 0)
-      {
-        next_crossed_edge_id = tri.half_edges[0];
-        midpoint = (points[0] + points[1]) / 2.0;
-      }
-      else if (edge_function_12 < 0)
-      {
-        next_crossed_edge_id = tri.half_edges[1];
-        midpoint = (points[1] + points[2]) / 2.0;
-      }
-      else if (edge_function_20 < 0)
-      {
-        next_crossed_edge_id = tri.half_edges[2];
-        midpoint = (points[2] + points[0]) / 2.0;
       }
       else
       {
-        inside_triangle = true;
-      }
-
-      while (!inside_triangle)
-      {
-        // TODO: Get next triangle index and check if circumcenter is inside. If not, compute which of the two edges in
-        // the adjacent triangles are crossed using half-plane induced by bisector.
-        size_t next_face_id = graph.getHalfEdges()[next_crossed_edge_id ^ 1].face;
-
-        const HalfEdgeDelaunayGraph::Triangle& next_tri = graph.getFaces()[next_face_id];
-        auto next_tri_half_edges = graph.getTriangleHalfEdgeIndices(next_crossed_edge_id ^ 1);
-
-        // compute circumradius at t = 0 and check if within cutoff
-        auto next_vertices = graph.adjacentTriangleVertices(next_crossed_edge_id ^ 1);
-        std::vector<glm::dvec2> next_points;
-        bool outer_face = false;
-        for (int i = 0; i < next_vertices.size(); i++)
-        {
-          const auto& v = next_vertices[i];
-          if (v == -1)
-          {
-            outer_face = true;
-            break;
-          }
-          // assume that only one plane as frame of reference exists
-          next_points.push_back(branch_trajs.evaluate(v, 0.0));
-        }
-
-        if (outer_face)
-        {
-          //KINDS_DEBUG("Next face " << next_face_id << " is an outer face, computing edge functions differently");
-          // We need to use different edge functions in this case. For each finite vertex, we use the two neighbor
-          // vertices that are also part of infinite triangles and choose a line perpendicular to the line through those
-          // two vertices that passes through the vertex
-
-          // TODO: This is only true if we first enter an outer face. If we come from another outer face, we must do
-          // this differently.
-          size_t finite_he_id = next_crossed_edge_id ^ 1;
-
-          // first look at the origin and the incoming half-edge on the convex hull
-          {
-            size_t prev_he_id = graph.prevOnConvexBoundaryId(finite_he_id);
-            size_t a = graph.getHalfEdges()[finite_he_id].origin;
-            size_t c = graph.destination(finite_he_id);
-            size_t c_prime = graph.getHalfEdges()[prev_he_id].origin;
-
-            // compute points
-            glm::dvec2 p_a = branch_trajs.evaluate(a, 0.0);
-            glm::dvec2 p_c = branch_trajs.evaluate(c, 0.0);
-            glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, 0.0);
-
-            //KINDS_DEBUG("Considering points for incoming edge: " << glm::to_string(p_a) << ", " << glm::to_string(p_c) << " and " << glm::to_string(p_c_prime)
-            //                     << " for edge function computation");
-
-            // compute edge in homogeneous coordinates
-            glm::dvec3 edge { p_c_prime.x - p_c.x, p_c_prime.y - p_c.y,
-              -(p_c_prime.x - p_c.x) * p_a.x - (p_c_prime.y - p_c.y) * p_a.y };
-
-            double edge_function = -glm::dot(edge, glm::dvec3(circumcenter, 1.0));
-            //KINDS_DEBUG("Edge function for incoming edge " << prev_he_id << ": " << edge_function);
-
-            if (edge_function < 0)
-            {
-              // This is technically not the next crossed edge, but it gives us the only finite edge of the next
-              // triangle. This means we do not check if we cross it, but that is not possible anyway because we can
-              // never re-enter the convex hull after leaving it, so we can just continue.
-              // We could optimize in the future by storing both, so we only need to check one edge in the next
-              // iteration.
-              next_crossed_edge_id = prev_he_id ^ 1;
-              continue;
-            }
-          }
-          // secondly look at the destination and the outgoing half-edge on the convex hull
-          {
-            size_t next_he_id = graph.nextOnConvexBoundaryId(finite_he_id);
-            size_t a = graph.destination(finite_he_id);
-            size_t c = graph.getHalfEdges()[finite_he_id].origin;
-            size_t c_prime = graph.destination(next_he_id);
-
-            // compute points
-            glm::dvec2 p_a = branch_trajs.evaluate(a, 0.0);
-            glm::dvec2 p_c = branch_trajs.evaluate(c, 0.0);
-            glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, 0.0);
-            //KINDS_DEBUG("Considering points for outgoing edge: " << glm::to_string(p_a) << ", " << glm::to_string(p_c) << " and " << glm::to_string(p_c_prime)
-            //                     << " for edge function computation");
-            // compute edge in homogeneous coordinates
-            glm::dvec3 edge { p_c_prime.x - p_c.x, p_c_prime.y - p_c.y,
-              -(p_c_prime.x - p_c.x) * p_a.x - (p_c_prime.y - p_c.y) * p_a.y };
-
-            double edge_function = -glm::dot(edge, glm::dvec3(circumcenter, 1.0));
-            //KINDS_DEBUG("Edge function for outgoing edge " << next_he_id << ": " << edge_function);
-
-            if (edge_function < 0)
-            {
-              // Technically not the next crossed edge, see comment above.
-              next_crossed_edge_id = next_he_id ^ 1;
-              continue;
-            }
-          }
-
-          inside_triangle = true;
-          crossing_data.setVoronoiVertexTriId(face_index, next_face_id);
-          break;
-        }
-
-        //KINDS_DEBUG("Next face " << next_face_id << " is an inner face, computing edge functions normally");
-        //KINDS_DEBUG("Next triangle vertices: " << next_vertices[0] << ", " << next_vertices[1] << ", " << next_vertices[2]);
-        //KINDS_DEBUG("Next triangle points: " << glm::to_string(next_points[0]) << ", " << glm::to_string(next_points[1]) << ", " << glm::to_string(next_points[2]));
-
-        // We can skip edge 01 because that is where we came from and thus cannot be crossed again
-        edge_function_12 = edge_function(next_points[1], next_points[2], circumcenter);
-        // edge function for edge from points[2] to points[0]
-        edge_function_20 = edge_function(next_points[2], next_points[0], circumcenter);
-        //KINDS_DEBUG("Edge functions for edge ids " << next_tri_half_edges[0] << ", " << next_tri_half_edges[1] << ", " << next_tri_half_edges[2] << " for next triangle: " << edge_function_12 << ", " << edge_function_20);
-
-        if (edge_function_12 >= 0 && edge_function_20 >= 0)
-        {
-          inside_triangle = true;
-          crossing_data.setVoronoiVertexTriId(face_index, next_face_id);
-        }
-        else
-        {
-          if (edge_function_12 < 0 && edge_function_20 < 0)
-          {
-            // In this case, we need to check which edge intersects the bisector. The easiest way to do this is testing
-            // the edge endpoints against the bisector and pick the one where the sign differs.
-            auto check_v0 = edge_function(midpoint, circumcenter, next_points[0]);
-            auto check_v1 = edge_function(midpoint, circumcenter, next_points[1]);
-            auto check_v2 = edge_function(midpoint, circumcenter, next_points[2]);
-
-            if (std::signbit(check_v0) != std::signbit(check_v1))
-            {
-              next_crossed_edge_id = next_tri_half_edges[0];
-            }
-            else if (std::signbit(check_v1) != std::signbit(check_v2))
-            {
-              next_crossed_edge_id = next_tri_half_edges[1];
-            }
-            else
-            {
-              throw std::runtime_error(
-                "This should not happen, check_v0, check_v1 and check_v2 cannot all have the same sign");
-            }
-          }
-          else if (edge_function_12 < 0)
-          {
-            next_crossed_edge_id = next_tri_half_edges[1];
-          }
-          else if (edge_function_20 < 0)
-          {
-            next_crossed_edge_id = next_tri_half_edges[2];
-          }
-        }
+        size_t last_crossed_edge_id = crossed_half_edges.back();
+        size_t containing_face_id = graph.getHalfEdges()[last_crossed_edge_id ^ 1].face;
+        crossing_data.setVoronoiVertexTriId(face_index, containing_face_id);
       }
     }
   }

@@ -2,6 +2,7 @@
 #include "KineticDelaunay.hpp"
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
+#include <list>
 
 namespace kinDS
 {
@@ -17,7 +18,14 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   std::vector<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
-  std::vector<std::pair<size_t, size_t>> segment_mesh_pair_last_left_and_right_vertex;
+
+  struct MeshingData{
+    int mesh_start_vertex_id;
+    int mesh_end_vertex_id;
+    int start_half_edge_id;
+    int end_half_edge_id;
+  };
+  std::vector<std::list<MeshingData>> segment_mesh_pair_last_left_and_right_vertex;
   // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no
   // cutoff mesh exists
   std::vector<int> corner_to_cutoff_mesh_indices;
@@ -29,6 +37,8 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   double uv_circum_factor = 1.0;
   // 2.0;
   double texture_diameter = 0.9;
+
+  std::vector<VoronoiMesh> boundary_meshes;
 
   // for the boundary
   VoronoiMesh boundary_mesh; // Mesh for the boundary cuts
