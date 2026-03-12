@@ -108,7 +108,7 @@ class HalfEdgeDelaunayGraph
 
   size_t prev(size_t he_id) const;
 
-  std::array<size_t, 3> getTriangleVertexIndices(size_t face_id) const;
+  std::array<int, 3> getTriangleVertexIndices(size_t face_id) const;
   std::array<size_t, 3> getTriangleHalfEdgeIndices(size_t start_he_id) const;
 
   // getters
