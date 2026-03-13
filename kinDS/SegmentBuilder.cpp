@@ -113,7 +113,7 @@ static bool isInside(const std::vector<BoundaryPoint>& polygon, const glm::dvec2
 }
 
 [[nodiscard]] glm::dvec3 kinDS::SegmentBuilder::computeVoronoiVertex(
-  size_t half_edge_id, double t, size_t segment_mesh_pair_index) const
+  size_t half_edge_id, double t) const
 {
   const auto& graph = kin_del.getGraph();
   const auto& half_edges = graph.getHalfEdges();
@@ -150,6 +150,7 @@ static bool isInside(const std::vector<BoundaryPoint>& polygon, const glm::dvec2
   if (points.size() == 3)
   {
     circumcenter = graph.circumcenter(points[0], points[1], points[2]);
+    //KINDS_DEBUG("Computed circumcenter: " << glm::to_string(circumcenter));
     // circumcenter = (points[0] + points[1] + points[2]) / 3.0;
   }
   else
@@ -185,6 +186,7 @@ static bool isInside(const std::vector<BoundaryPoint>& polygon, const glm::dvec2
     glm::dvec2 perp_dir = glm::dvec2 { -edge_dir[1], edge_dir[0] };
 
     circumcenter = neighboring_circumcenter - perp_dir;
+    //KINDS_DEBUG("Infinite case; replacement circumcenter: " << glm::to_string(circumcenter));
   }
 
   // place circumcenters into the mesh
@@ -268,8 +270,8 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
   VoronoiMesh& mesh = meshes[segment_mesh_pair_index];
   // Insert Voronoi vertex
 
-  glm::dvec3 left_vertex = computeVoronoiVertex(he_id & ~1, t, segment_mesh_pair_index);
-  glm::dvec3 right_vertex = computeVoronoiVertex((he_id & ~1) + 1, t, segment_mesh_pair_index);
+  glm::dvec3 left_vertex = computeVoronoiVertex(he_id & ~1, t);
+  glm::dvec3 right_vertex = computeVoronoiVertex((he_id & ~1) + 1, t);
   auto& he = kin_del.getGraph().getHalfEdges()[he_id & ~1];
   glm::dvec2 centroid = polygonCentroid(boundary_points);
 
@@ -390,8 +392,8 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   // For now also create a mesh, but this might be changed later
   VoronoiMesh mesh;
 
-  glm::dvec3 left_vertex = computeVoronoiVertex(even_id, t, half_edge_index_to_segment_mesh_pair_index[even_id]);
-  glm::dvec3 right_vertex = computeVoronoiVertex(odd_id, t, half_edge_index_to_segment_mesh_pair_index[even_id]);
+  glm::dvec3 left_vertex = computeVoronoiVertex(even_id, t);
+  glm::dvec3 right_vertex = computeVoronoiVertex(odd_id, t);
 
 
   // Track how the Voronoi edge between these two vertices intersects with the boundary, we will need this information to correctly build the boundary mesh
@@ -412,11 +414,13 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   }
 
   if(kin_del.computeBoundaryOnTheFly()){
-    std::vector<size_t> crossed_half_edges = kin_del.computeCrossedHalfEdges(left_containing_tri_id, right_vertex, left_vertex, t);
-    KINDS_DEBUG("Number of crossed half edges: " << crossed_half_edges.size() << " with voronoi vertex ids: " << left_voronoi_vertex_id << " and " << right_voronoi_vertex_id);
+    //KINDS_DEBUG("Determining edge crossings of voronoi edge from " << left_voronoi_vertex_id << " to " << right_voronoi_vertex_id);
+    // TODO: I don't think we need this anymore, we can use the edge intersection list instead
+    std::vector<size_t> crossed_half_edges = kin_del.computeCrossedHalfEdges(left_containing_tri_id, right_vertex, left_vertex, t).first;
+    //KINDS_DEBUG("Number of crossed half edges: " << crossed_half_edges.size() << " with voronoi vertex ids: " << left_voronoi_vertex_id << " and " << right_voronoi_vertex_id);
     for(size_t crossed_he_id : crossed_half_edges)
     {
-      KINDS_DEBUG("Crossed half edge: " << crossed_he_id);
+      //KINDS_DEBUG("Crossed half edge: " << crossed_he_id);
       size_t prev_face_id = graph.getHalfEdges()[crossed_he_id].face;
       size_t next_face_id = graph.getHalfEdges()[crossed_he_id ^ 1].face;
       bool next_inside = kin_del.getFaceInside(next_face_id);
@@ -442,9 +446,6 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
         }
         else
         {
-          // entering the inside, start a new pair with the intersection point as first vertex
-          segment_mesh_pair_last_left_and_right_vertex.emplace_back();
-
           // Use the twin half-edge as it is located inside the component.
           segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
             MeshingData{ static_cast<int>(vertex_index), -1, static_cast<int>(crossed_he_id ^ 1), -1 });
@@ -773,7 +774,7 @@ std::vector<glm::dvec3> SegmentBuilder::computeClampedVoronoiVertices(
                                                    end = graph.incidentEdgesEnd(strand_id);
     it != end; ++it)
   {
-    glm::dvec3 voronoi_vertex = computeVoronoiVertex(*it, t, half_edge_index_to_segment_mesh_pair_index[*it]);
+    glm::dvec3 voronoi_vertex = computeVoronoiVertex(*it, t);
     voronoi_vertices.emplace_back(voronoi_vertex);
     // addMeshletVertex(mesh, boundary_polygon, centroid, voronoi_vertex);
   }
@@ -938,6 +939,99 @@ void kinDS::SegmentBuilder::splitComponent(
   }
 }
 
+void SegmentBuilder::computeEdgeIntersections()
+{
+  // Clear any previous intersections
+  for (auto& list : voronoi_edge_intersections) {
+    list.clear();
+  }
+  // Edge intersections will be rebuilt
+  edge_intersections.clear();
+
+  size_t num_edges = kin_del.getGraph().getHalfEdges().size() / 2;
+  voronoi_edge_intersections.resize(num_edges);
+  delaunay_edge_intersections.resize(num_edges);
+
+  // Pick a representative time value for intersections (could also parameterize this)
+  double t = 0.0;
+
+  // Fill intersections for each Voronoi edge
+  for (size_t voronoi_edge_id = 0; voronoi_edge_id < num_edges; ++voronoi_edge_id)
+  {
+    // Assume the Voronoi edge is represented by two half-edge IDs
+    size_t he_id0 = voronoi_edge_id * 2;
+    size_t he_id1 = he_id0 + 1;
+
+    // Compute the Voronoi vertices at the ends of the Voronoi edge
+    glm::dvec3 left_vertex = computeVoronoiVertex(he_id0, t);
+    glm::dvec3 right_vertex = computeVoronoiVertex(he_id1, t);
+
+    // Find which Delaunay edges this Voronoi edge crosses
+    // Note: We conventionally pass the containing triangle id, but use left_vertex or its face
+    size_t left_voronoi_vertex_id = kin_del.getGraph().getHalfEdges()[he_id0].face;
+    size_t left_containing_tri_id = kin_del.getCrossingDataContainingTriId(left_voronoi_vertex_id);
+
+    // Use computeCrossedHalfEdges with start and end vertices of the Voronoi edge
+    auto crossed_half_edges_params = kin_del.computeCrossedHalfEdges(
+      left_containing_tri_id,
+      glm::dvec2(right_vertex.x, right_vertex.y),
+      glm::dvec2(left_vertex.x, left_vertex.y),
+      t
+    );
+
+    // Build the intersection references for this voronoi edge
+    for (size_t i = 0; i < crossed_half_edges_params.first.size(); i++)
+    {
+      size_t delaunay_he_id = crossed_half_edges_params.first[i];
+      double param = crossed_half_edges_params.second[i];
+      // Create new intersection
+      edge_intersections.emplace_back();
+      auto edge_itr = std::prev(edge_intersections.end());
+
+      edge_itr->delaunay_edge_id = delaunay_he_id / 2; // edge id corresponds to undirected edge
+      edge_itr->voronoi_edge_id = voronoi_edge_id;
+
+      if(delaunay_he_id % 2 == 0){
+        edge_itr->delaunay_edge_param = param;
+      }
+      else{
+        edge_itr->delaunay_edge_param = 1.0 - param;
+      }
+      // Add reference to this intersection in the voronoi_edge_intersections
+      auto voronoi_ref = voronoi_edge_intersections[voronoi_edge_id].emplace(voronoi_edge_intersections[voronoi_edge_id].end(), edge_itr);
+      // now set voronoi_ref
+      edge_itr->voronoi_ref = voronoi_ref;
+
+      // For now, leave delaunay_ref unset; will be handled in next steps
+    }
+  }
+
+  // After populating `edge_intersections`, put references into `delaunay_edge_intersections` using `delaunay_edge_id`.
+  for (auto edge_itr = edge_intersections.begin(); edge_itr != edge_intersections.end(); ++edge_itr)
+  {
+    size_t delaunay_edge_id = edge_itr->delaunay_edge_id;
+    // Ensure index is valid
+    if (delaunay_edge_id >= delaunay_edge_intersections.size())
+    {
+      KINDS_ERROR("Delaunay edge id out of bounds: " << delaunay_edge_id << " >= " << delaunay_edge_intersections.size());
+      continue;
+    }
+    delaunay_edge_intersections[delaunay_edge_id].push_back(edge_itr);
+  }
+  // Now sort each list in delaunay_edge_intersections by delaunay_edge_param ascending.
+  for (auto& edge_list : delaunay_edge_intersections)
+  {
+    edge_list.sort([&](const EdgeIntersectionRef& a, const EdgeIntersectionRef& b)
+      { return a->delaunay_edge_param < b->delaunay_edge_param; });
+
+      // now set delaunay_ref
+      for (auto edge_itr = edge_list.begin(); edge_itr != edge_list.end(); ++edge_itr)
+      {
+        (*edge_itr)->delaunay_ref = edge_itr;
+      }
+  }
+}
+
 void SegmentBuilder::init()
 {
   auto& graph = kin_del.getGraph();
@@ -946,6 +1040,8 @@ void SegmentBuilder::init()
   strand_to_segment_indices.resize(strand_count);
   half_edge_index_to_segment_mesh_pair_index.resize(graph.getHalfEdges().size(), -1);
   corner_to_cutoff_mesh_indices.resize(graph.getHalfEdges().size(), -1);
+
+  computeEdgeIntersections();
 
   // Initialize the strand geometries at t = 0.0
   double t = 0.0; // TODO: might be customized later
@@ -1756,7 +1852,7 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
       // The half-edge is not in the list, we need to add it
       // But we need to determine whether we have to add it at the start or the end of the list.
       // The data structure is set up such that the start is the origin of the even he_id.
-      size_t even_id = inside_he_id & ~1;
+      size_t even_id = voronoi_he_id & ~1;
       size_t odd_id = even_id + 1;
 
       size_t start_voronoi_vertex_id = graph.getHalfEdges()[even_id].face;
@@ -1764,7 +1860,7 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
 
       if(end_voronoi_vertex_id == voronoi_vertex_id){
         // we need to add it at the end of the list
-        if(!entering_boundary){
+        if(entering_boundary){
           size_t new_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, e.time);
           segments.emplace_back(MeshingData{ static_cast<int>(new_vertex_index), static_cast<int>(new_vertex_index), static_cast<int>(inside_he_id), -1});
         }
@@ -1772,8 +1868,8 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
           // Segment will be clamped at the edge now instead of the Voronoi vertex
           assert(segments.back().end_half_edge_id == -1);
           size_t new_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, e.time);
-          int last_left = it->mesh_start_vertex_id;
-          int last_right = it->mesh_end_vertex_id;
+          int last_left = segments.back().mesh_start_vertex_id;
+          int last_right = segments.back().mesh_end_vertex_id;
           addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
 
           segments.back().end_half_edge_id = static_cast<int>(inside_he_id);
@@ -1783,7 +1879,7 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
       }
       else {
         // we need to add it at the start of the list
-        if(!entering_boundary){
+        if(entering_boundary){
           size_t new_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, e.time);
           segments.emplace_front(MeshingData{static_cast<int>(new_vertex_index), static_cast<int>(new_vertex_index), -1, static_cast<int>(inside_he_id)});
         }
@@ -1793,8 +1889,8 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
           assert(segments.front().start_half_edge_id == -1);
 
           size_t new_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, e.time);
-          int last_left = it->mesh_start_vertex_id;
-          int last_right = it->mesh_end_vertex_id;
+          int last_left = segments.front().mesh_start_vertex_id;
+          int last_right = segments.front().mesh_end_vertex_id;
           addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
 
           segments.front().start_half_edge_id = static_cast<int>(inside_he_id);
@@ -1857,7 +1953,7 @@ void kinDS::SegmentBuilder::insertSubdivision(size_t strand_id, double t)
     VoronoiMesh& adjacent_mesh = meshes[adjacent_segment_mesh_pair_index];
 
 
-    glm::dvec3 vertex = computeVoronoiVertex(adjacent_he_id, t, adjacent_segment_mesh_pair_index);
+    glm::dvec3 vertex = computeVoronoiVertex(adjacent_he_id, t);
     size_t new_vertex_index = addMeshletVertex(adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t);
     auto& segments = segment_mesh_pair_last_left_and_right_vertex[adjacent_segment_mesh_pair_index];
 

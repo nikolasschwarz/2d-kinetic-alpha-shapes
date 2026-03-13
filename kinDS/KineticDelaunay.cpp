@@ -1,4 +1,5 @@
 #include "KineticDelaunay.hpp"
+#include <glm/geometric.hpp>
 
 using namespace kinDS;
 
@@ -797,10 +798,10 @@ void KineticDelaunay::handleRadiusEvent(EventHandler& event_handler, Event& even
   }
 
   // Process the event at the given time
-  //KINDS_DEBUG("Processing radius event at time " << event.time << " for half-edge ID " << event.half_edge_id);
-  /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
+  KINDS_DEBUG("Processing radius event at time " << event.time << " for half-edge ID " << event.half_edge_id);
+  kinDS::HalfEdgeDelaunayGraphToSVG::write(
     getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + "_before.svg", 0.1, &face_inside);
-  std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;*/
+  std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;
   // Call the event handler if provided
   // TODO: (probably in callback) Handle boundary.
   event_handler.beforeRadiusEvent(event);
@@ -1038,43 +1039,43 @@ glm::dvec3 lineToHomegeneous(const glm::dvec2& p, const glm::dvec2& dir){
   return glm::dvec3(normal, -glm::dot(normal, p));
 }
 
-bool lineRayIntersection(
-  const glm::dvec2& line_p0,
-  const glm::dvec2& line_p1,
-  const glm::dvec2& ray_origin,
-  const glm::dvec2& ray_dir)
-{
+std::pair<double, double> segmentIntersectionParameters(const glm::dvec2& p0, const glm::dvec2& p1, const glm::dvec2& q0, const glm::dvec2& q1){
   auto cross2D = [](const glm::dvec2& a, const glm::dvec2& b)
   {
     return a.x * b.y - a.y * b.x;
   };
 
-  const glm::dvec2 p = ray_origin;
-  const glm::dvec2 r = ray_dir;
-  const glm::dvec2 q = line_p0;
-  const glm::dvec2 s = line_p1 - line_p0;
+  const glm::dvec2 p = p0;
+  const glm::dvec2 r = p1 - p0;
+  const glm::dvec2 q = q0;
+  const glm::dvec2 s = q1 - q0;
 
-  const double rxs = cross2D(r, s);
+  const double rxs = glm::cross(r, s);
 
   // Parallel (or nearly so): treat as no proper intersection
   if (std::abs(rxs) < 1e-12)
   {
-    return false;
+    return std::pair<double, double>(std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
   }
 
-  const double t_ray = cross2D(q - p, s) / rxs;
+  const double t = cross2D(q - p, s) / rxs;
+  const double u = cross2D(q - p, r) / rxs;
 
-  // Intersection must lie on the ray, i.e. parameter >= 0
-  return t_ray >= 0.0;
+  return std::pair<double, double>(t, u);
 }
 
-  std::vector<size_t> KineticDelaunay::computeCrossedHalfEdges(
+bool segmentRayIntersection(const glm::dvec2& segment_p0, const glm::dvec2& segment_p1, const glm::dvec2& ray_origin, const glm::dvec2& ray_dir)
+{
+  auto [t, u] = segmentIntersectionParameters(segment_p0, segment_p1, ray_origin, ray_origin + ray_dir);
+  return t >= 0.0 && u >= 0.0 && u <= 1.0;
+}
+
+  std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCrossedHalfEdges(
   size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t)
 {
-  // TODO: When I started implementing this, we didn't have an explicit start point and just relied on the start face ID. Perhaps we can simplify this.
   std::vector<size_t> crossed_half_edge_ids;
-
-  auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
+  std::vector<double> crossed_half_edge_params;
+    auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
   { return -((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)); };
 
   auto compute_angular_bisector = [&](size_t he_id)
@@ -1110,7 +1111,15 @@ bool lineRayIntersection(
     glm::dvec2 angular_bisector_direction =
       glm::normalize(p_c_prime - p_a) + glm::normalize(p_c - p_a);
 
-    return std::pair(p_a, angular_bisector_direction);
+    // Fallback: If the direction is zero, we can just use the normal of the segment.
+    if(glm::length(angular_bisector_direction) < 1e-12){
+      glm::dvec2 tangent = glm::normalize(p_c_prime - p_c);
+      angular_bisector_direction = glm::dvec2(-tangent.y, tangent.x);
+      // TODO: I'm not sure if the sign is correct here.
+    }
+
+    // Since we are on the convex hull, the direction points inward, so we need to negate it.
+    return std::pair(p_a, -angular_bisector_direction);
   };
 
   auto compute_angular_bisector_homogeneous = [&](size_t he_id)
@@ -1122,6 +1131,7 @@ bool lineRayIntersection(
   auto compute_he_graph_edge_function = [&](size_t he_id, const glm::dvec2& query_point){
     size_t origin = graph.getHalfEdges()[he_id].origin;
     size_t dest = graph.destination(he_id);
+    //KINDS_DEBUG("Computing edge function for half-edge " << he_id << " with origin " << origin << " and destination " << dest);
     if (origin != static_cast<size_t>(-1) && dest != static_cast<size_t>(-1))
     {
       glm::dvec2 p0 = branch_trajs.evaluate(origin, t);
@@ -1131,7 +1141,14 @@ bool lineRayIntersection(
     else
     {
       glm::dvec3 edge = compute_angular_bisector_homogeneous(he_id);
-      return glm::dot(edge, glm::dvec3(query_point, 1.0));
+
+      if(dest == -1){
+        return -glm::dot(edge, glm::dvec3(query_point, 1.0));
+      }
+      else
+      {
+        return glm::dot(edge, glm::dvec3(query_point, 1.0));
+      }
     }
   };
 
@@ -1141,170 +1158,82 @@ bool lineRayIntersection(
   auto next_vertices = graph.getTriangleVertexIndices(start_face_id);
   auto next_tri_half_edges = graph.getFaces()[start_face_id].half_edges;
 
-  double edge_functions[3] = {0.0, 0.0, 0.0};
-  double& edge_function_01 = edge_functions[0];
-  double& edge_function_12 = edge_functions[1];
-  double& edge_function_20 = edge_functions[2];
+  //KINDS_DEBUG("Following line from " << glm::to_string(start_point) << " to " << glm::to_string(destination));
 
   while (!inside_triangle)
   {
-    
-    std::vector<glm::dvec2> next_points;
-    bool outer_face = false;
-    bool infinite_vertex[3] = {false, false, false};
-    for (int i = 0; i < next_vertices.size(); i++)
-    {
-      const auto& v = next_vertices[i];
-      if (v == -1)
-      {
-        infinite_vertex[i] = true;
-        next_points.push_back(glm::dvec2(0.0, 0.0));
-      }
-      else {
-        next_points.push_back(branch_trajs.evaluate(v, t));
+    //KINDS_DEBUG("Next face ID: " << next_face_id);
+    // check each edge for an intersection with the line we need to follow.
+    inside_triangle = true;
+
+
+    // first test if we are inside
+    for(int edge_index = 0; edge_index < 3; edge_index++){
+      size_t he_id = next_tri_half_edges[edge_index];
+      double edge_function = compute_he_graph_edge_function(he_id, destination);
+      if(edge_function < 0){
+        inside_triangle = false;
+        break;
       }
     }
 
-    edge_function_12 = compute_he_graph_edge_function(next_tri_half_edges[1], destination);
-    edge_function_20 = compute_he_graph_edge_function(next_tri_half_edges[2], destination);
-
-    if(next_face_id == start_face_id){
-      edge_function_01 = compute_he_graph_edge_function(next_tri_half_edges[0], destination);
-    }
-    else {
-      edge_function_01 = 1.0; // positive dummy
+    // Now determine direction of walk
+    if(inside_triangle)
+    {
+      break;
     }
 
-    unsigned int violation_count = 0;
-    for( double f : edge_functions){
-      if(f < 0){
-        violation_count++;
+    size_t max_s_index = -1;
+    double max_s = -1.0;
+    double crossed_edge_param;
+
+    for(int edge_index = 0; edge_index < 3; edge_index++){
+      if(edge_index == 0 && next_face_id != start_face_id){
+        // This is where we came from, so we don't need to check it as it will make us go backwards
+        continue;
       }
-    }
+      size_t he_id = next_tri_half_edges[edge_index];
 
-    if (violation_count == 0)
-    {
-      inside_triangle = true;
-    }
-    else if (violation_count == 2)
-    {
-
-      if(!outer_face){
-        double check_v[3];
-
-        for(int i = 0; i < 3; i++){
-          check_v[i] = edge_function(start_point, destination, next_points[i]);
-        }
-
-        for(int i = 0; i < 3; i++){
-          if (edge_functions[i] >= 0) // complement is easier to check
-          {
-            if (std::signbit(check_v[i]) != std::signbit(check_v[(i + 1) % 3]))
-            {
-              next_crossed_edge_id = next_tri_half_edges[i];
-            }
-            else if (std::signbit(check_v[(i + 1) % 3]) != std::signbit(check_v[(i + 2) % 3]))
-            {
-              next_crossed_edge_id = next_tri_half_edges[(i + 1) % 3];
-            }
-            else
-            {
-              throw std::runtime_error(
-                "This should not happen, check_v0, check_v1 and check_v2 cannot all have the same sign");
-            }
+      if(graph.isInfinite(he_id)){
+        auto ray = compute_angular_bisector(he_id);
+        /*if(segmentRayIntersection(start_point, destination, ray.first, ray.second)){
+          next_crossed_edge_id = he_id;
+          inside_triangle = false;
+          break;
+        }*/
+        auto [r, s] = segmentIntersectionParameters(ray.first, ray.first + ray.second, start_point, destination);
+        if(r >= 0.0 && s <= 1.0){
+          if(s > max_s){
+            max_s = s;
+            max_s_index = edge_index;
+            crossed_edge_param = r;
           }
         }
       }
-      else
-      {
-        double check_v[3];
-
-        for(int i = 0; i < 3; i++){
-          if(!infinite_vertex[i]){
-            check_v[i] = edge_function(start_point, destination, next_points[i]);
-          }
-        }
-        // For the two infinite edges, we need to check if the line defined by start_point and destination intersects the edge.
-        for(int i = 0; i < 3; i++)
-        {
-          if(i == 0 && next_face_id != start_face_id){
-            // This is where we came from, so we shouldn't check it as it will make us go backwards
-            // 
-            continue;
-          }
-          // get edge
-          size_t he_id = next_tri_half_edges[i];
-          size_t origin = graph.getHalfEdges()[he_id].origin;
-          size_t dest = graph.destination(he_id);
-          if(origin != static_cast<size_t>(-1) && dest != static_cast<size_t>(-1)){
-            // finite, check against the two vertices just as in the non-outer face case
-            glm::dvec2 p0 = branch_trajs.evaluate(origin, t);
-            glm::dvec2 p1 = branch_trajs.evaluate(dest, t);
-            double check_v0 = edge_function(start_point, destination, p0);
-            double check_v1 = edge_function(start_point, destination, p1);
-           
-            if(std::signbit(check_v0) != std::signbit(check_v1)){
-              next_crossed_edge_id = he_id;
-              break;
-            }
-          }
-          else {
-            // infinite, check against the angular bisector
-            glm::dvec2 finite_point;
-            int origin_index = -1;
-            if(origin != -1){
-              finite_point = branch_trajs.evaluate(origin, t);
-              origin_index = i;
-            }
-            else
-            {
-              finite_point = branch_trajs.evaluate(dest, t);
-              origin_index = (i + 1) % 3;
-            }
-
-            auto ray = compute_angular_bisector(he_id);
-            KINDS_DEBUG("Checking ray intersection with finite point " << glm::to_string(finite_point) << " and ray direction " << glm::to_string(ray.second));
-            bool ray_intersects = lineRayIntersection(start_point, destination, finite_point, ray.second);
-            if(ray_intersects){
-              next_crossed_edge_id = he_id;
-              break;
-            }
+      else{
+        glm::dvec2 edge_start = branch_trajs.evaluate(graph.getHalfEdges()[he_id].origin, t);
+        glm::dvec2 edge_end = branch_trajs.evaluate(graph.destination(he_id), t);
+        auto [r, s] = segmentIntersectionParameters(edge_start, edge_end, start_point, destination);
+        if(r >= 0.0 && r <= 1.0 && s <= 1.0){
+          if(s > max_s){
+            max_s = s;
+            max_s_index = edge_index;
+            crossed_edge_param = r;
           }
         }
       }
     }
-    else if (violation_count == 1)
-    {
-      // Here we can rely on sidedness only.
-      if(edge_function_01 < 0)
-      {
-        next_crossed_edge_id = next_tri_half_edges[0];
-      }
-      else if (edge_function_12 < 0)
-      {
-        next_crossed_edge_id = next_tri_half_edges[1];
-      }
-      else if (edge_function_20 < 0)
-      {
-        next_crossed_edge_id = next_tri_half_edges[2];
-      }
-    }
-    else
-    {
-       throw std::runtime_error(
-            "This should not happen as it means that the edges do not form a triangle.");
-    }
-
-    if(!inside_triangle){
-      next_face_id = graph.getHalfEdges()[next_crossed_edge_id ^ 1].face;
-      // Record the edge we are about to cross
-      crossed_half_edge_ids.push_back(next_crossed_edge_id);
-      next_vertices = graph.adjacentTriangleVertices(next_crossed_edge_id ^ 1);
-      next_tri_half_edges = graph.getTriangleHalfEdgeIndices(next_crossed_edge_id ^ 1);
-    }
+  
+    next_crossed_edge_id = next_tri_half_edges[max_s_index];
+    next_face_id = graph.getHalfEdges()[next_crossed_edge_id ^ 1].face;
+    // Record the edge we are about to cross
+    crossed_half_edge_ids.push_back(next_crossed_edge_id);
+    crossed_half_edge_params.push_back(crossed_edge_param);
+    next_vertices = graph.adjacentTriangleVertices(next_crossed_edge_id ^ 1);
+    next_tri_half_edges = graph.getTriangleHalfEdgeIndices(next_crossed_edge_id ^ 1);
   }
 
-  return crossed_half_edge_ids;
+  return std::make_pair(crossed_half_edge_ids, crossed_half_edge_params);
 }
 
 const HalfEdgeDelaunayGraph& KineticDelaunay::init()
@@ -1406,7 +1335,8 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init()
     }
     else
     {
-      auto crossed_half_edges = computeCrossedHalfEdges(face_index, circumcenter, start_point, 0.0);
+      //KINDS_DEBUG("Determining containing triangle for voronoi vertex " << face_index);
+      auto crossed_half_edges = computeCrossedHalfEdges(face_index, circumcenter, start_point, 0.0).first;
 
       if (crossed_half_edges.empty())
       {

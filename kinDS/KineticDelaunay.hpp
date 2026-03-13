@@ -184,7 +184,7 @@ class KineticDelaunay
    * 
    * Currently assumes that the start face is finite and that the destination lies outside of only one edge of the start triangle.
    */
-  std::vector<size_t> computeCrossedHalfEdges(
+  std::pair<std::vector<size_t>, std::vector<double>> computeCrossedHalfEdges(
   size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t);
 
  private:
