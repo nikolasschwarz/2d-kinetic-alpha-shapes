@@ -414,7 +414,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   }
 
   if(kin_del.computeBoundaryOnTheFly()){
-    //KINDS_DEBUG("Determining edge crossings of voronoi edge from " << left_voronoi_vertex_id << " to " << right_voronoi_vertex_id);
+     //KINDS_DEBUG("Determining edge crossings of voronoi edge from " << left_voronoi_vertex_id << " to " << right_voronoi_vertex_id);
     // TODO: I don't think we need this anymore, we can use the edge intersection list instead
     std::vector<size_t> crossed_half_edges = kin_del.computeCrossedHalfEdges(left_containing_tri_id, right_vertex, left_vertex, t).first;
     //KINDS_DEBUG("Number of crossed half edges: " << crossed_half_edges.size() << " with voronoi vertex ids: " << left_voronoi_vertex_id << " and " << right_voronoi_vertex_id);
@@ -423,6 +423,46 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
       //KINDS_DEBUG("Crossed half edge: " << crossed_he_id);
       size_t prev_face_id = graph.getHalfEdges()[crossed_he_id].face;
       size_t next_face_id = graph.getHalfEdges()[crossed_he_id ^ 1].face;
+    /*
+    // Determine edge crossings of the Voronoi edge using the precomputed intersection lists
+    size_t voronoi_edge_id = even_id / 2;
+    auto& intersections = voronoi_edge_intersections[voronoi_edge_id];
+
+    size_t current_face_id = left_containing_tri_id;
+
+    for (auto& intersection_ref : intersections)
+    {
+      size_t delaunay_edge_id = intersection_ref->delaunay_edge_id;
+      size_t he0 = 2 * delaunay_edge_id;
+      size_t he1 = he0 + 1;
+
+      const auto& he0_ref = graph.getHalfEdges()[he0];
+      const auto& he1_ref = graph.getHalfEdges()[he1];
+
+      size_t crossed_he_id;
+      size_t prev_face_id;
+      size_t next_face_id;
+
+      if (he0_ref.face == current_face_id)
+      {
+        crossed_he_id = he0;
+        prev_face_id = he0_ref.face;
+        next_face_id = he1_ref.face;
+      }
+      else if (he1_ref.face == current_face_id)
+      {
+        crossed_he_id = he1;
+        prev_face_id = he1_ref.face;
+        next_face_id = he0_ref.face;
+      }
+      else
+      {
+        // Fallback: orientation is ambiguous, default to he0
+        crossed_he_id = he0;
+        prev_face_id = he0_ref.face;
+        next_face_id = he1_ref.face;
+      }
+      */
       bool next_inside = kin_del.getFaceInside(next_face_id);
 
       if(inside != next_inside)
@@ -442,7 +482,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
           // leaving the inside, add the intersection point as second of the last added pair
           segment_mesh_pair_last_left_and_right_vertex.back().back().mesh_end_vertex_id
             = static_cast<int>(vertex_index);
-            segment_mesh_pair_last_left_and_right_vertex.back().back().end_half_edge_id = static_cast<int>(crossed_he_id);
+          segment_mesh_pair_last_left_and_right_vertex.back().back().end_half_edge_id = static_cast<int>(crossed_he_id);
         }
         else
         {
@@ -452,6 +492,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
         }
       }
 
+      //current_face_id = next_face_id;
       inside = next_inside;
     }
   }
@@ -1737,6 +1778,9 @@ void kinDS::SegmentBuilder::afterRadiusEvent(KineticDelaunay::Event& e)
       = polygonCentroid(kin_del.component_data.component_boundaries[component_id][0]);
     kin_del.component_data.component_last_updated[component_id] = e.time;
   }
+
+  // The intersection data structure is fine, but we need to infer new meshlet pair data from it
+
 }
 
 void SegmentBuilder::beforeCrossingEvent(KineticDelaunay::Event& e) {
@@ -1774,6 +1818,83 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
     KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
   }
 
+  // Update the edge intersections
+  auto& graph = kin_del.getGraph();
+  size_t voronoi_vertex_id = e.voronoi_vertex_id;
+  size_t crossed_delaunay_edge_id = e.half_edge_id / 2;
+  auto& d_intersections = delaunay_edge_intersections[crossed_delaunay_edge_id];
+
+  glm::dvec3 voronoi_vertex_position = glm::dvec3(e.position, e.time);
+  auto half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;
+
+  bool erased[3] = {false, false, false};
+  for (size_t i = 0; i < half_edges.size(); i++)
+  {
+    size_t voronoi_he_id = half_edges[i];
+    size_t voronoi_edge_id = voronoi_he_id / 2;
+    auto& v_intersections = voronoi_edge_intersections[voronoi_edge_id];
+    // Check if an intersection with the crossed delaunay edge can be found in the list of voronoi edge intersections.
+    // For geometric reasons, this must always be the first or the last element of the list, if it exists.
+    // Lambda to identify intersection for this voronoi+delaunay edge.
+    auto is_matching = [&](EdgeIntersectionRef ref) {
+      return ref->delaunay_edge_id == crossed_delaunay_edge_id && ref->voronoi_edge_id == voronoi_edge_id;
+    };
+
+    if (!v_intersections.empty() && is_matching(v_intersections.front())) {
+      // Remove from all three lists (voronoi, delaunay, main)
+      auto main_ref = v_intersections.front();
+      // Remove from delaunay list
+      d_intersections.erase(main_ref->delaunay_ref);
+      // Remove from voronoi list
+      v_intersections.erase(main_ref->voronoi_ref);
+      // Remove from main list
+      edge_intersections.erase(main_ref);
+      erased[i] = true;
+    } else if (!v_intersections.empty() && is_matching(v_intersections.back())) {
+      auto main_ref = v_intersections.back();
+      d_intersections.erase(main_ref->delaunay_ref);
+      v_intersections.erase(main_ref->voronoi_ref);
+      edge_intersections.erase(main_ref);
+      erased[i] = true;
+    }
+  }
+
+  for (size_t i = 0; i < half_edges.size(); i++)
+  {
+    size_t voronoi_he_id = half_edges[i];
+    size_t voronoi_edge_id = voronoi_he_id / 2;
+    auto& v_intersections = voronoi_edge_intersections[voronoi_edge_id];
+    
+    if (!erased[i]) {
+      // Need to create a new intersection and insert into all three lists
+      // Find the correct insertion point in v_intersections and d_intersections.
+      // For now, just insert at end (TODO: determine correct place based on orientation, etc.)
+
+      VoronoiDelaunayEdgeIntersection new_int;
+      new_int.delaunay_edge_id = crossed_delaunay_edge_id;
+      new_int.voronoi_edge_id = voronoi_edge_id;
+      // If required to track a parameter, set it here (e.g., 0.0 or 1.0, or geometric interpolation, etc.)
+      new_int.delaunay_edge_param = 0.0;
+
+      // Insert into main list
+      edge_intersections.push_back(new_int);
+      auto main_iter = std::prev(edge_intersections.end());
+
+      // Insert into voronoi list and save iterator reference
+      // TODO: Insert in proper geometric order; for now just push_back
+      v_intersections.push_back(main_iter);
+      auto v_it = std::prev(v_intersections.end());
+      main_iter->voronoi_ref = v_it;
+
+      // Insert into delaunay list and save iterator reference
+      d_intersections.push_back(main_iter);
+      auto d_it = std::prev(d_intersections.end());
+      main_iter->delaunay_ref = d_it;
+
+      // TODO: Replace push_back above with correct insertion logic according to geometry/topology
+    }
+  }
+
   // If the edge is not on the component boundary, we do not need to do anything here, because the crossing does not change the boundary
   if (!kin_del.isOnComponentBoundary(e.half_edge_id)){
     return;
@@ -1788,16 +1909,12 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
   }
 
   // We need to iterate over the adjacent voronoi edges. These can be identified by the half-edges of the dual triangle to the Voronoi vertex.
-  auto& graph = kin_del.getGraph();
-  size_t voronoi_vertex_id = e.voronoi_vertex_id;
-  glm::dvec3 voronoi_vertex_position = glm::dvec3(e.position, e.time);
-
   // TODO: not sure if this is correct
   // TODO: we can probably simplify this since we are on the boundary and relative distance from the center should be 1.0
   size_t component_id = kin_del.component_data.component_map[graph.destination(inside_he_id)];
   auto& boundary_polygon = kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = kin_del.component_data.component_centroids[component_id]; // TODO: we might have to recompute this first.
-  auto half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;
+
   for (size_t voronoi_he_id : half_edges)
   {
     /*if(graph.getHalfEdges()[voronoi_he_id].origin == -1 || graph.destination(voronoi_he_id) == -1){

@@ -32,7 +32,6 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   };
 
   std::list<VoronoiDelaunayEdgeIntersection> edge_intersections;
-
   std::vector<std::list<EdgeIntersectionRef>> voronoi_edge_intersections;
   std::vector<std::list<EdgeIntersectionRef>> delaunay_edge_intersections;
 
