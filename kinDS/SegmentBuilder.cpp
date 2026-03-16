@@ -1347,6 +1347,9 @@ void SegmentBuilder::afterFlipEvent(KineticDelaunay::Event& e)
     }
   }
 
+  // Update the intersections with the flipped edge
+
+
   // Visual debug: export SVG after flip event with Voronoi vertex labels.
   if (visual_debug)
   {
@@ -1828,6 +1831,7 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
   auto half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;
 
   bool erased[3] = {false, false, false};
+  std::list<EdgeIntersectionRef>::iterator next_after_deletion;
   for (size_t i = 0; i < half_edges.size(); i++)
   {
     size_t voronoi_he_id = half_edges[i];
@@ -1843,6 +1847,8 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
     if (!v_intersections.empty() && is_matching(v_intersections.front())) {
       // Remove from all three lists (voronoi, delaunay, main)
       auto main_ref = v_intersections.front();
+      // store next for re-insertion
+      next_after_deletion = std::next(main_ref->voronoi_ref);
       // Remove from delaunay list
       d_intersections.erase(main_ref->delaunay_ref);
       // Remove from voronoi list
@@ -1852,6 +1858,7 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
       erased[i] = true;
     } else if (!v_intersections.empty() && is_matching(v_intersections.back())) {
       auto main_ref = v_intersections.back();
+      next_after_deletion = std::next(main_ref->delaunay_ref);
       d_intersections.erase(main_ref->delaunay_ref);
       v_intersections.erase(main_ref->voronoi_ref);
       edge_intersections.erase(main_ref);
@@ -1859,6 +1866,8 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
     }
   }
 
+  std::list<EdgeIntersectionRef>::iterator inserted_it;
+  bool inserted = false;
   for (size_t i = 0; i < half_edges.size(); i++)
   {
     size_t voronoi_he_id = half_edges[i];
@@ -1881,17 +1890,61 @@ void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
       auto main_iter = std::prev(edge_intersections.end());
 
       // Insert into voronoi list and save iterator reference
-      // TODO: Insert in proper geometric order; for now just push_back
-      v_intersections.push_back(main_iter);
-      auto v_it = std::prev(v_intersections.end());
-      main_iter->voronoi_ref = v_it;
+      if(!inserted){
+        inserted_it = d_intersections.insert(next_after_deletion, main_iter);
+        main_iter->delaunay_ref = inserted_it;
+        inserted = true;
+      }
+      else
+      {
+        // determine if we need to insert before or after the already inserted element
+        // check if the next Voronoi edge belongs to the same cell as the one that has to be inserted
+        bool insert_after = false;
+        size_t cell_index_a = graph.getHalfEdges()[voronoi_he_id].origin;
+        size_t cell_index_b = graph.destination(voronoi_he_id);
+        if(next_after_deletion != d_intersections.end()){
+          size_t next_voronoi_edge_id = (*next_after_deletion)->voronoi_edge_id;
+          size_t next_cell_index_a = graph.getHalfEdges()[2 * next_voronoi_edge_id].origin;
+          size_t next_cell_index_b = graph.destination(2 * next_voronoi_edge_id);
+
+          // if one matches, this is the correct insertion point
+          if(cell_index_a == next_cell_index_a || cell_index_a == next_cell_index_b || cell_index_b == next_cell_index_a || cell_index_b == next_cell_index_b)
+          {
+            insert_after = true;
+          }
+        }
+        else
+        {
+          // check against the index of the end vertex index
+          size_t vertex_id = graph.destination(2 * crossed_delaunay_edge_id);
+          if(cell_index_a == vertex_id || cell_index_b == vertex_id)
+          {
+            insert_after = true;
+          }
+        }
+
+        if(insert_after){
+          inserted_it = d_intersections.insert(next_after_deletion, main_iter);
+          main_iter->delaunay_ref = inserted_it;
+        }
+        else
+        {
+          inserted_it = d_intersections.insert(inserted_it, main_iter);
+          main_iter->delaunay_ref = inserted_it;
+        }
+      }
 
       // Insert into delaunay list and save iterator reference
-      d_intersections.push_back(main_iter);
-      auto d_it = std::prev(d_intersections.end());
-      main_iter->delaunay_ref = d_it;
-
-      // TODO: Replace push_back above with correct insertion logic according to geometry/topology
+      // Decide if we have to insert at beginning or end
+      if(e.voronoi_vertex_id == graph.getHalfEdges()[2 * voronoi_edge_id].face){
+        v_intersections.emplace_front(main_iter);
+        main_iter->voronoi_ref = v_intersections.begin();
+      }
+      else
+      {
+        v_intersections.emplace_back(main_iter);
+        main_iter->voronoi_ref = std::prev(v_intersections.end());
+      }
     }
   }
 
