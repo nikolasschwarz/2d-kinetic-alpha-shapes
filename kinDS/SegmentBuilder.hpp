@@ -19,22 +19,6 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
 
-  // For the meshing, we need to track all intersections of Voronoi edges with Delaunay edges and maintain their order
-  struct VoronoiDelaunayEdgeIntersection;
-
-  typedef std::list<VoronoiDelaunayEdgeIntersection>::iterator EdgeIntersectionRef;
-  struct VoronoiDelaunayEdgeIntersection {
-    std::list<EdgeIntersectionRef>::iterator delaunay_ref;
-    std::list<EdgeIntersectionRef>::iterator voronoi_ref;
-    size_t delaunay_edge_id; // edge ids correspond to floor(half_edge_id / 2)
-    size_t voronoi_edge_id;
-    double delaunay_edge_param;
-  };
-
-  std::list<VoronoiDelaunayEdgeIntersection> edge_intersections;
-  std::vector<std::list<EdgeIntersectionRef>> voronoi_edge_intersections;
-  std::vector<std::list<EdgeIntersectionRef>> delaunay_edge_intersections;
-
   struct MeshingData{
     int mesh_start_vertex_id;
     int mesh_end_vertex_id;
@@ -117,9 +101,6 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   SegmentBuilder(
     KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh);
   SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh);
-
-  void computeEdgeIntersections();
-
   void init() override;
 
   void betweenSections(size_t index) override;

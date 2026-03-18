@@ -110,7 +110,7 @@ class HalfEdgeDelaunayGraph
 
   std::array<int, 3> getTriangleVertexIndices(size_t face_id) const;
   std::array<size_t, 3> getTriangleHalfEdgeIndices(size_t start_he_id) const;
-
+  std::array<size_t, 4> getQuadBoundaryHalfEdgeIndices(size_t quad_id) const;
   // getters
   const std::vector<HalfEdge>& getHalfEdges() const;
   const std::vector<Triangle>& getFaces() const;

@@ -642,6 +642,18 @@ std::array<size_t, 3> kinDS::HalfEdgeDelaunayGraph::getTriangleHalfEdgeIndices(s
   return result;
 }
 
+std::array<size_t, 4> kinDS::HalfEdgeDelaunayGraph::getQuadBoundaryHalfEdgeIndices(size_t quad_id) const
+{
+  std::array<size_t, 4> result;
+
+  result[0] = half_edges[quad_id * 2].next; // Next half-edge in the quadrilateral
+  result[1] = half_edges[result[0]].next; // Next half-edge in the quadrilateral
+  result[2] = half_edges[quad_id * 2 + 1].next; // Next half-edge in the quadrilateral
+  result[3] = half_edges[result[2]].next; // Next half-edge in the quadrilateral
+
+  return result;
+}
+
 // getters
 const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& HalfEdgeDelaunayGraph::getHalfEdges() const { return half_edges; }
 

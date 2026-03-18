@@ -8,6 +8,7 @@
 #include <format>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
+#include <map>
 #include <queue>
 #include <string>
 
@@ -179,13 +180,19 @@ class KineticDelaunay
 
   ComponentData component_data;
 
+  std::pair<glm::dvec2, glm::dvec2> computeAngularBisector(size_t he_id, double t) const;
+
+  std::pair<double, double> delaunayVoronoiEdgeIntersection(size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
+
   /**
-   * \brief Compute the half-edges crossed by the Voronoi edge between the given start point and destination, starting from the given face.
-   * 
-   * Currently assumes that the start face is finite and that the destination lies outside of only one edge of the start triangle.
+   * \brief Compute the half-edges crossed by the Voronoi edge between the given start point and destination, starting
+   * from the given face.
+   *
+   * Currently assumes that the start face is finite and that the destination lies outside of only one edge of the start
+   * triangle.
    */
   std::pair<std::vector<size_t>, std::vector<double>> computeCrossedHalfEdges(
-  size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t);
+  size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
 
  private:
   typedef std::priority_queue<Event> EventQueue;
@@ -208,13 +215,29 @@ class KineticDelaunay
   // crossing-related data
   struct CrossingData
   {
+    struct VoronoiDelaunayEdgeIntersection;
+    typedef std::list<VoronoiDelaunayEdgeIntersection>::iterator EdgeIntersectionRef;
+
    private:
     std::vector<size_t> voronoi_vertex_to_containing_tri_id;
     std::vector<std::list<size_t>> tri_id_to_voronoi_vertices;
     std::vector<std::list<size_t>::iterator> voronoi_vertex_to_iterator;
 
    public:
+    std::list<VoronoiDelaunayEdgeIntersection> edge_intersections;
+    std::vector<std::list<EdgeIntersectionRef>> voronoi_edge_intersections;
+    std::vector<std::list<EdgeIntersectionRef>> delaunay_edge_intersections;
+
+
     std::vector<double> last_crossing;
+
+    struct VoronoiDelaunayEdgeIntersection {
+      std::list<EdgeIntersectionRef>::iterator delaunay_ref;
+      std::list<EdgeIntersectionRef>::iterator voronoi_ref;
+      size_t delaunay_edge_id;
+      size_t voronoi_edge_id;
+      double delaunay_edge_param;
+    };
 
     void init(size_t face_count)
     {
@@ -269,13 +292,25 @@ class KineticDelaunay
       return result;
     }
 
+    void computeEdgeIntersections(const KineticDelaunay& kd, double t);
+
+    // Update Voronoi–Delaunay edge intersections after a single crossing event.
+    void updateAfterCrossingEvent(const KineticDelaunay& kd, const Event& e);
+
+    // Remove a single intersection from all three data structures (global list,
+    // per-Voronoi-edge list, and per-Delaunay-edge list).
+    void removeIntersection(EdgeIntersectionRef intersection_ref);
+
   } crossing_data;
 
   glm::dvec3 computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t) const;
 
   void computeCrossingEvents(double t, size_t voronoi_vertex_id);
 
-  void reassignVoronoiVerticesInQuadrilateral(size_t quad_index, double t);
+  void reassignVoronoiVerticesOnBoundary(size_t he_id, double t);
+
+  void reassignVoronoiVerticesInQuadrilateral(
+    size_t quad_index, double t, const std::map<size_t, size_t>& pre_flip_quad_faces);
 
   void computeRadiusEvents(double t, size_t he_id);
 
@@ -358,5 +393,14 @@ class KineticDelaunay
   size_t getCrossingDataContainingTriId(size_t voronoi_vertex_id) const;
   std::vector<size_t> getCrossingDataVoronoiVerticesInTri(size_t tri_id) const;
   glm::dvec3 getVoronoiVertexHomogeneous(size_t voronoi_vertex_id, double t) const;
+
+  /**
+   * \brief Compute the (possibly clamped) Voronoi vertex position for the Delaunay edge represented by half_edge_id.
+   *
+   * For finite triangles this is the circumcenter; for infinite / hull cases, this returns a finite point obtained
+   * by moving a neighboring circumcenter along a perpendicular direction so it can be used for meshing and
+   * intersection computations.
+   */
+  glm::dvec3 computeVoronoiVertexClampedInfinity(size_t half_edge_id, double t) const;
 };
 } // namespace kinDS
