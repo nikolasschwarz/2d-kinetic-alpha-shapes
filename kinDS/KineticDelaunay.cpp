@@ -1251,6 +1251,7 @@ void KineticDelaunay::handleRadiusEvent(EventHandler& event_handler, Event& even
 
   event_handler.afterRadiusEvent(event);
 }
+
 void KineticDelaunay::handleCrossingEvent(EventHandler& event_handler, Event& event)
 {
   // Check if the event is still valid
@@ -1280,10 +1281,10 @@ void KineticDelaunay::handleCrossingEvent(EventHandler& event_handler, Event& ev
   KINDS_DEBUG("Moving Voronoi vertex " << event.voronoi_vertex_id << " from triangle " << containing_tri_id << " to triangle " << graph.getHalfEdges()[event.half_edge_id ^ 1].face);
   crossing_data.moveVertex(event.voronoi_vertex_id, graph.getHalfEdges()[event.half_edge_id ^ 1].face, event.time);
 
-  event_handler.afterCrossingEvent(event);
-
   // Update Voronoi–Delaunay edge intersections stored in crossing_data in response to this crossing.
   crossing_data.updateAfterCrossingEvent(*this, event);
+
+  event_handler.afterCrossingEvent(event);
 
   // Re-compute crossing events for this Voronoi vertex
   computeCrossingEvents(event.time, event.voronoi_vertex_id);
@@ -1872,6 +1873,10 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
   {
     size_t he_id0 = voronoi_edge_id * 2;
     size_t he_id1 = he_id0 + 1;
+
+    if(graph.isInfinite(he_id0)){
+      continue;
+    }
 
     glm::dvec3 left_pos = kd.computeVoronoiVertexClampedInfinity(he_id0, t);
     glm::dvec3 right_pos = kd.computeVoronoiVertexClampedInfinity(he_id1, t);

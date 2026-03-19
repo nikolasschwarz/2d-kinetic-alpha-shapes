@@ -254,16 +254,22 @@ class HalfEdgeDelaunayGraphToSVG
       glm::dvec2 p0, p1, q0, q1;
       if (!getDelaunayEdgeEndpoints(points, graph, d_edge_id, p0, p1))
       {
+        KINDS_DEBUG("Intersection marker skip: invalid Delaunay endpoints for (d,v)=("
+          << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
         continue;
       }
       if (!getVoronoiEdgeEndpoints(graph, circumcenters, v_edge_id, q0, q1))
       {
+        KINDS_DEBUG("Intersection marker skip: invalid Voronoi endpoints for (d,v)=("
+          << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
         continue;
       }
 
       glm::dvec2 intersection;
       if (!lineIntersection(p0, p1, q0, q1, intersection))
       {
+        KINDS_DEBUG("Intersection marker skip: line intersection ill-defined for (d,v)=("
+          << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
         continue;
       }
       markers.push_back({ intersection, { d_index, v_index } });
@@ -475,7 +481,7 @@ class HalfEdgeDelaunayGraphToSVG
           }
           else
           {
-            KINDS_WARNING("Both circumcenters are infinite, skipping edge.");
+            //KINDS_WARNING("Both circumcenters are infinite, skipping edge.");
             continue;
           }
 
@@ -534,8 +540,17 @@ class HalfEdgeDelaunayGraphToSVG
       for (const auto& inter : intersections)
       {
         glm::dvec2 p = inter.first;
+        if (!std::isfinite(p.x) || !std::isfinite(p.y))
+        {
+          KINDS_DEBUG("Intersection marker skip: non-finite intersection point for listIdx(d,v)=("
+            << inter.second.first << "," << inter.second.second << ")");
+          continue;
+        }
         if (!isWithinBoundingBox(p, bb))
         {
+          KINDS_DEBUG("Intersection marker skip: outside bbox for (d,v)=("
+            << inter.second.first << "," << inter.second.second
+            << ") at (" << p.x << "," << p.y << ")");
           continue;
         }
 

@@ -483,8 +483,60 @@ std::vector<std::pair<glm::dvec2, bool>> HalfEdgeDelaunayGraph::computeCircumcen
     const glm::dvec2& v0 = vertices[he0.origin];
     const glm::dvec2& v1 = vertices[he1.origin];
     const glm::dvec2& v2 = vertices[he2.origin];
-    // Compute the circumcenter of the triangle
-    circumcenters[triangle_id] = { circumcenter(v0, v1, v2), false };
+    // Compute a finite circumcenter if the triangle is well-conditioned.
+    // If the triangle is nearly colinear, the circumcenter becomes numerically unstable and can explode.
+    //
+    // In that case, fall back to a direction vector (marked as "infinite") derived from the longest edge.
+    // The direction is chosen as the opposite of the infinite-vertex case, i.e. the opposite perpendicular.
+
+    const glm::dvec2 e01 = v1 - v0;
+    const glm::dvec2 e12 = v2 - v1;
+    const glm::dvec2 e20 = v0 - v2;
+
+    const double len01_2 = glm::dot(e01, e01);
+    const double len12_2 = glm::dot(e12, e12);
+    const double len20_2 = glm::dot(e20, e20);
+
+    const double max_edge_len2 = [&]() -> double
+    {
+      double m = len01_2;
+      if (len12_2 > m)
+        m = len12_2;
+      if (len20_2 > m)
+        m = len20_2;
+      return m;
+    }();
+
+    // area2 is proportional to the determinant in the circumcenter formula (2x triangle area).
+    const double area2 = std::abs(e01.x * (v2.y - v0.y) - e01.y * (v2.x - v0.x));
+
+    // Threshold relative to edge length scale.
+    constexpr double degenerate_eps = 1e-12;
+    if (area2 <= degenerate_eps * max_edge_len2)
+    {
+      // Pick the longest edge direction.
+      glm::dvec2 longest_edge_vec = e01; // v1 - v0 by default
+      if (len12_2 >= len01_2 && len12_2 >= len20_2)
+      {
+        longest_edge_vec = e12; // v2 - v1
+      }
+      else if (len20_2 >= len01_2 && len20_2 >= len12_2)
+      {
+        longest_edge_vec = e20; // v0 - v2
+      }
+
+      // Infinite-vertex case uses: circumcenter_dir = perp(edge_vec) = (dy, -dx)
+      // Here we want the opposite direction.
+      glm::dvec2 circumcenter_dir { longest_edge_vec[1], -longest_edge_vec[0] };
+      circumcenter_dir = -circumcenter_dir;
+
+      circumcenters[triangle_id] = { circumcenter_dir, true };
+    }
+    else
+    {
+      // Compute the circumcenter of the triangle (finite case).
+      circumcenters[triangle_id] = { circumcenter(v0, v1, v2), false };
+    }
   }
 
   return circumcenters;
