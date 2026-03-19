@@ -289,9 +289,10 @@ static void kinetic_delaunay_example()
   }
 
   // t=0 snapshot
+  auto demo_intersection_debug_data = kinetic_delaunay.getCrossingIntersectionDebugData();
   kinDS::HalfEdgeDelaunayGraphToSVG::write(
-    points, demo_graph, "t0_demo.svg", 0.1, nullptr, true, &demo_voronoi_vertex_to_tri);
-  kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(points, kinetic_delaunay.getGraph(), "t0_demo_voronoi.svg", 0.1);
+    points, demo_graph, "t0.000000_demo.svg", 0.1, nullptr, true, &demo_voronoi_vertex_to_tri,
+    &demo_intersection_debug_data);
 
   size_t section_count = kinetic_delaunay.getSectionCount();
 
@@ -314,15 +315,7 @@ static void kinetic_delaunay_example()
     }
 
     double t = static_cast<double>(i + 1);
-    std::string delaunay_name = "t" + std::to_string(t) + "_demo_section_" + std::to_string(i + 1) + ".svg";
-    kinDS::HalfEdgeDelaunayGraphToSVG::write(
-      points, section_graph, delaunay_name, 0.1, nullptr, true, &section_voronoi_vertex_to_tri);
-    std::cout << "Wrote " << delaunay_name << std::endl;
 
-    std::string voronoi_name = "t" + std::to_string(t) + "_demo_voronoi_section_" + std::to_string(i + 1) + ".svg";
-    kinDS::HalfEdgeDelaunayGraphToSVG::writeVoronoi(
-      points, section_graph, voronoi_name, 0.1);
-    std::cout << "Wrote " << voronoi_name << std::endl;
   }
 
   mesh_builder.finalize(section_count);

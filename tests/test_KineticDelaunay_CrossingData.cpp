@@ -33,9 +33,10 @@ static void exportSvgBeforeAssertion(const KineticDelaunay& kd, double t, const 
   {
     voronoi_vertex_to_tri[vid] = kd.getCrossingDataContainingTriId(vid);
   }
+  auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
 
   HalfEdgeDelaunayGraphToSVG::write(
-    points, graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri); // margin 0.1, draw Voronoi edges in red
+    points, graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri, &intersection_debug_data); // margin 0.1, draw Voronoi edges in red
 }
 
 // Validate CrossingData: each Voronoi vertex's containing tri matches the list, and the vertex lies inside that triangle.

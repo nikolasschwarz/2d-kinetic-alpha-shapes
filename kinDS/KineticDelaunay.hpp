@@ -284,6 +284,11 @@ class KineticDelaunay
       return voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
     }
 
+    const std::vector<size_t>& getContainingTriIds() const
+    {
+      return voronoi_vertex_to_containing_tri_id;
+    }
+
     // Note: we copy this into a vector because we need this for reassigning Voronoi vertices in a quadrilateral and we
     // will be modifying the underlying list while iterating
     std::vector<size_t> getVoronoiVerticesInTri(size_t tri_id) const
@@ -353,6 +358,9 @@ class KineticDelaunay
 
   void computeComponentData(double t);
 
+  const CrossingData& getCrossingData() const;
+  std::vector<std::array<size_t, 4>> getCrossingIntersectionDebugData() const;
+
   const HalfEdgeDelaunayGraph& init();
 
   const HalfEdgeDelaunayGraph& advanceOneSection(EventHandler& event_handler);
@@ -378,6 +386,8 @@ class KineticDelaunay
     const std::vector<size_t>& component, double t, std::vector<bool>& he_visited) const;
 
   std::vector<BoundaryPoint> extractComponentBoundary(const std::vector<size_t>& component, double t) const;
+
+  const std::vector<bool>& getFacesInside() const;
 
   bool getFaceInside(size_t face_index) const;
 

@@ -4,6 +4,7 @@
 #include "Logger.hpp"
 #include "simple_svg.hpp"
 #include <glm/glm.hpp>
+#include <array>
 
 namespace kinDS
 {
@@ -163,6 +164,113 @@ class HalfEdgeDelaunayGraphToSVG
       filename, svg::Layout(dimensions, svg::Layout::TopLeft, 1.0, svg::Point(-bb.min_x, -bb.min_y)));
   }
 
+  // [delaunay_edge_id, voronoi_edge_id, delaunay_list_index, voronoi_list_index]
+  typedef std::array<size_t, 4> IntersectionDebugInfo;
+
+  static bool lineIntersection(
+    const glm::dvec2& a0, const glm::dvec2& a1, const glm::dvec2& b0, const glm::dvec2& b1, glm::dvec2& out)
+  {
+    auto cross2d = [](const glm::dvec2& u, const glm::dvec2& v) { return u.x * v.y - u.y * v.x; };
+    glm::dvec2 r = a1 - a0;
+    glm::dvec2 s = b1 - b0;
+    double denom = cross2d(r, s);
+    if (std::abs(denom) < 1e-12)
+    {
+      return false;
+    }
+    double t = cross2d(b0 - a0, s) / denom;
+    out = a0 + t * r;
+    return true;
+  }
+
+  static bool getDelaunayEdgeEndpoints(
+    const std::vector<glm::dvec2>& points, const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, glm::dvec2& p0, glm::dvec2& p1)
+  {
+    size_t he0 = 2 * delaunay_edge_id;
+    if (he0 + 1 >= graph.getHalfEdges().size())
+    {
+      return false;
+    }
+    const auto& he_a = graph.getHalfEdges()[he0];
+    const auto& he_b = graph.getHalfEdges()[he0 ^ 1];
+    if (he_a.origin == static_cast<size_t>(-1) || he_b.origin == static_cast<size_t>(-1))
+    {
+      return false;
+    }
+    p0 = points[he_a.origin];
+    p1 = points[he_b.origin];
+    return true;
+  }
+
+  static bool getVoronoiEdgeEndpoints(const HalfEdgeDelaunayGraph& graph,
+    const std::vector<std::pair<glm::dvec2, bool>>& circumcenters, size_t voronoi_edge_id, glm::dvec2& q0, glm::dvec2& q1)
+  {
+    size_t he0 = 2 * voronoi_edge_id;
+    if (he0 + 1 >= graph.getHalfEdges().size())
+    {
+      return false;
+    }
+    size_t start_face = graph.getHalfEdges()[he0].face;
+    size_t end_face = graph.getHalfEdges()[he0 ^ 1].face;
+    const auto& start = circumcenters[start_face];
+    const auto& end = circumcenters[end_face];
+
+    if (!start.second && !end.second)
+    {
+      q0 = start.first;
+      q1 = end.first;
+      return true;
+    }
+    if (start.second && !end.second)
+    {
+      q1 = end.first;
+      q0 = end.first + 1000.0 * start.first;
+      return true;
+    }
+    if (!start.second && end.second)
+    {
+      q0 = start.first;
+      q1 = start.first + 1000.0 * end.first;
+      return true;
+    }
+    return false;
+  }
+
+  static std::vector<std::pair<glm::dvec2, std::pair<size_t, size_t>>> computeIntersectionMarkerData(
+    const std::vector<glm::dvec2>& points, const HalfEdgeDelaunayGraph& graph,
+    const std::vector<IntersectionDebugInfo>& intersection_debug_info)
+  {
+    std::vector<std::pair<glm::dvec2, std::pair<size_t, size_t>>> markers;
+    auto circumcenters = graph.computeCircumcenters(points);
+    markers.reserve(intersection_debug_info.size());
+
+    for (const auto& item : intersection_debug_info)
+    {
+      size_t d_edge_id = item[0];
+      size_t v_edge_id = item[1];
+      size_t d_index = item[2];
+      size_t v_index = item[3];
+
+      glm::dvec2 p0, p1, q0, q1;
+      if (!getDelaunayEdgeEndpoints(points, graph, d_edge_id, p0, p1))
+      {
+        continue;
+      }
+      if (!getVoronoiEdgeEndpoints(graph, circumcenters, v_edge_id, q0, q1))
+      {
+        continue;
+      }
+
+      glm::dvec2 intersection;
+      if (!lineIntersection(p0, p1, q0, q1, intersection))
+      {
+        continue;
+      }
+      markers.push_back({ intersection, { d_index, v_index } });
+    }
+    return markers;
+  }
+
   /**
    * @brief Converts the half-edge Delaunay graph to an SVG representation.
    *
@@ -177,8 +285,9 @@ class HalfEdgeDelaunayGraphToSVG
    *        If not provided, only "id" is used (no slash).
    */
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
-    const std::string& filename, double margin = 0.0, std::vector<bool>* face_inside = nullptr,
-    bool draw_voronoi_edges = false, const std::vector<size_t>* voronoi_vertex_to_tri = nullptr)
+    const std::string& filename, double margin = 0.0, const std::vector<bool>* face_inside = nullptr,
+    bool draw_voronoi_edges = false, const std::vector<size_t>* voronoi_vertex_to_tri = nullptr,
+    const std::vector<IntersectionDebugInfo>* intersection_debug_info = nullptr)
   {
     BoundingBox bb = computeBoundingBox(points, margin);
     svg::Document doc = setupDocument(points, filename, bb);
@@ -415,6 +524,53 @@ class HalfEdgeDelaunayGraphToSVG
             0.01));
         }
       }
+    }
+
+    // Helper to draw intersection markers and labels, if the caller provides them.
+    auto drawIntersections = [&](const std::vector<std::pair<glm::dvec2, std::pair<size_t, size_t>>>& intersections)
+    {
+      svg::Color light_blue(173, 216, 230);
+      svg::Color pale_pink(255, 182, 193);
+      for (const auto& inter : intersections)
+      {
+        glm::dvec2 p = inter.first;
+        if (!isWithinBoundingBox(p, bb))
+        {
+          continue;
+        }
+
+        // Draw a small dot at the intersection.
+        doc << svg::Circle(
+          svg::Point(p.x, p.y), 0.01, svg::Fill(light_blue), svg::Stroke(0.0, light_blue));
+
+        // Label as "(d,v)" with d in light blue and v in pale pink.
+        const double x0 = p.x + 0.005;
+        const double y0 = p.y + 0.005;
+        const double font_size = 0.01;
+        // crude glyph advance for this SVG font size/layout
+        const double dx = 0.0055;
+
+        std::string d_text = std::to_string(inter.second.first);
+        std::string v_text = std::to_string(inter.second.second);
+
+        // "(d," in light blue
+        std::string prefix_text = "(" + d_text + ",";
+        doc << svg::Text(svg::Point(x0, y0), prefix_text, svg::Fill(light_blue), svg::Font(font_size));
+
+        // "v" in pale pink
+        double vx = x0 + dx * static_cast<double>(prefix_text.size());
+        doc << svg::Text(svg::Point(vx, y0), v_text, svg::Fill(pale_pink), svg::Font(font_size));
+
+        // ")" in light blue
+        double suffix_x = vx + dx * static_cast<double>(v_text.size());
+        doc << svg::Text(svg::Point(suffix_x, y0), ")", svg::Fill(light_blue), svg::Font(font_size));
+      }
+    };
+
+    if (intersection_debug_info)
+    {
+      auto marker_data = computeIntersectionMarkerData(points, graph, *intersection_debug_info);
+      drawIntersections(marker_data);
     }
 
     for (const auto& label : labels)

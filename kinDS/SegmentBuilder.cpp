@@ -987,16 +987,11 @@ void SegmentBuilder::betweenSections(size_t index)
   {
     double t = static_cast<double>(index);
     std::vector<glm::dvec2> points = kin_del.getPointsAt(t);
-    const HalfEdgeDelaunayGraph& dbg_graph = kin_del.getGraph();
-    const size_t dbg_face_count = dbg_graph.getFaces().size();
-    std::vector<size_t> voronoi_vertex_to_tri(dbg_face_count);
-    constexpr size_t invalid_id = static_cast<size_t>(-1);
-    for (size_t vid = 0; vid < dbg_face_count; ++vid)
-    {
-      voronoi_vertex_to_tri[vid] = kin_del.getCrossingDataContainingTriId(vid);
-    }
+
     std::string filename = "t" + std::to_string(t) + "_segmentbuilder_between_section_" + std::to_string(index) + ".svg";
-    HalfEdgeDelaunayGraphToSVG::write(points, dbg_graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri);
+    auto intersection_debug_data = kin_del.getCrossingIntersectionDebugData();
+    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &kin_del.getFacesInside(), true,
+      &kin_del.getCrossingData().getContainingTriIds(), &intersection_debug_data);
     KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
   }
 }
@@ -1180,17 +1175,11 @@ void SegmentBuilder::afterFlipEvent(KineticDelaunay::Event& e)
   if (visual_debug)
   {
     std::vector<glm::dvec2> points = kin_del.getPointsAt(e.time);
-    const HalfEdgeDelaunayGraph& dbg_graph = kin_del.getGraph();
-    const size_t dbg_face_count = dbg_graph.getFaces().size();
-    std::vector<size_t> voronoi_vertex_to_tri(dbg_face_count);
-    constexpr size_t invalid_id = static_cast<size_t>(-1);
-    for (size_t vid = 0; vid < dbg_face_count; ++vid)
-    {
-      voronoi_vertex_to_tri[vid] = kin_del.getCrossingDataContainingTriId(vid);
-    }
     std::string filename = "t" + std::to_string(e.time)
       + "_segmentbuilder_after_flip_he" + std::to_string(e.half_edge_id) + ".svg";
-    HalfEdgeDelaunayGraphToSVG::write(points, dbg_graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri);
+    auto intersection_debug_data = kin_del.getCrossingIntersectionDebugData();
+    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &kin_del.getFacesInside(), true,
+      &kin_del.getCrossingData().getContainingTriIds(), &intersection_debug_data);
     KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
   }
   // For the boundary mesh, handle the case that a formerly infinite edge is flipped to a boundary. This means the
@@ -1608,7 +1597,14 @@ void kinDS::SegmentBuilder::afterRadiusEvent(KineticDelaunay::Event& e)
     kin_del.component_data.component_last_updated[component_id] = e.time;
   }
 
-  // The intersection data structure is fine, but we need to infer new meshlet pair data from it
+  // TODO: The intersection data structure is fine, but we need to infer new meshlet pair data from it
+  std::vector<glm::dvec2> points = kin_del.getPointsAt(e.time);
+  std::string filename = "t" + std::to_string(e.time)
+      + "_segmentbuilder_after_radius_he" + std::to_string(e.half_edge_id) + ".svg";
+    auto intersection_debug_data = kin_del.getCrossingIntersectionDebugData();
+    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &kin_del.getFacesInside(), true,
+      &kin_del.getCrossingData().getContainingTriIds(), &intersection_debug_data);
+    KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
 
 }
 
@@ -1624,31 +1620,28 @@ void SegmentBuilder::beforeCrossingEvent(KineticDelaunay::Event& e) {
 
 void SegmentBuilder::afterCrossingEvent(KineticDelaunay::Event& e)
 {
+  auto& graph = kin_del.getGraph();
+
   // Visual debug: export SVG after crossing event with Voronoi vertex labels.
   if (visual_debug)
   {
 
     std::vector<glm::dvec2> points = kin_del.getPointsAt(e.time);
-    const HalfEdgeDelaunayGraph& dbg_graph = kin_del.getGraph();
-    const size_t dbg_face_count = dbg_graph.getFaces().size();
-    std::vector<size_t> voronoi_vertex_to_tri(dbg_face_count);
-    constexpr size_t invalid_id = static_cast<size_t>(-1);
-    for (size_t vid = 0; vid < dbg_face_count; ++vid)
-    {
-      voronoi_vertex_to_tri[vid] = kin_del.getCrossingDataContainingTriId(vid);
-    }
-    const auto& graph = dbg_graph;
+    const size_t dbg_face_count = graph.getFaces().size();
+
     size_t old_tri = graph.getHalfEdges()[e.half_edge_id].face;
     size_t new_tri = graph.getHalfEdges()[e.half_edge_id ^ 1].face;
     std::string filename = "t" + std::to_string(e.time)
       + "_segmentbuilder_after_crossing_v" + std::to_string(e.voronoi_vertex_id)
       + "_" + std::to_string(old_tri) + "_to_" + std::to_string(new_tri) + ".svg";
-    HalfEdgeDelaunayGraphToSVG::write(points, dbg_graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri);
+    auto intersection_debug_data = kin_del.getCrossingIntersectionDebugData();
+    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &kin_del.getFacesInside(), true,
+      &kin_del.getCrossingData().getContainingTriIds(), &intersection_debug_data);
     KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
   }
 
   // Update the edge intersections
-  auto& graph = kin_del.getGraph();
+  
   size_t voronoi_vertex_id = e.voronoi_vertex_id;
   glm::dvec3 voronoi_vertex_position = glm::dvec3(e.position, e.time);
   auto half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;

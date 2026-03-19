@@ -719,8 +719,8 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
       auto intersection_it = std::prev(crossing_data.edge_intersections.end());
 
       // check if the start or end voronoi vertex lies in the outer triangle to determine on which side to insert
-      size_t start_voronoi_vertex_id = graph.getHalfEdges()[intersection.voronoi_edge_id].face;
-      size_t end_voronoi_vertex_id = graph.getHalfEdges()[intersection.voronoi_edge_id ^ 1].face;
+      size_t start_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection.voronoi_edge_id].face;
+      size_t end_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection.voronoi_edge_id + 1].face;
       size_t start_containing_triangle_id = crossing_data.getContainingTriId(start_voronoi_vertex_id);
       size_t end_containing_triangle_id = crossing_data.getContainingTriId(end_voronoi_vertex_id);
       std::list<CrossingData::EdgeIntersectionRef>::iterator v_ref;
@@ -1136,10 +1136,6 @@ void KineticDelaunay::handleFlipEvent(EventHandler& event_handler, Event& event)
                                                << ". Faces inside " << face_inside[face_id] << " | "
                                                << face_inside[twin_face_id]);
 
-  /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-    getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + "_before.svg", 0.1);
-  std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;*/
-
   // Call the event handler if provided
   event_handler.beforeFlipEvent(event);
 
@@ -1191,13 +1187,10 @@ void KineticDelaunay::handleFlipEvent(EventHandler& event_handler, Event& event)
     }
   }
 
-  //KINDS_DEBUG("Processed swap event at time " << event.time << " for half-edge ID " << event.half_edge_id
+  //KINDS_DEBUG("Processed flip event at time " << event.time << " for half-edge ID " << event.half_edge_id
   //                                            << ". Faces inside " << face_inside[face_id] << " | "
   //                                            << face_inside[twin_face_id]);
 
-  /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-    getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + ".svg", 0.1, &face_inside);
-  std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;*/
 
   // After flipping the edge, we need to recompute the events for all surrounding half-edges
   size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
@@ -1250,10 +1243,6 @@ void KineticDelaunay::handleRadiusEvent(EventHandler& event_handler, Event& even
   }
 
   // Process the event at the given time
-  KINDS_DEBUG("Processing radius event at time " << event.time << " for half-edge ID " << event.half_edge_id);
-  kinDS::HalfEdgeDelaunayGraphToSVG::write(
-    getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + "_before.svg", 0.1, &face_inside);
-  std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;
   // Call the event handler if provided
   // TODO: (probably in callback) Handle boundary.
   event_handler.beforeRadiusEvent(event);
@@ -1261,9 +1250,6 @@ void KineticDelaunay::handleRadiusEvent(EventHandler& event_handler, Event& even
   setFaceInside(face_id, !face_inside[face_id]);
 
   event_handler.afterRadiusEvent(event);
-  /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-    getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + ".svg", 0.1, &face_inside);
-  std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;*/
 }
 void KineticDelaunay::handleCrossingEvent(EventHandler& event_handler, Event& event)
 {
@@ -1482,6 +1468,39 @@ void KineticDelaunay::computeComponentData(double t)
   }
 
   component_data.component_last_updated.resize(component_data.components.size(), t);
+}
+
+const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const
+{
+  return crossing_data;
+}
+
+std::vector<std::array<size_t, 4>> KineticDelaunay::getCrossingIntersectionDebugData() const
+{
+  std::vector<std::array<size_t, 4>> result;
+  result.reserve(crossing_data.edge_intersections.size());
+
+  for (size_t d_edge_id = 0; d_edge_id < crossing_data.delaunay_edge_intersections.size(); ++d_edge_id)
+  {
+    const auto& d_list = crossing_data.delaunay_edge_intersections[d_edge_id];
+    size_t d_index = 0;
+    for (auto d_it = d_list.begin(); d_it != d_list.end(); ++d_it, ++d_index)
+    {
+      CrossingData::EdgeIntersectionRef ref = *d_it;
+      const auto& v_list = crossing_data.voronoi_edge_intersections[ref->voronoi_edge_id];
+      size_t v_index = 0;
+      for (auto v_it = v_list.begin(); v_it != v_list.end(); ++v_it, ++v_index)
+      {
+        if (*v_it == ref)
+        {
+          result.push_back({ ref->delaunay_edge_id, ref->voronoi_edge_id, d_index, v_index });
+          break;
+        }
+      }
+    }
+  }
+
+  return result;
 }
 
 bool KineticDelaunay::computeBoundaryOnTheFly() const
@@ -2331,6 +2350,8 @@ std::vector<BoundaryPoint> KineticDelaunay::extractComponentBoundary(
 
   return traverseBoundary(start_he_id, t);
 }
+
+const std::vector<bool>& KineticDelaunay::getFacesInside() const { return face_inside;}
 
 bool KineticDelaunay::getFaceInside(size_t face_index) const { return face_inside[face_index]; }
 
