@@ -1,13 +1,14 @@
 #pragma once
-#include "BranchTrajectories.hpp"
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "Logger.hpp"
 #include "Polynomial.hpp"
 #include "ProgressBar.hpp"
+#include "StrandTree.hpp"
 #include <format>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
+#include <map>
 #include <queue>
 #include <string>
 
@@ -78,12 +79,13 @@ class KineticDelaunay
     size_t half_edge_id; // Half-edge index associated with the event
     double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
     glm::dvec2 position; // Position of the event
+    size_t voronoi_vertex_id; // Voronoi vertex index associated with the event, only used for crossing events
 
     enum Type
     {
-      SWAP,
-      BOUNDARY,
-      RIGHT_ANGLED
+      FLIP,
+      RADIUS,
+      CROSSING
     } type;
 
     Event(double t, size_t he_id, double creation_time, glm::dvec2 position, Type type)
@@ -92,6 +94,20 @@ class KineticDelaunay
       , creation_time(creation_time)
       , position(position)
       , type(type)
+    {
+      if (type == Event::CROSSING)
+      {
+        throw std::invalid_argument("Crossing events must be created with a voronoi vertex id");
+      }
+    }
+
+    Event(double t, size_t he_id, double creation_time, glm::dvec2 position, size_t voronoi_vertex_id, Type type)
+      : time(t)
+      , half_edge_id(he_id)
+      , creation_time(creation_time)
+      , position(position)
+      , type(type)
+      , voronoi_vertex_id(voronoi_vertex_id)
     {
     }
 
@@ -107,32 +123,36 @@ class KineticDelaunay
    public:
     virtual ~EventHandler() = default;
     /**
-     * \brief Handle a SWAP event before it is processed, i.e. before any edges are swapped
+     * \brief Handle a FLIP event before it is processed, i.e. before any edges are swapped
      *
      * @param e The event to handle.
      */
-    virtual void beforeEvent(Event& e) { }
+    virtual void beforeFlipEvent(Event& e) { }
 
     /**
-     * \brief Handle a SWAP event after it is processed, i.e. after edges are swapped
+     * \brief Handle a FLIP event after it is processed, i.e. after edges are swapped
      *
      * @param e The event to handle.
      */
-    virtual void afterEvent(Event& e) { }
+    virtual void afterFlipEvent(Event& e) { }
 
     /**
-     * \brief Handle a BOUNDARY event before it is processed
+     * \brief Handle a RADIUS event before it is processed
      *
      * @param e The event to handle
      */
-    virtual void beforeBoundaryEvent(Event& e) { }
+    virtual void beforeRadiusEvent(Event& e) { }
 
     /**
-     * \brief Handle a BOUNDARY event after it is processed
+     * \brief Handle a RADIUS event after it is processed
      *
      * @param e The event to handle
      */
-    virtual void afterBoundaryEvent(Event& e) { }
+    virtual void afterRadiusEvent(Event& e) { }
+
+    virtual void beforeCrossingEvent(Event& e) { }
+
+    virtual void afterCrossingEvent(Event& e) { }
 
     virtual void betweenSections(size_t index) { }
 
@@ -160,1025 +180,237 @@ class KineticDelaunay
 
   ComponentData component_data;
 
+  std::pair<glm::dvec2, glm::dvec2> computeAngularBisector(size_t he_id, double t) const;
+
+  std::pair<double, double> delaunayVoronoiEdgeIntersection(size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
+
+  /**
+   * \brief Compute the half-edges crossed by the Voronoi edge between the given start point and destination, starting
+   * from the given face.
+   *
+   * Currently assumes that the start face is finite and that the destination lies outside of only one edge of the start
+   * triangle.
+   */
+  std::pair<std::vector<size_t>, std::vector<double>> computeCrossedHalfEdges(
+  size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
+
  private:
   typedef std::priority_queue<Event> EventQueue;
 
-  BranchTrajectories branch_trajs;
+  StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
   EventQueue events;
   size_t sections_advanced = 0; // Counter for the number of sections advanced
   double cutoff; // Cutoff radius for boundary events
   std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
+
   std::vector<std::vector<size_t>> branches; // track which vertices/splines belong to which branch
   std::vector<glm::dvec2> dummy_boundary;
   bool add_dummy_boundary;
-  const std::vector<std::vector<size_t>> branch_indices; // Create a branch index lookup using [strand_id][h]
-  std::vector<std::vector<std::vector<size_t>>>
-    strands_by_branch_id; // Maintain the branches as [h][branch_id][strand_no]
   size_t prev_component_count = 1;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
+  bool on_the_fly_boundary = true;
 
-  /* Compare to Leonidas Guibas and Jorge Stolfi. 1985. Primitives for the manipulation of general subdivisions and the
-   * computation of Voronoi. ACM Trans. Graph. 4, 2 (April 1985), 74–123. https://doi.org/10.1145/282918.282923
-   */
-  static Polynomial inCircle(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by,
-    const Polynomial& cx, const Polynomial& cy, const Polynomial& px, const Polynomial& py)
+  // crossing-related data
+  struct CrossingData
   {
-    const Polynomial dx = ax - px;
-    const Polynomial dy = ay - py;
-    const Polynomial ex = bx - px;
-    const Polynomial ey = by - py;
-    const Polynomial fx = cx - px;
-    const Polynomial fy = cy - py;
+    struct VoronoiDelaunayEdgeIntersection;
+    typedef std::list<VoronoiDelaunayEdgeIntersection>::iterator EdgeIntersectionRef;
 
-    const Polynomial ap = dx * dx + dy * dy;
-    const Polynomial bp = ex * ex + ey * ey;
-    const Polynomial cp = fx * fx + fy * fy;
+   private:
+    std::vector<size_t> voronoi_vertex_to_containing_tri_id;
+    std::vector<std::list<size_t>> tri_id_to_voronoi_vertices;
+    std::vector<std::list<size_t>::iterator> voronoi_vertex_to_iterator;
 
-    return (dx * (ey * cp - bp * fy) - dy * (ex * cp - bp * fx) + ap * (ex * fy - ey * fx));
-  }
+   public:
+    std::list<VoronoiDelaunayEdgeIntersection> edge_intersections;
+    std::vector<std::list<EdgeIntersectionRef>> voronoi_edge_intersections;
+    std::vector<std::list<EdgeIntersectionRef>> delaunay_edge_intersections;
 
-  static Polynomial ccw(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by,
-    const Polynomial& cx, const Polynomial& cy)
-  {
-    return (ax * by) + (bx * cy) + (cx * ay) - (ay * bx) - (by * cx) - (cy * ax);
-  }
 
-  // Polynomial that evaluates to zero iff the distance from A to the circumcenter equals the value r
-  static Polynomial circumradiusEquals(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx,
-    const Polynomial& by, const Polynomial& cx, const Polynomial& cy, double r)
-  {
-    // We first do the same computations as for the circumcenter
-    Polynomial D = (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by)) * 2.0;
+    std::vector<double> last_crossing;
 
-    // only compute the numerators
-    Polynomial Nx
-      = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by));
-    Polynomial Ny
-      = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax));
+    struct VoronoiDelaunayEdgeIntersection {
+      std::list<EdgeIntersectionRef>::iterator delaunay_ref;
+      std::list<EdgeIntersectionRef>::iterator voronoi_ref;
+      size_t delaunay_edge_id;
+      size_t voronoi_edge_id;
+      double delaunay_edge_param;
+    };
 
-    // By taking the distance formula between the circumcenter and the point A and setting it equal to r, we get the
-    // following after rearranging:
-    Polynomial circumradius_eq = (Nx - ax * D) * (Nx - ax * D) + (Ny - ay * D) * (Ny - ay * D) - (D * D * (r * r));
-    return circumradius_eq;
-  }
-
-  // Polynomial that evaluates to zero iff there is a right angle at c
-  static Polynomial rightAngled(const Polynomial& ax, const Polynomial& ay, const Polynomial& bx, const Polynomial& by,
-    const Polynomial& cx, const Polynomial& cy)
-  {
-    return (ax - cx) * (bx - cx) + (ay - cy) * (by - cy);
-  }
-
-  double circumradius(const glm::dvec2& p0, const glm::dvec2& p1, const glm::dvec2& p2)
-  {
-    const double x0 = p0[0], y0 = p0[1];
-    const double x1 = p1[0], y1 = p1[1];
-    const double x2 = p2[0], y2 = p2[1];
-
-    // Side lengths
-    const double a = std::hypot(x1 - x2, y1 - y2);
-    const double b = std::hypot(x0 - x2, y0 - y2);
-    const double c = std::hypot(x0 - x1, y0 - y1);
-
-    // Twice the triangle area (cross product magnitude)
-    const double area2 = std::abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0));
-
-    if (area2 == 0.0)
+    void init(size_t face_count)
     {
-      throw std::runtime_error("Degenerate triangle: circumradius undefined");
+      voronoi_vertex_to_containing_tri_id.clear();
+      voronoi_vertex_to_containing_tri_id.resize(face_count, -1);
+
+      tri_id_to_voronoi_vertices.clear();
+      tri_id_to_voronoi_vertices.resize(face_count);
+
+      voronoi_vertex_to_iterator.clear();
+      voronoi_vertex_to_iterator.resize(face_count);
+
+      last_crossing.clear();
+      last_crossing.resize(face_count, 0.0);
     }
 
-    // R = (a * b * c) / (4 * A), and area2 = 2 * A
-    return (a * b * c) / (2.0 * area2);
-  }
-
-  void computeRightAngleEvents(double t, size_t he_id)
-  {
-    // generally don't do this for now:
-    return;
-
-    if (cutoff == std::numeric_limits<double>::infinity())
+    void setVoronoiVertexTriId(size_t voronoi_vertex_id, size_t tri_id)
     {
-      // no boundary events wanted
-      return;
+      voronoi_vertex_to_containing_tri_id[voronoi_vertex_id] = tri_id;
+      voronoi_vertex_to_iterator[voronoi_vertex_id]
+        = tri_id_to_voronoi_vertices[tri_id].emplace(tri_id_to_voronoi_vertices[tri_id].end(), voronoi_vertex_id);
     }
 
-    const size_t section = static_cast<size_t>(t);
-    const float fraction = t - section;
-
-    size_t face_id = graph.getHalfEdges()[he_id].face;
-    size_t u = graph.getHalfEdges()[he_id].origin;
-    size_t v = graph.destination(he_id);
-    size_t w = graph.triangleOppositeVertex(he_id);
-
-    if (u == -1 || v == -1 || w == -1)
+    void moveVertex(size_t voronoi_vertex_id, size_t target_tri_id, double t)
     {
-      // one of the vertices is at infinity, no event possible
-      return;
-    }
+      std::list<size_t>::iterator v_it = voronoi_vertex_to_iterator[voronoi_vertex_id];
+      size_t current_tri_id = voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
 
-    std::vector<Trajectory<2>> trajs;
-
-    trajs.push_back(branch_trajs.getPiecePolynomial(u, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(v, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(w, section));
-
-    Polynomial event_trigger
-      = rightAngled(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1]);
-
-    event_trigger.trim();
-    auto zeros = event_trigger.realRoots();
-
-    // print roots:
-    for (const auto& root : zeros)
-    {
-      if (isnan(root))
+      if (current_tri_id == target_tri_id)
       {
-        continue; // Skip NaN roots
-      }
-      if (root > fraction && root <= 1)
-      { // Check if the root is within the valid range
-        double event_time = root + section;
-        // std::cout << "Root found at t = " << event_time << std::endl;
-
-        glm::dvec2 center {};
-
-        for (const auto& traj : trajs)
-        {
-          center[0] += traj[0](root);
-          center[1] += traj[1](root);
-        }
-        center[0] /= trajs.size();
-        center[1] /= trajs.size();
-        /*KINDS_DEBUG("Right Angle Event at time " << event_time << " for half-edge ID " << he_id
-                                                   << " at center position " << center.toString().c_str());*/
-
-        events.emplace(Event(event_time, he_id, t, center,
-          Event::RIGHT_ANGLED)); // Store the event with the time and half-edge index
-      }
-    }
-  }
-
-  void computeBoundaryEvents(double t, size_t he_id)
-  {
-    if (cutoff == std::numeric_limits<double>::infinity())
-    {
-      // no boundary events wanted
-      return;
-    }
-
-    const size_t section = static_cast<size_t>(t);
-    const float fraction = t - section;
-
-    size_t face_id = graph.getHalfEdges()[he_id].face;
-    size_t u = graph.getHalfEdges()[he_id].origin;
-    size_t v = graph.destination(he_id);
-    size_t w = graph.triangleOppositeVertex(he_id);
-
-    if (u == -1 || v == -1 || w == -1)
-    {
-      // one of the vertices is at infinity, no event possible
-      return;
-    }
-
-    std::vector<Trajectory<2>> trajs;
-
-    trajs.push_back(branch_trajs.getPiecePolynomial(u, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(v, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(w, section));
-
-    Polynomial event_trigger
-      = circumradiusEquals(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], cutoff);
-
-    event_trigger.trim();
-    auto zeros = event_trigger.realRoots();
-
-    // print roots:
-    for (const auto& root : zeros)
-    {
-      if (isnan(root))
-      {
-        continue; // Skip NaN roots
-      }
-      if (root > fraction && root <= 1)
-      { // Check if the root is within the valid range
-        double event_time = root + section;
-        // std::cout << "Root found at t = " << event_time << std::endl;
-
-        glm::dvec2 center {};
-
-        for (const auto& traj : trajs)
-        {
-          center[0] += traj[0](root);
-          center[1] += traj[1](root);
-        }
-        center[0] /= trajs.size();
-        center[1] /= trajs.size();
-        KINDS_DEBUG("Boundary Event at time " << event_time << " for half-edge ID " << he_id << " at center position"
-                                              << glm::to_string(center));
-
-        events.emplace(
-          Event(event_time, he_id, t, center, Event::BOUNDARY)); // Store the event with the time and half-edge index
-      }
-    }
-  }
-
-  void computeSwapEvents(double t, size_t quad_id)
-  {
-    const size_t section = static_cast<size_t>(t);
-    const float fraction = t - section;
-
-    size_t he_id = quad_id * 2;
-    Polynomial event_trigger;
-
-    std::vector<Trajectory<2>> trajs;
-
-    if (graph.isOnConvexBoundary(he_id) || graph.isOutsideConvexBoundary(he_id))
-    {
-      // boundary edges must be treated separately using ccw
-
-      // need to get the inner half-edge so we have access to the triangle
-      // in case both are outside, this swap does not matter, so we just let it happen
-      if (graph.isOutsideConvexBoundary(he_id))
-      {
-        he_id = he_id ^ 1; // use the twin half-edge if the current one is on the boundary
+        return;
       }
 
-      // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter
-      // it out
-      int indices[4];
-      indices[0] = graph.getHalfEdges()[he_id].origin; // First vertex
-      indices[1] = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
-      indices[2] = graph.getHalfEdges()[he_id ^ 1].origin; // Third vertex
-      indices[3] = graph.triangleOppositeVertex(he_id); // Fourth vertex
+      tri_id_to_voronoi_vertices[current_tri_id].erase(v_it);
 
-      std::vector<int> filtered_indices;
+      setVoronoiVertexTriId(voronoi_vertex_id, target_tri_id);
 
-      std::copy_if(
-        indices, indices + 4, std::back_inserter(filtered_indices), [this](int index) { return index != -1; });
-
-      int& a = filtered_indices[0]; // First vertex
-      int& b = filtered_indices[1]; // Second vertex
-      int& c = filtered_indices[2]; // Third vertex
-
-      // print the triangle vertices:
-      // std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
-
-      trajs.push_back(branch_trajs.getPiecePolynomial(a, section));
-      trajs.push_back(branch_trajs.getPiecePolynomial(b, section));
-      trajs.push_back(branch_trajs.getPiecePolynomial(c, section));
-
-      event_trigger = ccw(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1]);
+      KINDS_DEBUG("Voronoi vertex " << voronoi_vertex_id << " moved from triangle " << current_tri_id << " to "
+                                    << target_tri_id << " at t = " << t);
     }
-    else
+
+    size_t getContainingTriId(size_t voronoi_vertex_id) const
     {
-      int a = graph.getHalfEdges()[he_id].origin; // First vertex
-      int b = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
-      int c = graph.getHalfEdges()[he_id ^ 1].origin; // Third vertex
-      int d = graph.triangleOppositeVertex(he_id); // Fourth vertex
-
-      // print the quadrilateral vertices:
-      // std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
-
-      trajs.push_back(branch_trajs.getPiecePolynomial(a, section));
-      trajs.push_back(branch_trajs.getPiecePolynomial(b, section));
-      trajs.push_back(branch_trajs.getPiecePolynomial(c, section));
-      trajs.push_back(branch_trajs.getPiecePolynomial(d, section));
-
-      event_trigger = inCircle(
-        trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);
+      return voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
     }
-    event_trigger.trim();
-    auto zeros = event_trigger.realRoots();
 
-    // print roots:
-    for (const auto& root : zeros)
+    const std::vector<size_t>& getContainingTriIds() const
     {
-      if (isnan(root))
-      {
-        continue; // Skip NaN roots
-      }
-
-      if (root > fraction && root <= 1)
-      {
-        // Check if the root is within the valid range
-        double event_time = root + section;
-        // std::cout << "Root found at t = " << event_time << std::endl;
-
-        glm::dvec2 center {};
-
-        for (const auto& traj : trajs)
-        {
-          center[0] += traj[0](root);
-          center[1] += traj[1](root);
-        }
-        center[0] /= trajs.size();
-        center[1] /= trajs.size();
-
-        KINDS_DEBUG("Swap Event at time " << event_time << " for half-edge ID " << he_id << " at center position "
-                                          << glm::to_string(center));
-
-        events.emplace(
-          Event(event_time, he_id, t, center, Event::SWAP)); // Store the event with the time and half-edge index
-      }
+      return voronoi_vertex_to_containing_tri_id;
     }
-  }
 
-  void precomputeStep(double t)
-  {
-    // TODO: Make sure it works where no change of sign occurs in the polynomial, i.e., roots that do not lead to a
-    // change in the triangulation.
-    size_t quad_count = graph.getHalfEdges().size() / 2;
-    for (size_t i = 0; i < quad_count; i++)
+    // Note: we copy this into a vector because we need this for reassigning Voronoi vertices in a quadrilateral and we
+    // will be modifying the underlying list while iterating
+    std::vector<size_t> getVoronoiVerticesInTri(size_t tri_id) const
     {
-      computeSwapEvents(t, i);
+      std::vector<size_t> result(tri_id_to_voronoi_vertices[tri_id].begin(), tri_id_to_voronoi_vertices[tri_id].end());
+      return result;
     }
 
-    size_t he_count = graph.getHalfEdges().size();
-    for (size_t i = 0; i < face_inside.size(); i++)
-    {
-      size_t he_id = graph.getFaces()[i].half_edges[0];
-      computeBoundaryEvents(t, he_id);
-    }
+    void computeEdgeIntersections(const KineticDelaunay& kd, double t);
 
-    for (size_t he_id = 0; he_id < he_count; he_id++)
-    {
-      computeRightAngleEvents(t, he_id);
-    }
-  }
+    // Update Voronoiâ€“Delaunay edge intersections after a single crossing event.
+    void updateAfterCrossingEvent(const KineticDelaunay& kd, const Event& e);
 
-  void handleSwapEvent(EventHandler& event_handler, Event& event)
-  {
-    // Check if the event is still valid
-    if (event.creation_time < quadrilateral_last_updated[event.half_edge_id / 2])
-    {
-      // This event is outdated, skip it
-      return;
-    }
+    // Remove a single intersection from all three data structures (global list,
+    // per-Voronoi-edge list, and per-Delaunay-edge list).
+    void removeIntersection(EdgeIntersectionRef intersection_ref);
 
-    // Process the event at the given time
-    size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
-    size_t twin_face_id = graph.getHalfEdges()[event.half_edge_id ^ 1].face;
-    KINDS_DEBUG("Processing swap event at time " << event.time << " for half-edge ID " << event.half_edge_id
-                                                 << ". Faces inside " << face_inside[face_id] << " | "
-                                                 << face_inside[twin_face_id]);
+  } crossing_data;
 
-    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-      getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + "_before.svg", 0.1);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;*/
+  glm::dvec3 computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t) const;
 
-    // Call the event handler if provided
-    event_handler.beforeEvent(event);
+  void computeCrossingEvents(double t, size_t voronoi_vertex_id);
 
-    // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
-    if (graph.getHalfEdges()[event.half_edge_id].origin == -1)
-    {
-      KINDS_DEBUG("Swapping face of half-edge " << event.half_edge_id << " to the inside at t = " << event.time);
-      face_inside[twin_face_id] = (cutoff == std::numeric_limits<double>::infinity());
-    }
+  void reassignVoronoiVerticesOnBoundary(size_t he_id, double t);
 
-    if (graph.getHalfEdges()[event.half_edge_id ^ 1].origin == -1)
-    {
-      KINDS_DEBUG(
-        "Swapping face of twin half-edge " << (event.half_edge_id ^ 1) << " to the inside at t = " << event.time);
-      face_inside[face_id] = (cutoff == std::numeric_limits<double>::infinity());
-    }
+  void reassignVoronoiVerticesInQuadrilateral(
+    size_t quad_index, double t, const std::map<size_t, size_t>& pre_flip_quad_faces);
 
-    KINDS_DEBUG("Pre-flip: " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
-                             << face_inside[face_id] << " | " << face_inside[twin_face_id]);
+  void computeRadiusEvents(double t, size_t he_id);
 
-    graph.flipEdge(event.half_edge_id);
+  void computeFlipEvents(double t, size_t quad_id);
 
-    KINDS_DEBUG("Post-flip:  " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
-                               << face_inside[face_id] << " | " << face_inside[twin_face_id]);
+  void precomputeStep(double t);
 
-    // one of the triangles might have been swapped outside
-    auto tri_verts1 = graph.adjacentTriangleVertices(event.half_edge_id);
+  void handleFlipEvent(EventHandler& event_handler, Event& event);
 
-    for (auto& v : tri_verts1)
-    {
-      if (v == -1)
-      {
-        size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
-        KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << event.half_edge_id
-                                    << " to the outside at t = " << event.time);
-        setFaceInside(face_id, false);
-      }
-    }
+  void handleRadiusEvent(EventHandler& event_handler, Event& event);
 
-    auto tri_verts2 = graph.adjacentTriangleVertices(event.half_edge_id ^ 1);
-    for (auto& v : tri_verts2)
-    {
-      if (v == -1)
-      {
-        size_t face_id = graph.getHalfEdges()[event.half_edge_id ^ 1].face;
-        KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << (event.half_edge_id ^ 1)
-                                    << " to the outside at t = " << event.time);
-        setFaceInside(face_id, false);
-      }
-    }
+  void handleCrossingEvent(EventHandler& event_handler, Event& event);
 
-    KINDS_DEBUG("Processed swap event at time " << event.time << " for half-edge ID " << event.half_edge_id
-                                                << ". Faces inside " << face_inside[face_id] << " | "
-                                                << face_inside[twin_face_id]);
+  void handleEvents(EventHandler& event_handler);
 
-    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-      getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + ".svg", 0.1, &face_inside);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;*/
+  size_t getBranchIndex(size_t strand_id, size_t t) const;
 
-    // After flipping the edge, we need to recompute the events for all surrounding half-edges
-    size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
-    size_t next2 = graph.getHalfEdges()[next1].next;
+  const std::vector<std::vector<size_t>>& getBranches(size_t t) const;
 
-    size_t twin_next1 = graph.getHalfEdges()[event.half_edge_id ^ 1].next;
-    size_t twin_next2 = graph.getHalfEdges()[twin_next1].next;
+  const std::vector<size_t>& getBranchStrands(size_t t, size_t branch_id);
 
-    computeSwapEvents(event.time, next1 / 2);
-    quadrilateral_last_updated[next1 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-    computeSwapEvents(event.time, next2 / 2);
-    quadrilateral_last_updated[next2 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-    computeSwapEvents(event.time, twin_next1 / 2);
-    quadrilateral_last_updated[twin_next1 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-    computeSwapEvents(event.time, twin_next2 / 2);
-    quadrilateral_last_updated[twin_next2 / 2] = event.time; // Update the last updated time for the quadrilateral
-
-    // re-compute boundary events for both triangles
-    computeBoundaryEvents(event.time, event.half_edge_id);
-    face_last_updated[face_id] = event.time;
-
-    computeBoundaryEvents(event.time, event.half_edge_id ^ 1);
-    face_last_updated[twin_face_id] = event.time;
-
-    event_handler.afterEvent(event); // Call the event handler after processing the event
-  }
-
-  void handleBoundaryEvent(EventHandler& event_handler, Event& event)
-  {
-    assert(event.type == Event::BOUNDARY);
-
-    // Check if the event is still valid
-    size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
-    if (event.creation_time < face_last_updated[face_id])
-    {
-      // This event is outdated, skip it
-      return;
-    }
-
-    // Process the event at the given time
-    KINDS_DEBUG("Processing boundary event at time " << event.time << " for half-edge ID " << event.half_edge_id);
-    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-      getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + "_before.svg", 0.1, &face_inside);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + "_before.svg") << std::endl;*/
-    // Call the event handler if provided
-    event_handler.beforeBoundaryEvent(event);
-
-    setFaceInside(face_id, !face_inside[face_id]);
-
-    event_handler.afterBoundaryEvent(event);
-    /*kinDS::HalfEdgeDelaunayGraphToSVG::write(
-      getPointsAt(event.time), getGraph(), "test_" + std::to_string(event.time) + ".svg", 0.1, &face_inside);
-    std::cout << "Wrote " << ("test_" + std::to_string(event.time) + ".svg") << std::endl;*/
-  }
-
-  void handleEvents(EventHandler& event_handler)
-  {
-
-    while (!events.empty())
-    {
-      Event event = events.top();
-      events.pop();
-
-      switch (event.type)
-      {
-      case Event::SWAP:
-        handleSwapEvent(event_handler, event);
-        break;
-      case Event::BOUNDARY:
-        handleBoundaryEvent(event_handler, event);
-        break;
-        // TODO: right angle events
-      }
-    }
-  }
-
-  size_t getBranchIndex(size_t strand_id, size_t t) const { return branch_indices[strand_id][t]; }
-
-  const std::vector<std::vector<size_t>>& getBranches(size_t t) const { return strands_by_branch_id[t]; }
-
-  const std::vector<size_t>& getBranchStrands(size_t t, size_t branch_id) { return strands_by_branch_id[t][branch_id]; }
+  std::vector<double> findEvents(Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative = false);
 
  public:
-  KineticDelaunay(const BranchTrajectories& branch_trajs, double cutoff, bool add_dummy_splines,
-    const std::vector<std::vector<size_t>>& branch_indices,
-    const std::vector<std::vector<std::vector<size_t>>>& strands_by_branch_id)
-    : branch_trajs(branch_trajs)
-    , cutoff(cutoff)
-    , add_dummy_boundary(add_dummy_splines)
-    , branch_indices(branch_indices)
-    , strands_by_branch_id(strands_by_branch_id)
-  {
-    if (add_dummy_splines)
-    {
-      // first compute a bounding box:
-      glm::dvec2 p_min { std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() };
-      glm::dvec2 p_max { -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity() };
+  KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);
 
-      for (const auto& points : branch_trajs.getPoints())
-      {
-        for (const auto& p : points)
-        {
-          for (int dim = 0; dim < 2; dim++)
-          {
-            if (p[dim] < p_min[dim])
-            {
-              p_min[dim] = p[dim];
-            }
-            if (p[dim] > p_max[dim])
-            {
-              p_max[dim] = p[dim];
-            }
-          }
-        }
-      }
+  bool isDummyBoundary(size_t v);
 
-      // We will need dummy points such that no voronoi vertices can slip outside
-      double range = std::max(p_max[0] - p_min[0], p_max[1] - p_min[1]);
-      double dist_from_bb = std::max(range, 2 * cutoff);
+  bool computeBoundaryOnTheFly() const;
 
-      dummy_boundary = {
-        { p_min[0] - 0.75 * dist_from_bb, p_max[1] + 0.75 * dist_from_bb }, // corner_tl
-        { p_min[0], p_max[1] + dist_from_bb }, // top_left
-        { p_max[0], p_max[1] + dist_from_bb }, // top_right
-        { p_max[0] + 0.75 * dist_from_bb, p_max[1] + 0.75 * dist_from_bb }, // corner_tr
-        { p_max[0] + dist_from_bb, p_max[1] }, // right_top
-        { p_max[0] + dist_from_bb, p_min[1] }, // right_bottom
-        { p_max[0] + 0.75 * dist_from_bb, p_min[1] - 0.75 * dist_from_bb }, // corner_br
-        { p_max[0], p_min[1] - dist_from_bb }, // bottom_right
-        { p_min[0], p_min[1] - dist_from_bb }, // bottom_left
-        { p_min[0] - 0.75 * dist_from_bb, p_min[1] - 0.75 * dist_from_bb }, // corner_bl
-        { p_min[0] - dist_from_bb, p_min[1] }, // left_bottom
-        { p_min[0] - dist_from_bb, p_max[1] } // left_top
-      };
+  glm::dvec2 getPointAt(size_t v, double t) const;
 
-      size_t length = branch_trajs.getHeight() + 1;
+  glm::dvec2 getPointAt(double t, size_t v) const;
 
-      for (const auto& p : dummy_boundary)
-      {
-        std::vector<glm::dvec2> new_spline;
-        for (size_t i = 0; i < length; i++)
-        {
-          new_spline.push_back(p);
-        }
-        this->branch_trajs.addTrajectory(new_spline);
-      }
-    }
-  }
+  std::vector<glm::dvec2> getPointsAt(double t) const;
 
-  bool isDummyBoundary(size_t v)
-  {
-    if (add_dummy_boundary)
-    {
-      return v >= branch_trajs.getPoints().size() - 12;
-    }
-    return false;
-  }
+  glm::dvec3 getPointInObjectSpace(size_t v, double t) const;
 
-  glm::dvec2 getPointAt(size_t v, double t) const
-  {
-    // get point transformed such that all points in the same component match
-    size_t component_id = component_data.component_map[v];
-    size_t representative_vertex = component_data.components[component_id].front();
-    size_t reference_branch = branch_indices[representative_vertex][std::ceil(t)];
+  const StrandTree& getStrandTree() const;
 
-    return branch_trajs.evaluateTransformed(v, t, reference_branch);
-  }
+  void computeComponentData(double t);
 
-  glm::dvec2 getPointAt(double t, size_t v) const { return getPointAt(v, t); }
+  const CrossingData& getCrossingData() const;
+  std::vector<std::array<size_t, 4>> getCrossingIntersectionDebugData() const;
 
-  std::vector<glm::dvec2> getPointsAt(double t) const
-  {
-    size_t vertex_count = graph.getVertexCount();
-    std::vector<glm::dvec2> points;
-    points.reserve(vertex_count);
-    for (size_t v = 0; v < vertex_count; v++)
-    {
-      points.push_back(getPointAt(v, t));
-    }
-    return points;
-  }
+  const HalfEdgeDelaunayGraph& init();
 
-  glm::dvec3 getPointInObjectSpace(size_t v, double t) const { return branch_trajs.getPointInObjectSpace(v, t); }
+  const HalfEdgeDelaunayGraph& advanceOneSection(EventHandler& event_handler);
 
-  const BranchTrajectories& getBranchTrajectories() const { return branch_trajs; }
+  const HalfEdgeDelaunayGraph& getGraph() const;
 
-  void computeComponentData(double t)
-  {
-    auto& graph = getGraph();
-    component_data.components = extractConnectedComponents();
-    KINDS_DEBUG("Extracted " << component_data.components.size() << " components.");
-    component_data.component_map = buildComponentMap(component_data.components, graph.getVertexCount());
-    component_data.component_boundaries.resize(component_data.components.size());
-
-    std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
-
-    for (size_t component_index = 0; component_index < component_data.components.size(); component_index++)
-    {
-      component_data.component_boundaries[component_index]
-        = extractComponentBoundaries(component_data.components[component_index], t, he_visited);
-    }
-
-    component_data.component_centroids.resize(component_data.components.size());
-    for (size_t component_index = 0; component_index < component_data.components.size(); component_index++)
-    {
-      if (!component_data.component_boundaries[component_index].empty())
-      {
-        component_data.component_centroids[component_index]
-          = polygonCentroid(component_data.component_boundaries[component_index][0]);
-      }
-      else
-      {
-        // compute centroid from points in the component
-        glm::dvec2 centroid { 0.0, 0.0 };
-        for (auto& v : component_data.components[component_index])
-        {
-          glm::dvec2 p = getPointAt(t, v);
-          centroid += p;
-        }
-        component_data.component_centroids[component_index]
-          = centroid / double(component_data.components[component_index].size());
-      }
-    }
-
-    component_data.component_last_updated.resize(component_data.components.size(), t);
-  }
-
-  const HalfEdgeDelaunayGraph& init()
-  {
-    graph.init(branch_trajs.getPoints());
-    sections_advanced = 0; // Reset the section counter
-
-    face_inside.clear();
-    quadrilateral_last_updated.clear();
-    face_last_updated.clear();
-
-    face_inside.resize(graph.getFaces().size(), false);
-    quadrilateral_last_updated.resize(graph.getHalfEdges().size() / 2, 0.0);
-    face_last_updated.resize(graph.getFaces().size(), 0.0);
-
-    for (size_t face_index = 0; face_index < graph.getFaces().size(); face_index++)
-    {
-      const HalfEdgeDelaunayGraph::Triangle& tri = graph.getFaces()[face_index];
-
-      // compute circumradius at t = 0 and check if within cutoff
-      auto vertices = graph.adjacentTriangleVertices(tri.half_edges[0]);
-      std::vector<glm::dvec2> points;
-      bool outer_face = false;
-      for (const auto& v : vertices)
-      {
-        if (v == -1)
-        {
-          outer_face = true;
-          break;
-        }
-        // assume that only one plane as frame of reference exists
-        points.push_back(branch_trajs.evaluate(v, 0.0));
-      }
-
-      if (outer_face)
-      {
-        continue;
-      }
-
-      double r = circumradius(points[0], points[1], points[2]);
-      KINDS_DEBUG("Circumradius: " << r);
-      if (r < cutoff)
-      {
-        setFaceInside(face_index, true);
-      }
-    }
-    computeComponentData(0.0);
-
-    return graph;
-  }
-
-  const HalfEdgeDelaunayGraph& advanceOneSection(EventHandler& event_handler)
-  {
-    size_t section_count = branch_trajs.getHeight();
-    assert(sections_advanced < section_count); // Ensure we do not exceed the number of sections
-    KINDS_DEBUG("Advancing to section " << (sections_advanced + 1) << " of " << section_count);
-
-    // update delaunay graph according to the components
-    // For now we assume they can never be merged again
-    if (component_data.components.size() > prev_component_count)
-    {
-      graph.update(branch_trajs.getPoints(), sections_advanced, component_data.components);
-    }
-
-    precomputeStep(static_cast<double>(sections_advanced));
-    handleEvents(event_handler);
-    sections_advanced++;
-
-    return graph;
-  }
-
-  const HalfEdgeDelaunayGraph& getGraph() const { return graph; }
-
-  size_t getSectionCount() const { return branch_trajs.getHeight(); }
+  size_t getSectionCount() const;
 
   // Computes the Delaunay triangulation of the given splines
-  void compute(EventHandler& event_handler)
-  {
-    size_t section_count = getSectionCount(); // Assuming all splines have the same number of points
+  void compute(EventHandler& event_handler);
 
-    ProgressBar progress_bar(
-      0, branch_trajs.getHeight(), "Computing Kinetic Voronoi Sections", ProgressBar::Display::Absolute);
-    for (size_t i = 0; i < section_count; ++i)
-    {
-      progress_bar.Update(i);
+  std::vector<size_t> extractConnectedComponent(size_t u, std::vector<bool>& visited) const;
 
-      assert(i == sections_advanced); // Ensure we are advancing one section at a time
-      if (i != 0)
-        event_handler.betweenSections(i); // Call the event handler for the section
-      advanceOneSection(event_handler);
-    }
-    progress_bar.Finish();
-  }
+  const std::vector<glm::dvec2>& getDummyBoundary() const;
 
-  std::vector<size_t> extractConnectedComponent(size_t u, std::vector<bool>& visited) const
-  {
-    std::vector<size_t> component;
+  std::vector<std::vector<size_t>> checkForSplit(const std::array<int, 3>& tri_vertices) const;
 
-    // Perform an iterative DFS with edges induced by inside faces
+  std::vector<std::vector<size_t>> extractConnectedComponents() const;
 
-    std::vector<size_t> stack;
-    stack.push_back(u);
-
-    while (!stack.empty())
-    {
-      size_t v = stack.back();
-      stack.pop_back();
-
-      if (visited[v])
-        continue;
-
-      visited[v] = true;
-      component.push_back(v);
-
-      const auto nbrs = graph.inducedNeighbors(v, face_inside);
-
-      // Push neighbors in reverse order, the same order as recursive DFS
-      for (auto it = nbrs.rbegin(); it != nbrs.rend(); ++it)
-      {
-        size_t w = *it;
-        if (!visited[w])
-          stack.push_back(w);
-      }
-    }
-
-    return component;
-  }
-
-  const std::vector<glm::dvec2>& getDummyBoundary() const { return dummy_boundary; }
-
-  std::vector<std::vector<size_t>> checkForSplit(const std::array<int, 3>& tri_vertices) const
-  {
-    std::vector<std::vector<size_t>> components;
-    std::vector<bool> visited(graph.getVertexCount(), false);
-
-    size_t u = tri_vertices[0];
-
-    std::vector<size_t> component;
-
-    std::vector<size_t> queue;
-    queue.push_back(u);
-    visited[u] = true;
-
-    size_t head = 0;
-
-    while (head < queue.size())
-    {
-      size_t v = queue[head++];
-      component.push_back(v);
-
-      const auto nbrs = graph.inducedNeighbors(v, face_inside);
-
-      for (size_t w : nbrs)
-      {
-        if (!visited[w])
-        {
-          visited[w] = true;
-
-          // quit early if we found all triangle vertices
-          if (visited[tri_vertices[1]] && visited[tri_vertices[2]])
-          {
-            return {}; // return empty to indicate no split
-          }
-
-          queue.push_back(w);
-        }
-      }
-    }
-
-    components.push_back(component);
-
-    if (!visited[tri_vertices[1]])
-    {
-      auto component2 = extractConnectedComponent(tri_vertices[1], visited);
-      components.push_back(component2);
-    }
-
-    if (!visited[tri_vertices[2]])
-    {
-      auto component3 = extractConnectedComponent(tri_vertices[2], visited);
-      components.push_back(component3);
-    }
-
-    return components;
-  }
-
-  std::vector<std::vector<size_t>> extractConnectedComponents() const
-  {
-    std::vector<std::vector<size_t>> components;
-    std::vector<bool> visited(graph.getVertexCount(), false);
-    for (size_t u = 0; u < graph.getVertexCount(); u++)
-    {
-      if (visited[u])
-      {
-        continue;
-      }
-
-      auto component = extractConnectedComponent(u, visited);
-      components.push_back(component);
-    }
-
-    return components;
-  }
-
-  std::vector<BoundaryPoint> traverseBoundary(size_t start_he_id, double t) const
-  {
-    // Walk the boundary to extract the boundary half-edges
-    std::vector<BoundaryPoint> boundary_points;
-    size_t he_id = start_he_id;
-    do
-    {
-      size_t origin = graph.getHalfEdges()[he_id].origin;
-      if (origin == -1)
-      {
-        KINDS_ERROR("Followed infinite edge.");
-      }
-      glm::dvec2 pos = getPointAt(origin, t);
-      boundary_points.emplace_back(BoundaryPoint { origin, he_id, pos });
-      he_id = nextOnComponentBoundaryId(he_id);
-    } while (he_id != start_he_id);
-
-    return boundary_points;
-  }
+  std::vector<BoundaryPoint> traverseBoundary(size_t start_he_id, double t) const;
 
   std::vector<std::vector<BoundaryPoint>> extractComponentBoundaries(
-    const std::vector<size_t>& component, double t, std::vector<bool>& he_visited) const
-  {
-    KINDS_DEBUG("Extracting component boundaries at t = " << t);
-    if (component.size() < 3)
-    {
-      return { {} };
-    }
+    const std::vector<size_t>& component, double t, std::vector<bool>& he_visited) const;
 
-    std::vector<std::vector<BoundaryPoint>> boundaries;
-    double min_x = std::numeric_limits<double>::infinity();
-    // TODO: this is not perfectly safe if points of the outer and an inner boundary coincide at the minimum
-    size_t min_x_id = 0;
-    for (size_t i = 0; i < component.size(); i++)
-    {
-      const size_t& v = component[i];
+  std::vector<BoundaryPoint> extractComponentBoundary(const std::vector<size_t>& component, double t) const;
 
-      for (auto it = graph.incidentEdgesBegin(v); it != graph.incidentEdgesEnd(v); it++)
-      {
-        auto he_id = *it;
+  const std::vector<bool>& getFacesInside() const;
 
-        if (he_visited[he_id] || !isOnComponentBoundaryOutside(he_id))
-        {
-          continue;
-        }
+  bool getFaceInside(size_t face_index) const;
 
-        if (graph.destination(he_id) == -1)
-        {
-          KINDS_ERROR("Destination of half-edge is invalid");
-        }
-        if (graph.getHalfEdges()[he_id].origin == -1)
-        {
-          KINDS_ERROR("Origin of half-edge is invalid");
-        }
+  void setFaceInside(size_t face_index, bool value);
 
-        auto boundary_points = traverseBoundary(he_id, t);
+  bool isOnComponentBoundary(size_t he_id) const;
 
-        for (auto& bp : boundary_points)
-        {
-          he_visited[bp.he_id] = true;
-          if (bp.p[0] < min_x)
-          {
-            min_x = bp.p[0];
-            min_x_id = boundaries.size();
-          }
-        }
+  bool isOnComponentBoundaryOutside(size_t he_id) const;
 
-        boundaries.emplace_back(boundary_points);
-      }
-    }
+  size_t nextOnComponentBoundaryId(size_t he_id) const;
 
-    // swap the boundary with the minimum x to the front
-    if (min_x_id != 0)
-    {
-      std::swap(boundaries[0], boundaries[min_x_id]);
-    }
+  // Getters for CrossingData (for testing/validation)
+  size_t getCrossingDataContainingTriId(size_t voronoi_vertex_id) const;
+  std::vector<size_t> getCrossingDataVoronoiVerticesInTri(size_t tri_id) const;
+  glm::dvec3 getVoronoiVertexHomogeneous(size_t voronoi_vertex_id, double t) const;
 
-    return boundaries;
-  }
-
-  std::vector<BoundaryPoint> extractComponentBoundary(const std::vector<size_t>& component, double t) const
-  {
-    // Find an extreme point to start the boundary walk as it must be on the boundary
-    // Note that merely being on the outside of the boundary is not sufficent as there can also be holes inside the
-    // component
-
-    size_t start_vertex_id = -1;
-    double min_x = std::numeric_limits<double>::infinity();
-    for (size_t i = 0; i < component.size(); i++)
-    {
-      const size_t& v = component[i];
-
-      // Get position and check if it's the minimum x
-      glm::dvec2 pos = getPointAt(v, t); // Evaluate at t=0 for starting point
-      if (pos[0] < min_x)
-      {
-        min_x = pos[0];
-        start_vertex_id = v;
-      }
-    }
-
-    // From the starting vertex, find a half-edge that is on the boundary
-    size_t start_he_id = -1;
-    for (auto it = graph.incidentEdgesBegin(start_vertex_id); it != graph.incidentEdgesEnd(start_vertex_id); it++)
-    {
-      if (isOnComponentBoundaryOutside(*it))
-      {
-        start_he_id = *it;
-        break;
-      }
-    }
-
-    return traverseBoundary(start_he_id, t);
-  }
-
-  bool getFaceInside(size_t face_index) const { return face_inside[face_index]; }
-
-  void setFaceInside(size_t face_index, bool value)
-  {
-    if (value)
-    {
-      auto tri_vertices = graph.adjacentTriangleVertices(graph.getFaces()[face_index].half_edges[0]);
-
-      for (int& v : tri_vertices)
-      {
-        if (v == -1)
-        {
-          // cannot set face with infinite vertex to inside
-          throw std::runtime_error("Cannot set face " + std::to_string(face_index) + " to inside!");
-        }
-      }
-    }
-    face_inside[face_index] = value;
-  }
-
-  bool isOnComponentBoundary(size_t he_id) const
-  {
-    size_t face_id = graph.getHalfEdges()[he_id].face;
-    size_t twin_face_id = graph.getHalfEdges()[he_id ^ 1].face;
-    return (face_inside[face_id] != face_inside[twin_face_id]);
-  }
-
-  bool isOnComponentBoundaryOutside(size_t he_id) const
-  {
-    size_t face_id = graph.getHalfEdges()[he_id].face;
-    size_t twin_face_id = graph.getHalfEdges()[he_id ^ 1].face;
-    return (!face_inside[face_id] && face_inside[twin_face_id]);
-  }
-
-  size_t nextOnComponentBoundaryId(size_t he_id) const
-  {
-    size_t next_he_id = graph.getHalfEdges()[he_id].next;
-
-    while (!isOnComponentBoundaryOutside(next_he_id))
-    {
-      next_he_id = graph.twin(next_he_id);
-      next_he_id = graph.getHalfEdges()[next_he_id].next;
-    }
-
-    return next_he_id;
-  }
+  /**
+   * \brief Compute the (possibly clamped) Voronoi vertex position for the Delaunay edge represented by half_edge_id.
+   *
+   * For finite triangles this is the circumcenter; for infinite / hull cases, this returns a finite point obtained
+   * by moving a neighboring circumcenter along a perpendicular direction so it can be used for meshing and
+   * intersection computations.
+   */
+  glm::dvec3 computeVoronoiVertexClampedInfinity(size_t half_edge_id, double t) const;
 };
 } // namespace kinDS

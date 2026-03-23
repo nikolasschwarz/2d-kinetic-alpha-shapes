@@ -1,8 +1,9 @@
 #include "VoronoiMesh.hpp"
 #include "Logger.hpp"
+#include "VoronoiMesh.hpp"
 #include "glm/gtx/norm.hpp"
-#include <unordered_map>
 #include <array>
+#include <unordered_map>
 #ifdef USE_CGAL
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
 #include <CGAL/Surface_mesh.h>
@@ -64,6 +65,8 @@ size_t VoronoiMesh::addVertex(const glm::dvec3& p)
   return index;
 }
 
+void kinDS::VoronoiMesh::replaceVertex(size_t index, const glm::dvec3& new_position) { vertices[index] = new_position; }
+
 size_t VoronoiMesh::addTriangle(size_t v1, size_t v2, size_t v3, int material_id)
 {
   return addTriangle(v1, v2, v3, std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(),
@@ -100,6 +103,8 @@ size_t VoronoiMesh::addNormal(const glm::dvec3& n)
   normals.emplace_back(n);
   return index;
 }
+
+void kinDS::VoronoiMesh::replaceNormal(size_t index, const glm::dvec3& new_normal) { normals[index] = new_normal; }
 
 size_t VoronoiMesh::addUV(double u, double v, double w) { return addUV(glm::dvec3 { u, v, w }); }
 
@@ -626,7 +631,7 @@ void kinDS::VoronoiMesh::checkForDegenerateTriangles() const
 
     // compute squared area via cross product
 
-    double area2 = glm::length2(glm::cross((p1 - p0),(p2 - p0)));
+    double area2 = glm::length2(glm::cross((p1 - p0), (p2 - p0)));
 
     if (area2 < 1e-20)
     {

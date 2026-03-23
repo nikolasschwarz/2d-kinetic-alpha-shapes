@@ -9,6 +9,7 @@
 #include "eigen/eigen/Eigen/Core"
 #include "eigen/eigen/Eigen/Dense"
 #include "eigen/eigen/unsupported/Eigen/Polynomials"
+#include "Logger.hpp"
 
 #pragma pop_macro("Success")
 
@@ -189,10 +190,11 @@ class Polynomial
 
   Polynomial derivative(size_t order = 1) const
   {
-    if (order == 0)
+    if (degree() - int(order) < 0)
     {
-      return *this; // The zeroth derivative is the polynomial itself
+      return Polynomial(0); // zero polynomial
     }
+
     Eigen::VectorXd derived_coeffs = coeffs;
 
     // do computation in place
@@ -202,7 +204,6 @@ class Polynomial
       {
         derived_coeffs[j - 1] = derived_coeffs[j] * j;
       }
-      derived_coeffs.tail(1).setZero(); // Set the last coefficient to zero after differentiation
       derived_coeffs.conservativeResize(derived_coeffs.size() - 1);
     }
     return Polynomial(derived_coeffs);

@@ -2,20 +2,30 @@
 #include "KineticDelaunay.hpp"
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
+#include <list>
 
-namespace kinDS {
+namespace kinDS
+{
 
-class SegmentBuilder : public KineticDelaunay::EventHandler {
+class SegmentBuilder : public KineticDelaunay::EventHandler
+{
  private:
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
-  std::vector<MeshStructure::SegmentProperties> segment_properties;  // Properties for each segment mesh
+  std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
   // Pairs of segments and their corresponding mesh data
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs;
   std::vector<size_t>
-      half_edge_index_to_segment_mesh_pair_index;  // Maps edge indices to their corresponding segment mesh pair indices
-  std::vector<VoronoiMesh> meshes;                 // List of all generated meshes
-  std::vector<std::pair<size_t, size_t>> segment_mesh_pair_last_left_and_right_vertex;
+    half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
+  std::vector<VoronoiMesh> meshes; // List of all generated meshes
+
+  struct MeshingData{
+    int mesh_start_vertex_id;
+    int mesh_end_vertex_id;
+    int start_half_edge_id;
+    int end_half_edge_id;
+  };
+  std::vector<std::list<MeshingData>> segment_mesh_pair_last_left_and_right_vertex;
   // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no
   // cutoff mesh exists
   std::vector<int> corner_to_cutoff_mesh_indices;
@@ -28,8 +38,10 @@ class SegmentBuilder : public KineticDelaunay::EventHandler {
   // 2.0;
   double texture_diameter = 0.9;
 
+  std::vector<VoronoiMesh> boundary_meshes;
+
   // for the boundary
-  VoronoiMesh boundary_mesh;  // Mesh for the boundary cuts
+  VoronoiMesh boundary_mesh; // Mesh for the boundary cuts
   std::vector<std::pair<size_t, size_t>> boundary_mesh_last_left_and_right_vertex;
   std::vector<size_t> boundary_vertex_to_strand_id;
 
@@ -40,11 +52,12 @@ class SegmentBuilder : public KineticDelaunay::EventHandler {
   std::vector<int> half_edge_to_boundary_vertex_index;
 
   KineticDelaunay& kin_del;
-  bool finalized = false;  // Flag to indicate if the mesh has been finalized
+  bool finalized = false; // Flag to indicate if the mesh has been finalized
+  bool visual_debug = true; // Always-on visual debug for now (SVG exports)
   std::vector<std::pair<size_t, double>> subdivisions;
   size_t subdivision_index = 0;
 
-  glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t, size_t segment_mesh_pair_index) const;
+  glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
   void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points);
 
@@ -65,7 +78,7 @@ class SegmentBuilder : public KineticDelaunay::EventHandler {
   size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w);
 
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
-                          const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t);
+    const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t);
 
   void addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset);
 
@@ -79,27 +92,30 @@ class SegmentBuilder : public KineticDelaunay::EventHandler {
 
   void advanceBoundaryMeshes(double t);
 
-  size_t createClosingMesh(size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon,
-                           const glm::dvec2& centroid);
+  size_t createClosingMesh(
+    size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);
 
   void accumulateSegmentProperties();
 
  public:
-  SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions,
-                 bool create_transformed_mesh);
+  SegmentBuilder(
+    KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh);
   SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh);
-
   void init() override;
 
   void betweenSections(size_t index) override;
 
-  void beforeEvent(KineticDelaunay::Event& e) override;
+  void beforeFlipEvent(KineticDelaunay::Event& e) override;
 
-  void afterEvent(KineticDelaunay::Event& e) override;
+  void afterFlipEvent(KineticDelaunay::Event& e) override;
 
-  void beforeBoundaryEvent(KineticDelaunay::Event& e) override;
+  void beforeRadiusEvent(KineticDelaunay::Event& e) override;
 
-  void afterBoundaryEvent(KineticDelaunay::Event& e) override;
+  void afterRadiusEvent(KineticDelaunay::Event& e) override;
+
+  void beforeCrossingEvent(KineticDelaunay::Event& e) override;
+
+  void afterCrossingEvent(KineticDelaunay::Event& e) override;
 
   void insertSubdivision(size_t strand_id, double t);
 
@@ -115,10 +131,9 @@ class SegmentBuilder : public KineticDelaunay::EventHandler {
 
   const std::vector<std::vector<size_t>>& getStrandToSegmentIndices() const;
 
-  std::vector<glm::dvec3> computeClampedVoronoiVertices(size_t strand_id, double t,
-                                                        const std::vector<BoundaryPoint>& boundary_polygon,
-                                                        const glm::dvec2& centroid);
+  std::vector<glm::dvec3> computeClampedVoronoiVertices(
+    size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);
 
   void splitComponent(size_t component_id, const std::vector<std::vector<size_t>>& new_components, double t);
 };
-}  // namespace kinDS
+} // namespace kinDS

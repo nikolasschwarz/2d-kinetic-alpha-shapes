@@ -1,5 +1,5 @@
 // C++ program to implement a basic logging system.
-// Source: https://www.geeksforgeeks.org/cpp/logging-system-in-cpp/
+// Based on https://www.geeksforgeeks.org/cpp/logging-system-in-cpp/
 
 #pragma once
 
@@ -52,21 +52,48 @@ inline LogLevel operator~(LogLevel a) { return static_cast<LogLevel>(~static_cas
 class Logger
 {
  private:
-  LogLevel log_level = LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
+  // Default: everything except Debug
+  LogLevel log_level = LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
+  ofstream log_file; // File stream for the log file (optional)
 
  public:
-  // Constructor: Opens the log file in append mode
-  Logger(const string& filename)
+  // Default constructor: no log file
+  Logger() = default;
+
+  // Constructor: Opens the log file in append mode (for backward compatibility)
+  Logger(const string& filename) { setLogFile(filename); }
+
+  // Destructor: Closes the log file if open
+  ~Logger()
   {
-    logFile.open(filename, ios::app);
-    if (!logFile.is_open())
+    if (log_file.is_open())
     {
-      cerr << "Error opening log file." << endl;
+      log_file.close();
     }
   }
 
-  // Destructor: Closes the log file
-  ~Logger() { logFile.close(); }
+  // Set or change the log file path
+  void setLogFile(const string& filename)
+  {
+    // Close existing file if open
+    if (log_file.is_open())
+    {
+      log_file.close();
+    }
+
+    // Open new file
+    log_file.open(filename, ios::app);
+    if (!log_file.is_open())
+    {
+      cerr << "Warning: Could not open log file: " << filename << endl;
+    }
+  }
+
+  // Explicitly set the full log level bitmask (overwrites existing mask).
+  void setLogLevelMask(LogLevel mask)
+  {
+    log_level = mask;
+  }
 
   void setLogLevel(LogLevel log_level, bool set = true)
   {
@@ -98,16 +125,16 @@ class Logger
 
     // Create log entry
     ostringstream logEntry;
-    logEntry << "[" << timestamp << "] " << levelToString(level) << ": " << message << endl;
+    logEntry << "[kinDS] [" << timestamp << "] " << levelToString(level) << ": " << message << endl;
 
     // Output to console
     cout << logEntry.str();
 
     // Output to log file
-    if (logFile.is_open())
+    if (log_file.is_open())
     {
-      logFile << logEntry.str();
-      logFile.flush(); // Ensure immediate write to file
+      log_file << logEntry.str();
+      log_file.flush(); // Ensure immediate write to file
     }
   }
 
@@ -142,8 +169,6 @@ class Logger
   }
 
  private:
-  ofstream logFile; // File stream for the log file
-
   // Converts log level to a string for output
   string levelToString(LogLevel level)
   {
@@ -165,7 +190,8 @@ class Logger
   }
 };
 
-inline Logger logger("kinDS_logfile.txt");
+// Global logger instance (no log file by default)
+inline Logger logger;
 
 #define KINDS_DEBUG(msg)                                                                                               \
   {                                                                                                                    \
