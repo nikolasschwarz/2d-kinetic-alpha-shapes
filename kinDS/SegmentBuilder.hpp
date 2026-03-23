@@ -19,7 +19,8 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
 
-  struct MeshingData{
+  struct MeshingData
+  {
     int mesh_start_vertex_id;
     int mesh_end_vertex_id;
     int start_half_edge_id;

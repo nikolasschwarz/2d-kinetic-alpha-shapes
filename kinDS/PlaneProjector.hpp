@@ -3,8 +3,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace kinDS {
-class PlaneProjector {
+namespace kinDS
+{
+class PlaneProjector
+{
  public:
   // Construct from plane-local -> world transforms
   // Local coordinates are (u, 0, v)
@@ -31,14 +33,14 @@ class PlaneProjector {
   glm::vec3 m_axis;
   float m_angle;
   glm::mat3 m_rot;
-  glm::vec3 m_p0;  // point on intersection line
+  glm::vec3 m_p0; // point on intersection line
 
   // --- Parallel case ---
-  float m_dB;  // plane B offset
+  float m_dB; // plane B offset
 
   // Helpers
   glm::vec3 localAToWorld(float a, float b) const;
   glm::vec3 applyTransform(const glm::vec3& x) const;
   glm::vec2 worldToLocalB(const glm::vec3& x) const;
 };
-}  // namespace kinDS
+} // namespace kinDS

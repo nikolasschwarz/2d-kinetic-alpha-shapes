@@ -655,12 +655,13 @@ size_t kinDS::HalfEdgeDelaunayGraph::prevOnConvexBoundaryId(size_t he_id) const
 
 size_t HalfEdgeDelaunayGraph::twin(size_t he_id) { return he_id ^ 1; }
 
-size_t HalfEdgeDelaunayGraph::prev(size_t he_id) const {
+size_t HalfEdgeDelaunayGraph::prev(size_t he_id) const
+{
   // Walk around face until we reach the edge from behind
   size_t next_he_id = half_edges[he_id].next;
   size_t prev_he_id;
 
-  while(next_he_id != he_id)
+  while (next_he_id != he_id)
   {
     prev_he_id = next_he_id;
     next_he_id = half_edges[next_he_id].next;
@@ -668,7 +669,7 @@ size_t HalfEdgeDelaunayGraph::prev(size_t he_id) const {
 
   assert(half_edges[prev_he_id].next == he_id);
   return prev_he_id;
- }
+}
 
 std::array<int, 3> kinDS::HalfEdgeDelaunayGraph::getTriangleVertexIndices(size_t face_id) const
 {

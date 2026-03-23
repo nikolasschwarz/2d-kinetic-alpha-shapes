@@ -182,7 +182,8 @@ class KineticDelaunay
 
   std::pair<glm::dvec2, glm::dvec2> computeAngularBisector(size_t he_id, double t) const;
 
-  std::pair<double, double> delaunayVoronoiEdgeIntersection(size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
+  std::pair<double, double> delaunayVoronoiEdgeIntersection(
+    size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
 
   /**
    * \brief Compute the half-edges crossed by the Voronoi edge between the given start point and destination, starting
@@ -192,7 +193,7 @@ class KineticDelaunay
    * triangle.
    */
   std::pair<std::vector<size_t>, std::vector<double>> computeCrossedHalfEdges(
-  size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
+    size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
 
  private:
   typedef std::priority_queue<Event> EventQueue;
@@ -228,10 +229,10 @@ class KineticDelaunay
     std::vector<std::list<EdgeIntersectionRef>> voronoi_edge_intersections;
     std::vector<std::list<EdgeIntersectionRef>> delaunay_edge_intersections;
 
-
     std::vector<double> last_crossing;
 
-    struct VoronoiDelaunayEdgeIntersection {
+    struct VoronoiDelaunayEdgeIntersection
+    {
       std::list<EdgeIntersectionRef>::iterator delaunay_ref;
       std::list<EdgeIntersectionRef>::iterator voronoi_ref;
       size_t delaunay_edge_id;
@@ -284,10 +285,7 @@ class KineticDelaunay
       return voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
     }
 
-    const std::vector<size_t>& getContainingTriIds() const
-    {
-      return voronoi_vertex_to_containing_tri_id;
-    }
+    const std::vector<size_t>& getContainingTriIds() const { return voronoi_vertex_to_containing_tri_id; }
 
     // Note: we copy this into a vector because we need this for reassigning Voronoi vertices in a quadrilateral and we
     // will be modifying the underlying list while iterating
@@ -337,7 +335,8 @@ class KineticDelaunay
 
   const std::vector<size_t>& getBranchStrands(size_t t, size_t branch_id);
 
-  std::vector<double> findEvents(Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative = false);
+  std::vector<double> findEvents(
+    Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative = false);
 
  public:
   KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);

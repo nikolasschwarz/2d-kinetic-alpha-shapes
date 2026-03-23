@@ -65,17 +65,22 @@ static double angularBisectorPredicate(
   return term1 - term2;
 }
 
-static Polynomial angularBisectorHelper(Trajectory<3>& voronoi_homogeneous, Trajectory<2>& a, Trajectory<2>& c_i, Trajectory<2>& c_j){
+static Polynomial angularBisectorHelper(
+  Trajectory<3>& voronoi_homogeneous, Trajectory<2>& a, Trajectory<2>& c_i, Trajectory<2>& c_j)
+{
   Trajectory<2> a_scaled = a * voronoi_homogeneous[2];
-  Trajectory<2> voronoi_xy{voronoi_homogeneous[0], voronoi_homogeneous[1]};
+  Trajectory<2> voronoi_xy { voronoi_homogeneous[0], voronoi_homogeneous[1] };
   return (Trajectory<2>::dot(c_i - a, voronoi_xy - a_scaled) * (c_j - a).squaredNorm());
 }
-static Polynomial angularBisector(Trajectory<2>& a, Trajectory<2>& c, Trajectory<2>& c_prime, Trajectory<3> voronoi_homogeneous){
-  return angularBisectorHelper(voronoi_homogeneous, a, c, c_prime) - angularBisectorHelper(voronoi_homogeneous, a, c_prime, c);
+static Polynomial angularBisector(
+  Trajectory<2>& a, Trajectory<2>& c, Trajectory<2>& c_prime, Trajectory<3> voronoi_homogeneous)
+{
+  return angularBisectorHelper(voronoi_homogeneous, a, c, c_prime)
+    - angularBisectorHelper(voronoi_homogeneous, a, c_prime, c);
 }
 
 static double circumradius(const glm::dvec2& p0, const glm::dvec2& p1, const glm::dvec2& p2)
-{ 
+{
   const double x0 = p0[0], y0 = p0[1];
   const double x1 = p1[0], y1 = p1[1];
   const double x2 = p2[0], y2 = p2[1];
@@ -130,8 +135,9 @@ void KineticDelaunay::computeRadiusEvents(double t, size_t he_id)
 
   auto event_times = findEvents(event_trigger, fraction);
   for (const auto& event_time : event_times)
-  {    glm::dvec2 center {};
-  
+  {
+    glm::dvec2 center {};
+
     for (const auto& traj : trajs)
     {
       center[0] += traj[0](event_time);
@@ -139,11 +145,12 @@ void KineticDelaunay::computeRadiusEvents(double t, size_t he_id)
     }
     center[0] /= trajs.size();
     center[1] /= trajs.size();
-    //KINDS_DEBUG("Boundary Event at time " << event_time + section << " for half-edge ID " << he_id << " at center position"
-    //                                      << glm::to_string(center));
+    // KINDS_DEBUG("Boundary Event at time " << event_time + section << " for half-edge ID " << he_id << " at center
+    // position"
+    //                                       << glm::to_string(center));
 
-    events.emplace(
-      Event(event_time + section, he_id, t, center, Event::RADIUS)); // Store the event with the time and half-edge index
+    events.emplace(Event(
+      event_time + section, he_id, t, center, Event::RADIUS)); // Store the event with the time and half-edge index
   }
 }
 
@@ -225,12 +232,12 @@ void KineticDelaunay::computeFlipEvents(double t, size_t quad_id)
     center[0] /= trajs.size();
     center[1] /= trajs.size();
 
-    //KINDS_DEBUG("Event at time " << event_time + section << " for half-edge ID " << he_id << " at center position "
-    //                                  << glm::to_string(center));
+    // KINDS_DEBUG("Event at time " << event_time + section << " for half-edge ID " << he_id << " at center position "
+    //                                   << glm::to_string(center));
 
     events.emplace(
       Event(event_time + section, he_id, t, center, Event::FLIP)); // Store the event with the time and half-edge index
-    }
+  }
 }
 
 glm::dvec3 kinDS::KineticDelaunay::computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t) const
@@ -252,7 +259,7 @@ glm::dvec3 kinDS::KineticDelaunay::computeVoronoiVertexHomogenous(size_t voronoi
     // Voronoi vertex at infinity, return a point at infinity in homogeneous coordinates
     glm::dvec2 dir = glm::normalize(points[1] - points[0]);
 
-    if(vertices[1] == -1)
+    if (vertices[1] == -1)
     {
       dir = -dir;
     }
@@ -300,8 +307,8 @@ glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinity(size_t half_edge
   if (points.size() == 3)
   {
     circumcenter = graph.circumcenter(points[0], points[1], points[2]);
-    //KINDS_DEBUG("Computed circumcenter: " << glm::to_string(circumcenter));
-    // circumcenter = (points[0] + points[1] + points[2]) / 3.0;
+    // KINDS_DEBUG("Computed circumcenter: " << glm::to_string(circumcenter));
+    //  circumcenter = (points[0] + points[1] + points[2]) / 3.0;
   }
   else
   {
@@ -336,7 +343,7 @@ glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinity(size_t half_edge
     glm::dvec2 perp_dir = glm::dvec2 { -edge_dir[1], edge_dir[0] };
 
     circumcenter = neighboring_circumcenter - perp_dir;
-    //KINDS_DEBUG("Infinite case; replacement circumcenter: " << glm::to_string(circumcenter));
+    // KINDS_DEBUG("Infinite case; replacement circumcenter: " << glm::to_string(circumcenter));
   }
 
   // place circumcenters into the mesh
@@ -358,9 +365,11 @@ glm::dvec3 KineticDelaunay::getVoronoiVertexHomogeneous(size_t voronoi_vertex_id
   return computeVoronoiVertexHomogenous(voronoi_vertex_id, t);
 }
 
-std::vector<double> KineticDelaunay::findEvents(Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative)
+std::vector<double> KineticDelaunay::findEvents(
+  Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative)
 {
-  if(event_trigger.degree() == -1){
+  if (event_trigger.degree() == -1)
+  {
     // No events possible, return empty vector
     return {};
   }
@@ -383,7 +392,8 @@ std::vector<double> KineticDelaunay::findEvents(Polynomial& event_trigger, doubl
     }
   }
 
-  if(filtered_sorted_zeros.empty()){
+  if (filtered_sorted_zeros.empty())
+  {
     // No valid events found, return empty vector
     return {};
   }
@@ -396,10 +406,10 @@ std::vector<double> KineticDelaunay::findEvents(Polynomial& event_trigger, doubl
   double test_point = (min_fraction + filtered_sorted_zeros[0]) / 2.0; // Start with a test point before the first root
   interval_signs[0] = event_trigger(test_point) > 0 ? 1 : -1;
 
-
   for (size_t i = 0; i < filtered_sorted_zeros.size(); ++i)
   {
-    test_point = (filtered_sorted_zeros[i] + (i + 1 < filtered_sorted_zeros.size() ? filtered_sorted_zeros[i + 1] : 1.0)) / 2.0;
+    test_point
+      = (filtered_sorted_zeros[i] + (i + 1 < filtered_sorted_zeros.size() ? filtered_sorted_zeros[i + 1] : 1.0)) / 2.0;
     interval_signs[i + 1] = event_trigger(test_point) > 0 ? 1 : -1;
   }
 
@@ -409,17 +419,19 @@ std::vector<double> KineticDelaunay::findEvents(Polynomial& event_trigger, doubl
   {
     if (interval_signs[i] != interval_signs[i + 1])
     {
-      if(only_positive_to_negative && interval_signs[i] < 0)
+      if (only_positive_to_negative && interval_signs[i] < 0)
       {
-        KINDS_DEBUG("Sign change from negative to positive at root " << filtered_sorted_zeros[i] << ", skipping event creation due to only_positive_to_negative flag.");
+        KINDS_DEBUG("Sign change from negative to positive at root "
+          << filtered_sorted_zeros[i] << ", skipping event creation due to only_positive_to_negative flag.");
         continue; // Skip if we only want positive to negative sign changes
       }
       else
       {
-      // Sign change detected, create an event
-      double event_time = filtered_sorted_zeros[i];
-      found_event_times.push_back(event_time);
-      KINDS_DEBUG("Event found at time " << event_time << " with sign change from " << interval_signs[i] << " to " << interval_signs[i + 1]);
+        // Sign change detected, create an event
+        double event_time = filtered_sorted_zeros[i];
+        found_event_times.push_back(event_time);
+        KINDS_DEBUG("Event found at time " << event_time << " with sign change from " << interval_signs[i] << " to "
+                                           << interval_signs[i + 1]);
       }
     }
     else
@@ -454,17 +466,21 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     return;
   }
 
-
-  // Check a special case: the containing triangle is infinite and adjacent to the dual triangle. In this case, we need a different predicate
+  // Check a special case: the containing triangle is infinite and adjacent to the dual triangle. In this case, we need
+  // a different predicate
   bool adjacent = false;
   size_t adjacent_edge_index = -1;
   size_t finite_he_id = -1;
-  if(graph.isInfinite(containing_triangle.half_edges[0]) || graph.isInfinite(containing_triangle.half_edges[1]) || graph.isInfinite(containing_triangle.half_edges[2])){
+  if (graph.isInfinite(containing_triangle.half_edges[0]) || graph.isInfinite(containing_triangle.half_edges[1])
+    || graph.isInfinite(containing_triangle.half_edges[2]))
+  {
     // One edge must be finite, find it
-    
+
     size_t finite_edge_index = -1;
-    for(size_t edge_index = 0; edge_index < 3; edge_index++){
-      if(!graph.isInfinite(containing_triangle.half_edges[edge_index])){
+    for (size_t edge_index = 0; edge_index < 3; edge_index++)
+    {
+      if (!graph.isInfinite(containing_triangle.half_edges[edge_index]))
+      {
         finite_he_id = containing_triangle.half_edges[edge_index];
         finite_edge_index = edge_index;
         break;
@@ -472,8 +488,10 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     }
 
     // Now iterate over the edges of the dual triangle and check if any of them is the twin of the finite edge.
-    for(size_t edge_index = 0; edge_index < 3; edge_index++){
-      if(graph.twin(dual_triangle.half_edges[edge_index]) == finite_he_id){
+    for (size_t edge_index = 0; edge_index < 3; edge_index++)
+    {
+      if (graph.twin(dual_triangle.half_edges[edge_index]) == finite_he_id)
+      {
         adjacent = true;
         adjacent_edge_index = edge_index;
         break;
@@ -481,7 +499,8 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     }
   }
 
-  if(adjacent){
+  if (adjacent)
+  {
 
     // re-assign vertices
     v_i = graph.triangleOppositeVertex(dual_triangle.half_edges[adjacent_edge_index]);
@@ -502,19 +521,21 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     Polynomial event_trigger = -(vector_ij[0] * vector_ik[0] + vector_ij[1] * vector_ik[1]);
     auto fractional_event_times = findEvents(event_trigger, fraction, true);
 
-    // Only need the first event as any following events will be invalidated by the first crossing event. TODO: The exception is the edge being crossed, but that would make this more complex. We can optimize this later if needed.
-    if(!fractional_event_times.empty()){
+    // Only need the first event as any following events will be invalidated by the first crossing event. TODO: The
+    // exception is the edge being crossed, but that would make this more complex. We can optimize this later if needed.
+    if (!fractional_event_times.empty())
+    {
       double fractional_event_time = fractional_event_times.front();
       double event_time = fractional_event_time + section;
       // Position must be the midpoint of the two vertices
-      glm::dvec2 position = glm::vec2((traj_j[0](fractional_event_time) + traj_k[0](fractional_event_time)) / 2.0, (traj_j[1](fractional_event_time) + traj_k[1](fractional_event_time)) / 2.0);
+      glm::dvec2 position = glm::vec2((traj_j[0](fractional_event_time) + traj_k[0](fractional_event_time)) / 2.0,
+        (traj_j[1](fractional_event_time) + traj_k[1](fractional_event_time)) / 2.0);
 
-      KINDS_DEBUG("Crossing (right angle) Event at time " << event_time << " for Voronoi vertex ID " << voronoi_vertex_id
-                                            << " crossing half-edge ID " << finite_he_id << " at position "
-                                            << glm::to_string(position));
+      KINDS_DEBUG("Crossing (right angle) Event at time "
+        << event_time << " for Voronoi vertex ID " << voronoi_vertex_id << " crossing half-edge ID " << finite_he_id
+        << " at position " << glm::to_string(position));
       events.emplace(event_time, finite_he_id, t, position, voronoi_vertex_id, Event::CROSSING);
     }
-
   }
   else
   {
@@ -534,8 +555,8 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
     bisector_ik[2] = (traj_i[0] * traj_i[0] + traj_i[1] * traj_i[1]) - (traj_k[0] * traj_k[0] + traj_k[1] * traj_k[1]);
 
     // We only need the first event as any following events will be invalidated by the first crossing event.
-    // TODO: The exception is the edge being crossed, but that would make this more complex. We can optimize this later if
-    // needed.
+    // TODO: The exception is the edge being crossed, but that would make this more complex. We can optimize this later
+    // if needed.
     double event_time = std::numeric_limits<double>::infinity();
     size_t event_he_id = -1;
     Polynomial event_trigger;
@@ -560,10 +581,9 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
         line_ab[2] = traj_a[0] * traj_b[1] - traj_a[1] * traj_b[0];
 
         // now compute the determinant of the matrix with bisector_ij, bisector_ik and line_ab as columns
-      event_trigger = bisector_ij[0] * bisector_ik[1] * line_ab[2]
-      + bisector_ij[1] * bisector_ik[2] * line_ab[0] + bisector_ij[2] * bisector_ik[0] * line_ab[1]
-      - bisector_ij[2] * bisector_ik[1] * line_ab[0] - bisector_ij[1] * bisector_ik[0] * line_ab[2]
-      - bisector_ij[0] * bisector_ik[2] * line_ab[1];
+        event_trigger = bisector_ij[0] * bisector_ik[1] * line_ab[2] + bisector_ij[1] * bisector_ik[2] * line_ab[0]
+          + bisector_ij[2] * bisector_ik[0] * line_ab[1] - bisector_ij[2] * bisector_ik[1] * line_ab[0]
+          - bisector_ij[1] * bisector_ik[0] * line_ab[2] - bisector_ij[0] * bisector_ik[2] * line_ab[1];
       }
       else
       {
@@ -583,7 +603,6 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
           Trajectory<3> voronoi_homogeneous = Trajectory<3>::cross(bisector_ij, bisector_ik);
 
           event_trigger = angularBisector(traj_a, traj_c, traj_c_prime, voronoi_homogeneous);
-
         }
         else
         {
@@ -637,7 +656,8 @@ void kinDS::KineticDelaunay::computeCrossingEvents(double t, size_t voronoi_vert
   }
 }
 
-void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
+void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
+{
   // Find which side of he_id is on the outside of the convex hull
   size_t face0 = graph.getHalfEdges()[he_id].face;
   size_t face1 = graph.getHalfEdges()[he_id ^ 1].face;
@@ -647,10 +667,13 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
   bool face1_is_outside = false;
 
   // A face is outside if any of its triangle vertices is -1
-  auto isFaceOutside = [&](size_t face_id) -> bool {
+  auto isFaceOutside = [&](size_t face_id) -> bool
+  {
     const auto& face = graph.getFaces()[face_id];
-    for (size_t i = 0; i < 3; ++i) {
-      if (graph.getHalfEdges()[face.half_edges[i]].origin == size_t(-1)) {
+    for (size_t i = 0; i < 3; ++i)
+    {
+      if (graph.getHalfEdges()[face.half_edges[i]].origin == size_t(-1))
+      {
         return true;
       }
     }
@@ -665,23 +688,28 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
 
   // For each voronoi vertex in face0, reassign to outside face if not already there
   auto vertices0 = crossing_data.getVoronoiVerticesInTri(face0);
-  for (size_t voronoi_vertex : vertices0) {
-    if (crossing_data.getContainingTriId(voronoi_vertex) != outside_face_id) {
+  for (size_t voronoi_vertex : vertices0)
+  {
+    if (crossing_data.getContainingTriId(voronoi_vertex) != outside_face_id)
+    {
       crossing_data.moveVertex(voronoi_vertex, outside_face_id, t);
     }
   }
 
   // For each voronoi vertex in face1, reassign to outside face if not already there
   auto vertices1 = crossing_data.getVoronoiVerticesInTri(face1);
-  for (size_t voronoi_vertex : vertices1) {
-    if (crossing_data.getContainingTriId(voronoi_vertex) != outside_face_id) {
+  for (size_t voronoi_vertex : vertices1)
+  {
+    if (crossing_data.getContainingTriId(voronoi_vertex) != outside_face_id)
+    {
       crossing_data.moveVertex(voronoi_vertex, outside_face_id, t);
     }
   }
 
   // Secondly, we need to add all intersections to the new Delaunay edge (he_id/2).
   // To do this, find the "inner" edge (the one whose face is not outside) and get its triangle's two other half-edges.
-  // Those two edges will have Voronoi–Delaunay intersections; we copy those intersections over to the new (now boundary) edge, adjusting appropriately.
+  // Those two edges will have Voronoi–Delaunay intersections; we copy those intersections over to the new (now
+  // boundary) edge, adjusting appropriately.
 
   auto& boundary_edge_d_intersections = crossing_data.delaunay_edge_intersections[he_id / 2];
   auto it = boundary_edge_d_intersections.begin();
@@ -705,12 +733,14 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
   triangle_half_edges.push_back(next_he_id);
 
   // Now, for each intersection on these two edges, copy the intersection (with changes) to he_id/2 boundary edge
-  //for (size_t tri_he : triangle_half_edges) {
-  auto copy_intersections = [&](size_t tri_he, bool backwards){
+  // for (size_t tri_he : triangle_half_edges) {
+  auto copy_intersections = [&](size_t tri_he, bool backwards)
+  {
     auto& d_intersections = crossing_data.delaunay_edge_intersections[tri_he / 2];
     bool even = tri_he % 2 == 0;
 
-    auto process_intersection = [&](CrossingData::VoronoiDelaunayEdgeIntersection intersection){
+    auto process_intersection = [&](CrossingData::VoronoiDelaunayEdgeIntersection intersection)
+    {
       intersection.delaunay_edge_id = inner_he_id / 2;
 
       auto& v_intersections = crossing_data.voronoi_edge_intersections[intersection.voronoi_edge_id];
@@ -724,13 +754,16 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
       size_t start_containing_triangle_id = crossing_data.getContainingTriId(start_voronoi_vertex_id);
       size_t end_containing_triangle_id = crossing_data.getContainingTriId(end_voronoi_vertex_id);
       std::list<CrossingData::EdgeIntersectionRef>::iterator v_ref;
-      if(start_containing_triangle_id == outside_face_id){
+      if (start_containing_triangle_id == outside_face_id)
+      {
         v_ref = v_intersections.insert(v_intersections.begin(), intersection_it);
       }
-      else if(end_containing_triangle_id == outside_face_id){
+      else if (end_containing_triangle_id == outside_face_id)
+      {
         v_ref = v_intersections.insert(v_intersections.end(), intersection_it);
       }
-      else{
+      else
+      {
         throw std::runtime_error("Intersection is not on the boundary");
       }
 
@@ -738,21 +771,25 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
       intersection_it->voronoi_ref = v_ref;
       intersection_it->delaunay_ref = d_ref;
     };
-    
-    if(even != backwards){
-      for (auto iter : d_intersections) {
+
+    if (even != backwards)
+    {
+      for (auto iter : d_intersections)
+      {
         process_intersection(*iter);
       }
     }
     else
     {
-      for(auto iter = d_intersections.rbegin(); iter != d_intersections.rend(); iter++){
+      for (auto iter = d_intersections.rbegin(); iter != d_intersections.rend(); iter++)
+      {
         process_intersection(**iter);
       }
     }
   };
 
-  if(inner_he_id % 2 == 0){
+  if (inner_he_id % 2 == 0)
+  {
     copy_intersections(triangle_half_edges[1], true);
     copy_intersections(triangle_half_edges[0], true);
   }
@@ -761,11 +798,10 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t){
     copy_intersections(triangle_half_edges[0], false);
     copy_intersections(triangle_half_edges[1], false);
   }
-
 }
 
-void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, double t,
-  const std::map<size_t, size_t>& pre_flip_quad_faces)
+void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
+  size_t quad_index, double t, const std::map<size_t, size_t>& pre_flip_quad_faces)
 {
   size_t he_id = quad_index * 2;
   size_t face_id0 = graph.getHalfEdges()[he_id].face;
@@ -829,8 +865,6 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
         // Must belong to the dual triangle
         crossing_data.moveVertex(voronoi_vertex, voronoi_vertex, t);
       }
-
-      
     }
   };
 
@@ -854,15 +888,15 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
         size_t other_voronoi_vertex = graph.getHalfEdges()[he_id ^ 1].face;
 
         size_t other_containing_tri_id = crossing_data.getContainingTriId(other_voronoi_vertex);
-        if(other_containing_tri_id == face_id0 || other_containing_tri_id == face_id1)
+        if (other_containing_tri_id == face_id0 || other_containing_tri_id == face_id1)
         {
           // fully within the quadrilateral, might have one intersection removed or added with the flipped edge
-          auto v_intersections = crossing_data.voronoi_edge_intersections[he_id/2];
-          if(containing_tri_id == other_containing_tri_id)
+          auto v_intersections = crossing_data.voronoi_edge_intersections[he_id / 2];
+          if (containing_tri_id == other_containing_tri_id)
           {
             // no intersection exists, loop through intersections and remove them
-            
-            for(auto intersection : v_intersections)
+
+            for (auto intersection : v_intersections)
             {
               crossing_data.removeIntersection(intersection);
             }
@@ -871,14 +905,14 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
           {
             // there is an intersection, either update the existing intersection or add a new one
             // Compute the parameter along the delaunay edge
-            
-            if(v_intersections.empty())
+
+            if (v_intersections.empty())
             {
               // add a new intersection
               crossing_data.edge_intersections.emplace_back();
               auto intersection = std::prev(crossing_data.edge_intersections.end());
-              intersection->delaunay_edge_id = he_id/2;
-              intersection->voronoi_edge_id = he_id/2;
+              intersection->delaunay_edge_id = he_id / 2;
+              intersection->voronoi_edge_id = he_id / 2;
               intersection->delaunay_edge_param = 0.0;
             }
             else
@@ -899,26 +933,29 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
   // Now handle all voronoi edges that are partially outside the quadrilateral
   auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(quad_index);
 
-  for(size_t he_id : quad_he_ids){
-    auto& d_edge_intersections = crossing_data.delaunay_edge_intersections[he_id/2];
-    
+  for (size_t he_id : quad_he_ids)
+  {
+    auto& d_edge_intersections = crossing_data.delaunay_edge_intersections[he_id / 2];
 
-    for(CrossingData::EdgeIntersectionRef& intersection : d_edge_intersections){
+    for (CrossingData::EdgeIntersectionRef& intersection : d_edge_intersections)
+    {
       // get the next and previous intersections to check if they match with the flipped edge
       auto& v_edge_intersections = crossing_data.voronoi_edge_intersections[intersection->voronoi_edge_id];
       auto v_ref = intersection->voronoi_ref;
       std::list<CrossingData::EdgeIntersectionRef>::iterator v_next;
       std::list<CrossingData::EdgeIntersectionRef>::iterator v_prev;
-      
+
       // check if next or previous matches the face
       size_t face_inside_old = pre_flip_quad_faces.at(he_id);
       size_t face_inside_new = graph.getHalfEdges()[he_id].face;
 
       v_next = std::next(v_ref);
-      if(v_ref == v_edge_intersections.begin()){
+      if (v_ref == v_edge_intersections.begin())
+      {
         v_prev = v_edge_intersections.end();
       }
-      else{
+      else
+      {
         v_prev = std::prev(v_ref);
       }
 
@@ -928,75 +965,91 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
       bool intersected_before = false;
       std::list<CrossingData::EdgeIntersectionRef>::iterator v_intersection = v_edge_intersections.end();
 
-      if(v_prev != v_edge_intersections.end()){
+      if (v_prev != v_edge_intersections.end())
+      {
         size_t d_edge_id = (*v_prev)->delaunay_edge_id;
         size_t prev_face0 = graph.getHalfEdges()[2 * d_edge_id].face;
         size_t prev_face1 = graph.getHalfEdges()[2 * d_edge_id + 1].face;
 
         use_prev = (face_inside_old == prev_face0) || (face_inside_old == prev_face1);
 
-        if(use_prev){
+        if (use_prev)
+        {
           // check if it intersected before
-          if((prev_face0 == face_id0 && prev_face1 == face_id1) || (prev_face0 == face_id1 && prev_face1 == face_id0))
+          if ((prev_face0 == face_id0 && prev_face1 == face_id1) || (prev_face0 == face_id1 && prev_face1 == face_id0))
           {
             intersected_before = true;
             v_intersection = v_prev;
 
-            if(v_ref == v_edge_intersections.begin()){
+            if (v_ref == v_edge_intersections.begin())
+            {
               v_prev = v_edge_intersections.end();
             }
-            else{
+            else
+            {
               v_prev = std::next(v_prev);
             }
           }
         }
-      } else {
+      }
+      else
+      {
         size_t start_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id].face;
         size_t containing_triangle_id = crossing_data.getContainingTriId(start_voronoi_vertex_id);
 
         // unlike the intersection data, this has already been updated, so we need to compare to the new face
         use_prev = containing_triangle_id == face_inside_new;
-        if(use_prev){
+        if (use_prev)
+        {
           at_end = true;
         }
       }
 
       // now do the same for next
-      if(!use_prev){
-        if(v_next != v_edge_intersections.end()){
+      if (!use_prev)
+      {
+        if (v_next != v_edge_intersections.end())
+        {
           size_t d_edge_id = (*v_next)->delaunay_edge_id;
           size_t next_face0 = graph.getHalfEdges()[2 * d_edge_id].face;
           size_t next_face1 = graph.getHalfEdges()[2 * d_edge_id + 1].face;
 
           use_next = (face_inside_new == next_face0) || (face_inside_new == next_face1);
-          if(use_next){
+          if (use_next)
+          {
             // check if it intersected before
-            if((next_face0 == face_id0 && next_face1 == face_id1) || (next_face0 == face_id1 && next_face1 == face_id0))
+            if ((next_face0 == face_id0 && next_face1 == face_id1)
+              || (next_face0 == face_id1 && next_face1 == face_id0))
             {
               intersected_before = true;
               v_intersection = v_next;
               v_next = std::next(v_next);
             }
           }
-        } else {
+        }
+        else
+        {
           size_t end_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id + 1].face;
           size_t containing_triangle_id = crossing_data.getContainingTriId(end_voronoi_vertex_id);
 
           use_next = containing_triangle_id == face_inside_old;
-          if(use_next){
+          if (use_next)
+          {
             at_end = true;
           }
         }
       }
 
       assert(use_next != use_prev);
-      if(use_prev){
+      if (use_prev)
+      {
         v_next = v_prev;
       }
 
-      if(v_next != v_edge_intersections.end()){ // Voronoi edge extends beyond quadrilateral
+      if (v_next != v_edge_intersections.end())
+      { // Voronoi edge extends beyond quadrilateral
         auto quad_he_id_it = std::find(quad_he_ids.begin(), quad_he_ids.end(), (*v_next)->delaunay_edge_id * 2);
-        if(quad_he_id_it == quad_he_ids.end())
+        if (quad_he_id_it == quad_he_ids.end())
         {
           // try again with odd id
           quad_he_id_it = std::find(quad_he_ids.begin(), quad_he_ids.end(), (*v_next)->delaunay_edge_id * 2 + 1);
@@ -1008,64 +1061,74 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
         size_t face_id = graph.getHalfEdges()[he_id].face;
         size_t other_face_id = graph.getHalfEdges()[other_he_id].face;
 
-        if(face_id != other_face_id){
+        if (face_id != other_face_id)
+        {
           // new intersection
-          if(!intersected_before){
+          if (!intersected_before)
+          {
             crossing_data.edge_intersections.emplace_back();
 
             CrossingData::EdgeIntersectionRef new_intersection = std::prev(crossing_data.edge_intersections.end());
             new_intersection->delaunay_edge_id = quad_index;
             new_intersection->voronoi_edge_id = intersection->voronoi_edge_id;
-            
-            auto new_intersection_params = delaunayVoronoiEdgeIntersection(quad_index, intersection->voronoi_edge_id, t);
+
+            auto new_intersection_params
+              = delaunayVoronoiEdgeIntersection(quad_index, intersection->voronoi_edge_id, t);
 
             new_intersection->delaunay_edge_param = new_intersection_params.first;
             v_edge_intersections.insert(v_next, new_intersection);
             crossing_data.delaunay_edge_intersections[quad_index].push_back(new_intersection); // sort later
-            
           }
-        } else {
-          if(intersected_before){
+        }
+        else
+        {
+          if (intersected_before)
+          {
             crossing_data.removeIntersection(*v_intersection);
           }
         }
       }
-      else// Voronoi edge is partially in quadrilateral, check which face its end belongs to.
-      { 
+      else // Voronoi edge is partially in quadrilateral, check which face its end belongs to.
+      {
         size_t containing_triangle_id;
-        if(use_next){
+        if (use_next)
+        {
           size_t end_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id + 1].face;
           containing_triangle_id = crossing_data.getContainingTriId(end_voronoi_vertex_id);
-        } else {
+        }
+        else
+        {
           size_t start_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id].face;
           containing_triangle_id = crossing_data.getContainingTriId(start_voronoi_vertex_id);
         }
 
-        if(containing_triangle_id == face_inside_new && intersected_before){
+        if (containing_triangle_id == face_inside_new && intersected_before)
+        {
           // remove intersection
           crossing_data.removeIntersection(*v_intersection);
         }
-        else if(containing_triangle_id != face_inside_new && !intersected_before)
+        else if (containing_triangle_id != face_inside_new && !intersected_before)
         {
           // add new intersection
           crossing_data.edge_intersections.emplace_back();
 
-            CrossingData::EdgeIntersectionRef new_intersection = std::prev(crossing_data.edge_intersections.end());
-            new_intersection->delaunay_edge_id = quad_index;
-            new_intersection->voronoi_edge_id = intersection->voronoi_edge_id;
-            
-            auto new_intersection_params = delaunayVoronoiEdgeIntersection(quad_index, intersection->voronoi_edge_id, t);
+          CrossingData::EdgeIntersectionRef new_intersection = std::prev(crossing_data.edge_intersections.end());
+          new_intersection->delaunay_edge_id = quad_index;
+          new_intersection->voronoi_edge_id = intersection->voronoi_edge_id;
 
-            new_intersection->delaunay_edge_param = new_intersection_params.first;
-            v_edge_intersections.insert(v_next, new_intersection);
-            crossing_data.delaunay_edge_intersections[quad_index].push_back(new_intersection); // sort later
+          auto new_intersection_params = delaunayVoronoiEdgeIntersection(quad_index, intersection->voronoi_edge_id, t);
+
+          new_intersection->delaunay_edge_param = new_intersection_params.first;
+          v_edge_intersections.insert(v_next, new_intersection);
+          crossing_data.delaunay_edge_intersections[quad_index].push_back(new_intersection); // sort later
         }
       }
     }
   }
 
-  crossing_data.delaunay_edge_intersections[quad_index].sort([&](const CrossingData::EdgeIntersectionRef& a, const CrossingData::EdgeIntersectionRef& b)
-      { return a->delaunay_edge_param < b->delaunay_edge_param; });
+  crossing_data.delaunay_edge_intersections[quad_index].sort(
+    [&](const CrossingData::EdgeIntersectionRef& a, const CrossingData::EdgeIntersectionRef& b)
+    { return a->delaunay_edge_param < b->delaunay_edge_param; });
 
   // Recompute all crossing events
   for (size_t voronoi_vertex : vertices0)
@@ -1142,24 +1205,24 @@ void KineticDelaunay::handleFlipEvent(EventHandler& event_handler, Event& event)
   // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
   if (graph.getHalfEdges()[event.half_edge_id].origin == -1)
   {
-    //KINDS_DEBUG("Swapping face of half-edge " << event.half_edge_id << " to the inside at t = " << event.time);
+    // KINDS_DEBUG("Swapping face of half-edge " << event.half_edge_id << " to the inside at t = " << event.time);
     face_inside[twin_face_id] = (cutoff == std::numeric_limits<double>::infinity());
   }
 
   if (graph.getHalfEdges()[event.half_edge_id ^ 1].origin == -1)
   {
-    //KINDS_DEBUG(
-    //  "Swapping face of twin half-edge " << (event.half_edge_id ^ 1) << " to the inside at t = " << event.time);
+    // KINDS_DEBUG(
+    //   "Swapping face of twin half-edge " << (event.half_edge_id ^ 1) << " to the inside at t = " << event.time);
     face_inside[face_id] = (cutoff == std::numeric_limits<double>::infinity());
   }
 
-  //KINDS_DEBUG("Pre-flip: " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
-  //                         << face_inside[face_id] << " | " << face_inside[twin_face_id]);
+  // KINDS_DEBUG("Pre-flip: " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
+  //                          << face_inside[face_id] << " | " << face_inside[twin_face_id]);
 
   graph.flipEdge(event.half_edge_id);
 
-  //KINDS_DEBUG("Post-flip:  " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
-  //                             << face_inside[face_id] << " | " << face_inside[twin_face_id]);
+  // KINDS_DEBUG("Post-flip:  " << event.time << " for half-edge ID " << event.half_edge_id << ". Faces inside "
+  //                              << face_inside[face_id] << " | " << face_inside[twin_face_id]);
 
   // one of the triangles might have been swapped outside
   auto tri_verts1 = graph.adjacentTriangleVertices(event.half_edge_id);
@@ -1169,8 +1232,8 @@ void KineticDelaunay::handleFlipEvent(EventHandler& event_handler, Event& event)
     if (v == -1)
     {
       size_t face_id = graph.getHalfEdges()[event.half_edge_id].face;
-      //KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << event.half_edge_id
-      //                            << " to the outside at t = " << event.time);
+      // KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << event.half_edge_id
+      //                             << " to the outside at t = " << event.time);
       setFaceInside(face_id, false);
     }
   }
@@ -1181,16 +1244,15 @@ void KineticDelaunay::handleFlipEvent(EventHandler& event_handler, Event& event)
     if (v == -1)
     {
       size_t face_id = graph.getHalfEdges()[event.half_edge_id ^ 1].face;
-      //KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << (event.half_edge_id ^ 1)
-      //                            << " to the outside at t = " << event.time);
+      // KINDS_DEBUG("Swapped face " << face_id << " of half-edge " << (event.half_edge_id ^ 1)
+      //                             << " to the outside at t = " << event.time);
       setFaceInside(face_id, false);
     }
   }
 
-  //KINDS_DEBUG("Processed flip event at time " << event.time << " for half-edge ID " << event.half_edge_id
-  //                                            << ". Faces inside " << face_inside[face_id] << " | "
-  //                                            << face_inside[twin_face_id]);
-
+  // KINDS_DEBUG("Processed flip event at time " << event.time << " for half-edge ID " << event.half_edge_id
+  //                                             << ". Faces inside " << face_inside[face_id] << " | "
+  //                                             << face_inside[twin_face_id]);
 
   // After flipping the edge, we need to recompute the events for all surrounding half-edges
   size_t next1 = graph.getHalfEdges()[event.half_edge_id].next;
@@ -1219,7 +1281,8 @@ void KineticDelaunay::handleFlipEvent(EventHandler& event_handler, Event& event)
   face_last_updated[twin_face_id] = event.time;
 
   // trigger re-assignment of voronoi vertices needed for crossing events
-  if(!graph.isOnConvexBoundary(event.half_edge_id)){
+  if (!graph.isOnConvexBoundary(event.half_edge_id))
+  {
     reassignVoronoiVerticesInQuadrilateral(event.half_edge_id / 2, event.time, pre_flip_quad_faces);
   }
   else
@@ -1275,10 +1338,11 @@ void KineticDelaunay::handleCrossingEvent(EventHandler& event_handler, Event& ev
     = event.time; // Update the last crossing time for this Voronoi vertex
 
   KINDS_DEBUG("Processing crossing event at time " << event.time << " for Voronoi vertex ID " << event.voronoi_vertex_id
-                                               << " crossing half-edge ID " << event.half_edge_id);
+                                                   << " crossing half-edge ID " << event.half_edge_id);
 
   // move to neighboring triangle
-  KINDS_DEBUG("Moving Voronoi vertex " << event.voronoi_vertex_id << " from triangle " << containing_tri_id << " to triangle " << graph.getHalfEdges()[event.half_edge_id ^ 1].face);
+  KINDS_DEBUG("Moving Voronoi vertex " << event.voronoi_vertex_id << " from triangle " << containing_tri_id
+                                       << " to triangle " << graph.getHalfEdges()[event.half_edge_id ^ 1].face);
   crossing_data.moveVertex(event.voronoi_vertex_id, graph.getHalfEdges()[event.half_edge_id ^ 1].face, event.time);
 
   // Update Voronoi–Delaunay edge intersections stored in crossing_data in response to this crossing.
@@ -1434,7 +1498,7 @@ void KineticDelaunay::computeComponentData(double t)
 {
   auto& graph = getGraph();
   component_data.components = extractConnectedComponents();
-  //KINDS_DEBUG("Extracted " << component_data.components.size() << " components.");
+  // KINDS_DEBUG("Extracted " << component_data.components.size() << " components.");
   component_data.component_map = buildComponentMap(component_data.components, graph.getVertexCount());
   component_data.component_boundaries.resize(component_data.components.size());
 
@@ -1471,10 +1535,7 @@ void KineticDelaunay::computeComponentData(double t)
   component_data.component_last_updated.resize(component_data.components.size(), t);
 }
 
-const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const
-{
-  return crossing_data;
-}
+const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const { return crossing_data; }
 
 std::vector<std::array<size_t, 4>> KineticDelaunay::getCrossingIntersectionDebugData() const
 {
@@ -1504,21 +1565,18 @@ std::vector<std::array<size_t, 4>> KineticDelaunay::getCrossingIntersectionDebug
   return result;
 }
 
-bool KineticDelaunay::computeBoundaryOnTheFly() const
-{
-  return on_the_fly_boundary;
-}
+bool KineticDelaunay::computeBoundaryOnTheFly() const { return on_the_fly_boundary; }
 
-glm::dvec3 lineToHomegeneous(const glm::dvec2& p, const glm::dvec2& dir){
+glm::dvec3 lineToHomegeneous(const glm::dvec2& p, const glm::dvec2& dir)
+{
   glm::dvec2 normal = glm::dvec2(-dir.y, dir.x);
   return glm::dvec3(normal, -glm::dot(normal, p));
 }
 
-std::pair<double, double> segmentIntersectionParameters(const glm::dvec2& p0, const glm::dvec2& p1, const glm::dvec2& q0, const glm::dvec2& q1){
-  auto cross2D = [](const glm::dvec2& a, const glm::dvec2& b)
-  {
-    return a.x * b.y - a.y * b.x;
-  };
+std::pair<double, double> segmentIntersectionParameters(
+  const glm::dvec2& p0, const glm::dvec2& p1, const glm::dvec2& q0, const glm::dvec2& q1)
+{
+  auto cross2D = [](const glm::dvec2& a, const glm::dvec2& b) { return a.x * b.y - a.y * b.x; };
 
   const glm::dvec2 p = p0;
   const glm::dvec2 r = p1 - p0;
@@ -1539,7 +1597,8 @@ std::pair<double, double> segmentIntersectionParameters(const glm::dvec2& p0, co
   return std::pair<double, double>(t, u);
 }
 
-bool segmentRayIntersection(const glm::dvec2& segment_p0, const glm::dvec2& segment_p1, const glm::dvec2& ray_origin, const glm::dvec2& ray_dir)
+bool segmentRayIntersection(
+  const glm::dvec2& segment_p0, const glm::dvec2& segment_p1, const glm::dvec2& ray_origin, const glm::dvec2& ray_dir)
 {
   auto [t, u] = segmentIntersectionParameters(segment_p0, segment_p1, ray_origin, ray_origin + ray_dir);
   return t >= 0.0 && u >= 0.0 && u <= 1.0;
@@ -1575,11 +1634,11 @@ std::pair<glm::dvec2, glm::dvec2> KineticDelaunay::computeAngularBisector(size_t
   glm::dvec2 p_c = branch_trajs.evaluate(c, t);
   glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, t);
 
-  glm::dvec2 angular_bisector_direction =
-    glm::normalize(p_c_prime - p_a) + glm::normalize(p_c - p_a);
+  glm::dvec2 angular_bisector_direction = glm::normalize(p_c_prime - p_a) + glm::normalize(p_c - p_a);
 
   // Fallback: If the direction is zero, we can just use the normal of the segment.
-  if(glm::length(angular_bisector_direction) < 1e-12){
+  if (glm::length(angular_bisector_direction) < 1e-12)
+  {
     glm::dvec2 tangent = glm::normalize(p_c_prime - p_c);
     angular_bisector_direction = glm::dvec2(-tangent.y, tangent.x);
     // TODO: I'm not sure if the sign is correct here.
@@ -1589,29 +1648,33 @@ std::pair<glm::dvec2, glm::dvec2> KineticDelaunay::computeAngularBisector(size_t
   return std::pair(p_a, -angular_bisector_direction);
 };
 
-std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const {
+std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(
+  size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const
+{
 
   glm::dvec2 start_point = computeVoronoiVertexClampedInfinity(voronoi_edge_id * 2, t);
   glm::dvec2 destination = computeVoronoiVertexClampedInfinity(voronoi_edge_id * 2 + 1, t);
 
-  if(graph.isInfinite(delaunay_edge_id)){
+  if (graph.isInfinite(delaunay_edge_id))
+  {
     auto ray = computeAngularBisector(delaunay_edge_id, t);
 
     return segmentIntersectionParameters(ray.first, ray.first + ray.second, start_point, destination);
   }
-  else{
+  else
+  {
     glm::dvec2 edge_start = branch_trajs.evaluate(graph.getHalfEdges()[delaunay_edge_id].origin, t);
     glm::dvec2 edge_end = branch_trajs.evaluate(graph.destination(delaunay_edge_id), t);
     return segmentIntersectionParameters(edge_start, edge_end, start_point, destination);
   }
 }
 
-  std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCrossedHalfEdges(
+std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCrossedHalfEdges(
   size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const
 {
   std::vector<size_t> crossed_half_edge_ids;
   std::vector<double> crossed_half_edge_params;
-    auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
+  auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
   { return -((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)); };
 
   auto compute_angular_bisector_homogeneous = [&](size_t he_id)
@@ -1620,10 +1683,12 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(size_
     return lineToHomegeneous(ray.first, ray.second);
   };
 
-  auto compute_he_graph_edge_function = [&](size_t he_id, const glm::dvec2& query_point){
+  auto compute_he_graph_edge_function = [&](size_t he_id, const glm::dvec2& query_point)
+  {
     size_t origin = graph.getHalfEdges()[he_id].origin;
     size_t dest = graph.destination(he_id);
-    //KINDS_DEBUG("Computing edge function for half-edge " << he_id << " with origin " << origin << " and destination " << dest);
+    // KINDS_DEBUG("Computing edge function for half-edge " << he_id << " with origin " << origin << " and destination "
+    // << dest);
     if (origin != static_cast<size_t>(-1) && dest != static_cast<size_t>(-1))
     {
       glm::dvec2 p0 = branch_trajs.evaluate(origin, t);
@@ -1634,7 +1699,8 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(size_
     {
       glm::dvec3 edge = compute_angular_bisector_homogeneous(he_id);
 
-      if(dest == -1){
+      if (dest == -1)
+      {
         return -glm::dot(edge, glm::dvec3(query_point, 1.0));
       }
       else
@@ -1650,27 +1716,28 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(size_
   auto next_vertices = graph.getTriangleVertexIndices(start_face_id);
   auto next_tri_half_edges = graph.getFaces()[start_face_id].half_edges;
 
-  //KINDS_DEBUG("Following line from " << glm::to_string(start_point) << " to " << glm::to_string(destination));
+  // KINDS_DEBUG("Following line from " << glm::to_string(start_point) << " to " << glm::to_string(destination));
 
   while (!inside_triangle)
   {
-    //KINDS_DEBUG("Next face ID: " << next_face_id);
-    // check each edge for an intersection with the line we need to follow.
+    // KINDS_DEBUG("Next face ID: " << next_face_id);
+    //  check each edge for an intersection with the line we need to follow.
     inside_triangle = true;
 
-
     // first test if we are inside
-    for(int edge_index = 0; edge_index < 3; edge_index++){
+    for (int edge_index = 0; edge_index < 3; edge_index++)
+    {
       size_t he_id = next_tri_half_edges[edge_index];
       double edge_function = compute_he_graph_edge_function(he_id, destination);
-      if(edge_function < 0){
+      if (edge_function < 0)
+      {
         inside_triangle = false;
         break;
       }
     }
 
     // Now determine direction of walk
-    if(inside_triangle)
+    if (inside_triangle)
     {
       break;
     }
@@ -1679,14 +1746,17 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(size_
     double max_s = -1.0;
     double crossed_edge_param;
 
-    for(int edge_index = 0; edge_index < 3; edge_index++){
-      if(edge_index == 0 && next_face_id != start_face_id){
+    for (int edge_index = 0; edge_index < 3; edge_index++)
+    {
+      if (edge_index == 0 && next_face_id != start_face_id)
+      {
         // This is where we came from, so we don't need to check it as it will make us go backwards
         continue;
       }
       size_t he_id = next_tri_half_edges[edge_index];
 
-      if(graph.isInfinite(he_id)){
+      if (graph.isInfinite(he_id))
+      {
         auto ray = computeAngularBisector(he_id, t);
         /*if(segmentRayIntersection(start_point, destination, ray.first, ray.second)){
           next_crossed_edge_id = he_id;
@@ -1694,20 +1764,25 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(size_
           break;
         }*/
         auto [r, s] = segmentIntersectionParameters(ray.first, ray.first + ray.second, start_point, destination);
-        if(r >= 0.0 && s <= 1.0){
-          if(s > max_s){
+        if (r >= 0.0 && s <= 1.0)
+        {
+          if (s > max_s)
+          {
             max_s = s;
             max_s_index = edge_index;
             crossed_edge_param = r;
           }
         }
       }
-      else{
+      else
+      {
         glm::dvec2 edge_start = branch_trajs.evaluate(graph.getHalfEdges()[he_id].origin, t);
         glm::dvec2 edge_end = branch_trajs.evaluate(graph.destination(he_id), t);
         auto [r, s] = segmentIntersectionParameters(edge_start, edge_end, start_point, destination);
-        if(r >= 0.0 && r <= 1.0 && s <= 1.0){
-          if(s > max_s){
+        if (r >= 0.0 && r <= 1.0 && s <= 1.0)
+        {
+          if (s > max_s)
+          {
             max_s = s;
             max_s_index = edge_index;
             crossed_edge_param = r;
@@ -1715,7 +1790,7 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(size_
         }
       }
     }
-  
+
     next_crossed_edge_id = next_tri_half_edges[max_s_index];
     next_face_id = graph.getHalfEdges()[next_crossed_edge_id ^ 1].face;
     // Record the edge we are about to cross
@@ -1769,14 +1844,14 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init()
 
       // initialize face_inside based on the circumradius at t = 0
       double r = circumradius(points[0], points[1], points[2]);
-      //KINDS_DEBUG("Circumradius: " << r);
+      // KINDS_DEBUG("Circumradius: " << r);
       if (r < cutoff)
       {
         setFaceInside(face_index, true);
       }
     }
 
-    //KINDS_DEBUG("Computing containing triangle for Voronoi vertex " << face_index);
+    // KINDS_DEBUG("Computing containing triangle for Voronoi vertex " << face_index);
     if (outer_face)
     {
       // The voronoi vertices dual to the outer face are always within it, so we just set it to itself, no events
@@ -1785,12 +1860,13 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init()
       continue;
     }
 
-    //KINDS_DEBUG("Initial face has vertices at positions: " << glm::to_string(points[0]) << ", " << glm::to_string(points[1]) << ", "
-    //                           << glm::to_string(points[2]));
-    //KINDS_DEBUG("Vertex IDs: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2]);
-    // initialize voronoi_vertex_to_tri_id:
-    // We can use the edge functions from Pineda's algorithm to find if the circumcenter is inside and if not which
-    // edge must be crossed. First compute the circumcenter:
+    // KINDS_DEBUG("Initial face has vertices at positions: " << glm::to_string(points[0]) << ", " <<
+    // glm::to_string(points[1]) << ", "
+    //                            << glm::to_string(points[2]));
+    // KINDS_DEBUG("Vertex IDs: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2]);
+    //  initialize voronoi_vertex_to_tri_id:
+    //  We can use the edge functions from Pineda's algorithm to find if the circumcenter is inside and if not which
+    //  edge must be crossed. First compute the circumcenter:
     glm::dvec2 circumcenter = HalfEdgeDelaunayGraph::circumcenter(points[0], points[1], points[2]);
 
     auto edge_function = [](const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
@@ -1827,7 +1903,7 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init()
     }
     else
     {
-      //KINDS_DEBUG("Determining containing triangle for voronoi vertex " << face_index);
+      // KINDS_DEBUG("Determining containing triangle for voronoi vertex " << face_index);
       auto crossed_half_edges = computeCrossedHalfEdges(face_index, circumcenter, start_point, 0.0).first;
 
       if (crossed_half_edges.empty())
@@ -1874,7 +1950,8 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
     size_t he_id0 = voronoi_edge_id * 2;
     size_t he_id1 = he_id0 + 1;
 
-    if(graph.isInfinite(he_id0)){
+    if (graph.isInfinite(he_id0))
+    {
       continue;
     }
 
@@ -1887,8 +1964,7 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
     size_t left_voronoi_vertex_id = graph.getHalfEdges()[he_id0].face;
     size_t left_containing_tri_id = kd.getCrossingDataContainingTriId(left_voronoi_vertex_id);
 
-    auto crossed_half_edges_params
-      = kd.computeCrossedHalfEdges(left_containing_tri_id, right_vertex, left_vertex, t);
+    auto crossed_half_edges_params = kd.computeCrossedHalfEdges(left_containing_tri_id, right_vertex, left_vertex, t);
 
     for (size_t i = 0; i < crossed_half_edges_params.first.size(); i++)
     {
@@ -1910,8 +1986,8 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
         edge_itr->delaunay_edge_param = 1.0 - param;
       }
 
-      auto voronoi_ref
-        = voronoi_edge_intersections[voronoi_edge_id].emplace(voronoi_edge_intersections[voronoi_edge_id].end(), edge_itr);
+      auto voronoi_ref = voronoi_edge_intersections[voronoi_edge_id].emplace(
+        voronoi_edge_intersections[voronoi_edge_id].end(), edge_itr);
       edge_itr->voronoi_ref = voronoi_ref;
     }
   }
@@ -1922,7 +1998,8 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
     size_t delaunay_edge_id = edge_itr->delaunay_edge_id;
     if (delaunay_edge_id >= delaunay_edge_intersections.size())
     {
-      KINDS_ERROR("Delaunay edge id out of bounds: " << delaunay_edge_id << " >= " << delaunay_edge_intersections.size());
+      KINDS_ERROR(
+        "Delaunay edge id out of bounds: " << delaunay_edge_id << " >= " << delaunay_edge_intersections.size());
       continue;
     }
     delaunay_edge_intersections[delaunay_edge_id].push_back(edge_itr);
@@ -1978,12 +2055,11 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(const KineticDelaun
   {
     size_t voronoi_he_id = half_edges[i];
     size_t voronoi_edge_id = voronoi_he_id / 2;
-    auto& v_intersections = voronoi_edge_intersections[voronoi_edge_id]; // wrong as of now, first edge not deleted in preceding flip event
+    auto& v_intersections
+      = voronoi_edge_intersections[voronoi_edge_id]; // wrong as of now, first edge not deleted in preceding flip event
 
     auto is_matching = [&](EdgeIntersectionRef ref)
-    {
-      return ref->delaunay_edge_id == crossed_delaunay_edge_id && ref->voronoi_edge_id == voronoi_edge_id;
-    };
+    { return ref->delaunay_edge_id == crossed_delaunay_edge_id && ref->voronoi_edge_id == voronoi_edge_id; };
 
     if (!v_intersections.empty() && is_matching(v_intersections.front()))
     {
@@ -2263,7 +2339,7 @@ std::vector<BoundaryPoint> KineticDelaunay::traverseBoundary(size_t start_he_id,
 std::vector<std::vector<BoundaryPoint>> KineticDelaunay::extractComponentBoundaries(
   const std::vector<size_t>& component, double t, std::vector<bool>& he_visited) const
 {
-  //KINDS_DEBUG("Extracting component boundaries at t = " << t);
+  // KINDS_DEBUG("Extracting component boundaries at t = " << t);
   if (component.size() < 3)
   {
     return { {} };
@@ -2356,7 +2432,7 @@ std::vector<BoundaryPoint> KineticDelaunay::extractComponentBoundary(
   return traverseBoundary(start_he_id, t);
 }
 
-const std::vector<bool>& KineticDelaunay::getFacesInside() const { return face_inside;}
+const std::vector<bool>& KineticDelaunay::getFacesInside() const { return face_inside; }
 
 bool KineticDelaunay::getFaceInside(size_t face_index) const { return face_inside[face_index]; }
 

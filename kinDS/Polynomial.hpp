@@ -6,10 +6,10 @@
 #pragma push_macro("Success")
 #undef Success
 
+#include "Logger.hpp"
 #include "eigen/eigen/Eigen/Core"
 #include "eigen/eigen/Eigen/Dense"
 #include "eigen/eigen/unsupported/Eigen/Polynomials"
-#include "Logger.hpp"
 
 #pragma pop_macro("Success")
 
