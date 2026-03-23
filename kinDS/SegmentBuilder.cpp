@@ -1,6 +1,7 @@
 #include "SegmentBuilder.hpp"
 
 #include "Logger.hpp"
+#include "KineticDelaunayCrossingEvent.hpp"
 
 #include <glm/gtx/exterior_product.hpp>
 
