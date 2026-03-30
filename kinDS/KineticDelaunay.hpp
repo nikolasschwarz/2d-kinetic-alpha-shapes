@@ -73,94 +73,47 @@ static std::vector<size_t> buildComponentMap(const std::vector<std::vector<size_
 class KineticDelaunay
 {
  public:
-  class EventHandler;
+  class EventCallback;
+  class FlipEvent;
+  class RadiusEvent;
+  class CrossingEvent;
   class Event
   {
    public:
     virtual ~Event() = default;
 
-    double time; // Time of the event
-    size_t half_edge_id; // Half-edge index associated with the event
+    double occurrence_time; // Time of the event
     double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
-    glm::dvec2 position; // Position of the event
-    size_t voronoi_vertex_id; // Voronoi vertex index associated with the event, only used for crossing events
 
     // Virtual dispatch to execute the event.
-    virtual void handleEvent(EventHandler& event_handler) = 0;
+    virtual void handleEvent() = 0;
 
     KineticDelaunay* getKineticDelaunay() const { return kd_; }
     void setKineticDelaunay(KineticDelaunay* kd) { kd_ = kd; }
 
-    double getTime() const { return time; }
+    double getTime() const { return occurrence_time; }
 
-  protected:
+   protected:
     KineticDelaunay* kd_ = nullptr;
 
-    Event(
-      KineticDelaunay* kd,
-      double t,
-      size_t he_id,
-      double creation_time,
-      glm::dvec2 position,
-      size_t voronoi_vertex_id)
-      : time(t)
-      , half_edge_id(he_id)
+    Event(KineticDelaunay* kd, double occurrence_time, double creation_time)
+      : occurrence_time(occurrence_time)
       , creation_time(creation_time)
-      , position(position)
-      , voronoi_vertex_id(voronoi_vertex_id)
       , kd_(kd)
     {
     }
   };
 
-  // EventHandler class, inherit from this class to handle events in the KineticDelaunay algorithm
-  class EventHandler
+  // EventCallback class, inherit from this class to handle events in the KineticDelaunay algorithm
+  class EventCallback
   {
    public:
-    virtual ~EventHandler() = default;
-    /**
-     * \brief Handle a FLIP event before it is processed, i.e. before any edges are swapped
-     *
-     * @param e The event to handle.
-     */
-    virtual void beforeFlipEvent(Event& e) { }
+    virtual ~EventCallback() = default;
+    // Called for any event type before it is processed.
+    virtual void beforeEvent(Event& e) { }
 
-    /**
-     * \brief Handle a FLIP event after it is processed, i.e. after edges are swapped
-     *
-     * @param e The event to handle.
-     */
-    virtual void afterFlipEvent(Event& e) { }
-
-    /**
-     * \brief Handle a RADIUS event before it is processed
-     *
-     * @param e The event to handle
-     */
-    virtual void beforeRadiusEvent(Event& e) { }
-
-    /**
-     * \brief Handle a RADIUS event after it is processed
-     *
-     * @param e The event to handle
-     */
-    virtual void afterRadiusEvent(Event& e) { }
-
-    virtual void beforeCrossingEvent(Event& e) { }
-
-    virtual void afterCrossingEvent(Event& e) { }
-
-    virtual void betweenSections(size_t index) { }
-
-    /**
-     * \brief initialize event handler.
-     */
-    virtual void init() { }
-
-    /**
-     * \brief Finalize after all events have been handled
-     */
-    virtual void finalize(double t) { }
+    // Called for any event type after it is processed.
+    virtual void afterEvent(Event& e) { }
   };
 
   class EventManager
@@ -169,6 +122,8 @@ class KineticDelaunay
     virtual ~EventManager() = default;
 
     virtual void computeEvents(double t, size_t event_id) = 0;
+    void setCallback(EventCallback* callback) { callback_ = callback; }
+    EventCallback* getCallback() const { return callback_; }
 
    protected:
     explicit EventManager(KineticDelaunay* kd)
@@ -177,15 +132,27 @@ class KineticDelaunay
     }
 
     KineticDelaunay* kd_;
+    EventCallback* callback_ = nullptr;
+  };
+
+  class CallbackManager
+  {
+   public:
+    virtual ~CallbackManager() = default;
+
+    virtual void init() { }
+    virtual void finalize(double t) { }
   };
 
   class FlipEvent;
   class RadiusEvent;
   class CrossingEvent;
+  class SectionEvent;
 
   class FlipEventManager;
   class RadiusEventManager;
   class CrossingEventManager;
+  class SectionEventManager;
 
   struct ComponentData
   {
@@ -221,12 +188,11 @@ class KineticDelaunay
     bool operator()(const std::shared_ptr<Event>& a, const std::shared_ptr<Event>& b) const
     {
       // For priority_queue we want the earliest event first => reverse comparison.
-      return a->time > b->time;
+      return a->occurrence_time > b->occurrence_time;
     }
   };
 
-  using EventQueue
-    = std::priority_queue<std::shared_ptr<Event>, std::vector<std::shared_ptr<Event>>, EventPtrCompare>;
+  using EventQueue = std::priority_queue<std::shared_ptr<Event>, std::vector<std::shared_ptr<Event>>, EventPtrCompare>;
 
   StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
@@ -236,6 +202,8 @@ class KineticDelaunay
   std::unique_ptr<FlipEventManager> flip_event_manager_;
   std::unique_ptr<RadiusEventManager> radius_event_manager_;
   std::unique_ptr<CrossingEventManager> crossing_event_manager_;
+  std::unique_ptr<SectionEventManager> section_event_manager_;
+  CallbackManager* callback_manager_ = nullptr;
   size_t sections_advanced = 0; // Counter for the number of sections advanced
   double cutoff; // Cutoff radius for boundary events
   std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
@@ -266,7 +234,7 @@ class KineticDelaunay
 
   void precomputeStep(double t);
 
-  void handleEvents(EventHandler& event_handler);
+  void handleEvents();
 
   size_t getBranchIndex(size_t strand_id, size_t t) const;
 
@@ -300,16 +268,20 @@ class KineticDelaunay
   const CrossingData& getCrossingData() const;
   std::vector<std::array<size_t, 4>> getCrossingIntersectionDebugData() const;
 
-  const HalfEdgeDelaunayGraph& init();
-
-  const HalfEdgeDelaunayGraph& advanceOneSection(EventHandler& event_handler);
+  const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
+  void registerSectionEventCallback(EventCallback* callback);
+  void registerFlipEventCallback(EventCallback* callback);
+  void registerRadiusEventCallback(EventCallback* callback);
+  void registerCrossingEventCallback(EventCallback* callback);
+  void registerEventCallbacks(EventCallback* section_callback, EventCallback* flip_callback,
+    EventCallback* radius_callback, EventCallback* crossing_callback);
 
   const HalfEdgeDelaunayGraph& getGraph() const;
 
   size_t getSectionCount() const;
 
   // Computes the Delaunay triangulation of the given splines
-  void compute(EventHandler& event_handler);
+  void compute();
 
   std::vector<size_t> extractConnectedComponent(size_t u, std::vector<bool>& visited) const;
 

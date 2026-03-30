@@ -1,8 +1,9 @@
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "KineticDelaunayFlipEvent.hpp"
-#include "KineticDelaunayRadiusEvent.hpp"
 #include "KineticDelaunayHelpers.hpp"
+#include "KineticDelaunayRadiusEvent.hpp"
+#include "KineticDelaunaySectionEvent.hpp"
 #include <glm/geometric.hpp>
 
 using namespace kinDS;
@@ -718,13 +719,13 @@ void KineticDelaunay::precomputeStep(double t)
   }
 }
 
-void KineticDelaunay::handleEvents(EventHandler& event_handler)
+void KineticDelaunay::handleEvents()
 {
   while (!events.empty())
   {
     auto event = events.top();
     events.pop();
-    event->handleEvent(event_handler);
+    event->handleEvent();
   }
 }
 
@@ -750,6 +751,7 @@ KineticDelaunay::KineticDelaunay(const StrandTree& branch_trajs, double cutoff, 
   , flip_event_manager_(std::make_unique<FlipEventManager>(this))
   , radius_event_manager_(std::make_unique<RadiusEventManager>(this))
   , crossing_event_manager_(std::make_unique<CrossingEventManager>(this))
+  , section_event_manager_(std::make_unique<SectionEventManager>(this))
   , crossing_data(crossing_event_manager_->getCrossingDataMutable())
 {
   if (add_dummy_splines)
@@ -1160,10 +1162,16 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
   return std::make_pair(crossed_half_edge_ids, crossed_half_edge_params);
 }
 
-const HalfEdgeDelaunayGraph& KineticDelaunay::init()
+const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_manager)
 {
+  callback_manager_ = callback_manager;
   graph.init(branch_trajs.getPoints());
   sections_advanced = 0; // Reset the section counter
+
+  /*section_event_manager_->setCallback(section_callback);
+  flip_event_manager_->setCallback(flip_callback);
+  radius_event_manager_->setCallback(radius_callback);
+  crossing_event_manager_->setCallback(crossing_callback);*/
 
   graph.printDebug();
 
@@ -1283,7 +1291,41 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init()
   // Precompute Voronoi–Delaunay edge intersections at t = 0 and store them in crossing_data.
   crossing_data.computeEdgeIntersections(*this, 0.0);
 
+  if (callback_manager)
+  {
+    callback_manager->init();
+  }
+
   return graph;
+}
+
+void KineticDelaunay::registerSectionEventCallback(EventCallback* callback)
+{
+  section_event_manager_->setCallback(callback);
+}
+
+void KineticDelaunay::registerFlipEventCallback(EventCallback* callback)
+{
+  flip_event_manager_->setCallback(callback);
+}
+
+void KineticDelaunay::registerRadiusEventCallback(EventCallback* callback)
+{
+  radius_event_manager_->setCallback(callback);
+}
+
+void KineticDelaunay::registerCrossingEventCallback(EventCallback* callback)
+{
+  crossing_event_manager_->setCallback(callback);
+}
+
+void KineticDelaunay::registerEventCallbacks(EventCallback* section_callback, EventCallback* flip_callback,
+  EventCallback* radius_callback, EventCallback* crossing_callback)
+{
+  registerSectionEventCallback(section_callback);
+  registerFlipEventCallback(flip_callback);
+  registerRadiusEventCallback(radius_callback);
+  registerCrossingEventCallback(crossing_callback);
 }
 
 void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaunay& kd, double t)
@@ -1394,14 +1436,15 @@ void KineticDelaunay::CrossingData::removeIntersection(EdgeIntersectionRef inter
   edge_intersections.erase(intersection_ref);
 }
 
-void KineticDelaunay::CrossingData::updateAfterCrossingEvent(const KineticDelaunay& kd, const Event& e)
+void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
+  const KineticDelaunay& kd, const KineticDelaunay::CrossingEvent& e)
 {
   auto& graph = kd.getGraph();
   size_t voronoi_vertex_id = e.voronoi_vertex_id;
   size_t crossed_delaunay_edge_id = e.half_edge_id / 2;
   auto& d_intersections = delaunay_edge_intersections[crossed_delaunay_edge_id];
 
-  glm::dvec3 voronoi_vertex_position = glm::dvec3(e.position, e.time);
+  glm::dvec3 voronoi_vertex_position = glm::dvec3(e.position, e.occurrence_time);
   auto half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;
 
   bool erased[3] = { false, false, false };
@@ -1520,47 +1563,23 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(const KineticDelaun
   }
 }
 
-const HalfEdgeDelaunayGraph& KineticDelaunay::advanceOneSection(EventHandler& event_handler)
-{
-  size_t section_count = branch_trajs.getHeight();
-  assert(sections_advanced < section_count); // Ensure we do not exceed the number of sections
-  KINDS_DEBUG("Advancing to section " << (sections_advanced + 1) << " of " << section_count);
-
-  // update delaunay graph according to the components
-  // For now we assume they can never be merged again
-  if (component_data.components.size() > prev_component_count)
-  {
-    graph.update(branch_trajs.getPoints(), sections_advanced, component_data.components);
-  }
-
-  precomputeStep(static_cast<double>(sections_advanced));
-  handleEvents(event_handler);
-  sections_advanced++;
-
-  return graph;
-}
-
 const HalfEdgeDelaunayGraph& KineticDelaunay::getGraph() const { return graph; }
 
 size_t KineticDelaunay::getSectionCount() const { return branch_trajs.getHeight(); }
 
 // Computes the Delaunay triangulation of the given splines
-void KineticDelaunay::compute(EventHandler& event_handler)
+void KineticDelaunay::compute()
 {
-  size_t section_count = getSectionCount(); // Assuming all splines have the same number of points
 
-  ProgressBar progress_bar(
-    0, branch_trajs.getHeight(), "Computing Kinetic Voronoi Sections", ProgressBar::Display::Absolute);
-  for (size_t i = 0; i < section_count; ++i)
+  section_event_manager_->computeEvents(0.0, static_cast<size_t>(-1));
+  handleEvents();
+
+  const double end_time = static_cast<double>(getSectionCount());
+
+  if (callback_manager_)
   {
-    progress_bar.Update(i);
-
-    assert(i == sections_advanced); // Ensure we are advancing one section at a time
-    if (i != 0)
-      event_handler.betweenSections(i); // Call the event handler for the section
-    advanceOneSection(event_handler);
+    callback_manager_->finalize(end_time);
   }
-  progress_bar.Finish();
 }
 
 std::vector<size_t> KineticDelaunay::extractConnectedComponent(size_t u, std::vector<bool>& visited) const

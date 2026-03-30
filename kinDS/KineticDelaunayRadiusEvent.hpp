@@ -9,17 +9,22 @@ namespace kinDS
 class KineticDelaunay::RadiusEvent final : public KineticDelaunay::Event
 {
 public:
+  size_t half_edge_id;
+  glm::dvec2 position;
+
   RadiusEvent(
     KineticDelaunay* kd,
     double t,
     size_t he_id,
     double creation_time,
     glm::dvec2 position)
-    : KineticDelaunay::Event(kd, t, he_id, creation_time, position, static_cast<size_t>(-1))
+    : KineticDelaunay::Event(kd, t, creation_time)
+    , half_edge_id(he_id)
+    , position(position)
   {
   }
 
-  void handleEvent(EventHandler& event_handler) override;
+  void handleEvent() override;
 };
 
 class KineticDelaunay::RadiusEventManager final : public KineticDelaunay::EventManager
@@ -33,7 +38,7 @@ public:
   void computeEvents(double t, size_t event_id) override;
 };
 
-inline void KineticDelaunay::RadiusEvent::handleEvent(EventHandler& event_handler)
+inline void KineticDelaunay::RadiusEvent::handleEvent()
 {
   auto* kd = getKineticDelaunay();
   if (!kd)
@@ -50,11 +55,18 @@ inline void KineticDelaunay::RadiusEvent::handleEvent(EventHandler& event_handle
     return;
   }
 
-  event_handler.beforeRadiusEvent(*this);
+  auto* event_handler = kd->radius_event_manager_->getCallback();
+  if (event_handler)
+  {
+    event_handler->beforeEvent(*this);
+  }
 
   kd->setFaceInside(face_id, !kd->face_inside[face_id]);
 
-  event_handler.afterRadiusEvent(*this);
+  if (event_handler)
+  {
+    event_handler->afterEvent(*this);
+  }
 }
 
 } // namespace kinDS

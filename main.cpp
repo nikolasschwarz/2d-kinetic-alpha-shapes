@@ -273,9 +273,8 @@ static void kinetic_delaunay_example()
                                             transforms_by_height_and_branch, branch_indices, strands_by_branch_id),
     10.0, false);
 
-  kinetic_delaunay.init();
   kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);
-  mesh_builder.init();
+  kinetic_delaunay.init(&mesh_builder);
   auto points = kinetic_delaunay.getPointsAt(0.0);
 
   // Build Voronoi vertex -> containing triangle mapping from CrossingData for SVG labeling.
@@ -290,35 +289,10 @@ static void kinetic_delaunay_example()
 
   // t=0 snapshot
   auto demo_intersection_debug_data = kinetic_delaunay.getCrossingIntersectionDebugData();
-  kinDS::HalfEdgeDelaunayGraphToSVG::write(
-    points, demo_graph, "t0.000000_demo.svg", 0.1, nullptr, true, &demo_voronoi_vertex_to_tri,
-    &demo_intersection_debug_data);
+  kinDS::HalfEdgeDelaunayGraphToSVG::write(points, demo_graph, "t0.000000_demo.svg", 0.1, nullptr, true,
+    &demo_voronoi_vertex_to_tri, &demo_intersection_debug_data);
 
-  size_t section_count = kinetic_delaunay.getSectionCount();
-
-  for (size_t i = 0; i < section_count; ++i)
-  {
-    if (i != 0)
-      mesh_builder.betweenSections(i);
-    kinetic_delaunay.advanceOneSection(mesh_builder);
-    // kinetic_delaunay.getGraph().printDebug();
-    points = kinetic_delaunay.getPointsAt(static_cast<double>(i + 1));
-    
-    // Export SVG snapshots between sections with Voronoi vertex labels "id/containingTriId".
-    const kinDS::HalfEdgeDelaunayGraph& section_graph = kinetic_delaunay.getGraph();
-    const size_t section_face_count = section_graph.getFaces().size();
-    std::vector<size_t> section_voronoi_vertex_to_tri(section_face_count);
-    constexpr size_t section_invalid_id = static_cast<size_t>(-1);
-    for (size_t vid = 0; vid < section_face_count; ++vid)
-    {
-      section_voronoi_vertex_to_tri[vid] = kinetic_delaunay.getCrossingDataContainingTriId(vid);
-    }
-
-    double t = static_cast<double>(i + 1);
-
-  }
-
-  mesh_builder.finalize(section_count);
+  kinetic_delaunay.compute();
 
   // mesh_builder.printDebugInfo();
 
@@ -524,8 +498,8 @@ int main(int argc, char* argv[])
   }
 
   // First pass: parse all options, remember the command (order-independent)
-  std::string command;      // "demo", "mesh", "help"
-  std::string mesh_file;    // for --mesh
+  std::string command; // "demo", "mesh", "help"
+  std::string mesh_file; // for --mesh
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -557,8 +531,8 @@ int main(int argc, char* argv[])
       }
       else
       {
-        std::cout << "Added log levels: " << argv[arg_idx + 1]
-                  << " -> now enabled: " << get_enabled_log_levels() << std::endl;
+        std::cout << "Added log levels: " << argv[arg_idx + 1] << " -> now enabled: " << get_enabled_log_levels()
+                  << std::endl;
       }
       arg_idx += 2;
     }
@@ -576,8 +550,8 @@ int main(int argc, char* argv[])
       }
       else
       {
-        std::cout << "Removed log levels: " << argv[arg_idx + 1]
-                  << " -> now enabled: " << get_enabled_log_levels() << std::endl;
+        std::cout << "Removed log levels: " << argv[arg_idx + 1] << " -> now enabled: " << get_enabled_log_levels()
+                  << std::endl;
       }
       arg_idx += 2;
     }

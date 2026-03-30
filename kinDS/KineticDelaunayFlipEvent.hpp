@@ -3,30 +3,30 @@
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
 
-#include <map>
 #include <limits>
+#include <map>
 
 namespace kinDS
 {
 class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
 {
-public:
-  FlipEvent(
-    KineticDelaunay* kd,
-    double t,
-    size_t he_id,
-    double creation_time,
-    glm::dvec2 position)
-    : KineticDelaunay::Event(kd, t, he_id, creation_time, position, static_cast<size_t>(-1))
+ public:
+  size_t half_edge_id;
+  glm::dvec2 position;
+
+  FlipEvent(KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position)
+    : KineticDelaunay::Event(kd, t, creation_time)
+    , half_edge_id(he_id)
+    , position(position)
   {
   }
 
-  void handleEvent(EventHandler& event_handler) override;
+  void handleEvent() override;
 };
 
 class KineticDelaunay::FlipEventManager final : public KineticDelaunay::EventManager
 {
-public:
+ public:
   explicit FlipEventManager(KineticDelaunay* kd)
     : EventManager(kd)
   {
@@ -35,7 +35,7 @@ public:
   void computeEvents(double t, size_t event_id) override;
 };
 
-inline void KineticDelaunay::FlipEvent::handleEvent(EventHandler& event_handler)
+inline void KineticDelaunay::FlipEvent::handleEvent()
 {
   auto* kd = getKineticDelaunay();
   if (!kd)
@@ -73,12 +73,15 @@ inline void KineticDelaunay::FlipEvent::handleEvent(EventHandler& event_handler)
   // Process the event at the given time
   size_t face_id = graph.getHalfEdges()[half_edge_id].face;
   size_t twin_face_id = graph.getHalfEdges()[half_edge_id ^ 1].face;
-  KINDS_DEBUG("Processing flip event at time " << time << " for half-edge ID " << half_edge_id
+  KINDS_DEBUG("Processing flip event at time " << occurrence_time << " for half-edge ID " << half_edge_id
                                                << ". Faces inside " << kd->face_inside[face_id] << " | "
                                                << kd->face_inside[twin_face_id]);
 
-  // Call the event handler if provided
-  event_handler.beforeFlipEvent(*this);
+  auto* event_handler = kd->flip_event_manager_->getCallback();
+  if (event_handler)
+  {
+    event_handler->beforeEvent(*this);
+  }
 
   // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
   if (graph.getHalfEdges()[half_edge_id].origin == -1)
@@ -121,38 +124,39 @@ inline void KineticDelaunay::FlipEvent::handleEvent(EventHandler& event_handler)
   size_t twin_next1 = graph.getHalfEdges()[half_edge_id ^ 1].next;
   size_t twin_next2 = graph.getHalfEdges()[twin_next1].next;
 
-  kd->flip_event_manager_->computeEvents(time, next1 / 2);
-  kd->quadrilateral_last_updated[next1 / 2] = time;
+  kd->flip_event_manager_->computeEvents(occurrence_time, next1 / 2);
+  kd->quadrilateral_last_updated[next1 / 2] = occurrence_time;
 
-  kd->flip_event_manager_->computeEvents(time, next2 / 2);
-  kd->quadrilateral_last_updated[next2 / 2] = time;
+  kd->flip_event_manager_->computeEvents(occurrence_time, next2 / 2);
+  kd->quadrilateral_last_updated[next2 / 2] = occurrence_time;
 
-  kd->flip_event_manager_->computeEvents(time, twin_next1 / 2);
-  kd->quadrilateral_last_updated[twin_next1 / 2] = time;
+  kd->flip_event_manager_->computeEvents(occurrence_time, twin_next1 / 2);
+  kd->quadrilateral_last_updated[twin_next1 / 2] = occurrence_time;
 
-  kd->flip_event_manager_->computeEvents(time, twin_next2 / 2);
-  kd->quadrilateral_last_updated[twin_next2 / 2] = time;
+  kd->flip_event_manager_->computeEvents(occurrence_time, twin_next2 / 2);
+  kd->quadrilateral_last_updated[twin_next2 / 2] = occurrence_time;
 
   // re-compute radius events for both triangles
-  kd->radius_event_manager_->computeEvents(time, half_edge_id);
-  kd->face_last_updated[face_id] = time;
+  kd->radius_event_manager_->computeEvents(occurrence_time, half_edge_id);
+  kd->face_last_updated[face_id] = occurrence_time;
 
-  kd->radius_event_manager_->computeEvents(time, half_edge_id ^ 1);
-  kd->face_last_updated[twin_face_id] = time;
+  kd->radius_event_manager_->computeEvents(occurrence_time, half_edge_id ^ 1);
+  kd->face_last_updated[twin_face_id] = occurrence_time;
 
   // trigger re-assignment of voronoi vertices needed for crossing events
   if (!graph.isOnConvexBoundary(half_edge_id))
   {
-    kd->reassignVoronoiVerticesInQuadrilateral(half_edge_id / 2, time, pre_flip_quad_faces);
+    kd->reassignVoronoiVerticesInQuadrilateral(half_edge_id / 2, occurrence_time, pre_flip_quad_faces);
   }
   else
   {
-    kd->reassignVoronoiVerticesOnBoundary(half_edge_id, time);
+    kd->reassignVoronoiVerticesOnBoundary(half_edge_id, occurrence_time);
   }
 
-  // Call the event handler after processing the event
-  event_handler.afterFlipEvent(*this);
+  if (event_handler)
+  {
+    event_handler->afterEvent(*this);
+  }
 }
 
 } // namespace kinDS
-

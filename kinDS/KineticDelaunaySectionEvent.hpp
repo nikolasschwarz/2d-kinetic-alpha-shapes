@@ -1,42 +1,47 @@
 #pragma once
 
 #include "KineticDelaunay.hpp"
+#include "ProgressBar.hpp"
 
 namespace kinDS
 {
 class KineticDelaunay::SectionEvent final : public KineticDelaunay::Event
 {
-public:
-    SectionEvent(
-    KineticDelaunay* kd,
-    double t,
-    size_t he_id,
-    double creation_time,
-    glm::dvec2 position)
-    : KineticDelaunay::Event(kd, t, he_id, creation_time, position, static_cast<size_t>(-1))
-    {
-    }
+ public:
+  size_t section_id;
+  glm::dvec2 position;
 
-    void handleEvent(EventHandler& event_handler) override;
+  SectionEvent(KineticDelaunay* kd, double t, size_t section_id, double creation_time, glm::dvec2 position)
+    : KineticDelaunay::Event(kd, t, creation_time)
+    , section_id(section_id)
+    , position(position)
+  {
+  }
+
+  void handleEvent() override;
 };
 
 class KineticDelaunay::SectionEventManager final : public KineticDelaunay::EventManager
 {
-public:
-    explicit SectionEventManager(KineticDelaunay* kd)
+ public:
+  explicit SectionEventManager(KineticDelaunay* kd)
     : EventManager(kd)
-    {
-    }
+  {
+  }
 
-    void computeEvents(double t, size_t event_id) override;
+  void computeEvents(double t, size_t event_id) override;
+
+  void updateProgress(size_t section_index);
+  void finishProgressIfNeeded(size_t section_index);
+
+  void resetProgress()
+  {
+    progress_bar_.reset();
+    section_count_ = 0;
+  }
+
+ private:
+  size_t section_count_ = 0;
+  std::unique_ptr<ProgressBar> progress_bar_;
 };
-
-inline void KineticDelaunay::SectionEvent::handleEvent(EventHandler& event_handler)
-{
-    auto* kd = getKineticDelaunay();
-    if (!kd)
-    {
-        throw std::runtime_error("SectionEvent has no KineticDelaunay pointer");
-    }
-}
 }

@@ -11,12 +11,12 @@ struct KineticDelaunay::CrossingData
   struct VoronoiDelaunayEdgeIntersection;
   typedef std::list<VoronoiDelaunayEdgeIntersection>::iterator EdgeIntersectionRef;
 
-private:
+ private:
   std::vector<size_t> voronoi_vertex_to_containing_tri_id;
   std::vector<std::list<size_t>> tri_id_to_voronoi_vertices;
   std::vector<std::list<size_t>::iterator> voronoi_vertex_to_iterator;
 
-public:
+ public:
   std::list<VoronoiDelaunayEdgeIntersection> edge_intersections;
   std::vector<std::list<EdgeIntersectionRef>> voronoi_edge_intersections;
   std::vector<std::list<EdgeIntersectionRef>> delaunay_edge_intersections;
@@ -90,7 +90,7 @@ public:
   void computeEdgeIntersections(const KineticDelaunay& kd, double t);
 
   // Update Voronoi–Delaunay edge intersections after a single crossing event.
-  void updateAfterCrossingEvent(const KineticDelaunay& kd, const Event& e);
+  void updateAfterCrossingEvent(const KineticDelaunay& kd, const KineticDelaunay::CrossingEvent& e);
 
   // Remove a single intersection from all three data structures (global list,
   // per-Voronoi-edge list, and per-Delaunay-edge list).
@@ -99,24 +99,26 @@ public:
 
 class KineticDelaunay::CrossingEvent final : public KineticDelaunay::Event
 {
-public:
+ public:
+  size_t half_edge_id;
+  glm::dvec2 position;
+  size_t voronoi_vertex_id;
+
   CrossingEvent(
-    KineticDelaunay* kd,
-    double t,
-    size_t he_id,
-    double creation_time,
-    glm::dvec2 position,
-    size_t voronoi_vertex_id)
-    : KineticDelaunay::Event(kd, t, he_id, creation_time, position, voronoi_vertex_id)
+    KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position, size_t voronoi_vertex_id)
+    : KineticDelaunay::Event(kd, t, creation_time)
+    , half_edge_id(he_id)
+    , position(position)
+    , voronoi_vertex_id(voronoi_vertex_id)
   {
   }
 
-  void handleEvent(EventHandler& event_handler) override;
+  void handleEvent() override;
 };
 
 class KineticDelaunay::CrossingEventManager final : public KineticDelaunay::EventManager
 {
-public:
+ public:
   explicit CrossingEventManager(KineticDelaunay* kd)
     : EventManager(kd)
   {
@@ -128,11 +130,11 @@ public:
   CrossingData& getCrossingDataMutable() { return crossing_data_; }
   const CrossingData& getCrossingData() const { return crossing_data_; }
 
-private:
+ private:
   CrossingData crossing_data_;
 };
 
-inline void KineticDelaunay::CrossingEvent::handleEvent(EventHandler& event_handler)
+inline void KineticDelaunay::CrossingEvent::handleEvent()
 {
   auto* kd = getKineticDelaunay();
   if (!kd)
@@ -156,26 +158,32 @@ inline void KineticDelaunay::CrossingEvent::handleEvent(EventHandler& event_hand
     return;
   }
 
-  event_handler.beforeCrossingEvent(*this);
+  auto* event_handler = kd->crossing_event_manager_->getCallback();
+  if (event_handler)
+  {
+    event_handler->beforeEvent(*this);
+  }
 
-  kd->crossing_data.last_crossing[voronoi_vertex_id] = time;
+  kd->crossing_data.last_crossing[voronoi_vertex_id] = occurrence_time;
 
-  KINDS_DEBUG("Processing crossing event at time " << time << " for Voronoi vertex ID " << voronoi_vertex_id
-                                                    << " crossing half-edge ID " << half_edge_id);
+  KINDS_DEBUG("Processing crossing event at time " << occurrence_time << " for Voronoi vertex ID " << voronoi_vertex_id
+                                                   << " crossing half-edge ID " << half_edge_id);
 
   // move to neighboring triangle
-  KINDS_DEBUG("Moving Voronoi vertex " << voronoi_vertex_id << " from triangle " << containing_tri_id
-                                        << " to triangle " << graph.getHalfEdges()[half_edge_id ^ 1].face);
-  kd->crossing_data.moveVertex(voronoi_vertex_id, graph.getHalfEdges()[half_edge_id ^ 1].face, time);
+  KINDS_DEBUG("Moving Voronoi vertex " << voronoi_vertex_id << " from triangle " << containing_tri_id << " to triangle "
+                                       << graph.getHalfEdges()[half_edge_id ^ 1].face);
+  kd->crossing_data.moveVertex(voronoi_vertex_id, graph.getHalfEdges()[half_edge_id ^ 1].face, occurrence_time);
 
   // Update Voronoi–Delaunay edge intersections stored in crossing_data in response to this crossing.
   kd->crossing_data.updateAfterCrossingEvent(*kd, *this);
 
-  event_handler.afterCrossingEvent(*this);
+  if (event_handler)
+  {
+    event_handler->afterEvent(*this);
+  }
 
   // Re-compute crossing events for this Voronoi vertex
-  kd->crossing_event_manager_->computeEvents(time, voronoi_vertex_id);
+  kd->crossing_event_manager_->computeEvents(occurrence_time, voronoi_vertex_id);
 }
 
 } // namespace kinDS
-
