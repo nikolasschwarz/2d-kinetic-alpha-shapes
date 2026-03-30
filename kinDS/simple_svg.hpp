@@ -42,28 +42,20 @@ namespace svg
 {
 // Utility XML/String Functions.
 template<typename T>
-inline std::string attribute(std::string const& attribute_name, T const& value,
-  std::string const& unit = "")
+inline std::string attribute(std::string const& attribute_name, T const& value, std::string const& unit = "")
 {
   std::stringstream ss;
   ss << attribute_name << "=\"" << value << unit << "\" ";
   return ss.str();
 }
-inline std::string elemStart(std::string const& element_name)
-{
-  return "\t<" + element_name + " ";
-}
-inline std::string elemEnd(std::string const& element_name)
-{
-  return "</" + element_name + ">\n";
-}
+inline std::string elemStart(std::string const& element_name) { return "\t<" + element_name + " "; }
+inline std::string elemEnd(std::string const& element_name) { return "</" + element_name + ">\n"; }
 inline std::string emptyElemEnd() { return "/>\n"; }
 
 // Quick optional return type.  This allows functions to return an invalid
 //  value if no good return is possible.  The user checks for validity
 //  before using the returned value.
-template<typename T>
-class optional
+template<typename T> class optional
 {
  public:
   explicit optional<T>(T const& type)
@@ -118,15 +110,9 @@ struct Point
   double x;
   double y;
 
-  Point operator+(const Point& other) const
-  {
-    return Point(x + other.x, y + other.y);
-  }
+  Point operator+(const Point& other) const { return Point(x + other.x, y + other.y); }
 
-  Point operator-(const Point& other) const
-  {
-    return Point(x - other.x, y - other.y);
-  }
+  Point operator-(const Point& other) const { return Point(x - other.x, y - other.y); }
 };
 inline optional<Point> getMinPoint(std::vector<Point> const& points)
 {
@@ -170,10 +156,7 @@ struct Size
   double height;
 };
 
-inline Point operator+(Point const& p, Size const& s)
-{
-  return Point(p.x + s.width, p.y + s.height);
-}
+inline Point operator+(Point const& p, Size const& s) { return Point(p.x + s.width, p.y + s.height); }
 
 struct Box
 {
@@ -197,8 +180,7 @@ struct Layout
     BottomRight
   };
 
-  explicit Layout(Dimensions const& dimensions = Dimensions(400, 300),
-    Origin origin = BottomLeft, double scale = 1,
+  explicit Layout(Dimensions const& dimensions = Dimensions(400, 300), Origin origin = BottomLeft, double scale = 1,
     Point const& origin_offset = Point(0, 0))
     : dimensions(dimensions)
     , scale(scale)
@@ -228,10 +210,7 @@ inline double translateY(double y, Layout const& layout)
   else
     return y;
 }
-inline double translateScale(double dimension, Layout const& layout)
-{
-  return dimension;
-}
+inline double translateScale(double dimension, Layout const& layout) { return dimension; }
 
 class Serializeable
 {
@@ -384,9 +363,7 @@ class Fill : public Serializeable
 class Stroke : public Serializeable
 {
  public:
-  explicit Stroke(double width = -1,
-    Color::Defaults colorDefault = Color::Transparent,
-    bool nonScalingStroke = false)
+  explicit Stroke(double width = -1, Color::Defaults colorDefault = Color::Transparent, bool nonScalingStroke = false)
     : width(width)
     , color(Color(colorDefault))
     , nonScaling(nonScalingStroke)
@@ -407,8 +384,7 @@ class Stroke : public Serializeable
       return std::string();
 
     std::stringstream ss;
-    ss << attribute("stroke-width", translateScale(width, layout))
-       << attribute("stroke", color.toString(layout));
+    ss << attribute("stroke-width", translateScale(width, layout)) << attribute("stroke", color.toString(layout));
     if (nonScaling)
       ss << attribute("vector-effect", "non-scaling-stroke");
     return ss.str();
@@ -431,8 +407,7 @@ class Font : public Serializeable
   std::string toString(Layout const& layout) const override
   {
     std::stringstream ss;
-    ss << attribute("font-size", translateScale(size, layout))
-       << attribute("font-family", family);
+    ss << attribute("font-size", translateScale(size, layout)) << attribute("font-family", family);
     return ss.str();
   }
 
@@ -484,11 +459,9 @@ class ShapeColl : public Shape
   {
   }
 
-  template<typename T>
-  ShapeColl& operator<<(const T& serializeable)
+  template<typename T> ShapeColl& operator<<(const T& serializeable)
   {
-    static_assert(std::is_base_of<Serializeable, T>::value,
-      "Must be derived from Serializeable");
+    static_assert(std::is_base_of<Serializeable, T>::value, "Must be derived from Serializeable");
     elements.push_back(std::make_shared<T>(serializeable));
     return *this;
   }
@@ -518,9 +491,7 @@ class ShapeColl : public Shape
   std::vector<std::shared_ptr<Serializeable>> elements;
 };
 
-template<typename T>
-inline std::string vectorToString(std::vector<T> collection,
-  Layout const& layout)
+template<typename T> inline std::string vectorToString(std::vector<T> collection, Layout const& layout)
 {
   std::string combination_str;
   for (unsigned i = 0; i < collection.size(); ++i)
@@ -532,8 +503,7 @@ inline std::string vectorToString(std::vector<T> collection,
 class Circle : public Shape
 {
  public:
-  Circle(Point const& center, double diameter, Fill const& fill = Fill(),
-    Stroke const& stroke = Stroke())
+  Circle(Point const& center, double diameter, Fill const& fill = Fill(), Stroke const& stroke = Stroke())
     : Shape(fill, stroke)
     , center(center)
     , radius(diameter / 2)
@@ -542,12 +512,9 @@ class Circle : public Shape
   std::string toString(Layout const& layout) const override
   {
     std::stringstream ss;
-    ss << elemStart("circle")
-       << attribute("cx", translateX(center.x, layout))
-       << attribute("cy", translateY(center.y, layout))
-       << attribute("r", translateScale(radius, layout))
-       << fill.toString(layout) << stroke.toString(layout)
-       << emptyElemEnd();
+    ss << elemStart("circle") << attribute("cx", translateX(center.x, layout))
+       << attribute("cy", translateY(center.y, layout)) << attribute("r", translateScale(radius, layout))
+       << fill.toString(layout) << stroke.toString(layout) << emptyElemEnd();
     return ss.str();
   }
   void offset(Point const& offset) override
@@ -564,8 +531,7 @@ class Circle : public Shape
 class Elipse : public Shape
 {
  public:
-  Elipse(Point const& center, double width, double height,
-    Fill const& fill = Fill(), Stroke const& stroke = Stroke())
+  Elipse(Point const& center, double width, double height, Fill const& fill = Fill(), Stroke const& stroke = Stroke())
     : Shape(fill, stroke)
     , center(center)
     , radius_width(width / 2)
@@ -575,12 +541,9 @@ class Elipse : public Shape
   std::string toString(Layout const& layout) const override
   {
     std::stringstream ss;
-    ss << elemStart("ellipse")
-       << attribute("cx", translateX(center.x, layout))
-       << attribute("cy", translateY(center.y, layout))
-       << attribute("rx", translateScale(radius_width, layout))
-       << attribute("ry", translateScale(radius_height, layout))
-       << fill.toString(layout) << stroke.toString(layout)
+    ss << elemStart("ellipse") << attribute("cx", translateX(center.x, layout))
+       << attribute("cy", translateY(center.y, layout)) << attribute("rx", translateScale(radius_width, layout))
+       << attribute("ry", translateScale(radius_height, layout)) << fill.toString(layout) << stroke.toString(layout)
        << emptyElemEnd();
     return ss.str();
   }
@@ -599,8 +562,7 @@ class Elipse : public Shape
 class Rectangle : public Shape
 {
  public:
-  Rectangle(Point const& edge, double width, double height,
-    Fill const& fill = Fill(), Stroke const& stroke = Stroke())
+  Rectangle(Point const& edge, double width, double height, Fill const& fill = Fill(), Stroke const& stroke = Stroke())
     : Shape(fill, stroke)
     , edge(edge)
     , width(width)
@@ -635,10 +597,8 @@ class Rectangle : public Shape
       x -= w;
     }
 
-    ss << elemStart("rect") << attribute("x", x) << attribute("y", y)
-       << attribute("width", w) << attribute("height", h)
-       << fill.toString(layout) << stroke.toString(layout)
-       << emptyElemEnd();
+    ss << elemStart("rect") << attribute("x", x) << attribute("y", y) << attribute("width", w) << attribute("height", h)
+       << fill.toString(layout) << stroke.toString(layout) << emptyElemEnd();
     return ss.str();
   }
   void offset(Point const& offset) override
@@ -656,8 +616,7 @@ class Rectangle : public Shape
 class Line : public Shape
 {
  public:
-  Line(Point const& start_point, Point const& end_point,
-    Stroke const& stroke = Stroke())
+  Line(Point const& start_point, Point const& end_point, Stroke const& stroke = Stroke())
     : Shape(Fill(), stroke)
     , start_point(start_point)
     , end_point(end_point)
@@ -666,12 +625,9 @@ class Line : public Shape
   std::string toString(Layout const& layout) const override
   {
     std::stringstream ss;
-    ss << elemStart("line")
-       << attribute("x1", translateX(start_point.x, layout))
-       << attribute("y1", translateY(start_point.y, layout))
-       << attribute("x2", translateX(end_point.x, layout))
-       << attribute("y2", translateY(end_point.y, layout))
-       << stroke.toString(layout) << emptyElemEnd();
+    ss << elemStart("line") << attribute("x1", translateX(start_point.x, layout))
+       << attribute("y1", translateY(start_point.y, layout)) << attribute("x2", translateX(end_point.x, layout))
+       << attribute("y2", translateY(end_point.y, layout)) << stroke.toString(layout) << emptyElemEnd();
     return ss.str();
   }
   void offset(Point const& offset) override
@@ -712,12 +668,10 @@ class Polygon : public Shape
 
     ss << "points=\"";
     for (unsigned i = 0; i < points.size(); ++i)
-      ss << translateX(points[i].x, layout) << ","
-         << translateY(points[i].y, layout) << " ";
+      ss << translateX(points[i].x, layout) << "," << translateY(points[i].y, layout) << " ";
     ss << "\" ";
 
-    ss << fill.toString(layout) << stroke.toString(layout)
-       << emptyElemEnd();
+    ss << fill.toString(layout) << stroke.toString(layout) << emptyElemEnd();
     return ss.str();
   }
   void offset(Point const& offset) override
@@ -772,15 +726,13 @@ class Path : public Shape
 
       ss << "M";
       for (auto const& point : subpath)
-        ss << translateX(point.x, layout) << ","
-           << translateY(point.y, layout) << " ";
+        ss << translateX(point.x, layout) << "," << translateY(point.y, layout) << " ";
       ss << "z ";
     }
     ss << "\" ";
     ss << "fill-rule=\"evenodd\" ";
 
-    ss << fill.toString(layout) << stroke.toString(layout)
-       << emptyElemEnd();
+    ss << fill.toString(layout) << stroke.toString(layout) << emptyElemEnd();
     return ss.str();
   }
 
@@ -801,8 +753,7 @@ class Path : public Shape
 class Polyline : public Shape
 {
  public:
-  explicit Polyline(Fill const& fill = Fill(),
-    Stroke const& stroke = Stroke())
+  explicit Polyline(Fill const& fill = Fill(), Stroke const& stroke = Stroke())
     : Shape(fill, stroke)
   {
   }
@@ -812,9 +763,7 @@ class Polyline : public Shape
   {
   }
 
-  explicit Polyline(std::vector<Point> const& points,
-    Fill const& fill = Fill(),
-    Stroke const& stroke = Stroke())
+  explicit Polyline(std::vector<Point> const& points, Fill const& fill = Fill(), Stroke const& stroke = Stroke())
     : Shape(fill, stroke)
     , points(points)
   {
@@ -832,12 +781,10 @@ class Polyline : public Shape
 
     ss << "points=\"";
     for (unsigned i = 0; i < points.size(); ++i)
-      ss << translateX(points[i].x, layout) << ","
-         << translateY(points[i].y, layout) << " ";
+      ss << translateX(points[i].x, layout) << "," << translateY(points[i].y, layout) << " ";
     ss << "\" ";
 
-    ss << fill.toString(layout) << stroke.toString(layout)
-       << emptyElemEnd();
+    ss << fill.toString(layout) << stroke.toString(layout) << emptyElemEnd();
     return ss.str();
   }
   void offset(Point const& offset) override
@@ -854,8 +801,7 @@ class Polyline : public Shape
 class Text : public Shape
 {
  public:
-  Text(Point const& origin, std::string const& content,
-    Fill const& fill = Fill(), Font const& font = Font(),
+  Text(Point const& origin, std::string const& content, Fill const& fill = Fill(), Font const& font = Font(),
     Stroke const& stroke = Stroke())
     : Shape(fill, stroke)
     , origin(origin)
@@ -888,9 +834,8 @@ class Text : public Shape
       break;
     }
 
-    ss << elemStart("text") << attribute("x", x) << attribute("y", y)
-       << fill.toString(layout) << stroke.toString(layout)
-       << font.toString(layout) << ">" << content << elemEnd("text");
+    ss << elemStart("text") << attribute("x", x) << attribute("y", y) << fill.toString(layout)
+       << stroke.toString(layout) << font.toString(layout) << ">" << content << elemEnd("text");
     return ss.str();
   }
   void offset(Point const& offset) override
@@ -929,8 +874,8 @@ class Text : public Shape
 class LineChart : public Shape
 {
  public:
-  explicit LineChart(Dimensions margin = Dimensions(), double scale = 1,
-    Stroke const& axis_stroke = Stroke(.5, Color::Purple))
+  explicit LineChart(
+    Dimensions margin = Dimensions(), double scale = 1, Stroke const& axis_stroke = Stroke(.5, Color::Purple))
     : axis_stroke(axis_stroke)
     , margin(margin)
     , scale(scale)
@@ -986,8 +931,7 @@ class LineChart : public Shape
         max->y = getMaxPoint(polylines[i].points)->y;
     }
 
-    return optional<Dimensions>(
-      Dimensions(max->x - min->x, max->y - min->y));
+    return optional<Dimensions>(Dimensions(max->x - min->x, max->y - min->y));
   }
   std::string axisString(Layout const& layout) const
   {
@@ -1001,22 +945,19 @@ class LineChart : public Shape
 
     // Draw the axis.
     Polyline axis(Fill(Color::Transparent), axis_stroke);
-    axis << Point(margin.width, margin.height + height)
-         << Point(margin.width, margin.height)
+    axis << Point(margin.width, margin.height + height) << Point(margin.width, margin.height)
          << Point(margin.width + width, margin.height);
 
     return axis.toString(layout);
   }
-  std::string polylineToString(Polyline const& polyline,
-    Layout const& layout) const
+  std::string polylineToString(Polyline const& polyline, Layout const& layout) const
   {
     Polyline shifted_polyline = polyline;
     shifted_polyline.offset(Point(margin.width, margin.height));
 
     std::vector<Circle> vertices;
     for (unsigned i = 0; i < shifted_polyline.points.size(); ++i)
-      vertices.push_back(Circle(
-        shifted_polyline.points[i], getDimensions()->height / 30.0,
+      vertices.push_back(Circle(shifted_polyline.points[i], getDimensions()->height / 30.0,
         Fill(Color::Black))); // Use Fill instead of direct Color
 
     return shifted_polyline.toString(layout) + vectorToString(vertices, layout);
@@ -1027,8 +968,7 @@ class Document
 {
  public:
   Document() { };
-  explicit Document(std::string const& file_name,
-    Layout const& layout = Layout())
+  explicit Document(std::string const& file_name, Layout const& layout = Layout())
     : file_name(file_name)
     , layout(layout)
   {
@@ -1059,15 +999,15 @@ class Document
  private:
   void writeToStream(std::ostream& str) const
   {
-    str << "<?xml " << attribute("version", "1.0")
-        << attribute("standalone", "no")
+    str << "<?xml " << attribute("version", "1.0") << attribute("standalone", "no")
         << "?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" "
         << "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n<svg "
-        << attribute("viewBox", std::to_string(-layout.origin_offset.x) + " " + std::to_string(-layout.origin_offset.y) + " " + std::to_string(layout.dimensions.width) + " " + std::to_string(layout.dimensions.height))
+        << attribute("viewBox",
+             std::to_string(-layout.origin_offset.x) + " " + std::to_string(-layout.origin_offset.y) + " "
+               + std::to_string(layout.dimensions.width) + " " + std::to_string(layout.dimensions.height))
         //<< attribute("width", layout.scale * layout.dimensions.width, "px")
         //<< attribute("height", layout.dimensions.height, "px")
-        << attribute("xmlns", "http://www.w3.org/2000/svg")
-        << attribute("version", "1.1") << ">\n";
+        << attribute("xmlns", "http://www.w3.org/2000/svg") << attribute("version", "1.1") << ">\n";
     for (const auto& body_node_str : body_nodes_str_list)
     {
       str << body_node_str;

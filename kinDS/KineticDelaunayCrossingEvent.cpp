@@ -1,0 +1,227 @@
+#include "KineticDelaunayCrossingEvent.hpp"
+
+#include <limits>
+
+using namespace kinDS;
+
+#include "KineticDelaunayEventPredicates.hpp"
+
+void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voronoi_vertex_id)
+{
+  auto* kd = kd_;
+  auto& graph = kd->graph;
+  auto& crossing_data = kd->crossing_data;
+  auto& branch_trajs = kd->branch_trajs;
+
+  if (!kd->on_the_fly_boundary)
+  {
+    return;
+  }
+  const size_t section = static_cast<size_t>(t);
+  const float fraction = t - section;
+
+  auto& dual_triangle = graph.getFaces()[voronoi_vertex_id];
+  auto& containing_triangle = graph.getFaces()[crossing_data.getContainingTriId(voronoi_vertex_id)];
+
+  // compute polynomials of two bisectors in homogeneous coordinates
+  size_t v_i = graph.getHalfEdges()[dual_triangle.half_edges[0]].origin;
+  size_t v_j = graph.getHalfEdges()[dual_triangle.half_edges[1]].origin;
+  size_t v_k = graph.getHalfEdges()[dual_triangle.half_edges[2]].origin;
+
+  // If a vertex is infinite, so is the Voronoi vertex and it cannot cross any edge, so we can skip this event.
+  if (v_i == -1 || v_j == -1 || v_k == -1)
+  {
+    return;
+  }
+
+  // Check a special case: the containing triangle is infinite and adjacent to the dual triangle. In this case, we need
+  // a different predicate
+  bool adjacent = false;
+  size_t adjacent_edge_index = -1;
+  size_t finite_he_id = -1;
+  if (graph.isInfinite(containing_triangle.half_edges[0]) || graph.isInfinite(containing_triangle.half_edges[1])
+    || graph.isInfinite(containing_triangle.half_edges[2]))
+  {
+    // One edge must be finite, find it
+
+    size_t finite_edge_index = -1;
+    for (size_t edge_index = 0; edge_index < 3; edge_index++)
+    {
+      if (!graph.isInfinite(containing_triangle.half_edges[edge_index]))
+      {
+        finite_he_id = containing_triangle.half_edges[edge_index];
+        finite_edge_index = edge_index;
+        break;
+      }
+    }
+
+    // Now iterate over the edges of the dual triangle and check if any of them is the twin of the finite edge.
+    for (size_t edge_index = 0; edge_index < 3; edge_index++)
+    {
+      if (graph.twin(dual_triangle.half_edges[edge_index]) == finite_he_id)
+      {
+        adjacent = true;
+        adjacent_edge_index = edge_index;
+        break;
+      }
+    }
+  }
+
+  if (adjacent)
+  {
+
+    // re-assign vertices
+    v_i = graph.triangleOppositeVertex(dual_triangle.half_edges[adjacent_edge_index]);
+    v_j = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index]].origin;
+    v_k = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index] ^ 1].origin;
+
+    Trajectory<2> traj_i = branch_trajs.getPiecePolynomial(v_i, section);
+    Trajectory<2> traj_j = branch_trajs.getPiecePolynomial(v_j, section);
+    Trajectory<2> traj_k = branch_trajs.getPiecePolynomial(v_k, section);
+
+    Trajectory<2> vector_ij;
+    vector_ij[0] = traj_j[0] - traj_i[0];
+    vector_ij[1] = traj_j[1] - traj_i[1];
+    Trajectory<2> vector_ik;
+    vector_ik[0] = traj_k[0] - traj_i[0];
+    vector_ik[1] = traj_k[1] - traj_i[1];
+
+    Polynomial event_trigger = -(vector_ij[0] * vector_ik[0] + vector_ij[1] * vector_ik[1]);
+    auto fractional_event_times = kd->findEvents(event_trigger, fraction, true);
+
+    // Only need the first event as any following events will be invalidated by the first crossing event. TODO: The
+    // exception is the edge being crossed, but that would make this more complex. We can optimize this later if needed.
+    if (!fractional_event_times.empty())
+    {
+      double fractional_event_time = fractional_event_times.front();
+      double event_time = fractional_event_time + section;
+      // Position must be the midpoint of the two vertices
+      glm::dvec2 position = glm::vec2((traj_j[0](fractional_event_time) + traj_k[0](fractional_event_time)) / 2.0,
+        (traj_j[1](fractional_event_time) + traj_k[1](fractional_event_time)) / 2.0);
+
+      KINDS_DEBUG("Crossing (right angle) Event at time "
+        << event_time << " for Voronoi vertex ID " << voronoi_vertex_id << " crossing half-edge ID " << finite_he_id
+        << " at position " << glm::to_string(position));
+      kd->kinetic_algorithm_->enqueueEvent(
+        std::make_shared<CrossingEvent>(kd, event_time, finite_he_id, t, position, voronoi_vertex_id));
+    }
+  }
+  else
+  {
+    Trajectory<2> traj_i = branch_trajs.getPiecePolynomial(v_i, section);
+    Trajectory<2> traj_j = branch_trajs.getPiecePolynomial(v_j, section);
+    Trajectory<2> traj_k = branch_trajs.getPiecePolynomial(v_k, section);
+    Trajectory<3> bisector_ij;
+
+    bisector_ij[0] = 2 * (traj_j[0] - traj_i[0]);
+    bisector_ij[1] = 2 * (traj_j[1] - traj_i[1]);
+    bisector_ij[2] = (traj_i[0] * traj_i[0] + traj_i[1] * traj_i[1]) - (traj_j[0] * traj_j[0] + traj_j[1] * traj_j[1]);
+
+    Trajectory<3> bisector_ik;
+
+    bisector_ik[0] = 2 * (traj_k[0] - traj_i[0]);
+    bisector_ik[1] = 2 * (traj_k[1] - traj_i[1]);
+    bisector_ik[2] = (traj_i[0] * traj_i[0] + traj_i[1] * traj_i[1]) - (traj_k[0] * traj_k[0] + traj_k[1] * traj_k[1]);
+
+    // We only need the first event as any following events will be invalidated by the first crossing event.
+    // TODO: The exception is the edge being crossed, but that would make this more complex. We can optimize this later
+    // if needed.
+    double event_time = std::numeric_limits<double>::infinity();
+    size_t event_he_id = -1;
+    Polynomial event_trigger;
+    // Construct polynomial predicates for each of the three edges of the containing triangle
+    for (size_t edge_index = 0; edge_index < 3; edge_index++)
+    {
+      size_t he_id = containing_triangle.half_edges[edge_index];
+      size_t a = graph.getHalfEdges()[he_id].origin;
+      size_t b = graph.getHalfEdges()[he_id ^ 1].origin;
+
+      Trajectory<3> line_ab;
+      if (a != -1 && b != -1)
+      {
+
+        Trajectory<2> traj_a = branch_trajs.getPiecePolynomial(a, section);
+        Trajectory<2> traj_b = branch_trajs.getPiecePolynomial(b, section);
+
+        // line through a and b in homogeneous coordinates
+
+        line_ab[0] = traj_a[1] - traj_b[1];
+        line_ab[1] = traj_b[0] - traj_a[0];
+        line_ab[2] = traj_a[0] * traj_b[1] - traj_a[1] * traj_b[0];
+
+        // now compute the determinant of the matrix with bisector_ij, bisector_ik and line_ab as columns
+        event_trigger = bisector_ij[0] * bisector_ik[1] * line_ab[2] + bisector_ij[1] * bisector_ik[2] * line_ab[0]
+          + bisector_ij[2] * bisector_ik[0] * line_ab[1] - bisector_ij[2] * bisector_ik[1] * line_ab[0]
+          - bisector_ij[1] * bisector_ik[0] * line_ab[2] - bisector_ij[0] * bisector_ik[2] * line_ab[1];
+      }
+      else
+      {
+        size_t finite_vertex = (a != -1) ? a : b;
+
+        if (a == finite_vertex)
+        {
+          size_t prev_he_id = graph.prev(he_id);
+          size_t next_he_id = graph.getHalfEdges()[he_id ^ 1].next;
+
+          size_t c = graph.getHalfEdges()[prev_he_id].origin;
+          size_t c_prime = graph.getHalfEdges()[next_he_id].origin;
+
+          Trajectory<2> traj_a = branch_trajs.getPiecePolynomial(a, section);
+          Trajectory<2> traj_c = branch_trajs.getPiecePolynomial(c, section);
+          Trajectory<2> traj_c_prime = branch_trajs.getPiecePolynomial(c_prime, section);
+          Trajectory<3> voronoi_homogeneous = Trajectory<3>::cross(bisector_ij, bisector_ik);
+
+          event_trigger = angularBisector(traj_a, traj_c, traj_c_prime, voronoi_homogeneous);
+        }
+        else
+        {
+          size_t prev_he_id = graph.prev(he_id ^ 1);
+          size_t next_he_id = graph.getHalfEdges()[he_id].next;
+
+          size_t c_prime = graph.getHalfEdges()[prev_he_id].origin;
+          size_t c = graph.getHalfEdges()[next_he_id].origin;
+
+          Trajectory<2> traj_b = branch_trajs.getPiecePolynomial(b, section);
+          Trajectory<2> traj_c = branch_trajs.getPiecePolynomial(c, section);
+          Trajectory<2> traj_c_prime = branch_trajs.getPiecePolynomial(c_prime, section);
+          Trajectory<3> voronoi_homogeneous = Trajectory<3>::cross(bisector_ij, bisector_ik);
+
+          event_trigger = angularBisector(traj_b, traj_c, traj_c_prime, voronoi_homogeneous);
+        }
+      }
+
+      auto fractional_event_times = kd->findEvents(event_trigger, fraction, true);
+      if (!fractional_event_times.empty())
+      {
+        double fractional_event_time = fractional_event_times.front();
+        double candidate_event_time = fractional_event_time + section;
+        if (candidate_event_time < event_time)
+        {
+          event_time = candidate_event_time;
+          event_he_id = he_id;
+        }
+      }
+    }
+
+    if (event_time != std::numeric_limits<double>::infinity())
+    {
+      glm::dvec3 position_homogeneous;
+
+      // use cross product to compute the intersection point of the two bisectors at the event time
+      position_homogeneous[0] = bisector_ij[1](event_time) * bisector_ik[2](event_time)
+        - bisector_ij[2](event_time) * bisector_ik[1](event_time);
+      position_homogeneous[1] = bisector_ij[2](event_time) * bisector_ik[0](event_time)
+        - bisector_ij[0](event_time) * bisector_ik[2](event_time);
+      position_homogeneous[2] = bisector_ij[0](event_time) * bisector_ik[1](event_time)
+        - bisector_ij[1](event_time) * bisector_ik[0](event_time);
+
+      glm::dvec2 position(
+        position_homogeneous.x / position_homogeneous.z, position_homogeneous.y / position_homogeneous.z);
+      KINDS_DEBUG("Crossing Event at time " << event_time << " for Voronoi vertex ID " << voronoi_vertex_id
+                                            << " crossing half-edge ID " << event_he_id << " at position "
+                                            << glm::to_string(position));
+      kd->kinetic_algorithm_->enqueueEvent(
+        std::make_shared<CrossingEvent>(kd, event_time, event_he_id, t, position, voronoi_vertex_id));
+    }
+  }
+}

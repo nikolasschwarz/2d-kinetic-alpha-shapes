@@ -90,10 +90,7 @@ class Logger
   }
 
   // Explicitly set the full log level bitmask (overwrites existing mask).
-  void setLogLevelMask(LogLevel mask)
-  {
-    log_level = mask;
-  }
+  void setLogLevelMask(LogLevel mask) { log_level = mask; }
 
   void setLogLevel(LogLevel log_level, bool set = true)
   {

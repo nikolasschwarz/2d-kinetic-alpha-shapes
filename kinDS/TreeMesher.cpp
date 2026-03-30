@@ -351,28 +351,9 @@ void TreeMesher::runKineticDelaunay()
 
   bool transform_mesh_at_construction = false;
 
-  kinetic_delaunay->init();
   mesh_builder = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction);
-  mesh_builder->init();
-  // auto points = kinetic_delaunay.getPointsAt(0.0);
-
-  size_t section_count = kinetic_delaunay->getSectionCount();
-
-  ProgressBar section_progress_bar(
-    0, section_count, "Computing Kinetic Voronoi Sections", ProgressBar::Display::Absolute);
-  for (size_t i = 0; i < section_count; ++i)
-  {
-    section_progress_bar.Update(i);
-    if (i != 0)
-      mesh_builder->betweenSections(i);
-    kinetic_delaunay->advanceOneSection(*mesh_builder);
-
-    // points = kinetic_delaunay.getPointsAt(static_cast<double>(i + 1));
-  }
-  section_progress_bar.Finish();
-
-  KINDS_INFO("Finalizing Kinetic Delaunay Voronoi Meshing...");
-  mesh_builder->finalize(section_count);
+  kinetic_delaunay->init(mesh_builder.get());
+  kinetic_delaunay->compute();
 
   std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets();
 }

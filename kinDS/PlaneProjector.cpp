@@ -7,7 +7,8 @@ using namespace kinDS;
 
 static const float EPS = 1e-8f;
 
-PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& planeBToWorld) {
+PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& planeBToWorld)
+{
   // Extract plane A
   extractPlaneFromTransform(planeAToWorld, m_oA, m_uA, m_vA);
 
@@ -22,11 +23,14 @@ PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& 
   glm::vec3 axis = glm::cross(m_nA, m_nB);
   float axisLen = glm::length(axis);
 
-  if (axisLen < EPS) {
+  if (axisLen < EPS)
+  {
     // Parallel planes
     m_parallel = true;
     m_dB = -glm::dot(m_nB, m_oB);
-  } else {
+  }
+  else
+  {
     // Non-parallel planes
     m_parallel = false;
 
@@ -51,7 +55,8 @@ PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& 
   }
 }
 
-void PlaneProjector::extractPlaneFromTransform(const glm::mat4& M, glm::vec3& origin, glm::vec3& u, glm::vec3& v) {
+void PlaneProjector::extractPlaneFromTransform(const glm::mat4& M, glm::vec3& origin, glm::vec3& u, glm::vec3& v)
+{
   // Origin
   origin = glm::vec3(M * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
 
@@ -61,22 +66,25 @@ void PlaneProjector::extractPlaneFromTransform(const glm::mat4& M, glm::vec3& or
   v = glm::vec3(M * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
 }
 
-glm::vec3 PlaneProjector::localAToWorld(float a, float b) const {
-  return m_oA + a * m_uA + b * m_vA;
-}
+glm::vec3 PlaneProjector::localAToWorld(float a, float b) const { return m_oA + a * m_uA + b * m_vA; }
 
-glm::vec3 PlaneProjector::applyTransform(const glm::vec3& x) const {
-  if (!m_parallel) {
+glm::vec3 PlaneProjector::applyTransform(const glm::vec3& x) const
+{
+  if (!m_parallel)
+  {
     // Rotate around intersection line
     return m_p0 + m_rot * (x - m_p0);
-  } else {
+  }
+  else
+  {
     // Project along plane normal
     float t = (glm::dot(m_nB, x) + m_dB) / glm::dot(m_nB, m_nA);
     return x - t * m_nA;
   }
 }
 
-glm::vec2 PlaneProjector::worldToLocalB(const glm::vec3& x) const {
+glm::vec2 PlaneProjector::worldToLocalB(const glm::vec3& x) const
+{
   glm::vec3 w = x - m_oB;
 
   float uu = glm::dot(m_uB, m_uB);
@@ -95,7 +103,8 @@ glm::vec2 PlaneProjector::worldToLocalB(const glm::vec3& x) const {
   return glm::vec2(c, d);
 }
 
-glm::vec2 PlaneProjector::project(const glm::vec2& v) const {
+glm::vec2 PlaneProjector::project(const glm::vec2& v) const
+{
   glm::vec3 xA = localAToWorld(v.x, v.y);
   glm::vec3 xW = applyTransform(xA);
   return worldToLocalB(xW);

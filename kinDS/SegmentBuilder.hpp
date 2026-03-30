@@ -3,12 +3,22 @@
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
 #include <list>
+#include <memory>
 
 namespace kinDS
 {
+class SegmentBuilderSectionCallback;
+class SegmentBuilderFlipCallback;
+class SegmentBuilderRadiusCallback;
+class SegmentBuilderCrossingCallback;
 
-class SegmentBuilder : public KineticDelaunay::EventHandler
+class SegmentBuilder : public KineticDelaunay::CallbackManager
 {
+  friend class SegmentBuilderSectionCallback;
+  friend class SegmentBuilderFlipCallback;
+  friend class SegmentBuilderRadiusCallback;
+  friend class SegmentBuilderCrossingCallback;
+
  private:
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
@@ -19,7 +29,8 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
 
-  struct MeshingData{
+  struct MeshingData
+  {
     int mesh_start_vertex_id;
     int mesh_end_vertex_id;
     int start_half_edge_id;
@@ -52,6 +63,10 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
   std::vector<int> half_edge_to_boundary_vertex_index;
 
   KineticDelaunay& kin_del;
+  std::unique_ptr<SegmentBuilderSectionCallback> section_callback_;
+  std::unique_ptr<SegmentBuilderFlipCallback> flip_callback_;
+  std::unique_ptr<SegmentBuilderRadiusCallback> radius_callback_;
+  std::unique_ptr<SegmentBuilderCrossingCallback> crossing_callback_;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
   bool visual_debug = true; // Always-on visual debug for now (SVG exports)
   std::vector<std::pair<size_t, double>> subdivisions;
@@ -100,22 +115,12 @@ class SegmentBuilder : public KineticDelaunay::EventHandler
  public:
   SegmentBuilder(
     KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh);
+
   SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh);
+
+  ~SegmentBuilder() override;
+
   void init() override;
-
-  void betweenSections(size_t index) override;
-
-  void beforeFlipEvent(KineticDelaunay::Event& e) override;
-
-  void afterFlipEvent(KineticDelaunay::Event& e) override;
-
-  void beforeRadiusEvent(KineticDelaunay::Event& e) override;
-
-  void afterRadiusEvent(KineticDelaunay::Event& e) override;
-
-  void beforeCrossingEvent(KineticDelaunay::Event& e) override;
-
-  void afterCrossingEvent(KineticDelaunay::Event& e) override;
 
   void insertSubdivision(size_t strand_id, double t);
 

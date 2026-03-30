@@ -1,22 +1,24 @@
-#include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/HalfEdgeDelaunayGraph.hpp"
+#include "kinDS/HalfEdgeDelaunayGraphToSVG.hpp"
 #include "kinDS/KineticDelaunay.hpp"
-#include "kinDS/StrandTree.hpp"
+#include "kinDS/KineticDelaunayCrossingEvent.hpp"
+#include "kinDS/KineticDelaunayFlipEvent.hpp"
+#include "kinDS/KineticDelaunaySectionEvent.hpp"
 #include "kinDS/Logger.hpp"
+#include "kinDS/StrandTree.hpp"
 
+#include <bitset>
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <cstdint>
-#include <bitset>
 
 using namespace kinDS;
 
 static void enable_all_log_levels_for_test()
 {
-  logger.setLogLevelMask(
-    LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical);
+  logger.setLogLevelMask(LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical);
 }
 
 // Export current state to SVG before running validation (for debugging failures).
@@ -35,12 +37,13 @@ static void exportSvgBeforeAssertion(const KineticDelaunay& kd, double t, const 
   }
   auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
 
-  HalfEdgeDelaunayGraphToSVG::write(
-    points, graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri, &intersection_debug_data); // margin 0.1, draw Voronoi edges in red
+  HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri,
+    &intersection_debug_data); // margin 0.1, draw Voronoi edges in red
 }
 
-// Validate CrossingData: each Voronoi vertex's containing tri matches the list, and the vertex lies inside that triangle.
-// The 'context' string is used to indicate where in the evolution we are (init, betweenSections, after event, etc.).
+// Validate CrossingData: each Voronoi vertex's containing tri matches the list, and the vertex lies inside that
+// triangle. The 'context' string is used to indicate where in the evolution we are (init, betweenSections, after event,
+// etc.).
 static void validateCrossingData(const KineticDelaunay& kd, double t, const std::string& context)
 {
   const HalfEdgeDelaunayGraph& graph = kd.getGraph();
@@ -68,10 +71,7 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
     std::bitset<52> mantissa(mantissa_bits);
 
     std::ostringstream oss;
-    oss << "sign=" << sign
-        << ", exp_bits=" << exp_bits
-        << ", exp=" << exponent
-        << ", mantissa=" << mantissa;
+    oss << "sign=" << sign << ", exp_bits=" << exp_bits << ", exp=" << exponent << ", mantissa=" << mantissa;
     return oss.str();
   };
 
@@ -194,7 +194,8 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
     auto tri_vertices = graph.adjacentTriangleVertices(tri.half_edges[0]);
     std::vector<glm::dvec2> pts;
 
-    KINDS_DEBUG("Tri vertices for tri_id " << tri_id << ": " << tri_vertices[0] << ", " << tri_vertices[1] << ", " << tri_vertices[2] << " at t = " << t);
+    KINDS_DEBUG("Tri vertices for tri_id " << tri_id << ": " << tri_vertices[0] << ", " << tri_vertices[1] << ", "
+                                           << tri_vertices[2] << " at t = " << t);
     for (int v : tri_vertices)
     {
       if (v == -1)
@@ -226,10 +227,8 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
     oss.setf(std::ios::fixed);
     oss.precision(15);
     oss << " Voronoi vertex p=(" << p.x << "," << p.y << ")"
-        << " tri_id=" << tri_id
-        << " tri_verts=[(" << a.x << "," << a.y << "),("
-        << b.x << "," << b.y << "),("
-        << c.x << "," << c.y << ")]"
+        << " tri_id=" << tri_id << " tri_verts=[(" << a.x << "," << a.y << "),(" << b.x << "," << b.y << "),(" << c.x
+        << "," << c.y << ")]"
         << " barycentric=(w1=" << w1 << ", w2=" << w2 << ", w3=" << w3 << ")"
         << " | p.x_bin={" << to_binary_ieee754(p.x) << "}"
         << " p.y_bin={" << to_binary_ieee754(p.y) << "}"
@@ -267,16 +266,15 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
       size_t containing_tri = kd.getCrossingDataContainingTriId(voronoi_vertex_id);
       if (containing_tri == invalid_id)
       {
-        throw std::runtime_error(
-          context + ": CrossingData inconsistency: Voronoi vertex " + std::to_string(voronoi_vertex_id)
-          + " has invalid containing triangle id (expected to be in face " + std::to_string(face_id) + ").");
+        throw std::runtime_error(context + ": CrossingData inconsistency: Voronoi vertex "
+          + std::to_string(voronoi_vertex_id) + " has invalid containing triangle id (expected to be in face "
+          + std::to_string(face_id) + ").");
       }
       if (containing_tri != face_id)
       {
-        throw std::runtime_error(
-          context + ": CrossingData inconsistency for Voronoi vertex " + std::to_string(voronoi_vertex_id)
-          + ": tri_id_to_voronoi_vertices lists it in face " + std::to_string(face_id)
-          + " but containing tri id is " + std::to_string(containing_tri) + ".");
+        throw std::runtime_error(context + ": CrossingData inconsistency for Voronoi vertex "
+          + std::to_string(voronoi_vertex_id) + ": tri_id_to_voronoi_vertices lists it in face "
+          + std::to_string(face_id) + " but containing tri id is " + std::to_string(containing_tri) + ".");
       }
 
       glm::dvec3 pos_h = kd.getVoronoiVertexHomogeneous(voronoi_vertex_id, t);
@@ -356,10 +354,8 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
       // Always emit detailed DEBUG info for this Voronoi vertex, now that expected_face_by_geometry
       // is defined (for finite regions; infinite regions are handled by the early-continue above).
       {
-        std::string dbg = context + ": CrossingData debug for Voronoi vertex "
-          + std::to_string(voronoi_vertex_id)
-          + " at t=" + std::to_string(t)
-          + " containing_tri=" + std::to_string(containing_tri)
+        std::string dbg = context + ": CrossingData debug for Voronoi vertex " + std::to_string(voronoi_vertex_id)
+          + " at t=" + std::to_string(t) + " containing_tri=" + std::to_string(containing_tri)
           + " geom_face=" + std::to_string(expected_face_by_geometry);
         dbg += format_triangle_and_barycentric(containing_tri, p);
         dbg += " geom_suggested:" + format_triangle_and_barycentric(expected_face_by_geometry, p);
@@ -382,25 +378,21 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
 // Build a StrandTree similar to the demo data used in kinetic_delaunay_example()
 static StrandTree makeDemoStrandTree()
 {
-  std::vector<glm::dvec2> trajectory_A = {
-    { -0.432132, -0.426942 }, { -0.447292, -0.580708 }, { -0.469864, -0.531837 }, { -0.578741, -0.494280 },
-    { -0.519044, -0.496727 }, { -0.487418, -0.587100 }, { -0.536664, -0.465019 }, { -0.536664, -0.465019 }
-  };
+  std::vector<glm::dvec2> trajectory_A
+    = { { -0.432132, -0.426942 }, { -0.447292, -0.580708 }, { -0.469864, -0.531837 }, { -0.578741, -0.494280 },
+        { -0.519044, -0.496727 }, { -0.487418, -0.587100 }, { -0.536664, -0.465019 }, { -0.536664, -0.465019 } };
 
-  std::vector<glm::dvec2> trajectory_B = {
-    { -0.150887, -0.424968 }, { -0.101774, -0.349936 }, { -0.052661, -0.274904 }, { -0.003548, -0.199872 },
-    { 0.045565, -0.124840 },  { 0.094678, -0.049808 },  { 0.143791, 0.025224 },   { 0.143791, 0.025224 }
-  };
+  std::vector<glm::dvec2> trajectory_B
+    = { { -0.150887, -0.424968 }, { -0.101774, -0.349936 }, { -0.052661, -0.274904 }, { -0.003548, -0.199872 },
+        { 0.045565, -0.124840 }, { 0.094678, -0.049808 }, { 0.143791, 0.025224 }, { 0.143791, 0.025224 } };
 
-  std::vector<glm::dvec2> trajectory_C = {
-    { -0.048665, -0.333097 }, { -0.197330, -0.266194 }, { -0.345995, -0.199291 }, { -0.494660, -0.132388 },
-    { -0.643325, -0.065485 }, { -0.791990, 0.001418 },  { -0.940656, 0.068321 },  { -0.940656, 0.068321 }
-  };
+  std::vector<glm::dvec2> trajectory_C
+    = { { -0.048665, -0.333097 }, { -0.197330, -0.266194 }, { -0.345995, -0.199291 }, { -0.494660, -0.132388 },
+        { -0.643325, -0.065485 }, { -0.791990, 0.001418 }, { -0.940656, 0.068321 }, { -0.940656, 0.068321 } };
 
-  std::vector<glm::dvec2> trajectory_D = {
-    { 0.467745, 0.111272 }, { 0.435490, 0.022544 }, { 0.403235, -0.066183 }, { 0.370980, -0.154910 },
-    { 0.338725, -0.243637 }, { 0.306470, -0.332364 }, { 0.274215, -0.421091 }, { 0.274215, -0.421091 }
-  };
+  std::vector<glm::dvec2> trajectory_D
+    = { { 0.467745, 0.111272 }, { 0.435490, 0.022544 }, { 0.403235, -0.066183 }, { 0.370980, -0.154910 },
+        { 0.338725, -0.243637 }, { 0.306470, -0.332364 }, { 0.274215, -0.421091 }, { 0.274215, -0.421091 } };
 
   std::vector<std::vector<glm::dvec2>> support_points { trajectory_A, trajectory_B, trajectory_C, trajectory_D };
 
@@ -413,7 +405,8 @@ static StrandTree makeDemoStrandTree()
 
   // Identity transforms per height and branch (single branch)
   const size_t height = support_points.front().size();
-  std::vector<std::vector<glm::dmat4>> transforms_by_height_and_branch(height, std::vector<glm::dmat4>(1, glm::dmat4(1.0)));
+  std::vector<std::vector<glm::dmat4>> transforms_by_height_and_branch(
+    height, std::vector<glm::dmat4>(1, glm::dmat4(1.0)));
 
   // Single branch (0) for all strands at all heights
   std::vector<std::vector<size_t>> branch_indices(
@@ -427,13 +420,12 @@ static StrandTree makeDemoStrandTree()
     strands_by_branch_id[h].push_back({ 0, 1, 2, 3 }); // single branch containing all strands
   }
 
-  return StrandTree(
-    support_points, subdivisions, physics_strand_to_segment_indices, transforms_by_height_and_branch, branch_indices,
-    strands_by_branch_id);
+  return StrandTree(support_points, subdivisions, physics_strand_to_segment_indices, transforms_by_height_and_branch,
+    branch_indices, strands_by_branch_id);
 }
 
 // Event handler that validates CrossingData during the kinetic Delaunay evolution
-struct CrossingDataTestHandler : public KineticDelaunay::EventHandler
+struct CrossingDataTestHandler : public KineticDelaunay::EventCallback
 {
   KineticDelaunay& kd;
 
@@ -442,34 +434,46 @@ struct CrossingDataTestHandler : public KineticDelaunay::EventHandler
   {
   }
 
-  void afterFlipEvent(KineticDelaunay::Event& e) override
+  void afterEvent(KineticDelaunay::Event& e) override
   {
+    if (auto* flip = dynamic_cast<KineticDelaunay::FlipEvent*>(&e))
+    {
+      std::string filename = "t" + std::to_string(flip->occurrence_time) + "_crossing_data_after_flip_he"
+        + std::to_string(flip->half_edge_id) + ".svg";
+      exportSvgBeforeAssertion(kd, flip->occurrence_time, filename);
+      std::string ctx = "afterFlipEvent(time=" + std::to_string(flip->occurrence_time)
+        + ", half_edge_id=" + std::to_string(flip->half_edge_id) + ")";
+      validateCrossingData(kd, flip->occurrence_time, ctx);
+      return;
+    }
+
+    if (auto* crossing = dynamic_cast<KineticDelaunay::CrossingEvent*>(&e))
+    {
+      const auto& graph = kd.getGraph();
+      size_t old_tri = graph.getHalfEdges()[crossing->half_edge_id].face;
+      size_t new_tri = graph.getHalfEdges()[crossing->half_edge_id ^ 1].face;
+      std::string filename = "t" + std::to_string(crossing->occurrence_time) + "_crossing_data_after_crossing_v"
+        + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_"
+        + std::to_string(new_tri) + ".svg";
+      exportSvgBeforeAssertion(kd, crossing->occurrence_time, filename);
+      std::string ctx = "afterCrossingEvent(time=" + std::to_string(crossing->occurrence_time)
+        + ", voronoi_vertex_id=" + std::to_string(crossing->voronoi_vertex_id) + ")";
+      validateCrossingData(kd, crossing->occurrence_time, ctx);
+      return;
+    }
+  }
+
+  void beforeEvent(KineticDelaunay::Event& e) override
+  {
+    auto* section = dynamic_cast<KineticDelaunay::SectionEvent*>(&e);
+    if (!section)
+    {
+      return;
+    }
+
+    const size_t index = section->section_id;
     std::string filename
-      = "t" + std::to_string(e.time) + "_crossing_data_after_flip_he" + std::to_string(e.half_edge_id) + ".svg";
-    exportSvgBeforeAssertion(kd, e.time, filename);
-    std::string ctx
-      = "afterFlipEvent(time=" + std::to_string(e.time) + ", half_edge_id=" + std::to_string(e.half_edge_id) + ")";
-    validateCrossingData(kd, e.time, ctx);
-  }
-
-  void afterCrossingEvent(KineticDelaunay::Event& e) override
-  {
-    const auto& graph = kd.getGraph();
-    size_t old_tri = graph.getHalfEdges()[e.half_edge_id].face;
-    size_t new_tri = graph.getHalfEdges()[e.half_edge_id ^ 1].face;
-    std::string filename = "t" + std::to_string(e.time) + "_crossing_data_after_crossing_v"
-                           + std::to_string(e.voronoi_vertex_id) + "_"
-                           + std::to_string(old_tri) + "_to_" + std::to_string(new_tri) + ".svg";
-    exportSvgBeforeAssertion(kd, e.time, filename);
-    std::string ctx = "afterCrossingEvent(time=" + std::to_string(e.time)
-      + ", voronoi_vertex_id=" + std::to_string(e.voronoi_vertex_id) + ")";
-    validateCrossingData(kd, e.time, ctx);
-  }
-
-  void betweenSections(size_t index) override
-  {
-    std::string filename = "t" + std::to_string(index) + "_crossing_data_between_sections_" + std::to_string(index)
-      + ".svg";
+      = "t" + std::to_string(index) + "_crossing_data_between_sections_" + std::to_string(index) + ".svg";
     exportSvgBeforeAssertion(kd, static_cast<double>(index), filename);
     std::string ctx = "betweenSections(index=" + std::to_string(index) + ")";
     validateCrossingData(kd, static_cast<double>(index), ctx);
@@ -490,6 +494,7 @@ TEST_CASE("KineticDelaunay CrossingData consistency on demo data", "[KineticDela
   KineticDelaunay kd(tree, cutoff, add_dummy_boundary);
   CrossingDataTestHandler handler(kd);
 
+  kd.registerEventCallbacks(&handler, &handler, &handler, &handler);
   kd.init();
 
   // Debug: dump initial CrossingData mapping voronoi_vertex_id -> containing triangle.
@@ -511,6 +516,5 @@ TEST_CASE("KineticDelaunay CrossingData consistency on demo data", "[KineticDela
   REQUIRE_NOTHROW(validateCrossingData(kd, 0.0, "after init"));
 
   // The test passes if validateCrossingData never throws during the full evolution
-  REQUIRE_NOTHROW(kd.compute(handler));
+  REQUIRE_NOTHROW(kd.compute());
 }
-

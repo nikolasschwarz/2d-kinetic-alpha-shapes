@@ -1,6 +1,7 @@
 #pragma once
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
+#include "KineticAlgorithm.hpp"
 #include "Logger.hpp"
 #include "Polynomial.hpp"
 #include "ProgressBar.hpp"
@@ -9,6 +10,7 @@
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <map>
+#include <memory>
 #include <queue>
 #include <string>
 
@@ -72,100 +74,32 @@ static std::vector<size_t> buildComponentMap(const std::vector<std::vector<size_
 class KineticDelaunay
 {
  public:
-  class Event
+  using Event = KineticAlgorithm::Event;
+  using EventCallback = KineticAlgorithm::EventCallback;
+  using EventManager = KineticAlgorithm::EventManager;
+
+  class FlipEvent;
+  class RadiusEvent;
+  class CrossingEvent;
+
+  class CallbackManager
   {
    public:
-    double time; // Time of the event
-    size_t half_edge_id; // Half-edge index associated with the event
-    double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
-    glm::dvec2 position; // Position of the event
-    size_t voronoi_vertex_id; // Voronoi vertex index associated with the event, only used for crossing events
+    virtual ~CallbackManager() = default;
 
-    enum Type
-    {
-      FLIP,
-      RADIUS,
-      CROSSING
-    } type;
-
-    Event(double t, size_t he_id, double creation_time, glm::dvec2 position, Type type)
-      : time(t)
-      , half_edge_id(he_id)
-      , creation_time(creation_time)
-      , position(position)
-      , type(type)
-    {
-      if (type == Event::CROSSING)
-      {
-        throw std::invalid_argument("Crossing events must be created with a voronoi vertex id");
-      }
-    }
-
-    Event(double t, size_t he_id, double creation_time, glm::dvec2 position, size_t voronoi_vertex_id, Type type)
-      : time(t)
-      , half_edge_id(he_id)
-      , creation_time(creation_time)
-      , position(position)
-      , type(type)
-      , voronoi_vertex_id(voronoi_vertex_id)
-    {
-    }
-
-    bool operator<(const Event& other) const
-    {
-      return time > other.time; // For priority queue, we want the earliest event first
-    }
-  };
-
-  // EventHandler class, inherit from this class to handle events in the KineticDelaunay algorithm
-  class EventHandler
-  {
-   public:
-    virtual ~EventHandler() = default;
-    /**
-     * \brief Handle a FLIP event before it is processed, i.e. before any edges are swapped
-     *
-     * @param e The event to handle.
-     */
-    virtual void beforeFlipEvent(Event& e) { }
-
-    /**
-     * \brief Handle a FLIP event after it is processed, i.e. after edges are swapped
-     *
-     * @param e The event to handle.
-     */
-    virtual void afterFlipEvent(Event& e) { }
-
-    /**
-     * \brief Handle a RADIUS event before it is processed
-     *
-     * @param e The event to handle
-     */
-    virtual void beforeRadiusEvent(Event& e) { }
-
-    /**
-     * \brief Handle a RADIUS event after it is processed
-     *
-     * @param e The event to handle
-     */
-    virtual void afterRadiusEvent(Event& e) { }
-
-    virtual void beforeCrossingEvent(Event& e) { }
-
-    virtual void afterCrossingEvent(Event& e) { }
-
-    virtual void betweenSections(size_t index) { }
-
-    /**
-     * \brief initialize event handler.
-     */
     virtual void init() { }
-
-    /**
-     * \brief Finalize after all events have been handled
-     */
     virtual void finalize(double t) { }
   };
+
+  class FlipEvent;
+  class RadiusEvent;
+  class CrossingEvent;
+  class SectionEvent;
+
+  class FlipEventManager;
+  class RadiusEventManager;
+  class CrossingEventManager;
+  class SectionEventManager;
 
   struct ComponentData
   {
@@ -182,7 +116,8 @@ class KineticDelaunay
 
   std::pair<glm::dvec2, glm::dvec2> computeAngularBisector(size_t he_id, double t) const;
 
-  std::pair<double, double> delaunayVoronoiEdgeIntersection(size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
+  std::pair<double, double> delaunayVoronoiEdgeIntersection(
+    size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
 
   /**
    * \brief Compute the half-edges crossed by the Voronoi edge between the given start point and destination, starting
@@ -192,14 +127,19 @@ class KineticDelaunay
    * triangle.
    */
   std::pair<std::vector<size_t>, std::vector<double>> computeCrossedHalfEdges(
-  size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
+    size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
 
  private:
-  typedef std::priority_queue<Event> EventQueue;
-
   StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
-  EventQueue events;
+  std::unique_ptr<KineticAlgorithm> kinetic_algorithm_;
+  // Reused managers: one per event type.
+  // Kept as pointers to avoid forcing complete manager types in this header.
+  std::unique_ptr<FlipEventManager> flip_event_manager_;
+  std::unique_ptr<RadiusEventManager> radius_event_manager_;
+  std::unique_ptr<CrossingEventManager> crossing_event_manager_;
+  std::unique_ptr<SectionEventManager> section_event_manager_;
+  CallbackManager* callback_manager_ = nullptr;
   size_t sections_advanced = 0; // Counter for the number of sections advanced
   double cutoff; // Cutoff radius for boundary events
   std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
@@ -213,123 +153,24 @@ class KineticDelaunay
   bool on_the_fly_boundary = true;
 
   // crossing-related data
-  struct CrossingData
-  {
-    struct VoronoiDelaunayEdgeIntersection;
-    typedef std::list<VoronoiDelaunayEdgeIntersection>::iterator EdgeIntersectionRef;
+  // Kept as a forward declaration in this header.
+  // The full definition lives in `KineticDelaunayCrossingEvent.hpp`.
+  struct CrossingData;
 
-   private:
-    std::vector<size_t> voronoi_vertex_to_containing_tri_id;
-    std::vector<std::list<size_t>> tri_id_to_voronoi_vertices;
-    std::vector<std::list<size_t>::iterator> voronoi_vertex_to_iterator;
-
-   public:
-    std::list<VoronoiDelaunayEdgeIntersection> edge_intersections;
-    std::vector<std::list<EdgeIntersectionRef>> voronoi_edge_intersections;
-    std::vector<std::list<EdgeIntersectionRef>> delaunay_edge_intersections;
-
-
-    std::vector<double> last_crossing;
-
-    struct VoronoiDelaunayEdgeIntersection {
-      std::list<EdgeIntersectionRef>::iterator delaunay_ref;
-      std::list<EdgeIntersectionRef>::iterator voronoi_ref;
-      size_t delaunay_edge_id;
-      size_t voronoi_edge_id;
-      double delaunay_edge_param;
-    };
-
-    void init(size_t face_count)
-    {
-      voronoi_vertex_to_containing_tri_id.clear();
-      voronoi_vertex_to_containing_tri_id.resize(face_count, -1);
-
-      tri_id_to_voronoi_vertices.clear();
-      tri_id_to_voronoi_vertices.resize(face_count);
-
-      voronoi_vertex_to_iterator.clear();
-      voronoi_vertex_to_iterator.resize(face_count);
-
-      last_crossing.clear();
-      last_crossing.resize(face_count, 0.0);
-    }
-
-    void setVoronoiVertexTriId(size_t voronoi_vertex_id, size_t tri_id)
-    {
-      voronoi_vertex_to_containing_tri_id[voronoi_vertex_id] = tri_id;
-      voronoi_vertex_to_iterator[voronoi_vertex_id]
-        = tri_id_to_voronoi_vertices[tri_id].emplace(tri_id_to_voronoi_vertices[tri_id].end(), voronoi_vertex_id);
-    }
-
-    void moveVertex(size_t voronoi_vertex_id, size_t target_tri_id, double t)
-    {
-      std::list<size_t>::iterator v_it = voronoi_vertex_to_iterator[voronoi_vertex_id];
-      size_t current_tri_id = voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
-
-      if (current_tri_id == target_tri_id)
-      {
-        return;
-      }
-
-      tri_id_to_voronoi_vertices[current_tri_id].erase(v_it);
-
-      setVoronoiVertexTriId(voronoi_vertex_id, target_tri_id);
-
-      KINDS_DEBUG("Voronoi vertex " << voronoi_vertex_id << " moved from triangle " << current_tri_id << " to "
-                                    << target_tri_id << " at t = " << t);
-    }
-
-    size_t getContainingTriId(size_t voronoi_vertex_id) const
-    {
-      return voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
-    }
-
-    const std::vector<size_t>& getContainingTriIds() const
-    {
-      return voronoi_vertex_to_containing_tri_id;
-    }
-
-    // Note: we copy this into a vector because we need this for reassigning Voronoi vertices in a quadrilateral and we
-    // will be modifying the underlying list while iterating
-    std::vector<size_t> getVoronoiVerticesInTri(size_t tri_id) const
-    {
-      std::vector<size_t> result(tri_id_to_voronoi_vertices[tri_id].begin(), tri_id_to_voronoi_vertices[tri_id].end());
-      return result;
-    }
-
-    void computeEdgeIntersections(const KineticDelaunay& kd, double t);
-
-    // Update Voronoi–Delaunay edge intersections after a single crossing event.
-    void updateAfterCrossingEvent(const KineticDelaunay& kd, const Event& e);
-
-    // Remove a single intersection from all three data structures (global list,
-    // per-Voronoi-edge list, and per-Delaunay-edge list).
-    void removeIntersection(EdgeIntersectionRef intersection_ref);
-
-  } crossing_data;
+  // Owned by `CrossingEventManager`. This is only an alias reference so the existing
+  // code can keep using the name `crossing_data`.
+  CrossingData& crossing_data;
 
   glm::dvec3 computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t) const;
-
-  void computeCrossingEvents(double t, size_t voronoi_vertex_id);
 
   void reassignVoronoiVerticesOnBoundary(size_t he_id, double t);
 
   void reassignVoronoiVerticesInQuadrilateral(
     size_t quad_index, double t, const std::map<size_t, size_t>& pre_flip_quad_faces);
 
-  void computeRadiusEvents(double t, size_t he_id);
-
-  void computeFlipEvents(double t, size_t quad_id);
-
   void precomputeStep(double t);
 
-  void handleFlipEvent(EventHandler& event_handler, Event& event);
-
-  void handleRadiusEvent(EventHandler& event_handler, Event& event);
-
-  void handleCrossingEvent(EventHandler& event_handler, Event& event);
-
-  void handleEvents(EventHandler& event_handler);
+  void handleEvents();
 
   size_t getBranchIndex(size_t strand_id, size_t t) const;
 
@@ -337,10 +178,12 @@ class KineticDelaunay
 
   const std::vector<size_t>& getBranchStrands(size_t t, size_t branch_id);
 
-  std::vector<double> findEvents(Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative = false);
+  std::vector<double> findEvents(
+    Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative = false);
 
  public:
   KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);
+  ~KineticDelaunay();
 
   bool isDummyBoundary(size_t v);
 
@@ -361,16 +204,20 @@ class KineticDelaunay
   const CrossingData& getCrossingData() const;
   std::vector<std::array<size_t, 4>> getCrossingIntersectionDebugData() const;
 
-  const HalfEdgeDelaunayGraph& init();
-
-  const HalfEdgeDelaunayGraph& advanceOneSection(EventHandler& event_handler);
+  const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
+  void registerSectionEventCallback(EventCallback* callback);
+  void registerFlipEventCallback(EventCallback* callback);
+  void registerRadiusEventCallback(EventCallback* callback);
+  void registerCrossingEventCallback(EventCallback* callback);
+  void registerEventCallbacks(EventCallback* section_callback, EventCallback* flip_callback,
+    EventCallback* radius_callback, EventCallback* crossing_callback);
 
   const HalfEdgeDelaunayGraph& getGraph() const;
 
   size_t getSectionCount() const;
 
   // Computes the Delaunay triangulation of the given splines
-  void compute(EventHandler& event_handler);
+  void compute();
 
   std::vector<size_t> extractConnectedComponent(size_t u, std::vector<bool>& visited) const;
 

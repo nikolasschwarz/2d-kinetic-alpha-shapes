@@ -4,8 +4,8 @@
 
 #include <array>
 #include <cstddef>
-#include <type_traits>
 #include <initializer_list>
+#include <type_traits>
 
 namespace kinDS
 {
@@ -16,8 +16,7 @@ namespace kinDS
  * This is essentially an array of `Polynomial` of length `dim`, but wrapped
  * in a type with convenience operations defined componentwise.
  */
-template <std::size_t dim>
-class Trajectory : public std::array<Polynomial, dim>
+template<std::size_t dim> class Trajectory : public std::array<Polynomial, dim>
 {
   using Base = std::array<Polynomial, dim>;
 
@@ -163,13 +162,10 @@ class Trajectory : public std::array<Polynomial, dim>
   Polynomial dot(const Trajectory& other) const { return dot(*this, other); }
 
   // Pointwise squared norm: dot product with itself.
-  Polynomial squaredNorm() const
-  {
-    return dot(*this, *this);
-  }
+  Polynomial squaredNorm() const { return dot(*this, *this); }
 
   // Cross product: only defined for dim == 3.
-  template <std::size_t D = dim>
+  template<std::size_t D = dim>
   static std::enable_if_t<D == 3, Trajectory> cross(const Trajectory& a, const Trajectory& b)
   {
     Trajectory result;
@@ -182,15 +178,13 @@ class Trajectory : public std::array<Polynomial, dim>
 };
 
 // Scalar multiplication (scalar on the left)
-template <std::size_t dim>
-Trajectory<dim> operator*(double scalar, const Trajectory<dim>& traj)
+template<std::size_t dim> Trajectory<dim> operator*(double scalar, const Trajectory<dim>& traj)
 {
   return traj * scalar;
 }
 
 // Polynomial * Trajectory: multiply each component polynomial by `poly`.
-template <std::size_t dim>
-Trajectory<dim> operator*(const Polynomial& poly, const Trajectory<dim>& traj)
+template<std::size_t dim> Trajectory<dim> operator*(const Polynomial& poly, const Trajectory<dim>& traj)
 {
   Trajectory<dim> result;
   for (std::size_t i = 0; i < dim; ++i)
@@ -201,12 +195,9 @@ Trajectory<dim> operator*(const Polynomial& poly, const Trajectory<dim>& traj)
 }
 
 // Trajectory * Polynomial: multiply each component polynomial by `poly`.
-template <std::size_t dim>
-Trajectory<dim> operator*(const Trajectory<dim>& traj, const Polynomial& poly)
+template<std::size_t dim> Trajectory<dim> operator*(const Trajectory<dim>& traj, const Polynomial& poly)
 {
   return poly * traj;
 }
 
 } // namespace kinDS
-
-
