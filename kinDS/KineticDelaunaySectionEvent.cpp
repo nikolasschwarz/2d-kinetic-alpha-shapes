@@ -21,8 +21,7 @@ void KineticDelaunay::SectionEventManager::computeEvents(double t, size_t event_
   kd_->sections_advanced = 0;
 
   // Clear any queued events from previous runs.
-  while (!kd_->events.empty())
-    kd_->events.pop();
+  kd_->kinetic_algorithm_->clear();
 
   progress_bar_
     = std::make_unique<ProgressBar>(0, section_count, "Computing Kinetic Voronoi Sections", ProgressBar::Display::Absolute);
@@ -31,7 +30,7 @@ void KineticDelaunay::SectionEventManager::computeEvents(double t, size_t event_
   for (size_t i = 0; i < section_count; ++i)
   {
     const double time = t + static_cast<double>(i);
-    kd_->events.push(std::make_shared<SectionEvent>(kd_, time, i, time, glm::dvec2 { 0.0, 0.0 }));
+    kd_->kinetic_algorithm_->enqueueEvent(std::make_shared<SectionEvent>(kd_, time, i, time, glm::dvec2 { 0.0, 0.0 }));
   }
 }
 
@@ -55,7 +54,7 @@ void KineticDelaunay::SectionEventManager::finishProgressIfNeeded(size_t section
 
 void KineticDelaunay::SectionEvent::handleEvent()
 {
-  auto* kd = getKineticDelaunay();
+  auto* kd = kd_;
   if (!kd)
   {
     throw std::runtime_error("SectionEvent has no KineticDelaunay pointer");

@@ -11,11 +11,13 @@ namespace kinDS
 class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
 {
  public:
+  KineticDelaunay* kd_;
   size_t half_edge_id;
   glm::dvec2 position;
 
   FlipEvent(KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position)
-    : KineticDelaunay::Event(kd, t, creation_time)
+    : KineticDelaunay::Event(t, creation_time)
+    , kd_(kd)
     , half_edge_id(he_id)
     , position(position)
   {
@@ -28,16 +30,19 @@ class KineticDelaunay::FlipEventManager final : public KineticDelaunay::EventMan
 {
  public:
   explicit FlipEventManager(KineticDelaunay* kd)
-    : EventManager(kd)
+    : kd_(kd)
   {
   }
 
   void computeEvents(double t, size_t event_id) override;
+
+ private:
+  KineticDelaunay* kd_;
 };
 
 inline void KineticDelaunay::FlipEvent::handleEvent()
 {
-  auto* kd = getKineticDelaunay();
+  auto* kd = kd_;
   if (!kd)
   {
     throw std::runtime_error("FlipEvent has no KineticDelaunay pointer");

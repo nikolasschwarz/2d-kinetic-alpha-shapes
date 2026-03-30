@@ -11,7 +11,6 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   auto* kd = kd_;
   auto& graph = kd->graph;
   auto& branch_trajs = kd->branch_trajs;
-  auto& events = kd->events;
 
   const size_t section = static_cast<size_t>(t);
   const float fraction = t - section;
@@ -92,6 +91,6 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     // KINDS_DEBUG("Event at time " << event_time + section << " for half-edge ID " << he_id << " at center position "
     //                                   << glm::to_string(center));
 
-    events.emplace(std::make_shared<FlipEvent>(kd, event_time + section, he_id, t, center));
+    kd->kinetic_algorithm_->enqueueEvent(std::make_shared<FlipEvent>(kd, event_time + section, he_id, t, center));
   }
 }

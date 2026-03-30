@@ -8,11 +8,13 @@ namespace kinDS
 class KineticDelaunay::SectionEvent final : public KineticDelaunay::Event
 {
  public:
+  KineticDelaunay* kd_;
   size_t section_id;
   glm::dvec2 position;
 
   SectionEvent(KineticDelaunay* kd, double t, size_t section_id, double creation_time, glm::dvec2 position)
-    : KineticDelaunay::Event(kd, t, creation_time)
+    : KineticDelaunay::Event(t, creation_time)
+    , kd_(kd)
     , section_id(section_id)
     , position(position)
   {
@@ -25,7 +27,7 @@ class KineticDelaunay::SectionEventManager final : public KineticDelaunay::Event
 {
  public:
   explicit SectionEventManager(KineticDelaunay* kd)
-    : EventManager(kd)
+    : kd_(kd)
   {
   }
 
@@ -41,6 +43,7 @@ class KineticDelaunay::SectionEventManager final : public KineticDelaunay::Event
   }
 
  private:
+  KineticDelaunay* kd_;
   size_t section_count_ = 0;
   std::unique_ptr<ProgressBar> progress_bar_;
 };

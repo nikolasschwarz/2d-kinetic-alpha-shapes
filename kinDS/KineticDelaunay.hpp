@@ -1,6 +1,7 @@
 #pragma once
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
+#include "KineticAlgorithm.hpp"
 #include "Logger.hpp"
 #include "Polynomial.hpp"
 #include "ProgressBar.hpp"
@@ -73,67 +74,13 @@ static std::vector<size_t> buildComponentMap(const std::vector<std::vector<size_
 class KineticDelaunay
 {
  public:
-  class EventCallback;
+  using Event = KineticAlgorithm::Event;
+  using EventCallback = KineticAlgorithm::EventCallback;
+  using EventManager = KineticAlgorithm::EventManager;
+
   class FlipEvent;
   class RadiusEvent;
   class CrossingEvent;
-  class Event
-  {
-   public:
-    virtual ~Event() = default;
-
-    double occurrence_time; // Time of the event
-    double creation_time; // Time when the event was created, used do check validity after a quadrilateral is updated
-
-    // Virtual dispatch to execute the event.
-    virtual void handleEvent() = 0;
-
-    KineticDelaunay* getKineticDelaunay() const { return kd_; }
-    void setKineticDelaunay(KineticDelaunay* kd) { kd_ = kd; }
-
-    double getTime() const { return occurrence_time; }
-
-   protected:
-    KineticDelaunay* kd_ = nullptr;
-
-    Event(KineticDelaunay* kd, double occurrence_time, double creation_time)
-      : occurrence_time(occurrence_time)
-      , creation_time(creation_time)
-      , kd_(kd)
-    {
-    }
-  };
-
-  // EventCallback class, inherit from this class to handle events in the KineticDelaunay algorithm
-  class EventCallback
-  {
-   public:
-    virtual ~EventCallback() = default;
-    // Called for any event type before it is processed.
-    virtual void beforeEvent(Event& e) { }
-
-    // Called for any event type after it is processed.
-    virtual void afterEvent(Event& e) { }
-  };
-
-  class EventManager
-  {
-   public:
-    virtual ~EventManager() = default;
-
-    virtual void computeEvents(double t, size_t event_id) = 0;
-    void setCallback(EventCallback* callback) { callback_ = callback; }
-    EventCallback* getCallback() const { return callback_; }
-
-   protected:
-    explicit EventManager(KineticDelaunay* kd)
-      : kd_(kd)
-    {
-    }
-
-    KineticDelaunay* kd_;
-    EventCallback* callback_ = nullptr;
-  };
 
   class CallbackManager
   {
@@ -183,20 +130,9 @@ class KineticDelaunay
     size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
 
  private:
-  struct EventPtrCompare
-  {
-    bool operator()(const std::shared_ptr<Event>& a, const std::shared_ptr<Event>& b) const
-    {
-      // For priority_queue we want the earliest event first => reverse comparison.
-      return a->occurrence_time > b->occurrence_time;
-    }
-  };
-
-  using EventQueue = std::priority_queue<std::shared_ptr<Event>, std::vector<std::shared_ptr<Event>>, EventPtrCompare>;
-
   StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
-  EventQueue events;
+  std::unique_ptr<KineticAlgorithm> kinetic_algorithm_;
   // Reused managers: one per event type.
   // Kept as pointers to avoid forcing complete manager types in this header.
   std::unique_ptr<FlipEventManager> flip_event_manager_;

@@ -60,6 +60,7 @@ set(KINDS_SOURCES
 	"kinDS/StrandTree.cpp"
 	"kinDS/Delaunator2D.cpp"
 	"kinDS/HalfEdgeDelaunayGraph.cpp"
+    "kinDS/KineticAlgorithm.cpp"
     "kinDS/KineticDelaunay.cpp"
     "kinDS/KineticDelaunayFlipEvent.cpp"
     "kinDS/KineticDelaunayRadiusEvent.cpp"

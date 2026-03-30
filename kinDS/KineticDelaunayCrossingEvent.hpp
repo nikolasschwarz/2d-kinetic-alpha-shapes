@@ -100,13 +100,15 @@ struct KineticDelaunay::CrossingData
 class KineticDelaunay::CrossingEvent final : public KineticDelaunay::Event
 {
  public:
+  KineticDelaunay* kd_;
   size_t half_edge_id;
   glm::dvec2 position;
   size_t voronoi_vertex_id;
 
   CrossingEvent(
     KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position, size_t voronoi_vertex_id)
-    : KineticDelaunay::Event(kd, t, creation_time)
+    : KineticDelaunay::Event(t, creation_time)
+    , kd_(kd)
     , half_edge_id(he_id)
     , position(position)
     , voronoi_vertex_id(voronoi_vertex_id)
@@ -120,7 +122,7 @@ class KineticDelaunay::CrossingEventManager final : public KineticDelaunay::Even
 {
  public:
   explicit CrossingEventManager(KineticDelaunay* kd)
-    : EventManager(kd)
+    : kd_(kd)
   {
   }
 
@@ -131,12 +133,13 @@ class KineticDelaunay::CrossingEventManager final : public KineticDelaunay::Even
   const CrossingData& getCrossingData() const { return crossing_data_; }
 
  private:
+  KineticDelaunay* kd_;
   CrossingData crossing_data_;
 };
 
 inline void KineticDelaunay::CrossingEvent::handleEvent()
 {
-  auto* kd = getKineticDelaunay();
+  auto* kd = kd_;
   if (!kd)
   {
     throw std::runtime_error("CrossingEvent has no KineticDelaunay pointer");

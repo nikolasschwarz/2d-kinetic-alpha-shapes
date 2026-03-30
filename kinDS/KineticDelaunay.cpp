@@ -721,12 +721,7 @@ void KineticDelaunay::precomputeStep(double t)
 
 void KineticDelaunay::handleEvents()
 {
-  while (!events.empty())
-  {
-    auto event = events.top();
-    events.pop();
-    event->handleEvent();
-  }
+  kinetic_algorithm_->processEvents();
 }
 
 size_t KineticDelaunay::getBranchIndex(size_t strand_id, size_t t) const
@@ -746,6 +741,7 @@ const std::vector<size_t>& KineticDelaunay::getBranchStrands(size_t t, size_t br
 
 KineticDelaunay::KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines)
   : branch_trajs(branch_trajs)
+  , kinetic_algorithm_(std::make_unique<KineticAlgorithm>())
   , cutoff(cutoff)
   , add_dummy_boundary(add_dummy_splines)
   , flip_event_manager_(std::make_unique<FlipEventManager>(this))

@@ -12,7 +12,6 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   auto& graph = kd->graph;
   auto& crossing_data = kd->crossing_data;
   auto& branch_trajs = kd->branch_trajs;
-  auto& events = kd->events;
 
   if (!kd->on_the_fly_boundary)
   {
@@ -103,7 +102,8 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
       KINDS_DEBUG("Crossing (right angle) Event at time "
         << event_time << " for Voronoi vertex ID " << voronoi_vertex_id << " crossing half-edge ID " << finite_he_id
         << " at position " << glm::to_string(position));
-      events.emplace(std::make_shared<CrossingEvent>(kd, event_time, finite_he_id, t, position, voronoi_vertex_id));
+      kd->kinetic_algorithm_->enqueueEvent(
+        std::make_shared<CrossingEvent>(kd, event_time, finite_he_id, t, position, voronoi_vertex_id));
     }
   }
   else
@@ -220,7 +220,8 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
       KINDS_DEBUG("Crossing Event at time " << event_time << " for Voronoi vertex ID " << voronoi_vertex_id
                                             << " crossing half-edge ID " << event_he_id << " at position "
                                             << glm::to_string(position));
-      events.emplace(std::make_shared<CrossingEvent>(kd, event_time, event_he_id, t, position, voronoi_vertex_id));
+      kd->kinetic_algorithm_->enqueueEvent(
+        std::make_shared<CrossingEvent>(kd, event_time, event_he_id, t, position, voronoi_vertex_id));
     }
   }
 }

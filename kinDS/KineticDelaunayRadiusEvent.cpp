@@ -11,7 +11,6 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
   auto* kd = kd_;
   auto& graph = kd->graph;
   auto& branch_trajs = kd->branch_trajs;
-  auto& events = kd->events;
 
   if (kd->cutoff == std::numeric_limits<double>::infinity())
   {
@@ -59,6 +58,6 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     // position"
     //                                       << glm::to_string(center));
 
-    events.emplace(std::make_shared<RadiusEvent>(kd, event_time + section, he_id, t, center));
+    kd->kinetic_algorithm_->enqueueEvent(std::make_shared<RadiusEvent>(kd, event_time + section, he_id, t, center));
   }
 }
