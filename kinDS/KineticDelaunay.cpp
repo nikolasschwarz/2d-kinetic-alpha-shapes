@@ -4,7 +4,9 @@
 #include "KineticDelaunayHelpers.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
 #include "KineticDelaunaySectionEvent.hpp"
+#include <cmath>
 #include <glm/geometric.hpp>
+#include <limits>
 
 using namespace kinDS;
 
@@ -891,6 +893,150 @@ void KineticDelaunay::computeComponentData(double t)
 }
 
 const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const { return crossing_data; }
+
+std::string KineticDelaunay::formatCrossingIntersectionForLog(const void* intersection_ptr) const
+{
+  if (intersection_ptr == nullptr)
+  {
+    return "null";
+  }
+  const auto* ir = static_cast<const CrossingData::VoronoiDelaunayEdgeIntersection*>(intersection_ptr);
+  const size_t d_edge = ir->delaunay_edge_id;
+  const size_t v_edge = ir->voronoi_edge_id;
+
+  auto fmt_fallback = [&]() -> std::string
+  {
+    return std::string("V?xD? v_edge=") + std::to_string(v_edge) + " d_edge=" + std::to_string(d_edge)
+      + " tD=" + std::to_string(ir->delaunay_edge_param);
+  };
+
+  if (d_edge >= crossing_data.delaunay_edge_intersections.size()
+      || v_edge >= crossing_data.voronoi_edge_intersections.size())
+  {
+    return fmt_fallback();
+  }
+
+  size_t d_list_idx = 0;
+  bool found_on_d = false;
+  for (auto d_it = crossing_data.delaunay_edge_intersections[d_edge].begin();
+    d_it != crossing_data.delaunay_edge_intersections[d_edge].end(); ++d_it, ++d_list_idx)
+  {
+    const CrossingData::EdgeIntersectionRef ref = *d_it;
+    if (&(*ref) == ir)
+    {
+      found_on_d = true;
+      break;
+    }
+  }
+  if (!found_on_d)
+  {
+    return fmt_fallback();
+  }
+
+  size_t v_list_idx = 0;
+  bool found_on_v = false;
+  for (auto v_it = crossing_data.voronoi_edge_intersections[v_edge].begin();
+    v_it != crossing_data.voronoi_edge_intersections[v_edge].end(); ++v_it, ++v_list_idx)
+  {
+    const CrossingData::EdgeIntersectionRef ref = *v_it;
+    if (&(*ref) == ir)
+    {
+      found_on_v = true;
+      break;
+    }
+  }
+  if (!found_on_v)
+  {
+    return fmt_fallback();
+  }
+
+  return std::string("V") + std::to_string(v_list_idx) + "xD" + std::to_string(d_list_idx) + " v_edge="
+    + std::to_string(v_edge) + " d_edge=" + std::to_string(d_edge) + " tD=" + std::to_string(ir->delaunay_edge_param);
+}
+
+namespace
+{
+glm::dvec2 intersect_segments_2d_closing(
+  const glm::dvec2& p, const glm::dvec2& p2, const glm::dvec2& q, const glm::dvec2& q2)
+{
+  glm::dvec2 r = p2 - p;
+  glm::dvec2 s = q2 - q;
+  const double rxs = r.x * s.y - r.y * s.x;
+  const double qpxr = (q - p).x * r.y - (q - p).y * r.x;
+  if (rxs == 0.0 && qpxr == 0.0)
+  {
+    return glm::dvec2(std::numeric_limits<double>::quiet_NaN());
+  }
+  if (rxs == 0.0 && qpxr != 0.0)
+  {
+    return glm::dvec2(std::numeric_limits<double>::infinity());
+  }
+  const double tt = ((q - p).x * s.y - (q - p).y * s.x) / rxs;
+  return p + tt * r;
+}
+} // namespace
+
+bool KineticDelaunay::tryComputeCrossingIntersectionPosition2D(
+  const void* intersection_ptr, double t, glm::dvec2& out_xy) const
+{
+  if (intersection_ptr == nullptr)
+  {
+    return false;
+  }
+  const auto* ir = static_cast<const CrossingData::VoronoiDelaunayEdgeIntersection*>(intersection_ptr);
+  const size_t v_edge = ir->voronoi_edge_id;
+  const glm::dvec3 L3 = computeVoronoiVertexClampedInfinity(2 * v_edge, t);
+  const glm::dvec3 R3 = computeVoronoiVertexClampedInfinity(2 * v_edge + 1, t);
+  const glm::dvec2 left2(L3.x, L3.y);
+  const glm::dvec2 right2(R3.x, R3.y);
+  const size_t d_he0 = 2 * ir->delaunay_edge_id;
+  const size_t d_he1 = d_he0 + 1;
+  if (d_he1 >= graph.getHalfEdges().size())
+  {
+    return false;
+  }
+  const int oa = graph.getHalfEdges()[d_he0].origin;
+  const int ob = graph.getHalfEdges()[d_he1].origin;
+  if (oa < 0 || ob < 0)
+  {
+    return false;
+  }
+  const glm::dvec2 d0 = getPointAt(t, static_cast<size_t>(oa));
+  const glm::dvec2 d1 = getPointAt(t, static_cast<size_t>(ob));
+  const glm::dvec2 p = intersect_segments_2d_closing(left2, right2, d0, d1);
+  if (!std::isfinite(p.x) || !std::isfinite(p.y))
+  {
+    return false;
+  }
+  out_xy = p;
+  return true;
+}
+
+void KineticDelaunay::validateClosingCapCrossingRef(const char* context_msg, const void* intersection_ptr,
+  size_t expected_voronoi_edge_id, int delaunay_half_edge_id) const
+{
+  if (intersection_ptr == nullptr)
+  {
+    return;
+  }
+  const auto* ir = static_cast<const CrossingData::VoronoiDelaunayEdgeIntersection*>(intersection_ptr);
+  if (expected_voronoi_edge_id != static_cast<size_t>(-1) && ir->voronoi_edge_id != expected_voronoi_edge_id)
+  {
+    KINDS_ERROR("validateClosingCapCrossingRef (" << context_msg << "): crossing v_edge=" << ir->voronoi_edge_id
+                                                  << " but expected closing_voronoi_edge_id=" << expected_voronoi_edge_id
+                                                  << " (d_edge=" << ir->delaunay_edge_id << ")");
+  }
+  if (delaunay_half_edge_id >= 0)
+  {
+    const size_t ud = static_cast<size_t>(delaunay_half_edge_id) / 2;
+    if (ir->delaunay_edge_id != ud)
+    {
+      KINDS_ERROR("validateClosingCapCrossingRef (" << context_msg << "): crossing d_edge=" << ir->delaunay_edge_id
+                                                      << " does not match delaunay_half_edge_id " << delaunay_half_edge_id
+                                                      << " (undirected " << ud << ")");
+    }
+  }
+}
 
 std::vector<std::array<size_t, 4>> KineticDelaunay::getCrossingIntersectionDebugData() const
 {

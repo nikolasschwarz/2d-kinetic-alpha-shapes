@@ -204,6 +204,17 @@ class KineticDelaunay
   const CrossingData& getCrossingData() const;
   std::vector<std::array<size_t, 4>> getCrossingIntersectionDebugData() const;
 
+  /** intersection_ptr is nullptr or the address of a VoronoiDelaunayEdgeIntersection in crossing data.
+   *  Log form is V{idx}xD{idx} where indices are positions along voronoi_edge_intersections[v_edge] and
+   *  delaunay_edge_intersections[d_edge] respectively, plus edge ids and tD. */
+  std::string formatCrossingIntersectionForLog(const void* intersection_ptr) const;
+
+  bool tryComputeCrossingIntersectionPosition2D(const void* intersection_ptr, double t, glm::dvec2& out_xy) const;
+
+  /** Log KINDS_ERROR if ptr is non-null and does not match expected dual Voronoi edge / Delaunay half-edge. */
+  void validateClosingCapCrossingRef(const char* context_msg, const void* intersection_ptr,
+    size_t expected_voronoi_edge_id, int delaunay_half_edge_id) const;
+
   const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
   void registerSectionEventCallback(EventCallback* callback);
   void registerFlipEventCallback(EventCallback* callback);

@@ -297,7 +297,7 @@ static void kinetic_delaunay_example()
   // mesh_builder.printDebugInfo();
 
   // auto meshes = mesh_builder.extractMeshes();
-  auto meshes = mesh_builder.extractSegmentMeshlets();
+  auto meshes = mesh_builder.extractSegmentMeshlets(false);
   //(0.1, 0.01, subdivisions);
 
   for (size_t i = 0; i < meshes.first.size(); ++i)
@@ -460,6 +460,9 @@ static void mesh_from_file(const std::string& filename)
 
     std::cout << "Running TreeMesher..." << std::endl;
     kinDS::TreeMesher mesher(strand_tree);
+    auto mesher_settings = mesher.getSettings();
+    mesher_settings.merge_meshlets_by_segment = false; // Export raw meshlets (no segment-level merge)
+    mesher.setSettings(mesher_settings);
     const auto& meshes = mesher.runMeshingAlgorithm();
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;

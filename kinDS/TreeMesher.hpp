@@ -22,6 +22,7 @@ class TreeMesher
     // for debugging purposes:
     bool debug_export_meshes = false;
     size_t max_meshlet_export = 10; // maximum number of meshlets to export for debugging
+    bool merge_meshlets_by_segment = true; // if false, keep one output meshlet per generated mesh pair
   };
 
  private:
@@ -47,6 +48,9 @@ class TreeMesher
   void transformToWorldSpace(
     VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform = glm::dmat4(1)) const;
   const std::vector<VoronoiMesh>& getSegmentMeshlets() const { return segment_meshlets; }
+  Settings& getSettings() { return settings; }
+  const Settings& getSettings() const { return settings; }
+  void setSettings(const Settings& new_settings) { settings = new_settings; }
 
   void exportCombinedMesh() const;
   void truncateToBoundary(const VoronoiMesh& boundary_mesh);

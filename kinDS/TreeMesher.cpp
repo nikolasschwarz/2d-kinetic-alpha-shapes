@@ -355,7 +355,8 @@ void TreeMesher::runKineticDelaunay()
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
 
-  std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets();
+  std::tie(segment_meshlets, meshing_neighbor_indices)
+    = mesh_builder->extractSegmentMeshlets(settings.merge_meshlets_by_segment);
 }
 
 void TreeMesher::mapMeshingToPhysicsSegmentIndices()
