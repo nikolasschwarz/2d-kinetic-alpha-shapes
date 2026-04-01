@@ -12,13 +12,6 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
-  while (segment_builder_.subdivision_index < segment_builder_.subdivisions.size()
-    && segment_builder_.subdivisions[segment_builder_.subdivision_index].second <= crossing->occurrence_time)
-  {
-    segment_builder_.insertSubdivision(segment_builder_.subdivisions[segment_builder_.subdivision_index].first,
-      segment_builder_.subdivisions[segment_builder_.subdivision_index].second);
-    segment_builder_.subdivision_index++;
-  }
 }
 
 void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)

@@ -215,7 +215,7 @@ static void kinetic_delaunay_example()
 #endif
 
   std::vector<std::vector<double>> subdivisions
-    = { { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 } };
+    = { { 0.4, 0.6, 0.8 }, { 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.4, 0.6, 0.8 } };
 
   // Sort subdivisions into pairs of strand index and parameter
   std::vector<std::pair<size_t, double>> sorted_subdivisions = merge_sorted_vectors(subdivisions);

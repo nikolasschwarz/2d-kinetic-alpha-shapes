@@ -4,6 +4,7 @@
 #include "KineticDelaunayHelpers.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
 #include "KineticDelaunaySectionEvent.hpp"
+#include "KineticDelaunaySubdivisionEvent.hpp"
 #include <cmath>
 #include <glm/geometric.hpp>
 #include <limits>
@@ -750,6 +751,7 @@ KineticDelaunay::KineticDelaunay(const StrandTree& branch_trajs, double cutoff, 
   , radius_event_manager_(std::make_unique<RadiusEventManager>(this))
   , crossing_event_manager_(std::make_unique<CrossingEventManager>(this))
   , section_event_manager_(std::make_unique<SectionEventManager>(this))
+  , subdivision_event_manager_(std::make_unique<SubdivisionEventManager>(this))
   , crossing_data(crossing_event_manager_->getCrossingDataMutable())
 {
   if (add_dummy_splines)
@@ -1461,6 +1463,26 @@ void KineticDelaunay::registerCrossingEventCallback(EventCallback* callback)
   crossing_event_manager_->setCallback(callback);
 }
 
+void KineticDelaunay::registerSubdivisionEventCallback(EventCallback* callback)
+{
+  subdivision_event_manager_->setCallback(callback);
+}
+
+void KineticDelaunay::setSubdivisionSchedule(std::vector<std::pair<size_t, double>> schedule)
+{
+  subdivision_schedule_ = std::move(schedule);
+}
+
+void KineticDelaunay::enqueueScheduledSubdivisionEvents()
+{
+  for (const auto& strand_and_t : subdivision_schedule_)
+  {
+    kinetic_algorithm_->enqueueEvent(
+      std::make_shared<SubdivisionEvent>(this, strand_and_t.second, strand_and_t.first, strand_and_t.second));
+  }
+  subdivision_schedule_.clear();
+}
+
 void KineticDelaunay::registerEventCallbacks(EventCallback* section_callback, EventCallback* flip_callback,
   EventCallback* radius_callback, EventCallback* crossing_callback)
 {
@@ -1714,6 +1736,7 @@ void KineticDelaunay::compute()
 {
 
   section_event_manager_->computeEvents(0.0, static_cast<size_t>(-1));
+  enqueueScheduledSubdivisionEvents();
   handleEvents();
 
   const double end_time = static_cast<double>(getSectionCount());

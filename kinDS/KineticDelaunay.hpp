@@ -13,6 +13,8 @@
 #include <memory>
 #include <queue>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace kinDS
 {
@@ -100,6 +102,8 @@ class KineticDelaunay
   class RadiusEventManager;
   class CrossingEventManager;
   class SectionEventManager;
+  class SubdivisionEvent;
+  class SubdivisionEventManager;
 
   struct ComponentData
   {
@@ -130,6 +134,9 @@ class KineticDelaunay
     size_t start_face_id, const glm::dvec2& destination, const glm::dvec2& start_point, double t) const;
 
  private:
+  friend class SectionEventManager;
+  friend class SubdivisionEvent;
+
   StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
   std::unique_ptr<KineticAlgorithm> kinetic_algorithm_;
@@ -139,6 +146,9 @@ class KineticDelaunay
   std::unique_ptr<RadiusEventManager> radius_event_manager_;
   std::unique_ptr<CrossingEventManager> crossing_event_manager_;
   std::unique_ptr<SectionEventManager> section_event_manager_;
+  std::unique_ptr<SubdivisionEventManager> subdivision_event_manager_;
+  /// Strand mesh subdivision schedule; consumed on the first @ref enqueueScheduledSubdivisionEvents in @ref compute.
+  std::vector<std::pair<size_t, double>> subdivision_schedule_;
   CallbackManager* callback_manager_ = nullptr;
   size_t sections_advanced = 0; // Counter for the number of sections advanced
   double cutoff; // Cutoff radius for boundary events
@@ -171,6 +181,9 @@ class KineticDelaunay
   void precomputeStep(double t);
 
   void handleEvents();
+
+  /// Enqueues one @ref SubdivisionEvent per entry in @ref subdivision_schedule_ (called once from @ref compute).
+  void enqueueScheduledSubdivisionEvents();
 
   size_t getBranchIndex(size_t strand_id, size_t t) const;
 
@@ -220,6 +233,9 @@ class KineticDelaunay
   void registerFlipEventCallback(EventCallback* callback);
   void registerRadiusEventCallback(EventCallback* callback);
   void registerCrossingEventCallback(EventCallback* callback);
+  void registerSubdivisionEventCallback(EventCallback* callback);
+  /// Pairs `(strand_id, t)` sorted by non-decreasing `t`; enqueued once when @ref compute builds the initial queue.
+  void setSubdivisionSchedule(std::vector<std::pair<size_t, double>> schedule);
   void registerEventCallbacks(EventCallback* section_callback, EventCallback* flip_callback,
     EventCallback* radius_callback, EventCallback* crossing_callback);
 

@@ -8,6 +8,7 @@ void KineticAlgorithm::clear()
   {
     events_.pop();
   }
+  next_queue_sequence_ = 0;
 }
 
 void KineticAlgorithm::processEvents()

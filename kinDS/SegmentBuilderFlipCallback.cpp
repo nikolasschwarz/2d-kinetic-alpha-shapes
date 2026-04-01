@@ -13,14 +13,6 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     return;
   }
   auto& graph = segment_builder_.kin_del.getGraph();
-  // Check if we need to insert a subdivision before handling this event
-  while (segment_builder_.subdivision_index < segment_builder_.subdivisions.size()
-    && segment_builder_.subdivisions[segment_builder_.subdivision_index].second <= flip->occurrence_time)
-  {
-    segment_builder_.insertSubdivision(segment_builder_.subdivisions[segment_builder_.subdivision_index].first,
-      segment_builder_.subdivisions[segment_builder_.subdivision_index].second);
-    segment_builder_.subdivision_index++;
-  }
 
   auto vertex = graph.getHalfEdges()[flip->half_edge_id].origin;
   if (vertex == -1)

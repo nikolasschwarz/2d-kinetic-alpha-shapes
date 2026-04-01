@@ -16,7 +16,7 @@ class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
   glm::dvec2 position;
 
   FlipEvent(KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position)
-    : KineticDelaunay::Event(t, creation_time)
+    : KineticDelaunay::Event(t, creation_time, 20u)
     , kd_(kd)
     , half_edge_id(he_id)
     , position(position)

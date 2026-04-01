@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <queue>
+#include <tuple>
 #include <vector>
 
 namespace kinDS
@@ -17,15 +19,22 @@ class KineticAlgorithm
 
     double occurrence_time;
     double creation_time;
+    /// Lower value runs before higher when @p occurrence_time ties (e.g. strand subdivision before flip).
+    uint32_t queue_dispatch_order_;
+    /// Monotonic id assigned in @ref enqueueEvent for stable ordering when time and dispatch order tie.
+    uint64_t queue_sequence_ = 0;
 
     virtual void handleEvent() = 0;
 
     double getTime() const { return occurrence_time; }
 
+    void assignQueueSequence(uint64_t sequence) { queue_sequence_ = sequence; }
+
    protected:
-    Event(double occurrence_time, double creation_time)
+    Event(double occurrence_time, double creation_time, uint32_t queue_dispatch_order = 10u)
       : occurrence_time(occurrence_time)
       , creation_time(creation_time)
+      , queue_dispatch_order_(queue_dispatch_order)
     {
     }
   };
@@ -56,15 +65,21 @@ class KineticAlgorithm
   {
     bool operator()(const std::shared_ptr<Event>& a, const std::shared_ptr<Event>& b) const
     {
-      return a->occurrence_time > b->occurrence_time;
+      return std::tie(a->occurrence_time, a->queue_dispatch_order_, a->queue_sequence_)
+        > std::tie(b->occurrence_time, b->queue_dispatch_order_, b->queue_sequence_);
     }
   };
 
   using EventQueue = std::priority_queue<std::shared_ptr<Event>, std::vector<std::shared_ptr<Event>>, EventPtrCompare>;
   EventQueue events_;
+  uint64_t next_queue_sequence_ = 0;
 
  public:
-  void enqueueEvent(const std::shared_ptr<Event>& event) { events_.push(event); }
+  void enqueueEvent(const std::shared_ptr<Event>& event)
+  {
+    event->assignQueueSequence(next_queue_sequence_++);
+    events_.push(event);
+  }
   bool empty() const { return events_.empty(); }
   void clear();
   void processEvents();

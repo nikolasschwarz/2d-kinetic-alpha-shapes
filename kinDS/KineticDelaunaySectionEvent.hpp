@@ -13,7 +13,7 @@ class KineticDelaunay::SectionEvent final : public KineticDelaunay::Event
   glm::dvec2 position;
 
   SectionEvent(KineticDelaunay* kd, double t, size_t section_id, double creation_time, glm::dvec2 position)
-    : KineticDelaunay::Event(t, creation_time)
+    : KineticDelaunay::Event(t, creation_time, 10u)
     , kd_(kd)
     , section_id(section_id)
     , position(position)

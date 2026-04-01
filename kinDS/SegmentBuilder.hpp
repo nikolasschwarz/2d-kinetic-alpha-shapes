@@ -2,7 +2,9 @@
 #include "KineticDelaunay.hpp"
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
+#include <functional>
 #include <list>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -13,6 +15,7 @@ class SegmentBuilderSectionCallback;
 class SegmentBuilderFlipCallback;
 class SegmentBuilderRadiusCallback;
 class SegmentBuilderCrossingCallback;
+class SegmentBuilderSubdivisionCallback;
 
 class SegmentBuilder : public KineticDelaunay::CallbackManager
 {
@@ -20,6 +23,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   friend class SegmentBuilderFlipCallback;
   friend class SegmentBuilderRadiusCallback;
   friend class SegmentBuilderCrossingCallback;
+  friend class SegmentBuilderSubdivisionCallback;
 
  private:
   // Maps strand IDs to their corresponding segment indices in correct order
@@ -46,19 +50,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// `CrossingData` / `delaunay_edge_intersections` order follows the even directed Delaunay half-edge; when the strand
     /// lies on the odd Voronoi half-edge of this dual edge, walk those lists in the opposite direction along the boundary.
     bool closing_strand_at_voronoi_even_he = true;
-  };
-
-  /**
-   * @brief Output of @ref closingMeshExtractRawSegments: raw inside Voronoi polylines on a strand closing cap.
-   *
-   * @details Each entry in @p closing_segments is a portion of a dual edge from the strand-side circumcenter toward
-   * the opposite site, clipped to the interior. @p mesh_vertex_ids lists every cap mesh vertex id created during that
-   * extraction (same order as creation), for logging and for continuing the boundary trace.
-   */
-  struct ClosingMeshRawSegmentsResult
-  {
-    std::list<MeshingData> closing_segments; ///< In-progress or complete segments; list keeps stable addresses for pointers.
-    std::vector<size_t> mesh_vertex_ids;     ///< Indices into the cap @ref VoronoiMesh vertex array appended while extracting.
   };
 
   /**
@@ -118,10 +109,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::unique_ptr<SegmentBuilderFlipCallback> flip_callback_;
   std::unique_ptr<SegmentBuilderRadiusCallback> radius_callback_;
   std::unique_ptr<SegmentBuilderCrossingCallback> crossing_callback_;
+  std::unique_ptr<SegmentBuilderSubdivisionCallback> subdivision_callback_;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
   bool visual_debug = true; // Always-on visual debug for now (SVG exports)
-  std::vector<std::pair<size_t, double>> subdivisions;
-  size_t subdivision_index = 0;
 
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
@@ -197,21 +187,26 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     double t, size_t voronoi_edge_id, size_t delaunay_edge_id) const;
 
   /**
-   * @brief Traces every finite Voronoi edge incident to the strand and builds inside clipped segments.
+   * @brief Raw inside Voronoi polylines on one dual edge, oriented by @p reverse (no strand lookup).
    *
-   * @details Walks strand → opposite circumcenter using @ref KineticDelaunay::computeCrossedHalfEdges, records
-   * boundary crossings and mesh vertex ids. Orientation uses the Voronoi half-edge whose origin is the strand so that
-   * segment order matches boundary tracing (see @ref MeshingData::closing_strand_at_voronoi_even_he).
-   *
-   * @param strand_id Strand vertex id.
-   * @param t Time.
-   * @param mesh Cap mesh receiving new vertices (modified).
-   * @param boundary_polygon Boundary context for meshlet vertices.
-   * @param centroid Component centroid.
-   * @return Raw segments and the vertex-id list produced during extraction.
+   * @details When @p reverse is false, the walk starts at the even Voronoi half-edge circumcenter and ends at the odd;
+   * when true, odd→even. @ref closingMeshExtractRawSegmentsForVoronoiEdge sets @p reverse from strand incidence.
+   * Cap vertices are created only via @p track_vertex.
    */
-  ClosingMeshRawSegmentsResult closingMeshExtractRawSegments(size_t strand_id, double t, VoronoiMesh& mesh,
-    const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);
+  std::vector<MeshingData> extractSegmentsForVoronoiEdge(double t, int incident_edge_index, size_t voronoi_edge_id,
+    const std::function<int(const glm::dvec3&)>& track_vertex, bool reverse = false);
+
+  /**
+   * @brief Extracts raw inside Voronoi polylines for one dual edge incident to the strand (one Voronoi edge id).
+   *
+   * @details Validates strand incidence, derives orientation, then @ref extractSegmentsForVoronoiEdge.
+   *
+   * @param incident_edge_index Cyclic index around the strand (matches @ref closingMeshCountStrandIncidentEdges order).
+   * @param incident_he Directed Delaunay half-edge id for this incident undirected edge (iterator value).
+   */
+  std::vector<MeshingData> closingMeshExtractRawSegmentsForVoronoiEdge(size_t strand_id, double t, VoronoiMesh& mesh,
+    const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, int incident_edge_index,
+    size_t incident_he, const std::function<int(const glm::dvec3&)>& track_vertex);
 
   /**
    * @brief Builds ordered segment pointers and a start-ref map from a raw segment list.
@@ -253,7 +248,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @param mesh Cap mesh (modified: new vertices at boundary crossings).
    * @param boundary_polygon Boundary context for new vertices.
    * @param centroid Component centroid.
-   * @param mesh_vertex_ids Vertex ids from @ref closingMeshExtractRawSegments; extended with new ids during the walk.
+   * @param mesh_vertex_ids Vertex ids from closing-cap raw extraction; extended with new ids during the walk.
    * @param ordered_segments Complete segments to trace.
    * @param start_ref_to_segment Map for boundary handoff to the next strip.
    * @return Polygon rings, per-segment used flags, and updated vertex-id list.
@@ -294,8 +289,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   ~SegmentBuilder() override;
 
   void init() override;
-
-  void insertSubdivision(size_t strand_id, double t);
 
   void finalize(double t) override;
 

@@ -14,15 +14,6 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
   }
   const size_t index = section->section_id;
 
-  // Check if we need to insert a subdivision before handling this event
-  while (segment_builder_.subdivision_index < segment_builder_.subdivisions.size()
-    && segment_builder_.subdivisions[segment_builder_.subdivision_index].second <= index)
-  {
-    segment_builder_.insertSubdivision(segment_builder_.subdivisions[segment_builder_.subdivision_index].first,
-      segment_builder_.subdivisions[segment_builder_.subdivision_index].second);
-    segment_builder_.subdivision_index++;
-  }
-
   auto& graph = segment_builder_.kin_del.getGraph();
 
   segment_builder_.advanceBoundaryMeshes(index);

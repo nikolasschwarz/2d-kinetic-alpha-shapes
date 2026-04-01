@@ -107,7 +107,7 @@ class KineticDelaunay::CrossingEvent final : public KineticDelaunay::Event
 
   CrossingEvent(
     KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position, size_t voronoi_vertex_id)
-    : KineticDelaunay::Event(t, creation_time)
+    : KineticDelaunay::Event(t, creation_time, 40u)
     , kd_(kd)
     , half_edge_id(he_id)
     , position(position)
