@@ -2,7 +2,10 @@
 
 #include "KineticDelaunay.hpp"
 
+#include <glm/glm.hpp>
+#include <optional>
 #include <stdexcept>
+#include <string>
 
 namespace kinDS
 {
@@ -188,5 +191,17 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
   // Re-compute crossing events for this Voronoi vertex
   kd->crossing_event_manager_->computeEvents(occurrence_time, voronoi_vertex_id);
 }
+
+/** Empty optional formats as "null". Log form is V{idx}xD{idx} for list positions along voronoi/delaunay edge lists. */
+std::string formatCrossingIntersectionForLog(const KineticDelaunay& kd,
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection);
+
+bool tryComputeCrossingIntersectionPosition2D(const KineticDelaunay& kd,
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection, double t, glm::dvec2& out_xy);
+
+/** No-op if @p intersection is empty; otherwise log KINDS_ERROR on mismatch with expected dual edge / half-edge. */
+void validateClosingCapCrossingRef(const KineticDelaunay& kd, const char* context_msg,
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection, size_t expected_voronoi_edge_id,
+  int delaunay_half_edge_id);
 
 } // namespace kinDS

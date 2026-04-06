@@ -105,6 +105,9 @@ class KineticDelaunay
   class SubdivisionEvent;
   class SubdivisionEventManager;
 
+  /// Forward declaration; full definition in `KineticDelaunayCrossingEvent.hpp`.
+  struct CrossingData;
+
   struct ComponentData
   {
     std::vector<std::vector<size_t>> components;
@@ -162,10 +165,7 @@ class KineticDelaunay
   std::vector<double> face_last_updated;
   bool on_the_fly_boundary = true;
 
-  // crossing-related data
-  // Kept as a forward declaration in this header.
-  // The full definition lives in `KineticDelaunayCrossingEvent.hpp`.
-  struct CrossingData;
+  // crossing-related data (see public `CrossingData` forward declaration above).
 
   // Owned by `CrossingEventManager`. This is only an alias reference so the existing
   // code can keep using the name `crossing_data`.
@@ -216,17 +216,6 @@ class KineticDelaunay
 
   const CrossingData& getCrossingData() const;
   std::vector<std::array<size_t, 4>> getCrossingIntersectionDebugData() const;
-
-  /** intersection_ptr is nullptr or the address of a VoronoiDelaunayEdgeIntersection in crossing data.
-   *  Log form is V{idx}xD{idx} where indices are positions along voronoi_edge_intersections[v_edge] and
-   *  delaunay_edge_intersections[d_edge] respectively, plus edge ids and tD. */
-  std::string formatCrossingIntersectionForLog(const void* intersection_ptr) const;
-
-  bool tryComputeCrossingIntersectionPosition2D(const void* intersection_ptr, double t, glm::dvec2& out_xy) const;
-
-  /** Log KINDS_ERROR if ptr is non-null and does not match expected dual Voronoi edge / Delaunay half-edge. */
-  void validateClosingCapCrossingRef(const char* context_msg, const void* intersection_ptr,
-    size_t expected_voronoi_edge_id, int delaunay_half_edge_id) const;
 
   const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
   void registerSectionEventCallback(EventCallback* callback);

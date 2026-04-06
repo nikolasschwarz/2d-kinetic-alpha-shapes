@@ -234,6 +234,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   segment_builder_.kin_del.component_data.component_centroids[component_id]
     = polygonCentroid(segment_builder_.kin_del.component_data.component_boundaries[component_id][0]);
   segment_builder_.kin_del.component_data.component_last_updated[component_id] = flip->occurrence_time;
+
+  segment_builder_.refreshCrossingRefsForAllStrips();
 }
 } // namespace kinDS
 

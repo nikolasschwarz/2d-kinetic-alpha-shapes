@@ -1,11 +1,13 @@
 #pragma once
 #include "KineticDelaunay.hpp"
+#include "KineticDelaunayCrossingEvent.hpp"
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
 #include <functional>
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -41,8 +43,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     int mesh_end_vertex_id;
     int start_half_edge_id;
     int end_half_edge_id;
-    const void* start_intersection_ref = nullptr;
-    const void* end_intersection_ref = nullptr;
+    /// Iterator into `KineticDelaunay::CrossingData::edge_intersections` (via per-edge lists), when this endpoint is a
+    /// stored Voronoi–Delaunay crossing.
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_crossing;
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_crossing;
     /// Cyclic index around the strand when this meshlet is a closing cap (see `createClosingMesh`).
     int closing_incident_edge_index = -1;
     /// Undirected dual Delaunay edge id (= CrossingData `voronoi_edge_id`) for closing-cap segments; `(size_t)-1` if unset.
@@ -55,13 +59,34 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /**
    * @brief Lookup structures built from complete raw segments for closing-cap polygon tracing.
    *
-   * @details @p ordered_segments points into @c closing_segments list elements that have both mesh endpoints set.
-   * @p start_ref_to_segment maps each crossing `start_intersection_ref` pointer to its index in @p ordered_segments.
+   * @details @p ordered_segments points into @c closing_segments list elements with both mesh endpoints. Strips may
+   * omit boundary `end_crossing` when the strip ends at a circumcenter; the cap walk then joins the next strip whose
+   * strand-side endpoint is the same dual Voronoi vertex (circumcenter id: `half_edge.face` on the closing Voronoi
+   * edge), not by comparing mesh vertex indices. @p start_crossing_to_segment maps each segment's `start_crossing` iterator
+   * to its index in @p ordered_segments (duplicate start crossings are rejected).
    */
+  struct ClosingMeshCrossingIteratorHash
+  {
+    size_t operator()(KineticDelaunay::CrossingData::EdgeIntersectionRef it) const noexcept
+    {
+      return std::hash<const void*> {}(static_cast<const void*>(std::addressof(*it)));
+    }
+  };
+  struct ClosingMeshCrossingIteratorEq
+  {
+    bool operator()(KineticDelaunay::CrossingData::EdgeIntersectionRef a,
+      KineticDelaunay::CrossingData::EdgeIntersectionRef b) const noexcept
+    {
+      return a == b;
+    }
+  };
+
   struct ClosingMeshOrderedIndex
   {
-    std::vector<MeshingData*> ordered_segments;              ///< Pointers into list storage; valid while list is alive.
-    std::unordered_map<const void*, size_t> start_ref_to_segment; ///< CrossingData intersection address -> ordered index.
+    std::vector<MeshingData*> ordered_segments; ///< Pointers into list storage; valid while list is alive.
+    std::unordered_map<KineticDelaunay::CrossingData::EdgeIntersectionRef, size_t, ClosingMeshCrossingIteratorHash,
+      ClosingMeshCrossingIteratorEq>
+      start_crossing_to_segment;
   };
 
   /**
@@ -169,12 +194,26 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position);
 
   /**
-   * @brief Finds the CrossingData intersection object for a Voronoi/Delaunay edge pair.
+   * @brief Finds the CrossingData intersection record for a Voronoi/Delaunay edge pair.
    * @param voronoi_edge_id Undirected dual edge id (half-edge index / 2).
    * @param crossed_delaunay_he_id Directed Delaunay half-edge id whose undirected edge carries the crossing.
-   * @return Address of the stored intersection (for `start_intersection_ref` / `end_intersection_ref`), or nullptr.
+   * @return Iterator into `CrossingData::edge_intersections`, or empty if not found.
    */
-  const void* closingMeshFindVoronoiEdgeIntersectionPtr(size_t voronoi_edge_id, size_t crossed_delaunay_he_id) const;
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> closingMeshFindVoronoiEdgeIntersection(
+    size_t voronoi_edge_id, size_t crossed_delaunay_he_id) const;
+
+  /**
+   * Re-resolve `start_crossing` / `end_crossing` from boundary half-edges. Call after `CrossingData` mutates lists
+   * (erase/insert), since stored iterators into `edge_intersections` become invalid while `std::optional` may still hold
+   * a value.
+   */
+  void refreshMeshingDataCrossingRefs(MeshingData& seg, size_t voronoi_edge_id) const;
+
+  /// Refresh every segment strip whose dual Voronoi edge is incident to this Voronoi vertex (after a crossing event).
+  void refreshStripCrossingRefsIncidentToVoronoiVertex(size_t voronoi_vertex_id);
+
+  /// Refresh all segment strips (after flips / broad `CrossingData` updates).
+  void refreshCrossingRefsForAllStrips();
 
   /**
    * @brief 2D position of a Voronoi–Delaunay edge crossing at time @p t (lifted to z = t).
@@ -211,19 +250,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /**
    * @brief Builds ordered segment pointers and a start-ref map from a raw segment list.
    * @param closing_segments In/out list; must stay alive while @p ordered_segments pointers are used.
-   * @return Complete segments only, plus map from `start_intersection_ref` to ordered index.
+   * @return Complete segments only, plus map from `start_crossing` iterator to ordered index.
    */
   ClosingMeshOrderedIndex closingMeshBuildOrderedIndex(std::list<MeshingData>& closing_segments);
-
-  /**
-   * @brief Logs raw segment count, skipped incomplete entries, and each ordered segment (debug).
-   * @param strand_id Strand id (for log prefix).
-   * @param t Time (for log prefix).
-   * @param closing_segments All raw segments including incomplete.
-   * @param ordered_segments Pointers to complete segments only.
-   */
-  void closingMeshLogDiscoveredSegments(size_t strand_id, double t, const std::list<MeshingData>& closing_segments,
-    const std::vector<MeshingData*>& ordered_segments);
 
   /**
    * @brief Validates ordered segments against the dual edge and CrossingData refs (errors on mismatch).
@@ -240,7 +269,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @details For each unused ordered segment as seed, walks along mesh_start→mesh_end on the Voronoi strip, then
    * follows the Delaunay boundary consuming every crossing in list order (with direction adjusted per segment by
    * @ref MeshingData::closing_strand_at_voronoi_even_he), hands off at strand-incident crossings matching
-   * @p start_ref_to_segment, and closes loops back to the seed. Emits one vertex ring per closed walk.
+   * @p start_crossing_to_segment, and closes loops back to the seed. Emits one vertex ring per closed walk.
    *
    * @param strand_id Strand vertex id.
    * @param t Time.
@@ -250,13 +279,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @param centroid Component centroid.
    * @param mesh_vertex_ids Vertex ids from closing-cap raw extraction; extended with new ids during the walk.
    * @param ordered_segments Complete segments to trace.
-   * @param start_ref_to_segment Map for boundary handoff to the next strip.
+   * @param start_crossing_to_segment Map for boundary handoff to the next strip.
    * @return Polygon rings, per-segment used flags, and updated vertex-id list.
    */
   ClosingMeshPolygonsTraceResult closingMeshTraceCapPolygons(size_t strand_id, double t, size_t num_incident_edges,
     VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid,
     std::vector<size_t> mesh_vertex_ids, const std::vector<MeshingData*>& ordered_segments,
-    const std::unordered_map<const void*, size_t>& start_ref_to_segment);
+    const std::unordered_map<KineticDelaunay::CrossingData::EdgeIntersectionRef, size_t, ClosingMeshCrossingIteratorHash,
+      ClosingMeshCrossingIteratorEq>& start_crossing_to_segment);
 
   /**
    * @brief Warns about ordered segments that were never visited by the boundary trace.
