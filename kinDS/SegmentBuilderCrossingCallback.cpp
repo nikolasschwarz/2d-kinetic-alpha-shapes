@@ -3,6 +3,8 @@
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 
+#include <optional>
+
 namespace kinDS
 {
 void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
@@ -78,8 +80,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     {
       if (!entering_boundary)
       {
-        size_t new_vertex_index = segment_builder_.addMeshletVertex(
-          mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time);
+        size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+          voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time,
+          std::optional<size_t>(crossing->voronoi_vertex_id));
         int last_left = it->mesh_start_vertex_id;
         int last_right = it->mesh_end_vertex_id;
         segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
@@ -91,8 +94,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         {
           it->start_half_edge_id = -1;
           it->start_crossing.reset();
-          size_t new_vertex_index = segment_builder_.addMeshletVertex(
-            mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time);
+          size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+            voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time,
+            std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = it->mesh_start_vertex_id;
           int last_right = it->mesh_end_vertex_id;
           segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
@@ -103,8 +107,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           assert(it->end_half_edge_id == static_cast<int>(inside_he_id));
           it->end_half_edge_id = -1;
           it->end_crossing.reset();
-          size_t new_vertex_index = segment_builder_.addMeshletVertex(
-            mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time);
+          size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+            voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time,
+            std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = it->mesh_start_vertex_id;
           int last_right = it->mesh_end_vertex_id;
           segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
@@ -122,8 +127,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       {
         if (entering_boundary)
         {
-          size_t new_vertex_index = segment_builder_.addMeshletVertex(
-            mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time);
+          size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+            voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time,
+            std::optional<size_t>(crossing->voronoi_vertex_id));
           SegmentBuilder::MeshingData seg { static_cast<int>(new_vertex_index), static_cast<int>(new_vertex_index),
             static_cast<int>(inside_he_id), -1 };
           seg.start_crossing
@@ -133,8 +139,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         else
         {
           assert(segments.back().end_half_edge_id == -1);
-          size_t new_vertex_index = segment_builder_.addMeshletVertex(
-            mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time);
+          size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+            voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time,
+            std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = segments.back().mesh_start_vertex_id;
           int last_right = segments.back().mesh_end_vertex_id;
           segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
@@ -148,8 +155,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       {
         if (entering_boundary)
         {
-          size_t new_vertex_index = segment_builder_.addMeshletVertex(
-            mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time);
+          size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+            voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time,
+            std::optional<size_t>(crossing->voronoi_vertex_id));
           SegmentBuilder::MeshingData seg { static_cast<int>(new_vertex_index), static_cast<int>(new_vertex_index), -1,
             static_cast<int>(inside_he_id) };
           seg.end_crossing
@@ -159,8 +167,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         else
         {
           assert(segments.front().start_half_edge_id == -1);
-          size_t new_vertex_index = segment_builder_.addMeshletVertex(
-            mesh, boundary_polygon, centroid, voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time);
+          size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+            voronoi_vertex_position, voronoi_vertex_id, crossing->occurrence_time,
+            std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = segments.front().mesh_start_vertex_id;
           int last_right = segments.front().mesh_end_vertex_id;
           segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);

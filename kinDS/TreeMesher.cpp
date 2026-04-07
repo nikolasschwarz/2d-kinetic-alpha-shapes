@@ -91,7 +91,8 @@ void TreeMesher::exportCombinedMesh() const
   // also export some meshlets:
   for (size_t i = 0; i < std::min(settings.max_meshlet_export, segment_meshlets.size()); i++)
   {
-    kinDS::ObjExporter::writeMesh(segment_meshlets[i], "meshlet" + std::to_string(i) + ".obj");
+    const std::string suffix = (i < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[i] : "";
+    kinDS::ObjExporter::writeMesh(segment_meshlets[i], "meshlet" + std::to_string(i) + suffix + ".obj");
   }
   KINDS_INFO("Kinetic Delaunay Voronoi Meshes exported.");
 }
@@ -126,8 +127,10 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
       case kinDS::MeshIntersection::MeshRelation::INTERSECTING:
         if (settings.debug_export_meshes && mesh_index < settings.max_meshlet_export)
         {
+          const std::string suffix
+            = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
           kinDS::ObjExporter::writeMesh(
-            segment_meshlets[mesh_index], "meshlet" + std::to_string(mesh_index) + "_raw.obj");
+            segment_meshlets[mesh_index], "meshlet" + std::to_string(mesh_index) + suffix + "_raw.obj");
         }
         std::tie(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index])
           = boundary_intersector.Intersect(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index]);
@@ -357,6 +360,7 @@ void TreeMesher::runKineticDelaunay()
 
   std::tie(segment_meshlets, meshing_neighbor_indices)
     = mesh_builder->extractSegmentMeshlets(settings.merge_meshlets_by_segment);
+  segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(settings.merge_meshlets_by_segment);
 }
 
 void TreeMesher::mapMeshingToPhysicsSegmentIndices()

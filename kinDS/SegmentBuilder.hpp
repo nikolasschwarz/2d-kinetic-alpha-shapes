@@ -36,6 +36,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
+  std::vector<std::string> meshlet_export_suffixes; // Parallel to `meshes`, e.g. "_strandX" / "_voronoiX".
 
   struct MeshingData
   {
@@ -159,7 +160,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w);
 
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
-    const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t);
+    const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
+    std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt);
+
+  /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p position.
+  void warnIfVoronoiVertexOutsideAlphaShape(
+    const char* context, size_t voronoi_vertex_id, const glm::dvec3& position) const;
 
   void addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset);
 
@@ -191,7 +197,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @return New vertex index inside @p mesh (same convention as @ref addMeshletVertex).
    */
   int closingMeshAppendVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
-    const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position);
+    const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position,
+    std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt);
 
   /**
    * @brief Finds the CrossingData intersection record for a Voronoi/Delaunay edge pair.
@@ -230,10 +237,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    *
    * @details When @p reverse is false, the walk starts at the even Voronoi half-edge circumcenter and ends at the odd;
    * when true, odd→even. @ref closingMeshExtractRawSegmentsForVoronoiEdge sets @p reverse from strand incidence.
-   * Cap vertices are created only via @p track_vertex.
+   * Cap vertices are created only via @p track_vertex. Pass the Voronoi vertex id (dual circumcenter, `half_edge.face`)
+   * as the second argument for strand/end circumcenters so alpha-shape warnings can be logged; use @c std::nullopt for
+   * boundary crossing points.
    */
   std::vector<MeshingData> extractSegmentsForVoronoiEdge(double t, int incident_edge_index, size_t voronoi_edge_id,
-    const std::function<int(const glm::dvec3&)>& track_vertex, bool reverse = false);
+    const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex, bool reverse = false);
 
   /**
    * @brief Extracts raw inside Voronoi polylines for one dual edge incident to the strand (one Voronoi edge id).
@@ -245,7 +254,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   std::vector<MeshingData> closingMeshExtractRawSegmentsForVoronoiEdge(size_t strand_id, double t, VoronoiMesh& mesh,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, int incident_edge_index,
-    size_t incident_he, const std::function<int(const glm::dvec3&)>& track_vertex);
+    size_t incident_he, const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex);
 
   /**
    * @brief Builds ordered segment pointers and a start-ref map from a raw segment list.
@@ -310,6 +319,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void accumulateSegmentProperties();
 
+  /// Registers a newly created meshlet and stores export suffix metadata.
+  size_t registerMeshletWithSuffix(VoronoiMesh&& mesh, std::string suffix);
+
  public:
   SegmentBuilder(
     KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh);
@@ -326,6 +338,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> extractSegmentMeshlets(
     bool merge_by_segment = true) const;
+
+  std::vector<std::string> extractSegmentMeshletExportSuffixes(bool merge_by_segment = true) const;
 
   const VoronoiMesh& getBoundaryMesh() const;
 

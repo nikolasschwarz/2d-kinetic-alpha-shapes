@@ -3,6 +3,10 @@
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 
+#include <cmath>
+#include <optional>
+#include <string>
+
 namespace kinDS
 {
 void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
@@ -27,22 +31,36 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   // Finish the segment mesh pair of the edge being flipped
   glm::dvec3 event_point { flip->position[0], flip->position[1], flip->occurrence_time };
   size_t segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[flip->half_edge_id];
-  VoronoiMesh& mesh = segment_builder_.meshes[segment_mesh_pair_index];
-  const auto& last_segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
-  if (!last_segments.empty())
+
+  if(graph.isInfinite(flip->half_edge_id) && segment_builder_.kin_del.computeBoundaryOnTheFly())
   {
-    size_t event_vertex_index
-      = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex, flip->occurrence_time);
-    size_t last_left = last_segments.front().mesh_start_vertex_id;
-    size_t last_right = last_segments.back().mesh_end_vertex_id;
-    // create one triangle to the event point
-    segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index);
+    // Do nothing for now
   }
   else
   {
-    if (graph.getHalfEdges()[flip->half_edge_id].origin != -1)
+    VoronoiMesh& mesh = segment_builder_.meshes[segment_mesh_pair_index];
+    const auto& last_segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
+    if (!last_segments.empty())
     {
-      assert(!segment_builder_.kin_del.getFaceInside(segment_builder_.kin_del.getCrossingDataContainingTriId(vertex)));
+      const size_t pre_even_flip_he = flip->half_edge_id & ~1;
+      const size_t pre_left_voronoi_vertex_id = graph.getHalfEdges()[pre_even_flip_he].face;
+      size_t event_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
+        flip->occurrence_time, std::optional<size_t>(pre_left_voronoi_vertex_id));
+      size_t last_left = last_segments.front().mesh_start_vertex_id;
+      size_t last_right = last_segments.back().mesh_end_vertex_id;
+      // create one triangle to the event point
+      segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index);
+    }
+    else // TODO: I think this should't occur, but it does
+    {
+      const size_t pre_even_flip_he = flip->half_edge_id & ~1;
+      const size_t pre_left_voronoi_vertex_id = graph.getHalfEdges()[pre_even_flip_he].face;
+      const size_t pre_left_containing_tri_id
+        = segment_builder_.kin_del.getCrossingDataContainingTriId(pre_left_voronoi_vertex_id);
+      const bool pre_left_inside = segment_builder_.kin_del.getFaceInside(pre_left_containing_tri_id);
+      const bool event_pos_finite = std::isfinite(flip->position[0]) && std::isfinite(flip->position[1]);
+      // If this segment list is empty, afterEvent skipped seeding this mesh because the Voronoi vertex was not usable.
+      assert(!(pre_left_inside && event_pos_finite));
     }
   }
 
@@ -116,22 +134,40 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
 
+  const size_t even_flip_he = flip->half_edge_id & ~1;
+  const size_t left_voronoi_vertex_id = graph.getHalfEdges()[even_flip_he].face;
+  const size_t left_containing_tri_id = segment_builder_.kin_del.getCrossingDataContainingTriId(left_voronoi_vertex_id);
+  const bool left_inside = segment_builder_.kin_del.getFaceInside(left_containing_tri_id);
+  const bool flip_pos_finite = std::isfinite(flip->position[0]) && std::isfinite(flip->position[1]);
+  const bool seed_mesh_with_flip_vertex = left_inside && flip_pos_finite;
+
   // For now also create a mesh, but this might be changed later
   VoronoiMesh mesh;
-  size_t index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
-    glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time);
 
   // add last vertex indices
   segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
-  segment_builder_.segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
-    SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
+  if (seed_mesh_with_flip_vertex)
+  {
+    size_t index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
+      glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time,
+      std::optional<size_t>(left_voronoi_vertex_id));
+    segment_builder_.segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
+      SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
+  }
 
-  segment_builder_.meshes.push_back(mesh);
+  segment_builder_.registerMeshletWithSuffix(
+    std::move(mesh), std::string("_voronoi") + std::to_string(flip->half_edge_id / 2));
 
   auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(flip->half_edge_id / 2);
-
+  
+  // Update the meshes of the neighboring segments to connect to the new vertex created at the flip position, if applicable
   for (size_t he_id : quad_he_ids)
   {
+    if(segment_builder_.kin_del.getGraph().isInfinite(he_id) && segment_builder_.kin_del.computeBoundaryOnTheFly())
+    {
+      continue;
+    }
+
     size_t segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[he_id];
     VoronoiMesh& mesh_ref = segment_builder_.meshes[segment_mesh_pair_index];
 
@@ -141,6 +177,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       continue;
     }
 
+    // Same geometric seed as above; alpha warning already emitted from addMeshletVertex for the new meshlet.
     size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid,
       glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time);
 

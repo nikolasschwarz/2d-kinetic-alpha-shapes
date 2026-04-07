@@ -99,7 +99,7 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
       glm::dvec2 position = glm::vec2((traj_j[0](fractional_event_time) + traj_k[0](fractional_event_time)) / 2.0,
         (traj_j[1](fractional_event_time) + traj_k[1](fractional_event_time)) / 2.0);
 
-      KINDS_DEBUG("Crossing (right angle) Event at time "
+      KINDS_DEBUG("Crossing (right angle) Event queued at time "
         << event_time << " for Voronoi vertex ID " << voronoi_vertex_id << " crossing half-edge ID " << finite_he_id
         << " at position " << glm::to_string(position));
       kd->kinetic_algorithm_->enqueueEvent(

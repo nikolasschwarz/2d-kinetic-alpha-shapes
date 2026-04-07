@@ -4,6 +4,7 @@
 #include "VoronoiMesh.hpp"
 #include <glm/glm.hpp>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace kinDS
@@ -30,6 +31,7 @@ class TreeMesher
   std::shared_ptr<KineticDelaunay> kinetic_delaunay;
   std::shared_ptr<SegmentBuilder> mesh_builder;
   std::vector<VoronoiMesh> segment_meshlets;
+  std::vector<std::string> segment_meshlet_export_suffixes;
   std::vector<std::vector<int>> meshing_neighbor_indices; // for each mesh, the neighbor mesh index for each triangle
   std::vector<size_t> meshing_to_physics_segment_indices;
   Settings settings;
