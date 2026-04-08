@@ -2,6 +2,17 @@
 
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "Logger.hpp"
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace kinDS
 {
@@ -40,8 +51,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 
       if (vertices[i] == size_t(-1))
       {
-        KINDS_ERROR(
-          "Boundary triangle was turned at " << radius->occurrence_time << ", that is impossible and will be ignored!");
+        KINDS_ERROR("Boundary triangle was turned (t=" << radius->occurrence_time
+                                                      << "); that is impossible and will be ignored!");
         break;
       }
     }
@@ -289,14 +300,791 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   }
 
   auto triangle_he_ids = graph.getTriangleHalfEdgeIndices(radius->half_edge_id);
+  std::unordered_set<size_t> affected_delaunay_edges;
   for (size_t tri_he_id : triangle_he_ids)
   {
-    auto d_edge_intersections = segment_builder_.kin_del.getCrossingData().delaunay_edge_intersections[tri_he_id / 2];
-    for (auto intersection_ref : d_edge_intersections)
+    affected_delaunay_edges.insert(tri_he_id / 2);
+  }
+
+  const auto& crossing_data = segment_builder_.kin_del.getCrossingData();
+  const size_t affected_face_id = graph.getHalfEdges()[radius->half_edge_id].face;
+  const double t = radius->occurrence_time;
+  const auto affected_face_he = graph.getFaces()[affected_face_id].half_edges;
+
+  auto edge_endpoints = [&](size_t d_edge_id) -> std::array<int, 2>
+  {
+    const size_t he_even = 2 * d_edge_id;
+    return { graph.getHalfEdges()[he_even].origin, graph.destination(he_even) };
+  };
+
+  auto voronoi_vertex_on_edge = [&](size_t d_edge_id, bool even_side) -> size_t
+  {
+    const size_t he = 2 * d_edge_id + (even_side ? 0 : 1);
+    return static_cast<size_t>(graph.getHalfEdges()[he].face);
+  };
+
+  auto intersection_position = [&](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> glm::dvec3
+  {
+    return segment_builder_.closingMeshVoronoiDelaunayCrossingPosition(t, ref->voronoi_edge_id, ref->delaunay_edge_id);
+  };
+
+  auto dual_triangle_edges = [&](size_t voronoi_vertex_id) -> std::array<size_t, 3>
+  {
+    const auto& tri = graph.getFaces()[voronoi_vertex_id];
+    return { tri.half_edges[0] / 2, tri.half_edges[1] / 2, tri.half_edges[2] / 2 };
+  };
+
+  auto choose_voronoi_vertex_towards_inside = [&](size_t d_edge_id, std::optional<size_t> prev_vv) -> std::optional<size_t>
+  {
+    const size_t vv0 = voronoi_vertex_on_edge(d_edge_id, true);
+    const size_t vv1 = voronoi_vertex_on_edge(d_edge_id, false);
+    const bool vv0_inside = crossing_data.getContainingTriId(vv0) == affected_face_id;
+    const bool vv1_inside = crossing_data.getContainingTriId(vv1) == affected_face_id;
+    if (!vv0_inside && !vv1_inside)
     {
-      auto v_it = intersection_ref->voronoi_ref;
-      (void)v_it;
+      return std::nullopt;
     }
+    if (vv0_inside && !vv1_inside)
+    {
+      return vv0;
+    }
+    if (vv1_inside && !vv0_inside)
+    {
+      return vv1;
+    }
+    if (prev_vv.has_value())
+    {
+      if (vv0 != prev_vv.value())
+      {
+        return vv0;
+      }
+      if (vv1 != prev_vv.value())
+      {
+        return vv1;
+      }
+    }
+    return vv0;
+  };
+
+  auto next_dual_edge_for_cell = [&](size_t vv, size_t current_d_edge, size_t cell_id) -> std::optional<size_t>
+  {
+    const auto tri_edges = dual_triangle_edges(vv);
+    for (size_t candidate_d : tri_edges)
+    {
+      if (candidate_d == current_d_edge)
+      {
+        continue;
+      }
+      const auto ep = edge_endpoints(candidate_d);
+      if (ep[0] >= 0 && static_cast<size_t>(ep[0]) == cell_id)
+      {
+        return candidate_d;
+      }
+      if (ep[1] >= 0 && static_cast<size_t>(ep[1]) == cell_id)
+      {
+        return candidate_d;
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto first_triangle_intersection_on_voronoi_edge
+    = [&](size_t d_edge_id, size_t from_vv,
+        std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> exclude_ref)
+    -> std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> {
+    const auto& v_list = crossing_data.voronoi_edge_intersections[d_edge_id];
+    const size_t vv_even = voronoi_vertex_on_edge(d_edge_id, true);
+    const bool forward = (from_vv == vv_even);
+    if (forward)
+    {
+      for (auto it = v_list.begin(); it != v_list.end(); ++it)
+      {
+        auto ref = *it;
+        if (exclude_ref.has_value() && ref == exclude_ref.value())
+        {
+          continue;
+        }
+        if (affected_delaunay_edges.find(ref->delaunay_edge_id) != affected_delaunay_edges.end())
+        {
+          return ref;
+        }
+      }
+      return std::nullopt;
+    }
+    for (auto it = v_list.rbegin(); it != v_list.rend(); ++it)
+    {
+      auto ref = *it;
+      if (exclude_ref.has_value() && ref == exclude_ref.value())
+      {
+        continue;
+      }
+      if (affected_delaunay_edges.find(ref->delaunay_edge_id) != affected_delaunay_edges.end())
+      {
+        return ref;
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto other_triangle_intersection_on_same_voronoi_edge
+    = [&](size_t d_edge_id, KineticDelaunay::CrossingData::EdgeIntersectionRef exclude_ref)
+    -> std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> {
+    const auto& v_list = crossing_data.voronoi_edge_intersections[d_edge_id];
+    for (auto ref : v_list)
+    {
+      if (ref == exclude_ref)
+      {
+        continue;
+      }
+      if (affected_delaunay_edges.find(ref->delaunay_edge_id) != affected_delaunay_edges.end())
+      {
+        return ref;
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto edge_index_in_affected_triangle = [&](size_t delaunay_edge_id) -> std::optional<size_t>
+  {
+    for (size_t i = 0; i < 3; ++i)
+    {
+      if ((affected_face_he[i] / 2) == delaunay_edge_id)
+      {
+        return i;
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto triangle_boundary_chain_vertices = [&](size_t from_edge, size_t to_edge) -> std::vector<size_t>
+  {
+    std::vector<size_t> out;
+    const auto from_idx_opt = edge_index_in_affected_triangle(from_edge);
+    const auto to_idx_opt = edge_index_in_affected_triangle(to_edge);
+    if (!from_idx_opt.has_value() || !to_idx_opt.has_value())
+    {
+      return out;
+    }
+
+    const size_t from_idx = from_idx_opt.value();
+    const size_t to_idx = to_idx_opt.value();
+    size_t idx = from_idx;
+    while (idx != to_idx)
+    {
+      const size_t next_he = affected_face_he[idx];
+      const size_t v = graph.destination(next_he);
+      if (v != size_t(-1))
+      {
+        out.push_back(v);
+      }
+      idx = (idx + 1) % 3;
+    }
+    return out;
+  };
+
+  auto choose_triangle_boundary_chain = [&](size_t from_edge, size_t to_edge, size_t cell_id) -> std::vector<size_t>
+  {
+    const auto cw = triangle_boundary_chain_vertices(from_edge, to_edge);
+    const auto ccw = triangle_boundary_chain_vertices(to_edge, from_edge);
+
+    auto score = [&](const std::vector<size_t>& path) -> std::pair<size_t, size_t>
+    {
+      size_t contains_cell = 0;
+      for (size_t v : path)
+      {
+        if (v == cell_id)
+        {
+          contains_cell = 1;
+          break;
+        }
+      }
+      // Prefer chain containing the cell site; tie-break by fewer corner vertices.
+      return { contains_cell, std::numeric_limits<size_t>::max() - path.size() };
+    };
+
+    const auto s_cw = score(cw);
+    const auto s_ccw = score(ccw);
+    if (s_ccw > s_cw)
+    {
+      return ccw;
+    }
+    return cw;
+  };
+
+  std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> seed_intersections;
+  seed_intersections.reserve(32);
+  for (size_t d_edge_id : affected_delaunay_edges)
+  {
+    const auto& d_list = crossing_data.delaunay_edge_intersections[d_edge_id];
+    for (auto ref : d_list)
+    {
+      seed_intersections.push_back(ref);
+    }
+  }
+
+  struct IntersectionKey
+  {
+    size_t voronoi_edge_id = 0;
+    size_t delaunay_edge_id = 0;
+    uint64_t delaunay_param_bits = 0;
+
+    bool operator==(const IntersectionKey& other) const noexcept
+    {
+      return voronoi_edge_id == other.voronoi_edge_id && delaunay_edge_id == other.delaunay_edge_id
+        && delaunay_param_bits == other.delaunay_param_bits;
+    }
+  };
+  struct IntersectionKeyHash
+  {
+    size_t operator()(const IntersectionKey& k) const noexcept
+    {
+      size_t h = std::hash<size_t> {}(k.voronoi_edge_id);
+      h ^= std::hash<size_t> {}(k.delaunay_edge_id) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      h ^= std::hash<uint64_t> {}(k.delaunay_param_bits) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+  auto ref_key = [](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> IntersectionKey
+  {
+    IntersectionKey k;
+    k.voronoi_edge_id = ref->voronoi_edge_id;
+    k.delaunay_edge_id = ref->delaunay_edge_id;
+    std::memcpy(&k.delaunay_param_bits, &ref->delaunay_edge_param, sizeof(uint64_t));
+    return k;
+  };
+
+  auto edge_touches_cell = [&](size_t voronoi_edge_id, size_t cell_id) -> bool
+  {
+    const auto ep = edge_endpoints(voronoi_edge_id);
+    if (ep[0] >= 0 && static_cast<size_t>(ep[0]) == cell_id)
+    {
+      return true;
+    }
+    if (ep[1] >= 0 && static_cast<size_t>(ep[1]) == cell_id)
+    {
+      return true;
+    }
+    return false;
+  };
+
+  auto phase2_intersection_on_triangle_edge
+    = [&](size_t he_id, bool traverse_he_forward,
+        std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_ref)
+    -> std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> {
+    const size_t d_edge_id = he_id / 2;
+    const auto& d_list = crossing_data.delaunay_edge_intersections[d_edge_id];
+    if (d_list.empty())
+    {
+      return std::nullopt;
+    }
+
+    // Delaunay lists are sorted by parameter along the even half-edge direction.
+    const bool traverse_even_forward = (he_id % 2 == 0) ? traverse_he_forward : !traverse_he_forward;
+
+    if (!start_ref.has_value() || start_ref.value()->delaunay_edge_id != d_edge_id)
+    {
+      return traverse_even_forward ? d_list.front() : d_list.back();
+    }
+
+    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
+    refs.reserve(d_list.size());
+    for (auto ref : d_list)
+    {
+      refs.push_back(ref);
+    }
+    size_t start_i = size_t(-1);
+    for (size_t i = 0; i < refs.size(); ++i)
+    {
+      if (refs[i] == start_ref.value())
+      {
+        start_i = i;
+        break;
+      }
+    }
+    if (start_i == size_t(-1))
+    {
+      return traverse_even_forward ? refs.front() : refs.back();
+    }
+    if (traverse_even_forward)
+    {
+      if (start_i + 1 < refs.size())
+      {
+        return refs[start_i + 1];
+      }
+      return std::nullopt;
+    }
+    if (start_i > 0)
+    {
+      return refs[start_i - 1];
+    }
+    return std::nullopt;
+  };
+
+  auto relative_intersection_id = [&](const auto& refs, KineticDelaunay::CrossingData::EdgeIntersectionRef target) -> size_t {
+    size_t i = 0;
+    for (auto ref : refs)
+    {
+      if (ref == target)
+      {
+        return i;
+      }
+      ++i;
+    }
+    return size_t(-1);
+  };
+
+  auto log_intersection = [&](const char* tag, KineticDelaunay::CrossingData::EdgeIntersectionRef ref) {
+    const auto& d_refs = crossing_data.delaunay_edge_intersections[ref->delaunay_edge_id];
+    const auto& v_refs = crossing_data.voronoi_edge_intersections[ref->voronoi_edge_id];
+    const size_t rel_d = relative_intersection_id(d_refs, ref);
+    const size_t rel_v = relative_intersection_id(v_refs, ref);
+    KINDS_DEBUG("Radius trace " << tag << " face=" << affected_face_id << " t=" << t << " de=" << ref->delaunay_edge_id
+                                << " ve=" << ref->voronoi_edge_id << " rel_i=(" << rel_d << "," << rel_v << ")"
+                                << " de_param=" << ref->delaunay_edge_param);
+  };
+
+  // One representative intersection per touched cell.
+  std::unordered_map<size_t, KineticDelaunay::CrossingData::EdgeIntersectionRef> representative_by_cell;
+  for (auto ref : seed_intersections)
+  {
+    const auto ep = edge_endpoints(ref->voronoi_edge_id);
+    if (ep[0] >= 0)
+    {
+      representative_by_cell.emplace(static_cast<size_t>(ep[0]), ref);
+    }
+    if (ep[1] >= 0)
+    {
+      representative_by_cell.emplace(static_cast<size_t>(ep[1]), ref);
+    }
+  }
+
+  for (const auto& entry : representative_by_cell)
+  {
+    const size_t cell_id = entry.first;
+    auto seed_ref = entry.second;
+    std::vector<glm::dvec3> polygon;
+    bool success = false;
+    const size_t max_steps = 128;
+    std::string terminal_fail_reason;
+
+    std::string fail_reason;
+    polygon.clear();
+    KINDS_DEBUG("Starting new trace for cell " << cell_id << ":");
+    polygon.push_back(intersection_position(seed_ref));
+    {
+      const auto& p = polygon.back();
+      const auto& d_refs = crossing_data.delaunay_edge_intersections[seed_ref->delaunay_edge_id];
+      const auto& v_refs = crossing_data.voronoi_edge_intersections[seed_ref->voronoi_edge_id];
+      const size_t rel_d = relative_intersection_id(d_refs, seed_ref);
+      const size_t rel_v = relative_intersection_id(v_refs, seed_ref);
+      KINDS_DEBUG("Added point: seed-intersection x=" << p.x << " y=" << p.y << " t=" << p.z << " de="
+                                                      << seed_ref->delaunay_edge_id << " ve=" << seed_ref->voronoi_edge_id
+                                                      << " rel_i=(" << rel_d << "," << rel_v << ")");
+    }
+    KINDS_DEBUG("Radius trace start face=" << affected_face_id << " cell=" << cell_id << " t=" << t);
+    log_intersection("seed", seed_ref);
+
+    auto current_ref = seed_ref;
+    bool closed_to_seed = false;
+    bool wrong_direction = false;
+    size_t step_count = 0;
+
+    while (!closed_to_seed && !wrong_direction && step_count < max_steps)
+    {
+      ++step_count;
+
+      // Phase 1: try both directions independently.
+      std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_ref = std::nullopt;
+      std::string phase1_wrong_direction_reason;
+      bool phase1_non_direction_failure = false;
+      size_t current_d_edge = current_ref->voronoi_edge_id;
+      KINDS_DEBUG("Radius trace phase1 start face=" << affected_face_id << " cell=" << cell_id << " step=" << step_count
+                                                    << " current_dual_edge=" << current_d_edge);
+      log_intersection("phase1-current-intersection", current_ref);
+
+      for (size_t phase1_attempt = 0; phase1_attempt < 2 && !end_ref.has_value() && !phase1_non_direction_failure; ++phase1_attempt)
+      {
+        const bool phase1_reverse = (phase1_attempt == 1);
+        KINDS_DEBUG("Radius trace phase1 attempt face=" << affected_face_id << " cell=" << cell_id
+                                                        << " attempt=" << (phase1_attempt + 1) << "/2 reverse_orientation="
+                                                        << phase1_reverse);
+        std::optional<size_t> prev_vv = std::nullopt;
+        if (phase1_reverse)
+        {
+          prev_vv = voronoi_vertex_on_edge(current_d_edge, true);
+        }
+        bool phase1_wrong_direction_local = false;
+        std::string phase1_fail_local;
+
+        for (size_t hop = 0; hop < max_steps; ++hop)
+        {
+          auto vv_opt = choose_voronoi_vertex_towards_inside(current_d_edge, prev_vv);
+          if (!vv_opt.has_value())
+          {
+            KINDS_DEBUG("Radius trace phase1 no inward Voronoi vertex face=" << affected_face_id << " cell=" << cell_id
+                                                                              << " ve=" << current_d_edge);
+            auto paired_ref_opt = other_triangle_intersection_on_same_voronoi_edge(current_d_edge, current_ref);
+            if (paired_ref_opt.has_value())
+            {
+              end_ref = paired_ref_opt.value();
+              log_intersection("phase1-paired-end", end_ref.value());
+            }
+            else
+            {
+              phase1_fail_local = "phase1: no inward Voronoi vertex and no paired triangle intersection on dual edge "
+                + std::to_string(current_d_edge);
+            }
+            break;
+          }
+
+          const size_t vv = vv_opt.value();
+          KINDS_DEBUG("Radius trace phase1 visit voronoi-vertex face=" << affected_face_id << " cell=" << cell_id << " vv=" << vv
+                                                                        << " via_ve=" << current_d_edge
+                                                                        << " containing_tri=" << crossing_data.getContainingTriId(vv));
+          if (crossing_data.getContainingTriId(vv) != affected_face_id)
+          {
+            phase1_wrong_direction_local = true;
+            phase1_fail_local = "phase1: Voronoi vertex " + std::to_string(vv) + " not in affected triangle "
+              + std::to_string(affected_face_id) + " (wrong direction)";
+            break;
+          }
+
+          const glm::dvec3 vv_h = segment_builder_.kin_del.getVoronoiVertexHomogeneous(vv, t);
+          if (std::isfinite(vv_h.z) && std::abs(vv_h.z) > 1e-12)
+          {
+            polygon.push_back(glm::dvec3 { vv_h.x / vv_h.z, vv_h.y / vv_h.z, t });
+            const auto& p = polygon.back();
+            KINDS_DEBUG("Added point: phase1-voronoi-vertex dual_vv=" << vv << " via_ve=" << current_d_edge << " x=" << p.x
+                                                                       << " y=" << p.y << " t=" << p.z);
+          }
+
+          const auto tri_edges = dual_triangle_edges(vv);
+          std::vector<size_t> candidates;
+          for (size_t candidate_d : tri_edges)
+          {
+            if (candidate_d == current_d_edge)
+            {
+              continue;
+            }
+            const auto ep = edge_endpoints(candidate_d);
+            if ((ep[0] >= 0 && static_cast<size_t>(ep[0]) == cell_id) || (ep[1] >= 0 && static_cast<size_t>(ep[1]) == cell_id))
+            {
+              candidates.push_back(candidate_d);
+            }
+          }
+          if (candidates.empty())
+          {
+            phase1_wrong_direction_local = true;
+            phase1_fail_local = "phase1: no incident dual edge from Voronoi vertex " + std::to_string(vv) + " for cell "
+              + std::to_string(cell_id) + " (wrong direction)";
+            break;
+          }
+          const size_t next_d = phase1_reverse ? candidates.back() : candidates.front();
+          KINDS_DEBUG("Radius trace phase1 select-next-ve face=" << affected_face_id << " cell=" << cell_id << " vv=" << vv
+                                                                 << " current_ve=" << current_d_edge << " next_ve=" << next_d
+                                                                 << " candidate_count=" << candidates.size());
+
+          auto next_ref_opt = first_triangle_intersection_on_voronoi_edge(next_d, vv, current_ref);
+          if (!next_ref_opt.has_value())
+          {
+            phase1_fail_local = "phase1: no triangle-edge intersection on dual edge " + std::to_string(next_d)
+              + " from Voronoi vertex " + std::to_string(vv);
+            break;
+          }
+
+          end_ref = next_ref_opt.value();
+          log_intersection("phase1-end-intersection", end_ref.value());
+          break;
+        }
+
+        if (!end_ref.has_value())
+        {
+          if (phase1_wrong_direction_local)
+          {
+            phase1_wrong_direction_reason = phase1_fail_local;
+          }
+          else
+          {
+            phase1_non_direction_failure = true;
+            fail_reason = phase1_fail_local.empty() ? "phase1: Voronoi walk ended without a next triangle-edge intersection"
+                                                    : phase1_fail_local;
+          }
+        }
+      }
+
+      if (!end_ref.has_value())
+      {
+        if (!phase1_non_direction_failure)
+        {
+          wrong_direction = true;
+          fail_reason = phase1_wrong_direction_reason.empty() ? "phase1: wrong direction in both attempts"
+                                                              : phase1_wrong_direction_reason;
+        }
+        break;
+      }
+
+      if (end_ref.value() == seed_ref)
+      {
+        KINDS_DEBUG("Radius trace close-to-seed in phase1 face=" << affected_face_id << " cell=" << cell_id);
+        closed_to_seed = true;
+        break;
+      }
+      polygon.push_back(intersection_position(end_ref.value()));
+      {
+        const auto added_ref = end_ref.value();
+        const auto& p = polygon.back();
+        const auto& d_refs = crossing_data.delaunay_edge_intersections[added_ref->delaunay_edge_id];
+        const auto& v_refs = crossing_data.voronoi_edge_intersections[added_ref->voronoi_edge_id];
+        const size_t rel_d = relative_intersection_id(d_refs, added_ref);
+        const size_t rel_v = relative_intersection_id(v_refs, added_ref);
+        KINDS_DEBUG("Added point: phase1-end-intersection x=" << p.x << " y=" << p.y << " t=" << p.z << " de="
+                                                               << added_ref->delaunay_edge_id << " ve="
+                                                               << added_ref->voronoi_edge_id << " rel_i=(" << rel_d << ","
+                                                               << rel_v << ")");
+      }
+
+      // Phase 2: try both directions independently.
+      KINDS_DEBUG("Radius trace phase2 start face=" << affected_face_id << " cell=" << cell_id << " end_de="
+                                                    << end_ref.value()->delaunay_edge_id << " seed_de="
+                                                    << seed_ref->delaunay_edge_id);
+      log_intersection("phase2-end-intersection", end_ref.value());
+      const auto end_idx_opt = edge_index_in_affected_triangle(end_ref.value()->delaunay_edge_id);
+      const auto seed_idx_opt = edge_index_in_affected_triangle(seed_ref->delaunay_edge_id);
+      if (!end_idx_opt.has_value() || !seed_idx_opt.has_value())
+      {
+        fail_reason = "phase2: delaunay edge not on affected triangle (end_edge="
+          + std::to_string(end_ref.value()->delaunay_edge_id) + " seed_edge=" + std::to_string(seed_ref->delaunay_edge_id) + ")";
+        break;
+      }
+
+      bool phase2_advanced = false;
+      bool phase2_closed = false;
+      std::string phase2_wrong_direction_reason;
+      std::string phase2_non_direction_reason;
+
+      for (size_t phase2_attempt = 0; phase2_attempt < 2 && !phase2_advanced && !phase2_closed; ++phase2_attempt)
+      {
+        const bool phase2_reverse = (phase2_attempt == 1);
+        KINDS_DEBUG("Radius trace phase2 attempt face=" << affected_face_id << " cell=" << cell_id
+                                                        << " attempt=" << (phase2_attempt + 1) << "/2 reverse_orientation="
+                                                        << phase2_reverse);
+
+        size_t idx = end_idx_opt.value();
+        bool local_wrong_direction = false;
+        std::string local_fail_reason;
+        std::vector<glm::dvec3> local_polygon = polygon;
+        auto phase2_current_ref = end_ref.value();
+
+        while (true)
+        {
+          const size_t he_id = affected_face_he[idx];
+          const size_t d_edge_id = he_id / 2;
+          const bool traverse_he_forward = !phase2_reverse;
+          KINDS_DEBUG("Radius trace phase2 inspect triangle-edge face=" << affected_face_id << " cell=" << cell_id
+                                                                         << " idx=" << idx << " he=" << he_id << " de=" << d_edge_id
+                                                                         << " traverse_he_forward=" << traverse_he_forward);
+          const auto start_ref = (phase2_current_ref->delaunay_edge_id == d_edge_id)
+            ? std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(phase2_current_ref)
+            : std::nullopt;
+          if (start_ref.has_value())
+          {
+            log_intersection("phase2-inspect-start-intersection", start_ref.value());
+          }
+          auto boundary_intersection_opt = phase2_intersection_on_triangle_edge(he_id, traverse_he_forward, start_ref);
+          if (boundary_intersection_opt.has_value())
+          {
+            auto boundary_ref = boundary_intersection_opt.value();
+            log_intersection("phase2-boundary-intersection", boundary_ref);
+            if (!edge_touches_cell(boundary_ref->voronoi_edge_id, cell_id))
+            {
+              local_wrong_direction = true;
+              local_fail_reason = "phase2: boundary intersection uses voronoi_edge " + std::to_string(boundary_ref->voronoi_edge_id)
+                + " that does not touch cell " + std::to_string(cell_id) + " (wrong direction)";
+              break;
+            }
+
+            if (boundary_ref == seed_ref)
+            {
+              phase2_closed = true;
+              break;
+            }
+            if (boundary_ref == end_ref.value())
+            {
+              local_fail_reason = "phase2: returned to the same intersection it started from (de="
+                + std::to_string(boundary_ref->delaunay_edge_id) + " ve=" + std::to_string(boundary_ref->voronoi_edge_id) + ")";
+              KINDS_ERROR("Radius strand meshlet: " << local_fail_reason << " face=" << affected_face_id << " cell=" << cell_id
+                                                    << " t=" << t);
+              break;
+            }
+
+            local_polygon.push_back(intersection_position(boundary_ref));
+            {
+              const auto& p = local_polygon.back();
+              const auto& d_refs = crossing_data.delaunay_edge_intersections[boundary_ref->delaunay_edge_id];
+              const auto& v_refs = crossing_data.voronoi_edge_intersections[boundary_ref->voronoi_edge_id];
+              const size_t rel_d = relative_intersection_id(d_refs, boundary_ref);
+              const size_t rel_v = relative_intersection_id(v_refs, boundary_ref);
+              KINDS_DEBUG("Added point: phase2-boundary-intersection x=" << p.x << " y=" << p.y << " t=" << p.z << " de="
+                                                                          << boundary_ref->delaunay_edge_id << " ve="
+                                                                          << boundary_ref->voronoi_edge_id << " rel_i=("
+                                                                          << rel_d << "," << rel_v << ")");
+            }
+            phase2_current_ref = boundary_ref;
+            current_ref = boundary_ref;
+            log_intersection("phase2-next-current", current_ref);
+            polygon = std::move(local_polygon);
+            phase2_advanced = true;
+            break;
+          }
+
+          const bool traverse_even_forward = (he_id % 2 == 0) ? traverse_he_forward : !traverse_he_forward;
+          const size_t he_even = 2 * d_edge_id;
+          const size_t tri_vertex_id = traverse_even_forward ? graph.destination(he_even) : graph.getHalfEdges()[he_even].origin;
+          KINDS_DEBUG("Radius trace phase2 visit site (triangle-vertex) face=" << affected_face_id << " cell=" << cell_id
+                                                                                << " site=" << tri_vertex_id << " on_he=" << he_id
+                                                                                << " on_de=" << d_edge_id
+                                                                                << " traverse_even_forward=" << traverse_even_forward);
+          if (tri_vertex_id != size_t(-1))
+          {
+            if (tri_vertex_id != cell_id)
+            {
+              local_wrong_direction = true;
+              local_fail_reason = "phase2: triangle corner vertex " + std::to_string(tri_vertex_id) + " != cell "
+                + std::to_string(cell_id) + " (wrong direction)";
+              break;
+            }
+            const glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(t, tri_vertex_id);
+            local_polygon.push_back(glm::dvec3 { p2.x, p2.y, t });
+            {
+              const auto& p = local_polygon.back();
+              KINDS_DEBUG("Added point: phase2-triangle-vertex site=" << tri_vertex_id << " on_he="
+                                                                       << affected_face_he[idx] << " on_de=" << d_edge_id
+                                                                       << " x=" << p.x << " y=" << p.y << " t=" << p.z);
+            }
+          }
+          // We must inspect the seed edge too: even after reaching it, there can still be
+          // a directed step along that edge before we hit the seed intersection.
+          if (idx == seed_idx_opt.value())
+          {
+            break;
+          }
+          idx = phase2_reverse ? ((idx + 2) % 3) : ((idx + 1) % 3);
+        }
+
+        if (phase2_closed)
+        {
+          // Commit points accumulated in this successful phase2 attempt before closing.
+          polygon = std::move(local_polygon);
+          closed_to_seed = true;
+          break;
+        }
+        if (phase2_advanced)
+        {
+          break;
+        }
+
+        if (local_wrong_direction)
+        {
+          phase2_wrong_direction_reason = local_fail_reason;
+        }
+        else
+        {
+          if (phase2_non_direction_reason.empty())
+          {
+            phase2_non_direction_reason
+              = local_fail_reason.empty()
+              ? "phase2: directed triangle-edge traversal (including seed edge) found no valid next boundary intersection (considering half-edge parity and forward/backward walk direction)"
+              : local_fail_reason;
+          }
+        }
+      }
+
+      if (!closed_to_seed && !phase2_advanced)
+      {
+        if (!phase2_non_direction_reason.empty())
+        {
+          fail_reason = phase2_non_direction_reason;
+        }
+        else
+        {
+          wrong_direction = true;
+          fail_reason = phase2_wrong_direction_reason.empty() ? "phase2: wrong direction in both attempts"
+                                                              : phase2_wrong_direction_reason;
+        }
+        break;
+      }
+    }
+
+    if (!closed_to_seed && !wrong_direction && step_count >= max_steps)
+    {
+      fail_reason = "traversal step limit reached (" + std::to_string(max_steps) + " steps)";
+    }
+
+    if (!wrong_direction && closed_to_seed && polygon.size() >= 3)
+    {
+      success = true;
+    }
+    else if (!wrong_direction)
+    {
+      if (fail_reason.empty())
+      {
+        if (closed_to_seed && polygon.size() < 3)
+        {
+          fail_reason = "polygon closed to seed but only " + std::to_string(polygon.size()) + " vertices (need >= 3)";
+        }
+        else
+        {
+          fail_reason = "traversal incomplete: not closed to seed without direction error";
+        }
+      }
+      terminal_fail_reason = fail_reason;
+      KINDS_ERROR("Radius strand meshlet: non-retryable failure face=" << affected_face_id << " cell=" << cell_id
+        << " t=" << t << " reason=" << terminal_fail_reason);
+    }
+    else
+    {
+      terminal_fail_reason = fail_reason;
+      KINDS_ERROR("Radius strand meshlet: wrong direction after phase retries face=" << affected_face_id << " cell=" << cell_id
+        << " t=" << t << " reason=" << terminal_fail_reason);
+    }
+
+    auto emit_radius_cell_mesh = [&](const std::vector<glm::dvec3>& poly, bool failed)
+    {
+      if (poly.empty())
+      {
+        return;
+      }
+      VoronoiMesh mesh;
+      std::vector<size_t> ids;
+      ids.reserve(poly.size());
+      for (const auto& p : poly)
+      {
+        ids.push_back(segment_builder_.addMeshletVertex(mesh, segment_builder_.kin_del.component_data.component_boundaries[component_id][0],
+          segment_builder_.kin_del.component_data.component_centroids[component_id], p, cell_id, t));
+      }
+      for (size_t i = 2; i < ids.size(); ++i)
+      {
+        segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i - 1], ids[i]);
+      }
+      segment_builder_.segment_mesh_pairs.push_back(MeshStructure::SegmentMeshPair { static_cast<size_t>(-1),
+        static_cast<size_t>(-1), 0, 0, 1 });
+      std::string suffix = std::string("_delaunay") + std::to_string(affected_face_id) + "_strand" + std::to_string(cell_id);
+      if (failed)
+      {
+        suffix += "_failed";
+      }
+      segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::move(suffix));
+      segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
+    };
+
+    if (!success)
+    {
+      // Debug: export partial polygon so failed traversals are visible in OBJ exports.
+      emit_radius_cell_mesh(polygon, true);
+      continue;
+    }
+
+    emit_radius_cell_mesh(polygon, false);
   }
 }
 } // namespace kinDS

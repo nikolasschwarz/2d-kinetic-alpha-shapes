@@ -199,9 +199,9 @@ std::vector<double> KineticDelaunay::findEvents(
       }
       else
       {
-        // Sign change detected, create an event
-        double event_time = filtered_sorted_zeros[i];
-        found_event_times.push_back(event_time);
+      // Sign change detected, create an event
+      double event_time = filtered_sorted_zeros[i];
+      found_event_times.push_back(event_time);
         KINDS_DEBUG("Event will be queued at time " << event_time << " with sign change from " << interval_signs[i] << " to "
                                            << interval_signs[i + 1]);
       }
@@ -320,9 +320,9 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
       else if (end_containing_triangle_id == outside_face_id)
       {
         v_ref = v_intersections.insert(v_intersections.end(), intersection_it);
-      }
-      else
-      {
+        }
+        else
+        {
         throw std::runtime_error("Intersection is not on the boundary");
       }
 
@@ -408,23 +408,23 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
   auto reassign_vertices = [&](const std::vector<size_t>& vertices, size_t target_face_id)
   {
     for (size_t voronoi_vertex : vertices)
-    {
-      // Compute the position of the Voronoi vertex at time t and check on which side of the edge it is.
-      glm::dvec3 voronoi_pos = computeVoronoiVertexHomogenous(voronoi_vertex, t);
+  {
+    // Compute the position of the Voronoi vertex at time t and check on which side of the edge it is.
+    glm::dvec3 voronoi_pos = computeVoronoiVertexHomogenous(voronoi_vertex, t);
       if (voronoi_pos.z != 0)
+    {
+      glm::dvec2 event_pos = glm::dvec2(voronoi_pos.x / voronoi_pos.z, voronoi_pos.y / voronoi_pos.z);
+      if (glm::cross(event_pos - pu, edge_vector) > 0)
       {
-        glm::dvec2 event_pos = glm::dvec2(voronoi_pos.x / voronoi_pos.z, voronoi_pos.y / voronoi_pos.z);
-        if (glm::cross(event_pos - pu, edge_vector) > 0)
-        {
           crossing_data.moveVertex(voronoi_vertex, target_face_id, t);
-        }
-      }
-      else
-      {
-        // Must belong to the dual triangle
-        crossing_data.moveVertex(voronoi_vertex, voronoi_vertex, t);
       }
     }
+    else
+    {
+      // Must belong to the dual triangle
+      crossing_data.moveVertex(voronoi_vertex, voronoi_vertex, t);
+    }
+  }
   };
 
   reassign_vertices(vertices0, face_id1);
@@ -458,10 +458,10 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
             for (auto intersection : v_intersections)
             {
               crossing_data.removeIntersection(intersection);
-            }
-          }
-          else
-          {
+      }
+    }
+    else
+    {
             // there is an intersection, either update the existing intersection or add a new one
             // Compute the parameter along the delaunay edge
 
@@ -1083,7 +1083,7 @@ glm::dvec3 lineToHomegeneous(const glm::dvec2& p, const glm::dvec2& dir)
 
 std::pair<double, double> segmentIntersectionParameters(
   const glm::dvec2& p0, const glm::dvec2& p1, const glm::dvec2& q0, const glm::dvec2& q1)
-{
+  {
   auto cross2D = [](const glm::dvec2& a, const glm::dvec2& b) { return a.x * b.y - a.y * b.x; };
 
   const glm::dvec2 p = p0;
@@ -1113,48 +1113,48 @@ bool segmentRayIntersection(
 }
 
 std::pair<glm::dvec2, glm::dvec2> KineticDelaunay::computeAngularBisector(size_t he_id, double t) const
-{
-  int a = graph.getHalfEdges()[he_id].origin;
-  int b = graph.destination(he_id);
-  size_t finite_he_id = graph.getHalfEdges()[he_id].next;
-  size_t c, c_prime;
-
-  if (a == -1)
   {
-    a = b;
-    c = graph.destination(finite_he_id);
-    assert(c != size_t(-1));
-    size_t prev_he_id = graph.prevOnConvexBoundaryId(finite_he_id);
-    c_prime = graph.getHalfEdges()[prev_he_id].origin;
-    assert(c_prime != size_t(-1));
-  }
-  else
-  {
-    finite_he_id = graph.getHalfEdges()[finite_he_id].next;
-    c = graph.getHalfEdges()[finite_he_id].origin;
-    assert(c != size_t(-1));
-    size_t next_he_id = graph.nextOnConvexBoundaryId(finite_he_id);
-    c_prime = graph.destination(next_he_id);
-    assert(c_prime != size_t(-1));
-  }
+    int a = graph.getHalfEdges()[he_id].origin;
+    int b = graph.destination(he_id);
+    size_t finite_he_id = graph.getHalfEdges()[he_id].next;
+    size_t c, c_prime;
 
-  glm::dvec2 p_a = branch_trajs.evaluate(a, t);
-  glm::dvec2 p_c = branch_trajs.evaluate(c, t);
-  glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, t);
+    if (a == -1)
+    {
+      a = b;
+      c = graph.destination(finite_he_id);
+      assert(c != size_t(-1));
+      size_t prev_he_id = graph.prevOnConvexBoundaryId(finite_he_id);
+      c_prime = graph.getHalfEdges()[prev_he_id].origin;
+      assert(c_prime != size_t(-1));
+    }
+    else
+    {
+      finite_he_id = graph.getHalfEdges()[finite_he_id].next;
+      c = graph.getHalfEdges()[finite_he_id].origin;
+      assert(c != size_t(-1));
+      size_t next_he_id = graph.nextOnConvexBoundaryId(finite_he_id);
+      c_prime = graph.destination(next_he_id);
+      assert(c_prime != size_t(-1));
+    }
+
+    glm::dvec2 p_a = branch_trajs.evaluate(a, t);
+    glm::dvec2 p_c = branch_trajs.evaluate(c, t);
+    glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, t);
 
   glm::dvec2 angular_bisector_direction = glm::normalize(p_c_prime - p_a) + glm::normalize(p_c - p_a);
 
-  // Fallback: If the direction is zero, we can just use the normal of the segment.
+    // Fallback: If the direction is zero, we can just use the normal of the segment.
   if (glm::length(angular_bisector_direction) < 1e-12)
   {
-    glm::dvec2 tangent = glm::normalize(p_c_prime - p_c);
-    angular_bisector_direction = glm::dvec2(-tangent.y, tangent.x);
-    // TODO: I'm not sure if the sign is correct here.
-  }
+      glm::dvec2 tangent = glm::normalize(p_c_prime - p_c);
+      angular_bisector_direction = glm::dvec2(-tangent.y, tangent.x);
+      // TODO: I'm not sure if the sign is correct here.
+    }
 
-  // Since we are on the convex hull, the direction points inward, so we need to negate it.
-  return std::pair(p_a, -angular_bisector_direction);
-};
+    // Since we are on the convex hull, the direction points inward, so we need to negate it.
+    return std::pair(p_a, -angular_bisector_direction);
+  };
 
 std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(
   size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const
@@ -1298,7 +1298,7 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
         }
       }
     }
-
+  
     next_crossed_edge_id = next_tri_half_edges[max_s_index];
     next_face_id = graph.getHalfEdges()[next_crossed_edge_id ^ 1].face;
     // Record the edge we are about to cross
