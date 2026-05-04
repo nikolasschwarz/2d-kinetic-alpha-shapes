@@ -1,7 +1,9 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <glm/glm.hpp>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -27,6 +29,9 @@ class VoronoiMesh
   std::vector<int> material_ids; // Stores material IDs per triangle
 
   NormalMode normal_mode;
+
+  /// Kinetic time when this meshlet was first registered / last rebuilt in @ref SegmentBuilder (NaN if unset).
+  double creation_kinetic_time_ = std::numeric_limits<double>::quiet_NaN();
 
   struct Vec3iHash
   {
@@ -133,6 +138,12 @@ class VoronoiMesh
   const size_t getTriangleCount() const { return triangles.size() / 3; }
 
   const size_t getVertexCount() const { return vertices.size(); }
+
+  void setCreationKineticTime(double t) { creation_kinetic_time_ = t; }
+  double getCreationKineticTime() const { return creation_kinetic_time_; }
+
+  /// Empty string if unset; otherwise a stable fragment for filenames, e.g. `_t0.000000` or `_t3.500000`.
+  std::string creationKineticTimeFilenameSuffix() const;
 
   // debug methods
   void checkForDegenerateTriangles() const;

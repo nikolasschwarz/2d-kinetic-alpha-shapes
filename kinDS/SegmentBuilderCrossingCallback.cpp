@@ -4,9 +4,20 @@
 #include "KineticDelaunayCrossingEvent.hpp"
 
 #include <optional>
+#include <sstream>
 
 namespace kinDS
 {
+namespace
+{
+void logCrossingMeshExtend(
+  SegmentBuilder& sb, size_t voronoi_he_id, double t, VoronoiMesh& mesh, const char* branch, size_t tris_before)
+{
+  std::ostringstream o;
+  o << "extend_crossing_" << branch << " d_tris=" << (mesh.getTriangleCount() - tris_before);
+  sb.meshletDiagnosticLogLine("extend_mesh", voronoi_he_id, t, o.str().c_str());
+}
+} // namespace
 void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
 {
   auto* crossing = dynamic_cast<KineticDelaunay::CrossingEvent*>(&e);
@@ -85,7 +96,11 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           std::optional<size_t>(crossing->voronoi_vertex_id));
         int last_left = it->mesh_start_vertex_id;
         int last_right = it->mesh_end_vertex_id;
-        segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+        {
+          const size_t tris_before = mesh.getTriangleCount();
+          segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+          logCrossingMeshExtend(segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "erase_strip", tris_before);
+        }
         segments.erase(it);
       }
       else
@@ -99,7 +114,12 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
             std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = it->mesh_start_vertex_id;
           int last_right = it->mesh_end_vertex_id;
-          segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+          {
+            const size_t tris_before = mesh.getTriangleCount();
+            segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+            logCrossingMeshExtend(
+              segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "enter_boundary_start", tris_before);
+          }
           it->mesh_start_vertex_id = static_cast<int>(new_vertex_index);
         }
         else
@@ -112,7 +132,12 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
             std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = it->mesh_start_vertex_id;
           int last_right = it->mesh_end_vertex_id;
-          segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+          {
+            const size_t tris_before = mesh.getTriangleCount();
+            segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+            logCrossingMeshExtend(
+              segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "enter_boundary_end", tris_before);
+          }
           it->mesh_end_vertex_id = static_cast<int>(new_vertex_index);
         }
       }
@@ -144,7 +169,12 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
             std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = segments.back().mesh_start_vertex_id;
           int last_right = segments.back().mesh_end_vertex_id;
-          segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+          {
+            const size_t tris_before = mesh.getTriangleCount();
+            segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+            logCrossingMeshExtend(
+              segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "tail_close", tris_before);
+          }
           segments.back().end_half_edge_id = static_cast<int>(inside_he_id);
           segments.back().end_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
@@ -172,7 +202,12 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
             std::optional<size_t>(crossing->voronoi_vertex_id));
           int last_left = segments.front().mesh_start_vertex_id;
           int last_right = segments.front().mesh_end_vertex_id;
-          segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+          {
+            const size_t tris_before = mesh.getTriangleCount();
+            segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index);
+            logCrossingMeshExtend(
+              segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "head_close", tris_before);
+          }
           segments.front().start_half_edge_id = static_cast<int>(inside_he_id);
           segments.front().start_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);

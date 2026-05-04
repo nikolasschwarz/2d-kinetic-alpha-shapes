@@ -92,7 +92,8 @@ void TreeMesher::exportCombinedMesh() const
   for (size_t i = 0; i < std::min(settings.max_meshlet_export, segment_meshlets.size()); i++)
   {
     const std::string suffix = (i < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[i] : "";
-    kinDS::ObjExporter::writeMesh(segment_meshlets[i], "meshlet" + std::to_string(i) + suffix + ".obj");
+    kinDS::ObjExporter::writeMesh(segment_meshlets[i],
+      "meshlet" + std::to_string(i) + suffix + segment_meshlets[i].creationKineticTimeFilenameSuffix() + ".obj");
   }
   KINDS_INFO("Kinetic Delaunay Voronoi Meshes exported.");
 }
@@ -129,8 +130,9 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
         {
           const std::string suffix
             = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
-          kinDS::ObjExporter::writeMesh(
-            segment_meshlets[mesh_index], "meshlet" + std::to_string(mesh_index) + suffix + "_raw.obj");
+          kinDS::ObjExporter::writeMesh(segment_meshlets[mesh_index],
+            "meshlet" + std::to_string(mesh_index) + suffix + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix()
+              + "_raw.obj");
         }
         std::tie(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index])
           = boundary_intersector.Intersect(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index]);

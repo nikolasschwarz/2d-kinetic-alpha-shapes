@@ -1082,7 +1082,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         suffix += "_failed";
       }
-      segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::move(suffix));
+      segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::move(suffix), t);
       segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
     };
 

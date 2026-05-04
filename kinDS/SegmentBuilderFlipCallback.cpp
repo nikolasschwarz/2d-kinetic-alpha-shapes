@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <optional>
+#include <sstream>
 #include <string>
 
 namespace kinDS
@@ -49,7 +50,13 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
       size_t last_left = last_segments.front().mesh_start_vertex_id;
       size_t last_right = last_segments.back().mesh_end_vertex_id;
       // create one triangle to the event point
-      segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index);
+      {
+        const size_t tris_before = mesh.getTriangleCount();
+        segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index);
+        std::ostringstream note;
+        note << "extend_flip_before d_tris=" << (mesh.getTriangleCount() - tris_before);
+        segment_builder_.meshletDiagnosticLogLine("extend_mesh", flip->half_edge_id, flip->occurrence_time, note.str().c_str());
+      }
     }
     else // TODO: I think this should't occur, but it does
     {
@@ -155,8 +162,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
   }
 
-  segment_builder_.registerMeshletWithSuffix(
-    std::move(mesh), std::string("_voronoi") + std::to_string(flip->half_edge_id / 2));
+  segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::string("_voronoi") + std::to_string(flip->half_edge_id / 2),
+    flip->occurrence_time);
 
   auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(flip->half_edge_id / 2);
   
@@ -188,14 +195,26 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     {
       size_t last_left = segments.front().mesh_start_vertex_id;
       size_t last_right = segments.front().mesh_end_vertex_id;
-      segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
+      {
+        const size_t tris_before = mesh_ref.getTriangleCount();
+        segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
+        std::ostringstream note;
+        note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);
+        segment_builder_.meshletDiagnosticLogLine("extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
+      }
       segments.front().mesh_start_vertex_id = static_cast<int>(new_vertex_index);
     }
     else if (he_id % 2 != 0 && he_id_right == -1)
     {
       size_t last_left = segments.back().mesh_start_vertex_id;
       size_t last_right = segments.back().mesh_end_vertex_id;
-      segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
+      {
+        const size_t tris_before = mesh_ref.getTriangleCount();
+        segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
+        std::ostringstream note;
+        note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);
+        segment_builder_.meshletDiagnosticLogLine("extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
+      }
       segments.back().mesh_end_vertex_id = static_cast<int>(new_vertex_index);
     }
   }

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <glm/gtx/exterior_product.hpp>
 #include <map>
 #include <string>
@@ -326,18 +327,103 @@ bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
   return true;
 }
 
+void kinDS::SegmentBuilder::meshletDiagnosticLogLine(const char* tag, size_t half_edge_id, double t, const char* extra_note) const
+{
+  const size_t even = half_edge_id & ~1;
+  const size_t dual_edge = even / 2;
+  size_t pi = static_cast<size_t>(-1);
+  if (even < half_edge_index_to_segment_mesh_pair_index.size())
+  {
+    pi = half_edge_index_to_segment_mesh_pair_index[even];
+  }
+  size_t nv = 0;
+  size_t nt = 0;
+  size_t nstrip = 0;
+  size_t nclosed = 0;
+  const bool pi_ok = (pi < meshes.size()) && (pi < segment_mesh_pair_last_left_and_right_vertex.size());
+  if (pi_ok)
+  {
+    nv = meshes[pi].getVertices().size();
+    nt = meshes[pi].getTriangleCount();
+    nstrip = segment_mesh_pair_last_left_and_right_vertex[pi].size();
+    for (const auto& s : segment_mesh_pair_last_left_and_right_vertex[pi])
+    {
+      if (s.mesh_start_vertex_id >= 0 && s.mesh_end_vertex_id >= 0)
+      {
+        ++nclosed;
+      }
+    }
+  }
+  std::ostringstream oss;
+  oss << "meshlet_diag " << tag << " he=" << half_edge_id << " even=" << even << " dual_edge=" << dual_edge << " t=" << t;
+  if (even < half_edge_index_to_segment_mesh_pair_index.size() && !pi_ok)
+  {
+    oss << " pair=INVALID(raw_pi=" << pi << ")";
+  }
+  else
+  {
+    oss << " pair=" << (pi_ok ? static_cast<long long>(pi) : -1);
+  }
+  oss << " verts=" << nv << " tris=" << nt << " strips=" << nstrip << " closed_strips=" << nclosed;
+  if (extra_note != nullptr && extra_note[0] != '\0')
+  {
+    oss << ' ' << extra_note;
+  }
+  KINDS_DEBUG(oss.str());
+}
+
+void kinDS::SegmentBuilder::meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewMesh(size_t half_edge_even, double t,
+  bool initial_left_inside, const VoronoiMesh& mesh, const std::list<MeshingData>& strips) const
+{
+  const size_t dual_edge = half_edge_even / 2;
+  size_t with_any_mesh_id = 0;
+  for (const auto& s : strips)
+  {
+    if (s.mesh_start_vertex_id >= 0 || s.mesh_end_vertex_id >= 0)
+    {
+      ++with_any_mesh_id;
+    }
+  }
+  const size_t nv = mesh.getVertices().size();
+  if (nv == 0 && initial_left_inside)
+  {
+    KINDS_WARNING("meshlet_diag unexpected_empty after startNewMesh: dual_edge=" << dual_edge << " t=" << t
+      << " — left circumcenter face was inside alpha-shape but mesh has no vertices (strips=" << strips.size() << ").");
+  }
+  if (nv == 0 && with_any_mesh_id > 0)
+  {
+    KINDS_WARNING("meshlet_diag unexpected_empty after startNewMesh: dual_edge=" << dual_edge << " t=" << t
+      << " — strip entries reference mesh vertex ids but mesh has no vertices (strips=" << strips.size() << ").");
+  }
+  if (nv > 0 && strips.empty())
+  {
+    KINDS_WARNING("meshlet_diag inconsistent after startNewMesh: dual_edge=" << dual_edge << " t=" << t
+      << " — mesh has " << nv << " vertices but strip list is empty.");
+  }
+}
+
 void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector<BoundaryPoint>& boundary_points)
 {
   // check if half-edge is infinite
   if (kin_del.getGraph().isInfinite(he_id) && kin_del.computeBoundaryOnTheFly())
   {
+    meshletDiagnosticLogLine("finish_mesh_skip", he_id, t, "reason=infinite_boundary_on_the_fly");
     return;
   }
 
   size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[he_id];
+  if (segment_mesh_pair_index >= meshes.size() || segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
+  {
+    KINDS_WARNING("meshlet_diag finish_mesh: invalid pair index he=" << he_id << " t=" << t << " pair=" << segment_mesh_pair_index);
+    return;
+  }
+
+  meshletDiagnosticLogLine("finish_mesh_enter", he_id, t, "");
+
   auto& last_segments = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
   if (last_segments.empty())
   {
+    meshletDiagnosticLogLine("finish_mesh_noop", he_id, t, "last_segments empty (no extension)");
     // this can happen if the first Voronoi vertex was discarded because it was outside of the boundary, in this case we
     // just don't create any triangles
     return;
@@ -349,6 +435,24 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
   const size_t voronoi_edge_id = even_id / 2;
   auto& he = kin_del.getGraph().getHalfEdges()[even_id];
   glm::dvec2 centroid = polygonCentroid(boundary_points);
+
+  if (mesh.getVertices().empty())
+  {
+    size_t closed_strip_refs = 0;
+    for (const auto& s : last_segments)
+    {
+      if (s.mesh_start_vertex_id >= 0 && s.mesh_end_vertex_id >= 0)
+      {
+        ++closed_strip_refs;
+      }
+    }
+    if (closed_strip_refs > 0)
+    {
+      KINDS_WARNING("meshlet_diag finish_mesh_enter: mesh has no vertices but " << closed_strip_refs
+        << " strip(s) have mesh_start/end set (expected non-empty mesh) dual_edge=" << voronoi_edge_id << " he=" << he_id
+        << " t=" << t << ".");
+    }
+  }
 
   size_t v = he.origin;
   if (v == -1)
@@ -399,6 +503,17 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
     return p;
   };
 
+  size_t tris_before = mesh.getTriangleCount();
+  size_t processable_strips = 0;
+  for (const auto& segment : last_segments)
+  {
+    if (segment.mesh_start_vertex_id >= 0 && segment.mesh_end_vertex_id >= 0)
+    {
+      ++processable_strips;
+    }
+  }
+  size_t loops_ran = 0;
+
   for (auto& segment : last_segments)
   {
     if (segment.mesh_start_vertex_id < 0 || segment.mesh_end_vertex_id < 0)
@@ -406,6 +521,7 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
       continue;
     }
 
+    ++loops_ran;
     refreshMeshingDataCrossingRefs(segment, voronoi_edge_id);
 
     const glm::dvec3 new_start_pos = endpoint_position_at_t(segment, true);
@@ -441,6 +557,25 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
 
     segment.mesh_start_vertex_id = static_cast<int>(new_start_vertex_index);
     segment.mesh_end_vertex_id = static_cast<int>(new_end_vertex_index);
+  }
+
+  const size_t tris_after = mesh.getTriangleCount();
+  const long long d_tris = static_cast<long long>(tris_after) - static_cast<long long>(tris_before);
+  {
+    std::ostringstream oss;
+    oss << "tris_before=" << tris_before << " tris_after=" << tris_after << " d_tris=" << d_tris
+        << " processable_strips=" << processable_strips << " loops_ran=" << loops_ran;
+    meshletDiagnosticLogLine("finish_mesh_exit", he_id, t, oss.str().c_str());
+  }
+  if (processable_strips > 0 && tris_after == tris_before)
+  {
+    KINDS_WARNING("meshlet_diag finish_mesh: expected triangle extension (processable_strips=" << processable_strips
+      << ") but triangle count unchanged for dual_edge=" << voronoi_edge_id << " he=" << he_id << " t=" << t << ".");
+  }
+  if (!last_segments.empty() && processable_strips == 0)
+  {
+    KINDS_DEBUG("meshlet_diag finish_mesh: strips present but none had both mesh_start/end set — no extension for he="
+      << he_id << " dual_edge=" << voronoi_edge_id << " t=" << t << ".");
   }
 }
 
@@ -506,11 +641,17 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   // check if half-edge is infinite
   if (kin_del.getGraph().isInfinite(half_edge_id) && kin_del.computeBoundaryOnTheFly())
   {
+    meshletDiagnosticLogLine("start_new_mesh_skip", half_edge_id, t, "reason=infinite_boundary_on_the_fly");
     return;
   }
   
   size_t even_id = half_edge_id & ~1;
   size_t odd_id = even_id + 1;
+  {
+    std::ostringstream oss;
+    oss << "reuse_existing_pair=" << (reuse_existing_pair_and_mesh ? "true" : "false");
+    meshletDiagnosticLogLine("start_new_mesh_begin", half_edge_id, t, oss.str().c_str());
+  }
 
   const auto& graph = kin_del.getGraph();
   const auto& he = graph.getHalfEdges()[even_id];
@@ -541,6 +682,9 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
     segment_mesh_pairs[segment_mesh_pair_index] = segment_mesh_pair;
   }
 
+  KINDS_DEBUG("Using mesh pair index " << segment_mesh_pair_index << " for half-edge " << even_id << " (segment indices "
+    << segment_mesh_pair.segment_index0 << ", " << segment_mesh_pair.segment_index1 << ")");
+
   size_t vertex = std::max(he.origin, twin_he.origin);
   size_t component_id = kin_del.component_data.component_map[vertex];
 
@@ -550,14 +694,11 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   auto& boundary_polygon = kin_del.component_data.component_boundaries[component_id][0];
   auto& centroid = kin_del.component_data.component_centroids[component_id];
 
-  // For now also create a mesh, but this might be changed later
-  VoronoiMesh mesh;
-  if (!created_new_pair && segment_mesh_pair_index < meshes.size())
-  {
-    // Rebuild in place: clear old mesh content and recompute start state.
-    meshes[segment_mesh_pair_index] = VoronoiMesh {};
-    mesh = meshes[segment_mesh_pair_index];
-  }
+  // New pair: build into a fresh mesh and register. Reuse: append strip vertices onto the existing mesh; strip
+  // metadata below is cleared and rebuilt — mesh vertex indices from addMeshletVertex are absolute (append order).
+  VoronoiMesh mesh_local;
+  const bool reuse_in_place = !created_new_pair && segment_mesh_pair_index < meshes.size();
+  VoronoiMesh& mesh = reuse_in_place ? meshes[segment_mesh_pair_index] : mesh_local;
 
   glm::dvec3 left_vertex = computeVoronoiVertex(even_id, t);
   glm::dvec3 right_vertex = computeVoronoiVertex(odd_id, t);
@@ -572,7 +713,8 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   size_t right_voronoi_vertex_id = kin_del.getGraph().getHalfEdges()[odd_id].face;
 
   // Now go through all faces
-  bool inside = kin_del.getFaceInside(left_containing_tri_id);
+  const bool initial_left_inside = kin_del.getFaceInside(left_containing_tri_id);
+  bool inside = initial_left_inside;
 
   if (segment_mesh_pair_index < segment_mesh_pair_last_left_and_right_vertex.size())
   {
@@ -654,20 +796,33 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   {
     refreshMeshingDataCrossingRefs(seg, voronoi_edge_id);
   }
-  if (!created_new_pair && segment_mesh_pair_index < meshes.size())
+
+  meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewMesh(even_id, t, initial_left_inside, mesh, segments_for_pair);
+
+  if (reuse_in_place)
   {
-    meshes[segment_mesh_pair_index] = std::move(mesh);
+    mesh.setCreationKineticTime(t);
   }
   else
   {
-    registerMeshletWithSuffix(std::move(mesh), std::string("_voronoi") + std::to_string(voronoi_edge_id));
+    registerMeshletWithSuffix(std::move(mesh_local), std::string("_voronoi") + std::to_string(voronoi_edge_id), t);
+  }
+
+  {
+    std::ostringstream oss;
+    oss << "created_new_pair=" << (created_new_pair ? "true" : "false") << " pair_idx=" << segment_mesh_pair_index;
+    meshletDiagnosticLogLine("start_new_mesh_end", even_id, t, oss.str().c_str());
   }
 
   assert(segment_mesh_pairs.size() == segment_mesh_pair_last_left_and_right_vertex.size());
 }
 
-size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(VoronoiMesh&& mesh, std::string suffix)
+size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(VoronoiMesh&& mesh, std::string suffix, double creation_kinetic_time)
 {
+  if (std::isfinite(creation_kinetic_time))
+  {
+    mesh.setCreationKineticTime(creation_kinetic_time);
+  }
   const size_t index = meshes.size();
   meshes.push_back(std::move(mesh));
   meshlet_export_suffixes.push_back(std::move(suffix));
@@ -2110,7 +2265,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(
   closingMeshLogUnmatchedOrderedSegments(strand_id, t, index_data.ordered_segments, trace.segment_used);
   closingMeshTriangulatePolygonsFan(mesh, trace.polygons);
 
-  const size_t index = registerMeshletWithSuffix(std::move(mesh), std::string("_strand") + std::to_string(strand_id));
+  const size_t index = registerMeshletWithSuffix(std::move(mesh), std::string("_strand") + std::to_string(strand_id), t);
   segment_mesh_pair_last_left_and_right_vertex.emplace_back();
   segment_mesh_pair_last_left_and_right_vertex.back() = std::move(closing_segments);
 
@@ -2357,11 +2512,19 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     VoronoiMesh segment_mesh;
     std::vector<int> neighbor_segments_for_meshlet;
     const auto& properties = segment_properties[segment_id];
+    double earliest_creation = std::numeric_limits<double>::quiet_NaN();
     for (size_t neighbor_index = 0; neighbor_index < properties.neighbor_count; ++neighbor_index)
     {
       size_t mesh_pair_index = properties.mesh_pair_indices[neighbor_index];
-      const auto& mesh_pair = segment_mesh_pairs[mesh_pair_index];
       VoronoiMesh mesh = meshes[mesh_pair_index];
+      const double mesh_ct = mesh.getCreationKineticTime();
+      if (std::isfinite(mesh_ct))
+      {
+        if (!std::isfinite(earliest_creation) || mesh_ct < earliest_creation)
+        {
+          earliest_creation = mesh_ct;
+        }
+      }
       if (segment_mesh_pairs[mesh_pair_index].segment_index0 != segment_id)
       {
         mesh.flipOrientation();
@@ -2370,6 +2533,10 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       neighbor_segments_for_meshlet.insert(
         neighbor_segments_for_meshlet.end(), mesh.getTriangleCount(), properties.neighbor_indices[neighbor_index]);
       segment_mesh += mesh;
+    }
+    if (std::isfinite(earliest_creation))
+    {
+      segment_mesh.setCreationKineticTime(earliest_creation);
     }
     neighbor_segments.push_back(neighbor_segments_for_meshlet);
     segment_mesh.mergeDuplicateVertices(1e-4);

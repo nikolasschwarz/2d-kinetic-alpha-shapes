@@ -7,6 +7,7 @@
 #include "SegmentBuilder.hpp"
 
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -95,14 +96,26 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
       {
         size_t last_left = segments.front().mesh_start_vertex_id;
         size_t last_right = segments.front().mesh_end_vertex_id;
-        segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index);
+        {
+          const size_t tris_before = adjacent_mesh.getTriangleCount();
+          segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index);
+          std::ostringstream note;
+          note << "extend_subdivision_adjacent d_tris=" << (adjacent_mesh.getTriangleCount() - tris_before);
+          segment_builder_.meshletDiagnosticLogLine("extend_mesh", adjacent_he_id, t, note.str().c_str());
+        }
         segments.front().mesh_start_vertex_id = static_cast<int>(new_vertex_index);
       }
       else if (adjacent_he_id % 2 != 0 && he_id_right == -1)
       {
         size_t last_left = segments.back().mesh_start_vertex_id;
         size_t last_right = segments.back().mesh_end_vertex_id;
-        segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index);
+        {
+          const size_t tris_before = adjacent_mesh.getTriangleCount();
+          segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index);
+          std::ostringstream note;
+          note << "extend_subdivision_adjacent d_tris=" << (adjacent_mesh.getTriangleCount() - tris_before);
+          segment_builder_.meshletDiagnosticLogLine("extend_mesh", adjacent_he_id, t, note.str().c_str());
+        }
         segments.back().mesh_end_vertex_id = static_cast<int>(new_vertex_index);
       }
     }

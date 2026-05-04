@@ -3,6 +3,8 @@
 #include "VoronoiMesh.hpp"
 #include "glm/gtx/norm.hpp"
 #include <array>
+#include <iomanip>
+#include <sstream>
 #include <unordered_map>
 #ifdef USE_CGAL
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
@@ -18,6 +20,17 @@ typedef CGAL::Surface_mesh<Point_3> Surface_mesh;
 #endif
 
 using namespace kinDS;
+
+std::string VoronoiMesh::creationKineticTimeFilenameSuffix() const
+{
+  if (!std::isfinite(creation_kinetic_time_))
+  {
+    return {};
+  }
+  std::ostringstream o;
+  o << "_t" << std::fixed << std::setprecision(6) << creation_kinetic_time_;
+  return o.str();
+}
 
 std::array<double, 3> barycentricCoordinates(
   const glm::dvec3& A, const glm::dvec3& B, const glm::dvec3& C, const glm::dvec3& P)

@@ -303,7 +303,8 @@ static void kinetic_delaunay_example()
   for (size_t i = 0; i < meshes.first.size(); ++i)
   {
     const std::string suffix = (i < mesh_suffixes.size()) ? mesh_suffixes[i] : "";
-    std::string filename = "mesh_" + std::to_string(i) + suffix + ".obj";
+    std::string filename = "mesh_" + std::to_string(i) + suffix + meshes.first[i].creationKineticTimeFilenameSuffix()
+      + ".obj";
     kinDS::ObjExporter::writeMesh(meshes.first[i], filename);
     std::cout << "Mesh saved to " << filename << std::endl;
   }

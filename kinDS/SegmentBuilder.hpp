@@ -320,10 +320,19 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void accumulateSegmentProperties();
 
   /// Registers a newly created meshlet and stores export suffix metadata.
-  size_t registerMeshletWithSuffix(VoronoiMesh&& mesh, std::string suffix);
+  /// @param creation_kinetic_time If finite, stored on the mesh for export/debug (see @ref VoronoiMesh::setCreationKineticTime).
+  size_t registerMeshletWithSuffix(VoronoiMesh&& mesh, std::string suffix,
+    double creation_kinetic_time = std::numeric_limits<double>::quiet_NaN());
+
+   public:
+  /// One-line Voronoi meshlet diagnostics: dual edge id, pair slot, verts, tris, strip counts (@p extra_note optional).
+  void meshletDiagnosticLogLine(const char* tag, size_t half_edge_id, double t, const char* extra_note = "") const;
+
+  /// After @ref startNewMesh strip build: warn if topology/metadata suggests a non-empty mesh but vertices are missing.
+  void meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewMesh(
+    size_t half_edge_even, double t, bool initial_left_inside, const VoronoiMesh& mesh, const std::list<MeshingData>& strips) const;
 
 
- public:
   SegmentBuilder(
     KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh);
 
