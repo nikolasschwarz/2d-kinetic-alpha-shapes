@@ -501,7 +501,7 @@ static glm::dvec2 intersectSegments(
   return p + t * r;
 }
 
-void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
+void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh)
 {
   // check if half-edge is infinite
   if (kin_del.getGraph().isInfinite(half_edge_id) && kin_del.computeBoundaryOnTheFly())
@@ -516,14 +516,30 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   const auto& he = graph.getHalfEdges()[even_id];
   const auto& twin_he = graph.getHalfEdges()[odd_id];
 
+  size_t segment_mesh_pair_index = static_cast<size_t>(-1);
+  bool created_new_pair = false;
+  if (reuse_existing_pair_and_mesh && even_id < half_edge_index_to_segment_mesh_pair_index.size())
+  {
+    segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[even_id];
+  }
+
   MeshStructure::SegmentMeshPair segment_mesh_pair;
   segment_mesh_pair.segment_index0 = he.origin == -1 ? -1 : strand_to_segment_indices[he.origin].back();
   segment_mesh_pair.segment_index1 = twin_he.origin == -1 ? -1 : strand_to_segment_indices[twin_he.origin].back();
-
-  half_edge_index_to_segment_mesh_pair_index[even_id] = segment_mesh_pairs.size();
-  half_edge_index_to_segment_mesh_pair_index[odd_id] = segment_mesh_pairs.size();
-
-  segment_mesh_pairs.push_back(segment_mesh_pair);
+  if (segment_mesh_pair_index == static_cast<size_t>(-1))
+  {
+    created_new_pair = true;
+    segment_mesh_pair_index = segment_mesh_pairs.size();
+    half_edge_index_to_segment_mesh_pair_index[even_id] = segment_mesh_pair_index;
+    half_edge_index_to_segment_mesh_pair_index[odd_id] = segment_mesh_pair_index;
+    segment_mesh_pairs.push_back(segment_mesh_pair);
+  }
+  else
+  {
+    half_edge_index_to_segment_mesh_pair_index[even_id] = segment_mesh_pair_index;
+    half_edge_index_to_segment_mesh_pair_index[odd_id] = segment_mesh_pair_index;
+    segment_mesh_pairs[segment_mesh_pair_index] = segment_mesh_pair;
+  }
 
   size_t vertex = std::max(he.origin, twin_he.origin);
   size_t component_id = kin_del.component_data.component_map[vertex];
@@ -536,6 +552,12 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
 
   // For now also create a mesh, but this might be changed later
   VoronoiMesh mesh;
+  if (!created_new_pair && segment_mesh_pair_index < meshes.size())
+  {
+    // Rebuild in place: clear old mesh content and recompute start state.
+    meshes[segment_mesh_pair_index] = VoronoiMesh {};
+    mesh = meshes[segment_mesh_pair_index];
+  }
 
   glm::dvec3 left_vertex = computeVoronoiVertex(even_id, t);
   glm::dvec3 right_vertex = computeVoronoiVertex(odd_id, t);
@@ -552,14 +574,21 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
   // Now go through all faces
   bool inside = kin_del.getFaceInside(left_containing_tri_id);
 
-  segment_mesh_pair_last_left_and_right_vertex.emplace_back();
+  if (segment_mesh_pair_index < segment_mesh_pair_last_left_and_right_vertex.size())
+  {
+    segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index].clear();
+  }
+  else
+  {
+    segment_mesh_pair_last_left_and_right_vertex.emplace_back();
+  }
+  auto& segments_for_pair = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
   // If already inside, the left Voronoi vertex is the first one to be added to the mesh
   if (inside || !kin_del.computeBoundaryOnTheFly())
   {
     size_t vertex_index = addMeshletVertex(
       mesh, boundary_polygon, centroid, left_vertex, he.origin, t, std::optional<size_t>(left_voronoi_vertex_id));
-    segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
-      MeshingData { static_cast<int>(vertex_index), -1, -1, -1 });
+    segments_for_pair.emplace_back(MeshingData { static_cast<int>(vertex_index), -1, -1, -1 });
   }
 
   if (kin_del.computeBoundaryOnTheFly())
@@ -594,7 +623,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
         if (inside)
         {
           // leaving the inside, add the intersection point as second of the last added pair
-          auto& back_seg = segment_mesh_pair_last_left_and_right_vertex.back().back();
+          auto& back_seg = segments_for_pair.back();
           back_seg.mesh_end_vertex_id = static_cast<int>(vertex_index);
           back_seg.end_half_edge_id = static_cast<int>(crossed_he_id);
           back_seg.end_crossing = closingMeshFindVoronoiEdgeIntersection(voronoi_edge_id, crossed_he_id);
@@ -604,7 +633,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
           // Use the twin half-edge as it is located inside the component.
           MeshingData seg { static_cast<int>(vertex_index), -1, static_cast<int>(crossed_he_id ^ 1), -1 };
           seg.start_crossing = closingMeshFindVoronoiEdgeIntersection(voronoi_edge_id, crossed_he_id);
-          segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(std::move(seg));
+          segments_for_pair.emplace_back(std::move(seg));
         }
       }
 
@@ -618,15 +647,21 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t)
     // If we end inside, the right Voronoi vertex is the last one to be added to the mesh
     size_t vertex_index = addMeshletVertex(
       mesh, boundary_polygon, centroid, right_vertex, twin_he.origin, t, std::optional<size_t>(right_voronoi_vertex_id));
-    segment_mesh_pair_last_left_and_right_vertex.back().back().mesh_end_vertex_id = static_cast<int>(vertex_index);
+    segments_for_pair.back().mesh_end_vertex_id = static_cast<int>(vertex_index);
   }
 
-  for (auto& seg : segment_mesh_pair_last_left_and_right_vertex.back())
+  for (auto& seg : segments_for_pair)
   {
     refreshMeshingDataCrossingRefs(seg, voronoi_edge_id);
   }
-
-  registerMeshletWithSuffix(std::move(mesh), std::string("_voronoi") + std::to_string(voronoi_edge_id));
+  if (!created_new_pair && segment_mesh_pair_index < meshes.size())
+  {
+    meshes[segment_mesh_pair_index] = std::move(mesh);
+  }
+  else
+  {
+    registerMeshletWithSuffix(std::move(mesh), std::string("_voronoi") + std::to_string(voronoi_edge_id));
+  }
 
   assert(segment_mesh_pairs.size() == segment_mesh_pair_last_left_and_right_vertex.size());
 }
@@ -638,6 +673,7 @@ size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(VoronoiMesh&& mesh, std:
   meshlet_export_suffixes.push_back(std::move(suffix));
   return index;
 }
+
 
 void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right)
 {

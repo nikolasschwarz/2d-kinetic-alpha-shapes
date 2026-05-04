@@ -205,19 +205,19 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
 
     if (event_time != std::numeric_limits<double>::infinity())
     {
+      const double local_event_t = event_time - static_cast<double>(section);
       glm::dvec3 position_homogeneous;
 
-      // use cross product to compute the intersection point of the two bisectors at the event time
-      position_homogeneous[0] = bisector_ij[1](event_time) * bisector_ik[2](event_time)
-        - bisector_ij[2](event_time) * bisector_ik[1](event_time);
-      position_homogeneous[1] = bisector_ij[2](event_time) * bisector_ik[0](event_time)
-        - bisector_ij[0](event_time) * bisector_ik[2](event_time);
-      position_homogeneous[2] = bisector_ij[0](event_time) * bisector_ik[1](event_time)
-        - bisector_ij[1](event_time) * bisector_ik[0](event_time);
+      position_homogeneous[0] = bisector_ij[1](local_event_t) * bisector_ik[2](local_event_t)
+        - bisector_ij[2](local_event_t) * bisector_ik[1](local_event_t);
+      position_homogeneous[1] = bisector_ij[2](local_event_t) * bisector_ik[0](local_event_t)
+        - bisector_ij[0](local_event_t) * bisector_ik[2](local_event_t);
+      position_homogeneous[2] = bisector_ij[0](local_event_t) * bisector_ik[1](local_event_t)
+        - bisector_ij[1](local_event_t) * bisector_ik[0](local_event_t);
 
       glm::dvec2 position(
         position_homogeneous.x / position_homogeneous.z, position_homogeneous.y / position_homogeneous.z);
-      KINDS_DEBUG("Crossing Event at time " << event_time << " for Voronoi vertex ID " << voronoi_vertex_id
+      KINDS_DEBUG("Crossing Event scheduled at time " << event_time << " for Voronoi vertex ID " << voronoi_vertex_id
                                             << " crossing half-edge ID " << event_he_id << " at position "
                                             << glm::to_string(position));
       kd->kinetic_algorithm_->enqueueEvent(

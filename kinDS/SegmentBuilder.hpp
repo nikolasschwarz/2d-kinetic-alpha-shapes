@@ -143,7 +143,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points);
 
-  void startNewMesh(size_t half_edge_id, double t);
+  void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false);
 
   void completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right);
 
@@ -322,6 +322,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Registers a newly created meshlet and stores export suffix metadata.
   size_t registerMeshletWithSuffix(VoronoiMesh&& mesh, std::string suffix);
 
+
  public:
   SegmentBuilder(
     KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh);
@@ -340,6 +341,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     bool merge_by_segment = true) const;
 
   std::vector<std::string> extractSegmentMeshletExportSuffixes(bool merge_by_segment = true) const;
+
 
   const VoronoiMesh& getBoundaryMesh() const;
 

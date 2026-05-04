@@ -658,10 +658,14 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     }
   }
 
+  std::unordered_set<size_t> encountered_voronoi_edges_all;
+
   for (const auto& entry : representative_by_cell)
   {
     const size_t cell_id = entry.first;
     auto seed_ref = entry.second;
+    std::unordered_set<size_t> encountered_voronoi_edges;
+    encountered_voronoi_edges.insert(seed_ref->voronoi_edge_id);
     std::vector<glm::dvec3> polygon;
     bool success = false;
     const size_t max_steps = 128;
@@ -698,6 +702,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       std::string phase1_wrong_direction_reason;
       bool phase1_non_direction_failure = false;
       size_t current_d_edge = current_ref->voronoi_edge_id;
+      encountered_voronoi_edges.insert(current_d_edge);
       KINDS_DEBUG("Radius trace phase1 start face=" << affected_face_id << " cell=" << cell_id << " step=" << step_count
                                                     << " current_dual_edge=" << current_d_edge);
       log_intersection("phase1-current-intersection", current_ref);
@@ -727,6 +732,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
             if (paired_ref_opt.has_value())
             {
               end_ref = paired_ref_opt.value();
+              encountered_voronoi_edges.insert(end_ref.value()->voronoi_edge_id);
               log_intersection("phase1-paired-end", end_ref.value());
             }
             else
@@ -780,6 +786,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
             break;
           }
           const size_t next_d = phase1_reverse ? candidates.back() : candidates.front();
+          encountered_voronoi_edges.insert(next_d);
           KINDS_DEBUG("Radius trace phase1 select-next-ve face=" << affected_face_id << " cell=" << cell_id << " vv=" << vv
                                                                  << " current_ve=" << current_d_edge << " next_ve=" << next_d
                                                                  << " candidate_count=" << candidates.size());
@@ -793,6 +800,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
           }
 
           end_ref = next_ref_opt.value();
+          encountered_voronoi_edges.insert(end_ref.value()->voronoi_edge_id);
           log_intersection("phase1-end-intersection", end_ref.value());
           break;
         }
@@ -894,6 +902,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
           if (boundary_intersection_opt.has_value())
           {
             auto boundary_ref = boundary_intersection_opt.value();
+            encountered_voronoi_edges.insert(boundary_ref->voronoi_edge_id);
             log_intersection("phase2-boundary-intersection", boundary_ref);
             if (!edge_touches_cell(boundary_ref->voronoi_edge_id, cell_id))
             {
@@ -1081,10 +1090,22 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       // Debug: export partial polygon so failed traversals are visible in OBJ exports.
       emit_radius_cell_mesh(polygon, true);
+      encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
       continue;
     }
 
     emit_radius_cell_mesh(polygon, false);
+    encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
+  }
+
+  for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
+  {
+    const size_t he_even = 2 * voronoi_edge_id;
+    if (he_even >= segment_builder_.kin_del.getGraph().getHalfEdges().size())
+    {
+      continue;
+    }
+    segment_builder_.startNewMesh(he_even, t, true);
   }
 }
 } // namespace kinDS

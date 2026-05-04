@@ -214,8 +214,7 @@ static void kinetic_delaunay_example()
   }
 #endif
 
-  std::vector<std::vector<double>> subdivisions
-    = { { 0.4, 0.6, 0.8 }, { 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.4, 0.6, 0.8 } };
+  std::vector<std::vector<double>> subdivisions = { { 0.4 }, { 0.8 }, { 0.2 }, { 0.6 } };
 
   // Sort subdivisions into pairs of strand index and parameter
   std::vector<std::pair<size_t, double>> sorted_subdivisions = merge_sorted_vectors(subdivisions);
@@ -227,7 +226,7 @@ static void kinetic_delaunay_example()
   // Maintain the branches as strands_by_branch_id[h][branch_id][strand_no] = strand_id
   std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
 
-  // build strans_by_branch_id from branch_indices
+  // build strands_by_branch_id from branch_indices
   for (size_t h = 0; h < support_points.front().size(); ++h)
   {
     std::map<size_t, std::vector<size_t>> branch_to_strands;
