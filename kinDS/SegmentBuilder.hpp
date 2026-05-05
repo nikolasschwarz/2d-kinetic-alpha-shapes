@@ -33,6 +33,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
   // Pairs of segments and their corresponding mesh data
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs;
+  std::vector<MeshStructure::IntersectionMeshPairMetadata> intersection_mesh_pair_metadata;
   std::vector<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
@@ -144,6 +145,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points);
 
   void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false);
+  size_t startNewMeshFromIntersections(size_t voronoi_cell_id, double t,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
+    bool reuse_existing_pair_and_mesh = false);
+  size_t determineVoronoiCellForBoundaryIntersectionInterval(size_t delaunay_edge_id,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection) const;
 
   void completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right);
 
@@ -350,6 +358,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     bool merge_by_segment = true) const;
 
   std::vector<std::string> extractSegmentMeshletExportSuffixes(bool merge_by_segment = true) const;
+  std::vector<VoronoiMesh> extractBoundaryIntervalMeshlets() const;
+  std::vector<std::string> extractBoundaryIntervalMeshletExportSuffixes() const;
 
 
   const VoronoiMesh& getBoundaryMesh() const;

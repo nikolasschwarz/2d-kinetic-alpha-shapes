@@ -309,6 +309,17 @@ static void kinetic_delaunay_example()
     std::cout << "Mesh saved to " << filename << std::endl;
   }
 
+  auto boundary_interval_meshes = mesh_builder.extractBoundaryIntervalMeshlets();
+  auto boundary_interval_suffixes = mesh_builder.extractBoundaryIntervalMeshletExportSuffixes();
+  for (size_t i = 0; i < boundary_interval_meshes.size(); ++i)
+  {
+    const std::string suffix = (i < boundary_interval_suffixes.size()) ? boundary_interval_suffixes[i] : "";
+    std::string filename = "mesh_bound_" + std::to_string(i) + suffix
+      + boundary_interval_meshes[i].creationKineticTimeFilenameSuffix() + ".obj";
+    kinDS::ObjExporter::writeMesh(boundary_interval_meshes[i], filename);
+    std::cout << "Boundary interval mesh saved to " << filename << std::endl;
+  }
+
   auto& boundary_mesh = mesh_builder.getBoundaryMesh();
   kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
 

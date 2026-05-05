@@ -33,6 +33,9 @@ struct KineticDelaunay::CrossingData
     size_t delaunay_edge_id;
     size_t voronoi_edge_id;
     double delaunay_edge_param;
+    // SegmentBuilder boundary-interval mesh linkage along one Delaunay edge.
+    size_t prev_segment_mesh_pair_index = static_cast<size_t>(-1);
+    size_t next_segment_mesh_pair_index = static_cast<size_t>(-1);
   };
 
   void init(size_t face_count)

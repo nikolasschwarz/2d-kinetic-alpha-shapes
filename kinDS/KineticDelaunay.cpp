@@ -1549,6 +1549,8 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
 
       edge_itr->delaunay_edge_id = delaunay_he_id / 2;
       edge_itr->voronoi_edge_id = voronoi_edge_id;
+      edge_itr->prev_segment_mesh_pair_index = static_cast<size_t>(-1);
+      edge_itr->next_segment_mesh_pair_index = static_cast<size_t>(-1);
 
       if (delaunay_he_id % 2 == 0)
       {

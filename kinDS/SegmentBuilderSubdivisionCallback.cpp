@@ -68,7 +68,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     auto& he = graph.getHalfEdges()[*it];
 
     size_t adjacent_he_id = he.next;
-     size_t voronoi_vertex_id = graph.getHalfEdges()[adjacent_he_id].face;
+    size_t voronoi_vertex_id = graph.getHalfEdges()[adjacent_he_id].face;
     size_t containing_face_id = segment_builder_.kin_del.getCrossingDataContainingTriId(voronoi_vertex_id);
     bool voronoi_vertex_inside = segment_builder_.kin_del.getFacesInside()[containing_face_id];
 
@@ -77,14 +77,14 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       continue;
     }
-    
+
     size_t adjacent_segment_mesh_pair_index
       = segment_builder_.half_edge_index_to_segment_mesh_pair_index[adjacent_he_id];
     VoronoiMesh& adjacent_mesh = segment_builder_.meshes[adjacent_segment_mesh_pair_index];
-   
+
     glm::dvec3 vertex = segment_builder_.computeVoronoiVertex(adjacent_he_id, t);
-    size_t new_vertex_index = segment_builder_.addMeshletVertex(adjacent_mesh, boundary_polygon, centroid, vertex,
-      strand_id, t, std::optional<size_t>(voronoi_vertex_id));
+    size_t new_vertex_index = segment_builder_.addMeshletVertex(
+      adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t, std::optional<size_t>(voronoi_vertex_id));
     auto& segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[adjacent_segment_mesh_pair_index];
 
     if (!segments.empty())

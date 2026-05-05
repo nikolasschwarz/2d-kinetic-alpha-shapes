@@ -14,6 +14,13 @@ struct MeshStructure
     size_t connected = 1;
   };
 
+  struct IntersectionMeshPairMetadata
+  {
+    size_t voronoi_cell_id = static_cast<size_t>(-1);
+    size_t start_delaunay_edge_id = static_cast<size_t>(-1);
+    size_t end_delaunay_edge_id = static_cast<size_t>(-1);
+  };
+
   // TODO: will a fixed size array be sufficient here? Alternatively, we need a separate buffer with start index and
   // length
   struct SegmentProperties
