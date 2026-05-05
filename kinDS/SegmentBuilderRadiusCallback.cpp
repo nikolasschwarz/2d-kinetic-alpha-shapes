@@ -4,6 +4,7 @@
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "Logger.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -1096,6 +1097,35 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
     emit_radius_cell_mesh(polygon, false);
     encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
+  }
+
+  if (segment_builder_.kin_del.computeBoundaryOnTheFly())
+  {
+    // Close/extend existing strip meshes at the current kinetic time, then rebuild crossing iterators for the whole
+    // meshing state (full `computeEdgeIntersections` invalidates all `EdgeIntersectionRef`s), then seed fresh strips.
+    for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
+    {
+      const size_t he_even = 2 * voronoi_edge_id;
+      if (he_even >= graph.getHalfEdges().size())
+      {
+        continue;
+      }
+      if (graph.isInfinite(he_even))
+      {
+        continue;
+      }
+      const auto& he = graph.getHalfEdges()[he_even];
+      const auto& twin_he = graph.getHalfEdges()[he_even ^ 1];
+      const size_t vertex = std::max(he.origin, twin_he.origin);
+      const size_t component_id = segment_builder_.kin_del.component_data.component_map[vertex];
+      std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
+      segment_builder_.updateBoundary(t, he_visited, component_id);
+      auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
+      segment_builder_.finishMesh(he_even, t, boundary_polygon);
+    }
+
+    //segment_builder_.kin_del.recomputeEdgeIntersections(t);
+    //segment_builder_.refreshCrossingRefsForAllStrips();
   }
 
   for (size_t voronoi_edge_id : encountered_voronoi_edges_all)

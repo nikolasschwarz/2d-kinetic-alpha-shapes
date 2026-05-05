@@ -215,6 +215,8 @@ class KineticDelaunay
   void computeComponentData(double t);
 
   const CrossingData& getCrossingData() const;
+  /// Rebuild all Voronoi–Delaunay edge intersection lists at time @p t (invalidates existing `EdgeIntersectionRef`s).
+  void recomputeEdgeIntersections(double t);
   std::vector<std::array<size_t, 4>> getCrossingIntersectionDebugData() const;
 
   const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
