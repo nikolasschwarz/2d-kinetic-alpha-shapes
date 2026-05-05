@@ -33,6 +33,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
   // Pairs of segments and their corresponding mesh data
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs;
+  std::vector<MeshStructure::SegmentMeshPair> intersection_segment_mesh_pairs;
   std::vector<MeshStructure::IntersectionMeshPairMetadata> intersection_mesh_pair_metadata;
   std::vector<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
@@ -106,6 +107,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   };
 
   std::vector<std::list<MeshingData>> segment_mesh_pair_last_left_and_right_vertex;
+  // Boundary-interval meshes (built from crossing intersections) are stored separately from regular Voronoi-edge strips.
+  std::vector<VoronoiMesh> intersection_meshes;
+  std::vector<std::string> intersection_meshlet_export_suffixes;
+  std::vector<std::list<MeshingData>> intersection_mesh_pair_last_left_and_right_vertex;
   // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no
   // cutoff mesh exists
   std::vector<int> corner_to_cutoff_mesh_indices;
@@ -149,6 +154,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
     bool reuse_existing_pair_and_mesh = false);
+  void finishMeshFromIntersections(size_t voronoi_cell_id, double t,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection);
   size_t determineVoronoiCellForBoundaryIntersectionInterval(size_t delaunay_edge_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection) const;

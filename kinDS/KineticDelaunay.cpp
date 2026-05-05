@@ -897,11 +897,6 @@ void KineticDelaunay::computeComponentData(double t)
 
 const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const { return crossing_data; }
 
-void KineticDelaunay::recomputeEdgeIntersections(double t)
-{
-  crossing_data.computeEdgeIntersections(*this, t);
-}
-
 namespace
 {
 glm::dvec2 intersect_segments_2d_closing(

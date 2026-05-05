@@ -33,6 +33,43 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     auto& boundary_points = segment_builder_.kin_del.component_data.component_boundaries[component_index][0];
 
     segment_builder_.finishMesh(i, index, boundary_points);
+
+    // Advance boundary-interval meshes on boundary Delaunay edges using the same interval decomposition as init():
+    // [null, first], [k, k+1], [last, null].
+    if (!segment_builder_.kin_del.isOnComponentBoundary(i))
+    {
+      continue;
+    }
+    const size_t d_edge_id = i / 2;
+    const auto& d_intersections = segment_builder_.kin_del.getCrossingData().delaunay_edge_intersections[d_edge_id];
+    if (d_intersections.empty())
+    {
+      continue;
+    }
+
+    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
+    refs.reserve(d_intersections.size());
+    for (const auto& ref : d_intersections)
+    {
+      refs.push_back(ref);
+    }
+
+    {
+      const size_t first_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
+      segment_builder_.finishMeshFromIntersections(first_cell, index, std::nullopt, refs.front());
+    }
+    for (size_t k = 0; k + 1 < refs.size(); ++k)
+    {
+      const size_t mid_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      segment_builder_.finishMeshFromIntersections(mid_cell, index, refs[k], refs[k + 1]);
+    }
+    {
+      const size_t last_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+      segment_builder_.finishMeshFromIntersections(last_cell, index, refs.back(), std::nullopt);
+    }
   }
 
   // Visual debug: export SVG with Voronoi vertex labels at section boundaries.

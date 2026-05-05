@@ -35,6 +35,13 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
 
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
+  std::vector<size_t> cell_boundary_he_ids;
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),
+                                                   end = graph.incidentEdgesEnd(strand_id);
+    it != end; ++it)
+  {
+    cell_boundary_he_ids.push_back(*it);
+  }
 
   // finish old meshes
   for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),
@@ -42,6 +49,46 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     it != end; ++it)
   {
     segment_builder_.finishMesh(*it, t, boundary_polygon);
+  }
+
+  // Finish all boundary-interval meshes on boundary Delaunay edges of this Voronoi cell.
+  for (size_t he_id : cell_boundary_he_ids)
+  {
+    const size_t he_even = he_id & ~1;
+    if (!segment_builder_.kin_del.isOnComponentBoundary(he_even))
+    {
+      continue;
+    }
+    const size_t d_edge_id = he_even / 2;
+    const auto& d_intersections = segment_builder_.kin_del.getCrossingData().delaunay_edge_intersections[d_edge_id];
+    if (d_intersections.empty())
+    {
+      continue;
+    }
+
+    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
+    refs.reserve(d_intersections.size());
+    for (const auto& ref : d_intersections)
+    {
+      refs.push_back(ref);
+    }
+
+    {
+      const size_t first_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
+      segment_builder_.finishMeshFromIntersections(first_cell, t, std::nullopt, refs.front());
+    }
+    for (size_t k = 0; k + 1 < refs.size(); ++k)
+    {
+      const size_t mid_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      segment_builder_.finishMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1]);
+    }
+    {
+      const size_t last_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+      segment_builder_.finishMeshFromIntersections(last_cell, t, refs.back(), std::nullopt);
+    }
   }
 
   size_t new_segment_id = segment_builder_.segment_properties.size();
@@ -118,6 +165,46 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
         }
         segments.back().mesh_end_vertex_id = static_cast<int>(new_vertex_index);
       }
+    }
+  }
+
+  // Restart all boundary-interval meshes for the updated strand topology after subdivision.
+  for (size_t he_id : cell_boundary_he_ids)
+  {
+    const size_t he_even = he_id & ~1;
+    if (!segment_builder_.kin_del.isOnComponentBoundary(he_even))
+    {
+      continue;
+    }
+    const size_t d_edge_id = he_even / 2;
+    const auto& d_intersections = segment_builder_.kin_del.getCrossingData().delaunay_edge_intersections[d_edge_id];
+    if (d_intersections.empty())
+    {
+      continue;
+    }
+
+    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
+    refs.reserve(d_intersections.size());
+    for (const auto& ref : d_intersections)
+    {
+      refs.push_back(ref);
+    }
+
+    {
+      const size_t first_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
+      segment_builder_.startNewMeshFromIntersections(first_cell, t, std::nullopt, refs.front(), true);
+    }
+    for (size_t k = 0; k + 1 < refs.size(); ++k)
+    {
+      const size_t mid_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      segment_builder_.startNewMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1], true);
+    }
+    {
+      const size_t last_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+      segment_builder_.startNewMeshFromIntersections(last_cell, t, refs.back(), std::nullopt, true);
     }
   }
 }
