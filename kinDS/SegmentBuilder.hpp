@@ -21,13 +21,32 @@ class SegmentBuilderSubdivisionCallback;
 
 class SegmentBuilder : public KineticDelaunay::CallbackManager
 {
+ public:
+  enum class BoundaryEventType
+  {
+    Init,
+    Section,
+    Radius,
+    Crossing,
+    Subdivision
+  };
+
+  enum class BoundarySegmentAction
+  {
+    NewSegment,
+    SegmentCompleted,
+    SegmentRemoved
+  };
+
+  static std::string composeBoundaryMetadata(BoundaryEventType event_type, BoundarySegmentAction segment_action);
+
+ private:
   friend class SegmentBuilderSectionCallback;
   friend class SegmentBuilderFlipCallback;
   friend class SegmentBuilderRadiusCallback;
   friend class SegmentBuilderCrossingCallback;
   friend class SegmentBuilderSubdivisionCallback;
 
- private:
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
   std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
@@ -153,10 +172,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t startNewMeshFromIntersections(size_t voronoi_cell_id, double t,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
-    bool reuse_existing_pair_and_mesh = false);
+    bool reuse_existing_pair_and_mesh = false, BoundaryEventType event_type = BoundaryEventType::Init,
+    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment, bool force_single_seed_vertex = false);
   void finishMeshFromIntersections(size_t voronoi_cell_id, double t,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
-    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection);
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
+    BoundaryEventType event_type = BoundaryEventType::Section,
+    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted);
   size_t determineVoronoiCellForBoundaryIntersectionInterval(size_t delaunay_edge_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection) const;
@@ -173,11 +195,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   size_t addBoundaryVertex(glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t);
 
-  size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w);
+  size_t addMeshletTriangle(
+    VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}");
+  size_t addBoundaryIntervalTriangleOriented(VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id,
+    double t, const std::string& metadata = "{}");
 
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
-    std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt);
+    std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}");
 
   /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p position.
   void warnIfVoronoiVertexOutsideAlphaShape(

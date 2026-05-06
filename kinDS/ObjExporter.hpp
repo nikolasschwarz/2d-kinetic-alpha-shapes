@@ -12,11 +12,24 @@ namespace kinDS
 class ObjExporter
 {
  private:
-  static void writeFaces(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub)
+  static std::string sanitizeInlineComment(std::string value)
+  {
+    for (char& c : value)
+    {
+      if (c == '\n' || c == '\r')
+      {
+        c = ' ';
+      }
+    }
+    return value;
+  }
+
+  static void writeFaces(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub, bool include_metadata)
   {
     const auto& indices = mesh.getTriangles();
     const auto& uv_indices = mesh.getUVIndices();
     const auto& normals = mesh.getNormals();
+    const auto& face_metadata = mesh.getFaceMetadata();
 
     size_t material_id = -1;
     const auto& material_ids = mesh.getMaterialIDs();
@@ -66,6 +79,11 @@ class ObjExporter
         {
           file << "/" << std::to_string(normal_index + 1);
         }
+      }
+      if (include_metadata)
+      {
+        const std::string metadata = (i / 3 < face_metadata.size()) ? face_metadata[i / 3] : "{}";
+        file << " # " << sanitizeInlineComment(metadata);
       }
       file << "\n";
     }
@@ -141,7 +159,8 @@ class ObjExporter
     file << "}\n";
   }
   static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, double uv_height_factor = 1.0,
-    double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {})
+    double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {},
+    bool include_metadata = false)
   {
     std::ofstream file(obj_path);
     if (!file.is_open())
@@ -165,9 +184,17 @@ class ObjExporter
 
     // Write vertices
     file << "# Vertices\n";
-    for (const auto& vertex : mesh.getVertices())
+    const auto& vertex_metadata = mesh.getVertexMetadata();
+    for (size_t i = 0; i < mesh.getVertices().size(); ++i)
     {
-      file << "v " << vertex[0] << " " << vertex[1] << " " << vertex[2] << "\n";
+      const auto& vertex = mesh.getVertices()[i];
+      file << "v " << vertex[0] << " " << vertex[1] << " " << vertex[2];
+      if (include_metadata)
+      {
+        const std::string metadata = (i < vertex_metadata.size()) ? vertex_metadata[i] : "{}";
+        file << " # " << sanitizeInlineComment(metadata);
+      }
+      file << "\n";
     }
 
     // Write normals
@@ -220,7 +247,7 @@ class ObjExporter
         file << "o group_" << group_index << "\n";
         size_t lb = mesh.getGroupOffsets()[group_index];
         size_t ub = mesh.getGroupOffsets()[group_index + 1];
-        writeFaces(file, mesh, lb, ub);
+        writeFaces(file, mesh, lb, ub, include_metadata);
       }
 
       // Write the last group
@@ -228,12 +255,12 @@ class ObjExporter
       file << "o group_" << (group_count - 1) << "\n";
       size_t lb = mesh.getGroupOffsets().back();
       size_t ub = mesh.getTriangles().size() / 3;
-      writeFaces(file, mesh, lb, ub);
+      writeFaces(file, mesh, lb, ub, include_metadata);
     }
     else
     {
       // No groups defined, write all faces
-      writeFaces(file, mesh, 0, mesh.getTriangles().size() / 3);
+      writeFaces(file, mesh, 0, mesh.getTriangles().size() / 3, include_metadata);
     }
 
     file.close();

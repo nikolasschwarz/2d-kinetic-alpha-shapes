@@ -27,6 +27,9 @@ class VoronoiMesh
   std::vector<size_t> group_offsets; // Offsets for groups of triangles, if needed
   std::vector<std::string> material_names; // Stores material names - needed for exporting
   std::vector<int> material_ids; // Stores material IDs per triangle
+  // Optional JSON-like metadata kept separate from raw geometry/index buffers.
+  std::vector<std::string> vertex_metadata;
+  std::vector<std::string> face_metadata;
 
   NormalMode normal_mode;
 
@@ -67,16 +70,19 @@ class VoronoiMesh
       // If no UV indices are provided, set the same length as vertex indices
       this->uv_indices.resize(this->triangles.size(), std::numeric_limits<size_t>::max());
     }
+    this->vertex_metadata.resize(this->vertices.size(), "{}");
+    this->face_metadata.resize(this->triangles.size() / 3, "{}");
   }
 
   ~VoronoiMesh() = default;
 
   // methods to manipulate the mesh, such as adding vertices, triangles, normals, and UVs
-  size_t addVertex(double x, double y, double z);
-  size_t addVertex(const glm::dvec3& p);
+  size_t addVertex(double x, double y, double z, const std::string& metadata = "{}");
+  size_t addVertex(const glm::dvec3& p, const std::string& metadata = "{}");
   void replaceVertex(size_t index, const glm::dvec3& new_position);
-  size_t addTriangle(size_t v1, size_t v2, size_t v3, int material_id = -1);
-  size_t addTriangle(size_t v1, size_t v2, size_t v3, size_t uv1, size_t uv2, size_t uv3, int material_id = -1);
+  size_t addTriangle(size_t v1, size_t v2, size_t v3, int material_id = -1, const std::string& metadata = "{}");
+  size_t addTriangle(size_t v1, size_t v2, size_t v3, size_t uv1, size_t uv2, size_t uv3, int material_id = -1,
+    const std::string& metadata = "{}");
   size_t addNormal(double nx, double ny, double nz);
   size_t addNormal(const glm::dvec3& n);
   void replaceNormal(size_t index, const glm::dvec3& new_normal);
@@ -115,6 +121,8 @@ class VoronoiMesh
   const std::vector<int>& getMaterialIDs() const { return material_ids; }
 
   const std::vector<std::string>& getMaterialNames() const { return material_names; }
+  const std::vector<std::string>& getVertexMetadata() const { return vertex_metadata; }
+  const std::vector<std::string>& getFaceMetadata() const { return face_metadata; }
 
   std::vector<size_t> removeIsolatedVertices();
 

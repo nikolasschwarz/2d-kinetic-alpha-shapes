@@ -305,7 +305,7 @@ static void kinetic_delaunay_example()
     const std::string suffix = (i < mesh_suffixes.size()) ? mesh_suffixes[i] : "";
     std::string filename = "mesh_" + std::to_string(i) + suffix + meshes.first[i].creationKineticTimeFilenameSuffix()
       + ".obj";
-    kinDS::ObjExporter::writeMesh(meshes.first[i], filename);
+    kinDS::ObjExporter::writeMesh(meshes.first[i], filename, 1.0, 1.0, {}, true);
     std::cout << "Mesh saved to " << filename << std::endl;
   }
 
@@ -316,12 +316,12 @@ static void kinetic_delaunay_example()
     const std::string suffix = (i < boundary_interval_suffixes.size()) ? boundary_interval_suffixes[i] : "";
     std::string filename = "mesh_bound_" + std::to_string(i) + suffix
       + boundary_interval_meshes[i].creationKineticTimeFilenameSuffix() + ".obj";
-    kinDS::ObjExporter::writeMesh(boundary_interval_meshes[i], filename);
+    kinDS::ObjExporter::writeMesh(boundary_interval_meshes[i], filename, 1.0, 1.0, {}, true);
     std::cout << "Boundary interval mesh saved to " << filename << std::endl;
   }
 
   auto& boundary_mesh = mesh_builder.getBoundaryMesh();
-  kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
+  kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, true);
 
   boundary_mesh.checkForDegenerateTriangles();
 }
@@ -485,7 +485,7 @@ static void mesh_from_file(const std::string& filename)
 
     // Export boundary mesh
     const auto& boundary_mesh = mesher.getBoundaryMesh();
-    kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
+    kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, true);
     std::cout << "Boundary mesh exported to: boundary_mesh.obj" << std::endl;
 
     std::cout << "Meshing complete!" << std::endl;

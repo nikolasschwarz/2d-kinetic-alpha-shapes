@@ -62,18 +62,24 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       const size_t first_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      segment_builder_.finishMeshFromIntersections(first_cell, t, std::nullopt, refs.front());
+      segment_builder_.finishMeshFromIntersections(
+        first_cell, t, std::nullopt, refs.front(), SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      segment_builder_.finishMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1]);
+      segment_builder_.finishMeshFromIntersections(
+        mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
     {
       const size_t last_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      segment_builder_.finishMeshFromIntersections(last_cell, t, refs.back(), std::nullopt);
+      segment_builder_.finishMeshFromIntersections(
+        last_cell, t, refs.back(), std::nullopt, SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
   }
 
@@ -1217,18 +1223,24 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       const size_t first_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      segment_builder_.startNewMeshFromIntersections(first_cell, t, std::nullopt, refs.front(), true);
+      segment_builder_.startNewMeshFromIntersections(
+        first_cell, t, std::nullopt, refs.front(), false, SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::NewSegment);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      segment_builder_.startNewMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1], true);
+      segment_builder_.startNewMeshFromIntersections(
+        mid_cell, t, refs[k], refs[k + 1], false, SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::NewSegment);
     }
     {
       const size_t last_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      segment_builder_.startNewMeshFromIntersections(last_cell, t, refs.back(), std::nullopt, true);
+      segment_builder_.startNewMeshFromIntersections(
+        last_cell, t, refs.back(), std::nullopt, false, SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::NewSegment);
     }
   }
 }

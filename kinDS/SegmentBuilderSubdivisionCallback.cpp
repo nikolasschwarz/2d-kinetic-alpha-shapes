@@ -76,18 +76,24 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       const size_t first_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      segment_builder_.finishMeshFromIntersections(first_cell, t, std::nullopt, refs.front());
+      segment_builder_.finishMeshFromIntersections(
+        first_cell, t, std::nullopt, refs.front(), SegmentBuilder::BoundaryEventType::Subdivision,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      segment_builder_.finishMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1]);
+      segment_builder_.finishMeshFromIntersections(
+        mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Subdivision,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
     {
       const size_t last_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      segment_builder_.finishMeshFromIntersections(last_cell, t, refs.back(), std::nullopt);
+      segment_builder_.finishMeshFromIntersections(
+        last_cell, t, refs.back(), std::nullopt, SegmentBuilder::BoundaryEventType::Subdivision,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
   }
 
@@ -193,18 +199,27 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       const size_t first_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      segment_builder_.startNewMeshFromIntersections(first_cell, t, std::nullopt, refs.front(), true);
+      const bool reuse_existing = (first_cell != strand_id);
+      segment_builder_.startNewMeshFromIntersections(
+        first_cell, t, std::nullopt, refs.front(), reuse_existing, SegmentBuilder::BoundaryEventType::Subdivision,
+        SegmentBuilder::BoundarySegmentAction::NewSegment);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      segment_builder_.startNewMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1], true);
+      const bool reuse_existing = (mid_cell != strand_id);
+      segment_builder_.startNewMeshFromIntersections(
+        mid_cell, t, refs[k], refs[k + 1], reuse_existing, SegmentBuilder::BoundaryEventType::Subdivision,
+        SegmentBuilder::BoundarySegmentAction::NewSegment);
     }
     {
       const size_t last_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      segment_builder_.startNewMeshFromIntersections(last_cell, t, refs.back(), std::nullopt, true);
+      const bool reuse_existing = (last_cell != strand_id);
+      segment_builder_.startNewMeshFromIntersections(
+        last_cell, t, refs.back(), std::nullopt, reuse_existing, SegmentBuilder::BoundaryEventType::Subdivision,
+        SegmentBuilder::BoundarySegmentAction::NewSegment);
     }
   }
 }

@@ -27,6 +27,49 @@ using namespace kinDS;
 
 namespace
 {
+const char* boundaryEventTypeToString(SegmentBuilder::BoundaryEventType event_type)
+{
+  switch (event_type)
+  {
+  case SegmentBuilder::BoundaryEventType::Init:
+    return "init";
+  case SegmentBuilder::BoundaryEventType::Section:
+    return "section_event";
+  case SegmentBuilder::BoundaryEventType::Radius:
+    return "radius_event";
+  case SegmentBuilder::BoundaryEventType::Crossing:
+    return "crossing_event";
+  case SegmentBuilder::BoundaryEventType::Subdivision:
+    return "subdivision_event";
+  default:
+    return "unknown_event";
+  }
+}
+
+const char* boundarySegmentActionToString(SegmentBuilder::BoundarySegmentAction segment_action)
+{
+  switch (segment_action)
+  {
+  case SegmentBuilder::BoundarySegmentAction::NewSegment:
+    return "new_segment";
+  case SegmentBuilder::BoundarySegmentAction::SegmentCompleted:
+    return "segment_completed";
+  case SegmentBuilder::BoundarySegmentAction::SegmentRemoved:
+    return "segment_removed";
+  default:
+    return "unknown_action";
+  }
+}
+
+std::string makeBoundaryMeshMetadata(
+  SegmentBuilder::BoundaryEventType event_type, SegmentBuilder::BoundarySegmentAction segment_action)
+{
+  std::ostringstream o;
+  o << "{\"event_type\":\"" << boundaryEventTypeToString(event_type) << "\",\"segment_action\":\""
+    << boundarySegmentActionToString(segment_action) << "\"}";
+  return o.str();
+}
+
 std::optional<std::pair<size_t, size_t>> closingMeshIntersectionListIndices(const KineticDelaunay& kd,
   KineticDelaunay::CrossingData::EdgeIntersectionRef ref)
 {
@@ -875,9 +918,15 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   assert(segment_mesh_pairs.size() == meshes.size());
 }
 
+std::string SegmentBuilder::composeBoundaryMetadata(BoundaryEventType event_type, BoundarySegmentAction segment_action)
+{
+  return makeBoundaryMeshMetadata(event_type, segment_action);
+}
+
 size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, double t,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, bool reuse_existing_pair_and_mesh)
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, bool reuse_existing_pair_and_mesh,
+  BoundaryEventType event_type, BoundarySegmentAction segment_action, bool force_single_seed_vertex)
 {
   if (!start_intersection.has_value() && !end_intersection.has_value())
   {
@@ -991,9 +1040,16 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
   const size_t strand_hint = std::max(he.origin, twin_he.origin);
   const std::optional<size_t> start_voronoi_vertex = start_intersection.has_value() ? std::nullopt : std::optional<size_t>(voronoi_cell_id);
   const std::optional<size_t> end_voronoi_vertex = end_intersection.has_value() ? std::nullopt : std::optional<size_t>(voronoi_cell_id);
+  const std::string boundary_start_meta = composeBoundaryMetadata(event_type, segment_action);
   const size_t start_vertex_index
-    = addMeshletVertex(mesh, boundary_polygon, centroid, start_pos, strand_hint, t, start_voronoi_vertex);
-  const size_t end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, end_pos, strand_hint, t, end_voronoi_vertex);
+    = addMeshletVertex(mesh, boundary_polygon, centroid, start_pos, strand_hint, t, start_voronoi_vertex, boundary_start_meta);
+  const double dx = start_pos.x - end_pos.x;
+  const double dy = start_pos.y - end_pos.y;
+  const double dz = start_pos.z - end_pos.z;
+  const bool same_endpoint = force_single_seed_vertex || (dx * dx + dy * dy + dz * dz) <= 1e-20;
+  const size_t end_vertex_index = same_endpoint
+    ? start_vertex_index
+    : addMeshletVertex(mesh, boundary_polygon, centroid, end_pos, strand_hint, t, end_voronoi_vertex, boundary_start_meta);
 
   std::list<MeshingData> local_segments;
   MeshingData seg { static_cast<int>(start_vertex_index), static_cast<int>(end_vertex_index),
@@ -1041,7 +1097,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
 
 void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double t,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection)
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, BoundaryEventType event_type,
+  BoundarySegmentAction segment_action)
 {
   if (!start_intersection.has_value() && !end_intersection.has_value())
   {
@@ -1114,25 +1171,33 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   const glm::dvec3 new_end_pos = endpoint_position_at_t(false);
   const std::optional<size_t> start_vv = seg.start_half_edge_id < 0 ? std::optional<size_t>(voronoi_cell_id) : std::nullopt;
   const std::optional<size_t> end_vv = seg.end_half_edge_id < 0 ? std::optional<size_t>(voronoi_cell_id) : std::nullopt;
+  const std::string boundary_finish_meta = composeBoundaryMetadata(event_type, segment_action);
   const size_t new_start_vertex_index
-    = addMeshletVertex(mesh, boundary_polygon, centroid, new_start_pos, strand_hint, t, start_vv);
-  const size_t new_end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, strand_hint, t, end_vv);
+    = addMeshletVertex(mesh, boundary_polygon, centroid, new_start_pos, strand_hint, t, start_vv, boundary_finish_meta);
+  const size_t new_end_vertex_index
+    = addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, strand_hint, t, end_vv, boundary_finish_meta);
 
   const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
   const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
+  const int inside_boundary_he_id = (seg.start_half_edge_id >= 0) ? seg.start_half_edge_id : seg.end_half_edge_id;
   if (last_left == last_right)
   {
-    addMeshletTriangle(mesh, new_start_vertex_index, last_right, new_end_vertex_index);
+    addBoundaryIntervalTriangleOriented(
+      mesh, new_start_vertex_index, last_right, new_end_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
   }
   else if (mesh.getVertices()[last_left][2] < mesh.getVertices()[last_right][2])
   {
-    addMeshletTriangle(mesh, last_left, last_right, new_start_vertex_index);
-    addMeshletTriangle(mesh, new_start_vertex_index, last_right, new_end_vertex_index);
+    addBoundaryIntervalTriangleOriented(
+      mesh, last_left, last_right, new_start_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
+    addBoundaryIntervalTriangleOriented(
+      mesh, new_start_vertex_index, last_right, new_end_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
   }
   else
   {
-    addMeshletTriangle(mesh, last_left, last_right, new_end_vertex_index);
-    addMeshletTriangle(mesh, last_left, new_end_vertex_index, new_start_vertex_index);
+    addBoundaryIntervalTriangleOriented(
+      mesh, last_left, last_right, new_end_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
+    addBoundaryIntervalTriangleOriented(
+      mesh, last_left, new_end_vertex_index, new_start_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
   }
 
   seg.mesh_start_vertex_id = static_cast<int>(new_start_vertex_index);
@@ -1323,9 +1388,52 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(glm::dvec3 vertex, glm::dvec2 ce
   return index;
 }
 
-size_t kinDS::SegmentBuilder::addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w)
+size_t kinDS::SegmentBuilder::addMeshletTriangle(
+  VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata)
 {
-  return mesh.addTriangle(u, v, w, u, v, w); // For meshlets, the UVs are assigned per vertex so the indices match
+  return mesh.addTriangle(u, v, w, u, v, w, -1, metadata); // For meshlets, the UVs are assigned per vertex so the indices match
+}
+
+size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(
+  VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id, double t, const std::string& metadata)
+{
+  if (inside_boundary_he_id < 0 || static_cast<size_t>(inside_boundary_he_id) >= kin_del.getGraph().getHalfEdges().size())
+  {
+    return addMeshletTriangle(mesh, u, v, w, metadata);
+  }
+
+  const auto& graph = kin_del.getGraph();
+  const auto& he = graph.getHalfEdges()[static_cast<size_t>(inside_boundary_he_id)];
+  const int a_vid = he.origin;
+  const int b_vid = graph.destination(static_cast<size_t>(inside_boundary_he_id));
+  if (a_vid < 0 || b_vid < 0)
+  {
+    return addMeshletTriangle(mesh, u, v, w, metadata);
+  }
+
+  const glm::dvec2 a = kin_del.getPointAt(t, static_cast<size_t>(a_vid));
+  const glm::dvec2 b = kin_del.getPointAt(t, static_cast<size_t>(b_vid));
+  const glm::dvec2 edge = b - a;
+  const double edge_len2 = glm::dot(edge, edge);
+  if (!(edge_len2 > 1e-24))
+  {
+    return addMeshletTriangle(mesh, u, v, w, metadata);
+  }
+
+  // `inside_boundary_he_id` is directed along the inside boundary. The outside normal is on the right-hand side.
+  const glm::dvec2 outward_n(edge.y, -edge.x);
+  const auto& verts = mesh.getVertices();
+  const glm::dvec3 pu = verts[u];
+  const glm::dvec3 pv = verts[v];
+  const glm::dvec3 pw = verts[w];
+  const glm::dvec3 tri_n = glm::cross(pv - pu, pw - pu);
+  const glm::dvec2 tri_n_xy(tri_n.x, tri_n.y);
+
+  if (glm::dot(tri_n_xy, outward_n) > 0.0)
+  {
+    std::swap(v, w);
+  }
+  return addMeshletTriangle(mesh, u, v, w, metadata);
 }
 
 void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
@@ -1343,7 +1451,7 @@ void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
 
 size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
   const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
-  std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check)
+  std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check, const std::string& metadata)
 {
   const auto warn_degenerate_or_non_finite = [&](const glm::dvec3& p, const char* stage)
   {
@@ -1370,7 +1478,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   {
     warnIfVoronoiVertexOutsideAlphaShape("addMeshletVertex", meshlet_voronoi_vertex_for_alpha_check.value(), vertex);
   }
-  size_t index = mesh.addVertex(vertex);
+  size_t index = mesh.addVertex(vertex, metadata);
   double rel_dist = relativeDistanceFromCenter(boundary_polygon, centroid, glm::dvec2 { vertex[0], vertex[1] });
 
   /*if (rel_dist > 1.0 + std::numeric_limits<double>::epsilon()) {
@@ -2819,19 +2927,22 @@ void SegmentBuilder::init()
     {
       const size_t first_cell
         = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      startNewMeshFromIntersections(first_cell, t, std::nullopt, refs.front());
+      startNewMeshFromIntersections(first_cell, t, std::nullopt, refs.front(), false, BoundaryEventType::Init,
+        BoundarySegmentAction::NewSegment);
     }
 
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
       const size_t mid_cell
         = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      startNewMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1]);
+      startNewMeshFromIntersections(
+        mid_cell, t, refs[k], refs[k + 1], false, BoundaryEventType::Init, BoundarySegmentAction::NewSegment);
     }
 
     {
       const size_t last_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      startNewMeshFromIntersections(last_cell, t, refs.back(), std::nullopt);
+      startNewMeshFromIntersections(last_cell, t, refs.back(), std::nullopt, false, BoundaryEventType::Init,
+        BoundarySegmentAction::NewSegment);
     }
   }
 
@@ -2863,6 +2974,45 @@ void SegmentBuilder::finalize(double t)
     auto& boundary_points = kin_del.component_data.component_boundaries[component_index][0];
 
     finishMesh(i, t, boundary_points);
+  }
+
+  // Finalize boundary-interval meshes once more at the final time for all boundary Delaunay-edge sections.
+  for (size_t i = 0; i < half_edge_count; i += 2)
+  {
+    if (!kin_del.isOnComponentBoundary(i))
+    {
+      continue;
+    }
+    const size_t d_edge_id = i / 2;
+    const auto& d_intersections = kin_del.getCrossingData().delaunay_edge_intersections[d_edge_id];
+    if (d_intersections.empty())
+    {
+      continue;
+    }
+
+    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
+    refs.reserve(d_intersections.size());
+    for (const auto& ref : d_intersections)
+    {
+      refs.push_back(ref);
+    }
+
+    {
+      const size_t first_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
+      finishMeshFromIntersections(first_cell, t, std::nullopt, refs.front(), BoundaryEventType::Section,
+        BoundarySegmentAction::SegmentCompleted);
+    }
+    for (size_t k = 0; k + 1 < refs.size(); ++k)
+    {
+      const size_t mid_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      finishMeshFromIntersections(
+        mid_cell, t, refs[k], refs[k + 1], BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
+    }
+    {
+      const size_t last_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+      finishMeshFromIntersections(
+        last_cell, t, refs.back(), std::nullopt, BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
+    }
   }
 
   // finalize closing meshes

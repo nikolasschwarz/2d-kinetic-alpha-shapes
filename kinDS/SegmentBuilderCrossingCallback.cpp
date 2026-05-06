@@ -27,14 +27,14 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
     return;
   }
 
-  // Snapshot the crossed Delaunay edge intersection order + interval-mesh links before CrossingData mutates them.
-  // We compare this against the post-event state in afterEvent to detect removed/inserted intersections.
+  // Snapshot crossed-edge boundary interval links before CrossingData mutates them.
   crossing_edge_snapshot_.clear();
   crossing_edge_snapshot_delaunay_edge_id_ = crossing->half_edge_id / 2;
   if (!segment_builder_.kin_del.isOnComponentBoundary(crossing->half_edge_id))
   {
     return;
   }
+
   const auto& crossing_data = segment_builder_.kin_del.getCrossingData();
   if (crossing_edge_snapshot_delaunay_edge_id_ >= crossing_data.delaunay_edge_intersections.size())
   {
@@ -87,88 +87,17 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     return;
   }
 
+  // Boundary-interval crossing handling on the crossed Delaunay edge.
   const size_t crossed_d_edge = crossing->half_edge_id / 2;
   const auto& crossing_data_after = segment_builder_.kin_del.getCrossingData();
-  if (crossed_d_edge < crossing_data_after.delaunay_edge_intersections.size())
+  if (crossed_d_edge < crossing_data_after.delaunay_edge_intersections.size() && !crossing_edge_snapshot_.empty())
   {
-    // Post-event intersection order along the crossed Delaunay edge.
     const auto& d_refs_after = crossing_data_after.delaunay_edge_intersections[crossed_d_edge];
     std::vector<size_t> after_voronoi_edge_ids;
     after_voronoi_edge_ids.reserve(d_refs_after.size());
     for (const auto& r : d_refs_after)
     {
       after_voronoi_edge_ids.push_back(r->voronoi_edge_id);
-    }
-
-    size_t component_id = segment_builder_.kin_del.component_data.component_map[graph.destination(crossing->half_edge_id)];
-    auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-    auto centroid_local = segment_builder_.kin_del.component_data.component_centroids[component_id];
-    const glm::dvec3 event_pos(crossing->position, crossing->occurrence_time);
-
-    auto extend_pair_at_removed_intersection = [&](size_t pair_idx, bool remove_start_endpoint)
-    {
-      if (pair_idx == static_cast<size_t>(-1) || pair_idx >= segment_builder_.intersection_mesh_pair_metadata.size()
-        || pair_idx >= segment_builder_.intersection_meshes.size()
-        || pair_idx >= segment_builder_.intersection_mesh_pair_last_left_and_right_vertex.size())
-      {
-        return;
-      }
-
-      auto& mesh = segment_builder_.intersection_meshes[pair_idx];
-      auto& segs = segment_builder_.intersection_mesh_pair_last_left_and_right_vertex[pair_idx];
-      if (segs.empty())
-      {
-        return;
-      }
-      auto& seg = segs.front();
-      const size_t new_vid = segment_builder_.addMeshletVertex(
-        mesh, boundary_polygon, centroid_local, event_pos, graph.destination(crossing->half_edge_id), crossing->occurrence_time);
-      const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
-      const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
-      // Finish/extend current strip piece up to the crossing event location.
-      segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vid);
-
-      const auto& md = segment_builder_.intersection_mesh_pair_metadata[pair_idx];
-      const bool is_outer = md.start_delaunay_edge_id == static_cast<size_t>(-1) || md.end_delaunay_edge_id == static_cast<size_t>(-1);
-      if (is_outer)
-      {
-        // Outer interval terminates at this event (endpoint on the "null side"), so no active strip remains.
-        segs.clear();
-        return;
-      }
-
-      if (remove_start_endpoint)
-      {
-        // Inner interval: only one endpoint is replaced by the event vertex; the other endpoint keeps advancing.
-        seg.mesh_start_vertex_id = static_cast<int>(new_vid);
-        seg.start_half_edge_id = -1;
-        seg.start_crossing.reset();
-      }
-      else
-      {
-        seg.mesh_end_vertex_id = static_cast<int>(new_vid);
-        seg.end_half_edge_id = -1;
-        seg.end_crossing.reset();
-      }
-    };
-
-    for (const auto& old_ref : crossing_edge_snapshot_)
-    {
-      if (std::find(after_voronoi_edge_ids.begin(), after_voronoi_edge_ids.end(), old_ref.voronoi_edge_id)
-        != after_voronoi_edge_ids.end())
-      {
-        continue;
-      }
-      if (old_ref.prev_pair_idx == static_cast<size_t>(-1) && old_ref.next_pair_idx == static_cast<size_t>(-1))
-      {
-        KINDS_WARNING("Boundary interval crossing removal has no linked mesh pair on de=" << crossed_d_edge
-                                                                                           << " ve=" << old_ref.voronoi_edge_id
-                                                                                           << " t=" << crossing->occurrence_time
-                                                                                           << " (likely stale links after global recompute).");
-      }
-      // Along the crossed Delaunay edge: `prev` interval ends at removed intersection, `next` interval starts at it.
-      extend_pair_at_removed_intersection(old_ref.prev_pair_idx, false);
-      extend_pair_at_removed_intersection(old_ref.next_pair_idx, true);
     }
 
     std::vector<size_t> old_voronoi_edge_ids;
@@ -178,39 +107,144 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       old_voronoi_edge_ids.push_back(s.voronoi_edge_id);
     }
 
-    for (const auto& new_ref : d_refs_after)
+    struct RemovedRef
     {
-      if (std::find(old_voronoi_edge_ids.begin(), old_voronoi_edge_ids.end(), new_ref->voronoi_edge_id) != old_voronoi_edge_ids.end())
+      size_t old_index = static_cast<size_t>(-1);
+      CrossingEdgeSnapshotEntry snapshot;
+    };
+    std::vector<RemovedRef> removed;
+    std::vector<std::pair<size_t, KineticDelaunay::CrossingData::EdgeIntersectionRef>> inserted;
+    for (size_t i = 0; i < crossing_edge_snapshot_.size(); ++i)
+    {
+      const auto& old_ref = crossing_edge_snapshot_[i];
+      if (std::find(after_voronoi_edge_ids.begin(), after_voronoi_edge_ids.end(), old_ref.voronoi_edge_id)
+        == after_voronoi_edge_ids.end())
       {
-        continue;
+        removed.push_back(RemovedRef { i, old_ref });
       }
-      const auto it_pos = std::find(after_voronoi_edge_ids.begin(), after_voronoi_edge_ids.end(), new_ref->voronoi_edge_id);
-      if (it_pos == after_voronoi_edge_ids.end())
+    }
+    for (size_t i = 0; i < d_refs_after.size(); ++i)
+    {
+      auto ref = d_refs_after.begin();
+      std::advance(ref, static_cast<long long>(i));
+      auto r = *ref;
+      if (std::find(old_voronoi_edge_ids.begin(), old_voronoi_edge_ids.end(), r->voronoi_edge_id) == old_voronoi_edge_ids.end())
       {
-        continue;
+        inserted.emplace_back(i, r);
       }
-      const size_t pos = static_cast<size_t>(std::distance(after_voronoi_edge_ids.begin(), it_pos));
-      if (!(pos == 0 || pos + 1 == after_voronoi_edge_ids.size()))
+    }
+
+    const glm::dvec3 event_pos(crossing->position, crossing->occurrence_time);
+    const size_t component_id = segment_builder_.kin_del.component_data.component_map[graph.destination(crossing->half_edge_id)];
+    auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
+    const auto centroid_local = segment_builder_.kin_del.component_data.component_centroids[component_id];
+    const int inside_boundary_he_id
+      = segment_builder_.kin_del.isOnComponentBoundaryOutside(2 * crossed_d_edge) ? static_cast<int>(2 * crossed_d_edge + 1)
+                                                                                   : static_cast<int>(2 * crossed_d_edge);
+    const std::string crossing_remove_meta = SegmentBuilder::composeBoundaryMetadata(
+      SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::SegmentRemoved);
+
+    auto update_pair_endpoint = [&](size_t pair_idx, bool update_start_endpoint,
+                                  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> new_crossing,
+                                  bool clear_segment_after_update) {
+      if (pair_idx == static_cast<size_t>(-1) || pair_idx >= segment_builder_.intersection_meshes.size()
+        || pair_idx >= segment_builder_.intersection_mesh_pair_last_left_and_right_vertex.size())
       {
-        KINDS_WARNING("Boundary interval crossing insertion is not at de-list endpoint on de=" << crossed_d_edge
-                                                                                                << " ve="
-                                                                                                << new_ref->voronoi_edge_id
-                                                                                                << " pos=" << pos << "/"
-                                                                                                << after_voronoi_edge_ids.size()
-                                                                                                << " t=" << crossing->occurrence_time
-                                                                                                << " (currently unsupported; kept for later incremental handling).");
-        continue;
+        return;
       }
-      if (pos == 0 || pos + 1 == after_voronoi_edge_ids.size())
+      auto& mesh = segment_builder_.intersection_meshes[pair_idx];
+      auto& segs = segment_builder_.intersection_mesh_pair_last_left_and_right_vertex[pair_idx];
+      if (segs.empty())
       {
-        // Newly inserted boundary-end intersection creates a new outer interval [null,ref] or [ref,null].
-        const bool at_front = pos == 0;
-        const size_t cell = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(
-          crossed_d_edge, at_front ? std::nullopt : std::optional(new_ref), at_front ? std::optional(new_ref) : std::nullopt);
-        segment_builder_.startNewMeshFromIntersections(
-          cell, crossing->occurrence_time, at_front ? std::nullopt : std::optional(new_ref),
-          at_front ? std::optional(new_ref) : std::nullopt, false);
+        return;
       }
+      auto& seg = segs.front();
+      if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+      {
+        return;
+      }
+      const size_t new_vid = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid_local, event_pos,
+        graph.destination(crossing->half_edge_id), crossing->occurrence_time, std::nullopt, crossing_remove_meta);
+      const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
+      const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
+      segment_builder_.addBoundaryIntervalTriangleOriented(
+        mesh, last_left, last_right, new_vid, inside_boundary_he_id, crossing->occurrence_time, crossing_remove_meta);
+
+      if (clear_segment_after_update)
+      {
+        segs.clear();
+        return;
+      }
+
+      if (update_start_endpoint)
+      {
+        seg.mesh_start_vertex_id = static_cast<int>(new_vid);
+        seg.start_half_edge_id = inside_boundary_he_id;
+        seg.start_crossing = new_crossing;
+      }
+      else
+      {
+        seg.mesh_end_vertex_id = static_cast<int>(new_vid);
+        seg.end_half_edge_id = inside_boundary_he_id;
+        seg.end_crossing = new_crossing;
+      }
+    };
+
+    if (removed.size() == 2 && inserted.size() == 1)
+    {
+      // Case 1 (merge): two removed, one inserted.
+      std::sort(removed.begin(), removed.end(),
+        [](const RemovedRef& a, const RemovedRef& b) { return a.old_index < b.old_index; });
+      auto inserted_ref = inserted.front().second;
+      const auto& left_removed = removed[0].snapshot;
+      const auto& right_removed = removed[1].snapshot;
+
+      size_t middle_pair = static_cast<size_t>(-1);
+      if (left_removed.next_pair_idx != static_cast<size_t>(-1) && left_removed.next_pair_idx == right_removed.prev_pair_idx)
+      {
+        middle_pair = left_removed.next_pair_idx;
+      }
+      else if (right_removed.next_pair_idx != static_cast<size_t>(-1) && right_removed.next_pair_idx == left_removed.prev_pair_idx)
+      {
+        middle_pair = right_removed.next_pair_idx;
+      }
+
+      // The interval between the two removed intersections ends here.
+      update_pair_endpoint(middle_pair, false, std::nullopt, true);
+
+      // Adjacent intervals get a new vertex and become delimited by the newly inserted intersection.
+      update_pair_endpoint(left_removed.prev_pair_idx, false, inserted_ref, false);
+      update_pair_endpoint(right_removed.next_pair_idx, true, inserted_ref, false);
+      inserted_ref->prev_segment_mesh_pair_index = left_removed.prev_pair_idx;
+      inserted_ref->next_segment_mesh_pair_index = right_removed.next_pair_idx;
+    }
+    else if (removed.size() == 1 && inserted.size() == 2)
+    {
+      // Case 2 (split): one removed, two inserted.
+      std::sort(inserted.begin(), inserted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+      auto left_new = inserted[0].second;
+      auto right_new = inserted[1].second;
+      const auto& old = removed[0].snapshot;
+
+      // Old adjacent intervals are advanced to event position and retargeted to new delimiters.
+      update_pair_endpoint(old.prev_pair_idx, false, left_new, false);
+      update_pair_endpoint(old.next_pair_idx, true, right_new, false);
+      left_new->prev_segment_mesh_pair_index = old.prev_pair_idx;
+      right_new->next_segment_mesh_pair_index = old.next_pair_idx;
+
+      // New middle interval emerges between the two inserted intersections.
+      const size_t mid_cell
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(crossed_d_edge, left_new, right_new);
+      const size_t mid_pair = segment_builder_.startNewMeshFromIntersections(mid_cell, crossing->occurrence_time, left_new,
+        right_new, false, SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::NewSegment,
+        true);
+      (void)mid_pair;
+    }
+    else
+    {
+      KINDS_WARNING("Boundary crossing case not handled yet on de=" << crossed_d_edge << " removed=" << removed.size()
+                                                                    << " inserted=" << inserted.size() << " t="
+                                                                    << crossing->occurrence_time);
     }
   }
 
