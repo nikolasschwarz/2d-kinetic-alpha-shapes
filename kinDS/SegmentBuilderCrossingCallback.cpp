@@ -138,15 +138,33 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     const size_t component_id = segment_builder_.kin_del.component_data.component_map[graph.destination(crossing->half_edge_id)];
     auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
     const auto centroid_local = segment_builder_.kin_del.component_data.component_centroids[component_id];
+    // CrossingData intersection lists are ordered along the even half-edge direction.
+    // Boundary "outside" direction can be even or odd, so convert list-order left/right accordingly.
+    const bool outside_direction_matches_list_order = segment_builder_.kin_del.isOnComponentBoundaryOutside(2 * crossed_d_edge);
     const int inside_boundary_he_id
       = segment_builder_.kin_del.isOnComponentBoundaryOutside(2 * crossed_d_edge) ? static_cast<int>(2 * crossed_d_edge + 1)
                                                                                    : static_cast<int>(2 * crossed_d_edge);
     const std::string crossing_remove_meta = SegmentBuilder::composeBoundaryMetadata(
       SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::SegmentRemoved);
+    const std::string crossing_update_meta = SegmentBuilder::composeBoundaryMetadata(
+      SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
+    auto with_crossing_case = [](const std::string& base_meta, const char* case_tag) -> std::string
+    {
+      if (base_meta.empty() || base_meta.back() != '}')
+      {
+        return base_meta;
+      }
+      std::string out = base_meta;
+      out.pop_back();
+      out += ",\"crossing_case\":\"";
+      out += case_tag;
+      out += "\"}";
+      return out;
+    };
 
     auto update_pair_endpoint = [&](size_t pair_idx, bool update_start_endpoint,
                                   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> new_crossing,
-                                  bool clear_segment_after_update) {
+                                  bool clear_segment_after_update, const std::string& metadata) {
       if (pair_idx == static_cast<size_t>(-1) || pair_idx >= segment_builder_.intersection_meshes.size()
         || pair_idx >= segment_builder_.intersection_mesh_pair_last_left_and_right_vertex.size())
       {
@@ -163,12 +181,53 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       {
         return;
       }
+      bool resolved_update_start_endpoint = update_start_endpoint;
+      // Keep endpoint updates consistent with the canonical crossed-edge direction:
+      // CrossingData list order follows even half-edge direction, so pairs on the even-origin side
+      // correspond to "prev" (update end), while odd-origin side corresponds to "next" (update start).
+      const size_t he_even = 2 * crossed_d_edge;
+      const size_t he_odd = he_even + 1;
+      if (pair_idx < segment_builder_.intersection_mesh_pair_metadata.size() && he_odd < graph.getHalfEdges().size())
+      {
+        const auto& pair_meta = segment_builder_.intersection_mesh_pair_metadata[pair_idx];
+        const int even_origin = graph.getHalfEdges()[he_even].origin;
+        const int odd_origin = graph.getHalfEdges()[he_odd].origin;
+        if (even_origin >= 0 && odd_origin >= 0)
+        {
+          const size_t even_origin_cell = static_cast<size_t>(even_origin);
+          const size_t odd_origin_cell = static_cast<size_t>(odd_origin);
+          if (pair_meta.voronoi_cell_id == even_origin_cell)
+          {
+            resolved_update_start_endpoint = false; // prev-side => end endpoint.
+          }
+          else if (pair_meta.voronoi_cell_id == odd_origin_cell)
+          {
+            resolved_update_start_endpoint = true; // next-side => start endpoint.
+          }
+        }
+      }
+      auto with_pos = [](const std::string& base_meta, const char* pos) -> std::string
+      {
+        if (base_meta.empty() || base_meta.back() != '}')
+        {
+          return base_meta;
+        }
+        std::string out = base_meta;
+        out.pop_back();
+        out += ",\"pos\":\"";
+        out += pos;
+        out += "\"}";
+        return out;
+      };
+      const std::string vertex_meta = with_pos(metadata, resolved_update_start_endpoint ? "left" : "right");
+      const glm::dvec3 vertex_color
+        = resolved_update_start_endpoint ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
       const size_t new_vid = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid_local, event_pos,
-        graph.destination(crossing->half_edge_id), crossing->occurrence_time, std::nullopt, crossing_remove_meta);
+        graph.destination(crossing->half_edge_id), crossing->occurrence_time, std::nullopt, vertex_meta, vertex_color);
       const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
       const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
       segment_builder_.addBoundaryIntervalTriangleOriented(
-        mesh, last_left, last_right, new_vid, inside_boundary_he_id, crossing->occurrence_time, crossing_remove_meta);
+        mesh, last_left, last_right, new_vid, inside_boundary_he_id, crossing->occurrence_time, metadata);
 
       if (clear_segment_after_update)
       {
@@ -176,7 +235,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         return;
       }
 
-      if (update_start_endpoint)
+      if (resolved_update_start_endpoint)
       {
         seg.mesh_start_vertex_id = static_cast<int>(new_vid);
         seg.start_half_edge_id = inside_boundary_he_id;
@@ -192,12 +251,17 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
     if (removed.size() == 2 && inserted.size() == 1)
     {
+      KINDS_DEBUG("Boundary crossing case: merge_2_to_1 on de=" << crossed_d_edge << " t=" << crossing->occurrence_time);
+      const std::string crossing_remove_meta_case = with_crossing_case(crossing_remove_meta, "merge_2_to_1");
+      const std::string crossing_update_meta_case = with_crossing_case(crossing_update_meta, "merge_2_to_1");
       // Case 1 (merge): two removed, one inserted.
       std::sort(removed.begin(), removed.end(),
         [](const RemovedRef& a, const RemovedRef& b) { return a.old_index < b.old_index; });
       auto inserted_ref = inserted.front().second;
-      const auto& left_removed = removed[0].snapshot;
-      const auto& right_removed = removed[1].snapshot;
+      const auto& left_removed
+        = removed[outside_direction_matches_list_order ? 0 : 1].snapshot;
+      const auto& right_removed
+        = removed[outside_direction_matches_list_order ? 1 : 0].snapshot;
 
       size_t middle_pair = static_cast<size_t>(-1);
       if (left_removed.next_pair_idx != static_cast<size_t>(-1) && left_removed.next_pair_idx == right_removed.prev_pair_idx)
@@ -210,25 +274,27 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       }
 
       // The interval between the two removed intersections ends here.
-      update_pair_endpoint(middle_pair, false, std::nullopt, true);
+      update_pair_endpoint(middle_pair, false, std::nullopt, true, crossing_remove_meta_case);
 
       // Adjacent intervals get a new vertex and become delimited by the newly inserted intersection.
-      update_pair_endpoint(left_removed.prev_pair_idx, false, inserted_ref, false);
-      update_pair_endpoint(right_removed.next_pair_idx, true, inserted_ref, false);
+      update_pair_endpoint(left_removed.prev_pair_idx, false, inserted_ref, false, crossing_update_meta_case);
+      update_pair_endpoint(right_removed.next_pair_idx, true, inserted_ref, false, crossing_update_meta_case);
       inserted_ref->prev_segment_mesh_pair_index = left_removed.prev_pair_idx;
       inserted_ref->next_segment_mesh_pair_index = right_removed.next_pair_idx;
     }
     else if (removed.size() == 1 && inserted.size() == 2)
     {
+      KINDS_DEBUG("Boundary crossing case: split_1_to_2 on de=" << crossed_d_edge << " t=" << crossing->occurrence_time);
+      const std::string crossing_update_meta_case = with_crossing_case(crossing_update_meta, "split_1_to_2");
       // Case 2 (split): one removed, two inserted.
       std::sort(inserted.begin(), inserted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-      auto left_new = inserted[0].second;
-      auto right_new = inserted[1].second;
+      auto left_new = inserted[outside_direction_matches_list_order ? 0 : 1].second;
+      auto right_new = inserted[outside_direction_matches_list_order ? 1 : 0].second;
       const auto& old = removed[0].snapshot;
 
       // Old adjacent intervals are advanced to event position and retargeted to new delimiters.
-      update_pair_endpoint(old.prev_pair_idx, false, left_new, false);
-      update_pair_endpoint(old.next_pair_idx, true, right_new, false);
+      update_pair_endpoint(old.prev_pair_idx, false, left_new, false, crossing_update_meta_case);
+      update_pair_endpoint(old.next_pair_idx, true, right_new, false, crossing_update_meta_case);
       left_new->prev_segment_mesh_pair_index = old.prev_pair_idx;
       right_new->next_segment_mesh_pair_index = old.next_pair_idx;
 

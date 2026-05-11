@@ -64,19 +64,21 @@ std::array<double, 3> barycentricCoordinates(
   return { u, v, w };
 }
 
-size_t VoronoiMesh::addVertex(double x, double y, double z, const std::string& metadata)
+size_t VoronoiMesh::addVertex(double x, double y, double z, const std::string& metadata, const glm::dvec3& color)
 {
   size_t index = vertices.size();
   vertices.emplace_back(glm::dvec3 { x, y, z });
   vertex_metadata.push_back(metadata);
+  vertex_colors.push_back(color);
   return index;
 }
 
-size_t VoronoiMesh::addVertex(const glm::dvec3& p, const std::string& metadata)
+size_t VoronoiMesh::addVertex(const glm::dvec3& p, const std::string& metadata, const glm::dvec3& color)
 {
   size_t index = vertices.size();
   vertices.emplace_back(p);
   vertex_metadata.push_back(metadata);
+  vertex_colors.push_back(color);
   return index;
 }
 
@@ -157,6 +159,14 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   {
     vertex_metadata.insert(vertex_metadata.end(), other.vertices.size(), "{}");
   }
+  if (other.vertex_colors.size() == other.vertices.size())
+  {
+    vertex_colors.insert(vertex_colors.end(), other.vertex_colors.begin(), other.vertex_colors.end());
+  }
+  else
+  {
+    vertex_colors.insert(vertex_colors.end(), other.vertices.size(), glm::dvec3(1.0));
+  }
 
   size_t old_vertex_indices_size = triangles.size();
   triangles.insert(triangles.end(), other.triangles.begin(), other.triangles.end());
@@ -216,6 +226,8 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   newVerts.reserve(vertices.size());
   std::vector<std::string> new_vertex_metadata;
   new_vertex_metadata.reserve(vertices.size());
+  std::vector<glm::dvec3> new_vertex_colors;
+  new_vertex_colors.reserve(vertices.size());
 
   std::vector<size_t> remap(vertices.size(), size_t(-1));
 
@@ -252,6 +264,14 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
       {
         new_vertex_metadata.push_back("{}");
       }
+      if (i < vertex_colors.size())
+      {
+        new_vertex_colors.push_back(vertex_colors[i]);
+      }
+      else
+      {
+        new_vertex_colors.push_back(glm::dvec3(1.0));
+      }
       remap[i] = newIndex;
     }
     else
@@ -268,6 +288,7 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
 
   vertices.swap(newVerts);
   vertex_metadata.swap(new_vertex_metadata);
+  vertex_colors.swap(new_vertex_colors);
 
   return remap;
 }
@@ -524,6 +545,8 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
   new_vertices.reserve(new_count);
   std::vector<std::string> new_vertex_metadata;
   new_vertex_metadata.reserve(new_count);
+  std::vector<glm::dvec3> new_vertex_colors;
+  new_vertex_colors.reserve(new_count);
 
   for (size_t i = 0; i < n_vertices; ++i)
   {
@@ -538,10 +561,19 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
       {
         new_vertex_metadata.push_back("{}");
       }
+      if (i < vertex_colors.size())
+      {
+        new_vertex_colors.push_back(vertex_colors[i]);
+      }
+      else
+      {
+        new_vertex_colors.push_back(glm::dvec3(1.0));
+      }
     }
   }
   vertices.swap(new_vertices);
   vertex_metadata.swap(new_vertex_metadata);
+  vertex_colors.swap(new_vertex_colors);
 
   // 4. Compact per-vertex normals if needed
   if (normal_mode == PerVertex)

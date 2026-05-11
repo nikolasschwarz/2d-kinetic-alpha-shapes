@@ -164,8 +164,8 @@ class HalfEdgeDelaunayGraphToSVG
       filename, svg::Layout(dimensions, svg::Layout::TopLeft, 1.0, svg::Point(-bb.min_x, -bb.min_y)));
   }
 
-  // [delaunay_edge_id, voronoi_edge_id, delaunay_list_index, voronoi_list_index]
-  typedef std::array<size_t, 4> IntersectionDebugInfo;
+  // [delaunay_edge_id, voronoi_edge_id, delaunay_list_index, voronoi_list_index, prev_pair_idx, next_pair_idx]
+  typedef std::array<size_t, 6> IntersectionDebugInfo;
 
   static bool lineIntersection(
     const glm::dvec2& a0, const glm::dvec2& a1, const glm::dvec2& b0, const glm::dvec2& b1, glm::dvec2& out)
@@ -237,11 +237,11 @@ class HalfEdgeDelaunayGraphToSVG
     return false;
   }
 
-  static std::vector<std::pair<glm::dvec2, std::pair<size_t, size_t>>> computeIntersectionMarkerData(
+  static std::vector<std::pair<glm::dvec2, std::array<size_t, 4>>> computeIntersectionMarkerData(
     const std::vector<glm::dvec2>& points, const HalfEdgeDelaunayGraph& graph,
     const std::vector<IntersectionDebugInfo>& intersection_debug_info)
   {
-    std::vector<std::pair<glm::dvec2, std::pair<size_t, size_t>>> markers;
+    std::vector<std::pair<glm::dvec2, std::array<size_t, 4>>> markers;
     auto circumcenters = graph.computeCircumcenters(points);
     markers.reserve(intersection_debug_info.size());
 
@@ -251,6 +251,8 @@ class HalfEdgeDelaunayGraphToSVG
       size_t v_edge_id = item[1];
       size_t d_index = item[2];
       size_t v_index = item[3];
+      size_t prev_pair_idx = item[4];
+      size_t next_pair_idx = item[5];
 
       glm::dvec2 p0, p1, q0, q1;
       if (!getDelaunayEdgeEndpoints(points, graph, d_edge_id, p0, p1))
@@ -273,7 +275,7 @@ class HalfEdgeDelaunayGraphToSVG
           << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
         continue;
       }
-      markers.push_back({ intersection, { d_index, v_index } });
+      markers.push_back({ intersection, { d_index, v_index, prev_pair_idx, next_pair_idx } });
     }
     return markers;
   }
@@ -435,19 +437,24 @@ class HalfEdgeDelaunayGraphToSVG
 
       if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1)
       {
+        glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
+        glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+        glm::dvec2 midpoint = (start + end) / 2.0;
+        glm::dvec2 edge_dir = glm::normalize(end - start);
+        glm::dvec2 edge_normal(edge_dir[1], -edge_dir[0]);
+
         // Do this for both half-edges
         for (size_t i = 0; i < 2; i++)
         {
-
-          glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
-          glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
-          glm::dvec2 midpoint = (start + end) / 2.0;
-          glm::dvec2 edge_dir = glm::normalize(end - start);
-          glm::dvec2 edge_normal(edge_dir[1], -edge_dir[0]); // Rotate 90 degrees to get normal
+          const size_t current_he_id = he_id + i;
+          const int source = graph.getHalfEdges()[current_he_id].origin;
+          const int destination = graph.getHalfEdges()[current_he_id ^ 1].origin;
+          const std::string label_text = std::to_string(current_he_id) + " (" + std::to_string(source) + " --> "
+            + std::to_string(destination) + ")";
+          // Rotate 90 degrees to get normal
           glm::dvec2 label_pos
             = midpoint + std::pow(-1, i) * 0.01 * edge_normal - glm::dvec2(0.005, 0.005); // Offset by 0.02 units
-          labels.push_back(
-            Label(label_pos[0], label_pos[1], std::to_string(he_id + i), svg::Color(svg::Color::Yellow), 0.01));
+          labels.push_back(Label(label_pos[0], label_pos[1], label_text, svg::Color(svg::Color::Yellow), 0.01));
         }
       }
     }
@@ -530,23 +537,24 @@ class HalfEdgeDelaunayGraphToSVG
     }
 
     // Helper to draw intersection markers and labels, if the caller provides them.
-    auto drawIntersections = [&](const std::vector<std::pair<glm::dvec2, std::pair<size_t, size_t>>>& intersections)
+    auto drawIntersections = [&](const std::vector<std::pair<glm::dvec2, std::array<size_t, 4>>>& intersections)
     {
       svg::Color light_blue(173, 216, 230);
       svg::Color pale_pink(255, 182, 193);
+      svg::Color mint_green(170, 255, 170);
       for (const auto& inter : intersections)
       {
         glm::dvec2 p = inter.first;
         if (!std::isfinite(p.x) || !std::isfinite(p.y))
         {
           KINDS_DEBUG("Intersection marker skip: non-finite intersection point for listIdx(d,v)=("
-            << inter.second.first << "," << inter.second.second << ")");
+            << inter.second[0] << "," << inter.second[1] << ")");
           continue;
         }
         if (!isWithinBoundingBox(p, bb))
         {
           KINDS_DEBUG("Intersection marker skip: outside bbox for (d,v)=("
-            << inter.second.first << "," << inter.second.second << ") at (" << p.x << "," << p.y << ")");
+            << inter.second[0] << "," << inter.second[1] << ") at (" << p.x << "," << p.y << ")");
           continue;
         }
 
@@ -560,8 +568,8 @@ class HalfEdgeDelaunayGraphToSVG
         // crude glyph advance for this SVG font size/layout
         const double dx = 0.0055;
 
-        std::string d_text = std::to_string(inter.second.first);
-        std::string v_text = std::to_string(inter.second.second);
+        std::string d_text = std::to_string(inter.second[0]);
+        std::string v_text = std::to_string(inter.second[1]);
 
         // "(d," in light blue
         std::string prefix_text = "(" + d_text + ",";
@@ -574,6 +582,17 @@ class HalfEdgeDelaunayGraphToSVG
         // ")" in light blue
         double suffix_x = vx + dx * static_cast<double>(v_text.size());
         doc << svg::Text(svg::Point(suffix_x, y0), ")", svg::Fill(light_blue), svg::Font(font_size));
+
+        // Additional line below the relative indices to avoid overlap with "(d,v)".
+        // Skip it when both links are invalid to keep the debug view uncluttered.
+        if (!(inter.second[2] == static_cast<size_t>(-1) && inter.second[3] == static_cast<size_t>(-1)))
+        {
+          const double y1 = y0 + 0.012;
+          const std::string prev_text = (inter.second[2] == static_cast<size_t>(-1)) ? "X" : std::to_string(inter.second[2]);
+          const std::string next_text = (inter.second[3] == static_cast<size_t>(-1)) ? "X" : std::to_string(inter.second[3]);
+          const std::string mesh_pair_text = "m(" + prev_text + "," + next_text + ")";
+          doc << svg::Text(svg::Point(x0, y1), mesh_pair_text, svg::Fill(mint_green), svg::Font(font_size));
+        }
       }
     };
 

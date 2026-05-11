@@ -52,12 +52,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       continue;
     }
 
-    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
-    refs.reserve(d_intersections.size());
-    for (const auto& ref : d_intersections)
-    {
-      refs.push_back(ref);
-    }
+    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+      = segment_builder_.getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
 
     {
       const size_t first_cell
@@ -364,6 +360,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   const auto& crossing_data = segment_builder_.kin_del.getCrossingData();
   const size_t affected_face_id = graph.getHalfEdges()[radius->half_edge_id].face;
   const double t = radius->occurrence_time;
+  const bool new_inside_state = segment_builder_.kin_del.getFaceInside(affected_face_id);
+  const bool orient_upwards = !new_inside_state; // inside -> outside transition should face +Z
   const auto affected_face_he = graph.getFaces()[affected_face_id].half_edges;
 
   auto edge_endpoints = [&](size_t d_edge_id) -> std::array<int, 2>
@@ -1118,6 +1116,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         return;
       }
+      const std::string radius_regular_meta = "{\"event_type\":\"Radius\",\"mesh_type\":\"regular\"}";
       VoronoiMesh mesh;
       std::vector<size_t> ids;
       ids.reserve(poly.size());
@@ -1126,12 +1125,34 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         ids.push_back(segment_builder_.addMeshletVertex(mesh, segment_builder_.kin_del.component_data.component_boundaries[component_id][0],
           segment_builder_.kin_del.component_data.component_centroids[component_id], p, cell_id, t));
       }
+      double signed_area2 = 0.0;
+      for (size_t i = 0; i < ids.size(); ++i)
+      {
+        const auto& a = poly[i];
+        const auto& b = poly[(i + 1) % poly.size()];
+        signed_area2 += (a.x * b.y - b.x * a.y);
+      }
+      const bool polygon_is_ccw = signed_area2 > 0.0;
+      const bool use_default_winding = orient_upwards ? polygon_is_ccw : !polygon_is_ccw;
       for (size_t i = 2; i < ids.size(); ++i)
       {
-        segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i - 1], ids[i]);
+        if (use_default_winding)
+        {
+          segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i - 1], ids[i], radius_regular_meta);
+        }
+        else
+        {
+          segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i], ids[i - 1], radius_regular_meta);
+        }
       }
-      segment_builder_.segment_mesh_pairs.push_back(MeshStructure::SegmentMeshPair { static_cast<size_t>(-1),
-        static_cast<size_t>(-1), 0, 0, 1 });
+      size_t owner_segment_id = static_cast<size_t>(-1);
+      if (cell_id < segment_builder_.strand_to_segment_indices.size()
+        && !segment_builder_.strand_to_segment_indices[cell_id].empty())
+      {
+        owner_segment_id = segment_builder_.strand_to_segment_indices[cell_id].back();
+      }
+      segment_builder_.segment_mesh_pairs.push_back(
+        MeshStructure::SegmentMeshPair { owner_segment_id, static_cast<size_t>(-1), 0, 0, 1 });
       std::string suffix = std::string("_delaunay") + std::to_string(affected_face_id) + "_strand" + std::to_string(cell_id);
       if (failed)
       {
@@ -1213,12 +1234,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       continue;
     }
 
-    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
-    refs.reserve(d_intersections.size());
-    for (const auto& ref : d_intersections)
-    {
-      refs.push_back(ref);
-    }
+    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+      = segment_builder_.getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
 
     {
       const size_t first_cell

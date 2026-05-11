@@ -47,12 +47,8 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
       continue;
     }
 
-    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
-    refs.reserve(d_intersections.size());
-    for (const auto& ref : d_intersections)
-    {
-      refs.push_back(ref);
-    }
+    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+      = segment_builder_.getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
 
     {
       const size_t first_cell

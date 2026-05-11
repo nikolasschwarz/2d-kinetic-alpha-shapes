@@ -31,23 +31,45 @@ class ObjExporter
     const auto& normals = mesh.getNormals();
     const auto& face_metadata = mesh.getFaceMetadata();
 
-    size_t material_id = -1;
+    std::string active_material_name;
     const auto& material_ids = mesh.getMaterialIDs();
+    auto materialFromMetadata = [](const std::string& metadata) -> std::string
+    {
+      // Boundary-interval meshes carry segment_action in metadata.
+      if (metadata.find("\"segment_action\"") != std::string::npos)
+      {
+        return "brown";
+      }
+      // Radius-event regular meshes get explicit lightweight metadata.
+      if (metadata.find("\"event_type\":\"Radius\"") != std::string::npos
+        && metadata.find("\"mesh_type\":\"regular\"") != std::string::npos)
+      {
+        return "yellow";
+      }
+      return {};
+    };
     for (size_t i = 3 * lb; i < 3 * ub; i += 3)
     {
-      // Check if we need to switch material
-      if (!material_ids.empty())
+      std::string desired_material_name;
+      if (!material_ids.empty() && (i / 3) < material_ids.size())
       {
-        size_t current_material_id = material_ids[i / 3];
-        if (current_material_id != material_id)
+        const int current_material_id = material_ids[i / 3];
+        if (current_material_id >= 0 && static_cast<size_t>(current_material_id) < mesh.getMaterialNames().size())
         {
-          material_id = current_material_id;
-          if (material_id < mesh.getMaterialNames().size())
-          {
-            file << "usemtl " << mesh.getMaterialNames()[material_id] << "\n";
-          }
+          desired_material_name = mesh.getMaterialNames()[static_cast<size_t>(current_material_id)];
         }
       }
+      if (desired_material_name.empty() && include_metadata)
+      {
+        const std::string metadata = (i / 3 < face_metadata.size()) ? face_metadata[i / 3] : "{}";
+        desired_material_name = materialFromMetadata(metadata);
+      }
+      if (!desired_material_name.empty() && desired_material_name != active_material_name)
+      {
+        active_material_name = desired_material_name;
+        file << "usemtl " << active_material_name << "\n";
+      }
+
       file << "f";
 
       for (size_t j = 0; j < 3; j++)
@@ -99,14 +121,21 @@ class ObjExporter
 
     // TODO: Define proper materials or perhaps pass them as arguments
 
-    // Bark material
-    file << "newmtl bark\n";
+    // Brown material (boundary interval faces).
+    file << "newmtl brown\n";
     file << "Ka 0.2 0.1 0.05\n";
     file << "Kd 0.4 0.25 0.1\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    // Interior material
+    // Yellow material (regular meshes emitted by radius events).
+    file << "newmtl yellow\n";
+    file << "Ka 0.6 0.6 0.1\n";
+    file << "Kd 0.9 0.85 0.2\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    // Legacy material kept for existing exports.
     file << "newmtl interior\n";
     file << "Ka 0.8 0.8 0.8\n";
     file << "Kd 0.8 0.8 0.8\n";
@@ -160,7 +189,7 @@ class ObjExporter
   }
   static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, double uv_height_factor = 1.0,
     double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {},
-    bool include_metadata = false)
+    bool include_metadata = false, bool include_vertex_colors = false)
   {
     std::ofstream file(obj_path);
     if (!file.is_open())
@@ -185,10 +214,16 @@ class ObjExporter
     // Write vertices
     file << "# Vertices\n";
     const auto& vertex_metadata = mesh.getVertexMetadata();
+    const auto& vertex_colors = mesh.getVertexColors();
     for (size_t i = 0; i < mesh.getVertices().size(); ++i)
     {
       const auto& vertex = mesh.getVertices()[i];
       file << "v " << vertex[0] << " " << vertex[1] << " " << vertex[2];
+      if (include_vertex_colors && i < vertex_colors.size())
+      {
+        const auto& c = vertex_colors[i];
+        file << " " << c[0] << " " << c[1] << " " << c[2];
+      }
       if (include_metadata)
       {
         const std::string metadata = (i < vertex_metadata.size()) ? vertex_metadata[i] : "{}";

@@ -5,6 +5,7 @@
 #include "VoronoiMesh.hpp"
 #include <functional>
 #include <list>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -35,7 +36,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   {
     NewSegment,
     SegmentCompleted,
-    SegmentRemoved
+    SegmentRemoved,
+    SegmentRemapped
   };
 
   static std::string composeBoundaryMetadata(BoundaryEventType event_type, BoundarySegmentAction segment_action);
@@ -111,6 +113,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
       start_crossing_to_segment;
   };
 
+  struct BoundaryIntersectionInterval
+  {
+    size_t voronoi_cell_id = static_cast<size_t>(-1);
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection;
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection;
+  };
+
   /**
    * @brief Output of @ref closingMeshTraceCapPolygons: closed boundary loops and bookkeeping.
    *
@@ -123,6 +132,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::vector<std::vector<size_t>> polygons; ///< One simple polygon per closed walk (mesh vertex indices).
     std::vector<bool> segment_used;             ///< Parallel to ordered_segments: true if that segment was visited.
     std::vector<size_t> mesh_vertex_ids;        ///< Extended cap vertex id trail including boundary intersection verts.
+    std::vector<BoundaryIntersectionInterval> traced_boundary_intervals; ///< Delaunay-boundary intervals seen during trace.
   };
 
   std::vector<std::list<MeshingData>> segment_mesh_pair_last_left_and_right_vertex;
@@ -174,11 +184,66 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
     bool reuse_existing_pair_and_mesh = false, BoundaryEventType event_type = BoundaryEventType::Init,
     BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment, bool force_single_seed_vertex = false);
+  size_t resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
+    double event_time = std::numeric_limits<double>::quiet_NaN()) const;
   void finishMeshFromIntersections(size_t voronoi_cell_id, double t,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
     BoundaryEventType event_type = BoundaryEventType::Section,
     BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted);
+  /**
+   * @brief Returns Delaunay-edge intersections in component-boundary traversal order.
+   *
+   * @details `CrossingData::delaunay_edge_intersections[e]` is stored in canonical even-half-edge order.
+   * This helper reorders (possibly reverses) that list so callers can build `[null,first]`, `[k,k+1]`,
+   * `[last,null]` intervals consistently in boundary-walk direction.
+   */
+  std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> getBoundaryIntersectionsInBoundaryOrder(
+    size_t delaunay_edge_id) const;
+  /**
+   * @brief Writes one mesh-pair link for a single-intersection edge using strand-side identity.
+   *
+   * @details Used for one-null intervals when only one crossing exists on the Delaunay edge. The side is inferred
+   * from `strand_hint` (same strand id used for event-time endpoint geometry): if it matches the even-half-edge
+   * origin, write to `prev`; otherwise write to `next`.
+   *
+   * @param intersection_pair_index Pair id to write into crossing link fields.
+   * @param strand_hint Strand/cell hint used during mesh vertex generation.
+   * @param ref Crossing reference on the affected Delaunay edge.
+   * @param interval_tag Debug tag (e.g. "[ref,null]" / "[null,ref]") for diagnostic logs.
+   * @return true if the single-intersection fallback applied and wrote a link; false otherwise.
+   */
+  bool writeSingleIntersectionPairLinkByStrandHint(size_t intersection_pair_index, size_t strand_hint,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref, const char* interval_tag);
+  /**
+   * @brief Writes one-null interval links using boundary direction relative to list direction.
+   *
+   * @details For `[ref,null]`, writes the boundary-prev side; for `[null,ref]`, writes the boundary-next side.
+   * Mapping to `prev`/`next` is derived from `isOnComponentBoundaryOutside(2*d_edge)`.
+   *
+   * @param intersection_pair_index Pair id to write into crossing link fields.
+   * @param ref Non-null crossing reference of the one-null interval.
+   * @param interval_is_ref_to_null True for `[ref,null]`, false for `[null,ref]`.
+   */
+  void writeOneNullIntersectionPairLinkByBoundaryDirection(
+    size_t intersection_pair_index, KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool interval_is_ref_to_null);
+  /**
+   * @brief Centralized writer for crossing `prev`/`next` mesh-pair links.
+   *
+   * @details Handles all interval forms:
+   * - `[ref0,ref1]`: writes by actual crossing list order on the Delaunay edge.
+   * - one-null: first tries the single-intersection strand-hint fallback, then uses boundary-direction mapping.
+   *
+   * @param intersection_pair_index Pair id to write into crossing link fields.
+   * @param strand_hint Strand/cell hint used for single-intersection side inference.
+   * @param start_intersection Interval start crossing (or null endpoint).
+   * @param end_intersection Interval end crossing (or null endpoint).
+   */
+  void writeIntersectionPairLinks(size_t intersection_pair_index, size_t strand_hint,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection);
   size_t determineVoronoiCellForBoundaryIntersectionInterval(size_t delaunay_edge_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection) const;
@@ -202,7 +267,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
-    std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}");
+    std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
+    const std::optional<glm::dvec3>& debug_color = std::nullopt);
 
   /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p position.
   void warnIfVoronoiVertexOutsideAlphaShape(
@@ -355,8 +421,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   void closingMeshTriangulatePolygonsFan(VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons);
 
-  size_t createClosingMesh(
-    size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);
+  size_t createClosingMesh(size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon,
+    const glm::dvec2& centroid, std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals = nullptr);
 
   void accumulateSegmentProperties();
 

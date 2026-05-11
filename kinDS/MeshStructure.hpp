@@ -17,6 +17,7 @@ struct MeshStructure
   struct IntersectionMeshPairMetadata
   {
     size_t voronoi_cell_id = static_cast<size_t>(-1);
+    size_t owner_segment_id = static_cast<size_t>(-1);
     size_t start_delaunay_edge_id = static_cast<size_t>(-1);
     size_t end_delaunay_edge_id = static_cast<size_t>(-1);
   };

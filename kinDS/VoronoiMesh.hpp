@@ -23,6 +23,7 @@ class VoronoiMesh
   std::vector<size_t> triangles; // Stores indices of vertices forming triangles
   std::vector<glm::dvec3> normals; // Stores normal vectors for each triangle or vertex depending on node
   std::vector<glm::dvec3> uvs; // Stores texture coordinates
+  std::vector<glm::dvec3> vertex_colors; // Optional debug colors per vertex (RGB in [0,1])
   std::vector<size_t> uv_indices; // Stores indices of texture coordinates for face corners
   std::vector<size_t> group_offsets; // Offsets for groups of triangles, if needed
   std::vector<std::string> material_names; // Stores material names - needed for exporting
@@ -77,8 +78,9 @@ class VoronoiMesh
   ~VoronoiMesh() = default;
 
   // methods to manipulate the mesh, such as adding vertices, triangles, normals, and UVs
-  size_t addVertex(double x, double y, double z, const std::string& metadata = "{}");
-  size_t addVertex(const glm::dvec3& p, const std::string& metadata = "{}");
+  size_t addVertex(
+    double x, double y, double z, const std::string& metadata = "{}", const glm::dvec3& color = glm::dvec3(1.0));
+  size_t addVertex(const glm::dvec3& p, const std::string& metadata = "{}", const glm::dvec3& color = glm::dvec3(1.0));
   void replaceVertex(size_t index, const glm::dvec3& new_position);
   size_t addTriangle(size_t v1, size_t v2, size_t v3, int material_id = -1, const std::string& metadata = "{}");
   size_t addTriangle(size_t v1, size_t v2, size_t v3, size_t uv1, size_t uv2, size_t uv3, int material_id = -1,
@@ -123,6 +125,7 @@ class VoronoiMesh
   const std::vector<std::string>& getMaterialNames() const { return material_names; }
   const std::vector<std::string>& getVertexMetadata() const { return vertex_metadata; }
   const std::vector<std::string>& getFaceMetadata() const { return face_metadata; }
+  const std::vector<glm::dvec3>& getVertexColors() const { return vertex_colors; }
 
   std::vector<size_t> removeIsolatedVertices();
 

@@ -6,9 +6,11 @@
 #include "Logger.hpp"
 #include "SegmentBuilder.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kinDS
@@ -43,6 +45,179 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     cell_boundary_he_ids.push_back(*it);
   }
 
+  // The authoritative boundary-interval list comes from createClosingMesh() tracing.
+  // We use that exact list for finish/start calls.
+  auto format_intersection_ref
+    = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& ref) -> std::string
+  {
+    if (!ref.has_value())
+    {
+      return "null";
+    }
+    std::ostringstream oss;
+    oss << "{de=" << ref.value()->delaunay_edge_id << ", ve=" << ref.value()->voronoi_edge_id
+        << ", de_param=" << ref.value()->delaunay_edge_param << "}";
+    return oss.str();
+  };
+
+  auto interval_delaunay_edge
+    = [](const SegmentBuilder::BoundaryIntersectionInterval& interval) -> std::optional<size_t>
+  {
+    if (interval.start_intersection.has_value())
+    {
+      return interval.start_intersection.value()->delaunay_edge_id;
+    }
+    if (interval.end_intersection.has_value())
+    {
+      return interval.end_intersection.value()->delaunay_edge_id;
+    }
+    return std::nullopt;
+  };
+
+  auto format_refs_vector = [&](const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef>& refs) -> std::string
+  {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < refs.size(); ++i)
+    {
+      if (i > 0)
+      {
+        oss << ", ";
+      }
+      oss << format_intersection_ref(std::make_optional(refs[i]));
+    }
+    oss << "]";
+    return oss.str();
+  };
+
+  std::unordered_map<size_t, std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef>> boundary_refs_cache;
+  auto boundary_refs_for_edge = [&](size_t d_edge_id)
+    -> const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef>&
+  {
+    auto it = boundary_refs_cache.find(d_edge_id);
+    if (it != boundary_refs_cache.end())
+    {
+      return it->second;
+    }
+    const auto inserted
+      = boundary_refs_cache.emplace(d_edge_id, segment_builder_.getBoundaryIntersectionsInBoundaryOrder(d_edge_id));
+    return inserted.first->second;
+  };
+
+  auto find_ref_index = [](const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef>& refs,
+                         KineticDelaunay::CrossingData::EdgeIntersectionRef needle) -> size_t
+  {
+    for (size_t i = 0; i < refs.size(); ++i)
+    {
+      if (refs[i] == needle)
+      {
+        return i;
+      }
+    }
+    return static_cast<size_t>(-1);
+  };
+
+  auto validate_traced_interval = [&](const SegmentBuilder::BoundaryIntersectionInterval& interval, size_t interval_idx)
+  {
+    const auto d_edge_opt = interval_delaunay_edge(interval);
+    if (!d_edge_opt.has_value())
+    {
+      std::ostringstream oss;
+      oss << "Subdivision traced interval has no intersection endpoints (idx=" << interval_idx << ").";
+      KINDS_ERROR(oss.str());
+      throw std::runtime_error(oss.str());
+    }
+    const size_t d_edge_id = d_edge_opt.value();
+    const auto& refs = boundary_refs_for_edge(d_edge_id);
+    const size_t count = refs.size();
+    if (count == 0)
+    {
+      std::ostringstream oss;
+      oss << "Subdivision traced interval references d_edge " << d_edge_id
+          << " but boundary-order intersection list is empty.";
+      KINDS_ERROR(oss.str());
+      throw std::runtime_error(oss.str());
+    }
+
+    const bool has_start = interval.start_intersection.has_value();
+    const bool has_end = interval.end_intersection.has_value();
+    if (!has_start && !has_end)
+    {
+      std::ostringstream oss;
+      oss << "Subdivision traced interval has null start and end (idx=" << interval_idx << ", d_edge=" << d_edge_id
+          << ", refs=" << format_refs_vector(refs) << ").";
+      KINDS_ERROR(oss.str());
+      throw std::runtime_error(oss.str());
+    }
+
+    if (!has_start && has_end)
+    {
+      if (refs.front() != interval.end_intersection.value())
+      {
+        std::ostringstream oss;
+        oss << "Subdivision traced interval [null,ref] is not boundary-first (idx=" << interval_idx
+            << ", d_edge=" << d_edge_id << ", end=" << format_intersection_ref(interval.end_intersection)
+            << ", expected_first=" << format_intersection_ref(std::make_optional(refs.front()))
+            << ", refs=" << format_refs_vector(refs) << ").";
+        KINDS_ERROR(oss.str());
+        throw std::runtime_error(oss.str());
+      }
+      return;
+    }
+
+    if (has_start && !has_end)
+    {
+      if (refs.back() != interval.start_intersection.value())
+      {
+        std::ostringstream oss;
+        oss << "Subdivision traced interval [ref,null] is not boundary-last (idx=" << interval_idx
+            << ", d_edge=" << d_edge_id << ", start=" << format_intersection_ref(interval.start_intersection)
+            << ", expected_last=" << format_intersection_ref(std::make_optional(refs.back()))
+            << ", refs=" << format_refs_vector(refs) << ").";
+        KINDS_ERROR(oss.str());
+        //throw std::runtime_error(oss.str());
+      }
+      return;
+    }
+
+    const size_t start_idx = find_ref_index(refs, interval.start_intersection.value());
+    const size_t end_idx = find_ref_index(refs, interval.end_intersection.value());
+    if (start_idx == static_cast<size_t>(-1) || end_idx == static_cast<size_t>(-1))
+    {
+      std::ostringstream oss;
+      oss << "Subdivision traced interval [ref,ref] endpoints not found on boundary-ordered list (idx=" << interval_idx
+          << ", d_edge=" << d_edge_id << ", start=" << format_intersection_ref(interval.start_intersection)
+          << ", end=" << format_intersection_ref(interval.end_intersection) << ", refs=" << format_refs_vector(refs)
+          << ").";
+      KINDS_ERROR(oss.str());
+      throw std::runtime_error(oss.str());
+    }
+
+    if (end_idx == start_idx + 1)
+    {
+      return;
+    }
+
+    // Validation-only normalization for edges with >1 crossings:
+    // allow reversed adjacent pairs to be diagnosed as swapped-order intervals.
+    if (count > 1 && start_idx == end_idx + 1)
+    {
+      KINDS_WARNING("Subdivision traced interval appears reversed (normalizable) on d_edge "
+                    << d_edge_id << " at idx " << interval_idx << " start_idx=" << start_idx
+                    << " end_idx=" << end_idx << ". Caller should pass boundary-direction order.");
+      return;
+    }
+
+    std::ostringstream oss;
+    oss << "Subdivision traced interval [ref,ref] is not adjacent in boundary order (idx=" << interval_idx
+        << ", d_edge=" << d_edge_id << ", start_idx=" << start_idx << ", end_idx=" << end_idx
+        << ", start=" << format_intersection_ref(interval.start_intersection)
+        << ", end=" << format_intersection_ref(interval.end_intersection) << ", refs=" << format_refs_vector(refs)
+        << ").";
+    KINDS_ERROR(oss.str());
+    throw std::runtime_error(oss.str());
+  };
+
   // finish old meshes
   for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),
                                                    end = graph.incidentEdgesEnd(strand_id);
@@ -51,56 +226,29 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     segment_builder_.finishMesh(*it, t, boundary_polygon);
   }
 
-  // Finish all boundary-interval meshes on boundary Delaunay edges of this Voronoi cell.
-  for (size_t he_id : cell_boundary_he_ids)
-  {
-    const size_t he_even = he_id & ~1;
-    if (!segment_builder_.kin_del.isOnComponentBoundary(he_even))
-    {
-      continue;
-    }
-    const size_t d_edge_id = he_even / 2;
-    const auto& d_intersections = segment_builder_.kin_del.getCrossingData().delaunay_edge_intersections[d_edge_id];
-    if (d_intersections.empty())
-    {
-      continue;
-    }
-
-    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
-    refs.reserve(d_intersections.size());
-    for (const auto& ref : d_intersections)
-    {
-      refs.push_back(ref);
-    }
-
-    {
-      const size_t first_cell
-        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      segment_builder_.finishMeshFromIntersections(
-        first_cell, t, std::nullopt, refs.front(), SegmentBuilder::BoundaryEventType::Subdivision,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
-    }
-    for (size_t k = 0; k + 1 < refs.size(); ++k)
-    {
-      const size_t mid_cell
-        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      segment_builder_.finishMeshFromIntersections(
-        mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Subdivision,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
-    }
-    {
-      const size_t last_cell
-        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      segment_builder_.finishMeshFromIntersections(
-        last_cell, t, refs.back(), std::nullopt, SegmentBuilder::BoundaryEventType::Subdivision,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
-    }
-  }
-
   size_t new_segment_id = segment_builder_.segment_properties.size();
 
-  // create a closing mesh
-  size_t closing_mesh_index = segment_builder_.createClosingMesh(strand_id, t, boundary_polygon, centroid);
+  // Create closing mesh and retrieve the exact Delaunay-boundary intervals traced for this strand.
+  std::vector<SegmentBuilder::BoundaryIntersectionInterval> traced_boundary_intervals;
+  size_t closing_mesh_index
+    = segment_builder_.createClosingMesh(strand_id, t, boundary_polygon, centroid, &traced_boundary_intervals);
+
+  // Finish boundary-interval meshes using the interval list produced during closing-mesh tracing.
+  for (size_t interval_idx = 0; interval_idx < traced_boundary_intervals.size(); ++interval_idx)
+  {
+    const auto& interval = traced_boundary_intervals[interval_idx];
+    validate_traced_interval(interval, interval_idx);
+    const size_t mesh_id = segment_builder_.resolveIntersectionMeshPairIndex(
+      interval.voronoi_cell_id, interval.start_intersection, interval.end_intersection, t);
+    KINDS_DEBUG("Subdivision boundary interval finish: strand/cell=" << interval.voronoi_cell_id << " t=" << t
+      << " interval_idx=" << interval_idx << " mesh_id=" << mesh_id
+      << " start_ref=" << format_intersection_ref(interval.start_intersection)
+      << " end_ref=" << format_intersection_ref(interval.end_intersection));
+    segment_builder_.finishMeshFromIntersections(interval.voronoi_cell_id, t, interval.start_intersection,
+      interval.end_intersection, SegmentBuilder::BoundaryEventType::Subdivision,
+      SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+  }
+
   MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_builder_.segment_mesh_pairs[closing_mesh_index];
   segment_mesh_pair.segment_index0 = segment_builder_.strand_to_segment_indices[strand_id].back();
   segment_mesh_pair.segment_index1 = new_segment_id;
@@ -174,53 +322,22 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     }
   }
 
-  // Restart all boundary-interval meshes for the updated strand topology after subdivision.
-  for (size_t he_id : cell_boundary_he_ids)
+  // Restart exactly the same traced intervals so the event-time boundary handoff is consistent.
+  for (size_t interval_idx = 0; interval_idx < traced_boundary_intervals.size(); ++interval_idx)
   {
-    const size_t he_even = he_id & ~1;
-    if (!segment_builder_.kin_del.isOnComponentBoundary(he_even))
-    {
-      continue;
-    }
-    const size_t d_edge_id = he_even / 2;
-    const auto& d_intersections = segment_builder_.kin_del.getCrossingData().delaunay_edge_intersections[d_edge_id];
-    if (d_intersections.empty())
-    {
-      continue;
-    }
-
-    std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs;
-    refs.reserve(d_intersections.size());
-    for (const auto& ref : d_intersections)
-    {
-      refs.push_back(ref);
-    }
-
-    {
-      const size_t first_cell
-        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      const bool reuse_existing = (first_cell != strand_id);
-      segment_builder_.startNewMeshFromIntersections(
-        first_cell, t, std::nullopt, refs.front(), reuse_existing, SegmentBuilder::BoundaryEventType::Subdivision,
-        SegmentBuilder::BoundarySegmentAction::NewSegment);
-    }
-    for (size_t k = 0; k + 1 < refs.size(); ++k)
-    {
-      const size_t mid_cell
-        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      const bool reuse_existing = (mid_cell != strand_id);
-      segment_builder_.startNewMeshFromIntersections(
-        mid_cell, t, refs[k], refs[k + 1], reuse_existing, SegmentBuilder::BoundaryEventType::Subdivision,
-        SegmentBuilder::BoundarySegmentAction::NewSegment);
-    }
-    {
-      const size_t last_cell
-        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      const bool reuse_existing = (last_cell != strand_id);
-      segment_builder_.startNewMeshFromIntersections(
-        last_cell, t, refs.back(), std::nullopt, reuse_existing, SegmentBuilder::BoundaryEventType::Subdivision,
-        SegmentBuilder::BoundarySegmentAction::NewSegment);
-    }
+    const auto& interval = traced_boundary_intervals[interval_idx];
+    validate_traced_interval(interval, interval_idx);
+    const size_t mesh_id_before = segment_builder_.resolveIntersectionMeshPairIndex(
+      interval.voronoi_cell_id, interval.start_intersection, interval.end_intersection, t);
+    KINDS_DEBUG("Subdivision boundary interval start: strand/cell=" << interval.voronoi_cell_id << " t=" << t
+      << " interval_idx=" << interval_idx << " mesh_id_before=" << mesh_id_before
+      << " start_ref=" << format_intersection_ref(interval.start_intersection)
+      << " end_ref=" << format_intersection_ref(interval.end_intersection));
+    const size_t mesh_id = segment_builder_.startNewMeshFromIntersections(
+      interval.voronoi_cell_id, t, interval.start_intersection, interval.end_intersection, false,
+      SegmentBuilder::BoundaryEventType::Subdivision, SegmentBuilder::BoundarySegmentAction::NewSegment);
+    KINDS_DEBUG("Subdivision boundary interval started: strand/cell=" << interval.voronoi_cell_id << " t=" << t
+      << " interval_idx=" << interval_idx << " mesh_id=" << mesh_id);
   }
 }
 

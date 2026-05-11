@@ -1045,9 +1045,9 @@ void kinDS::validateClosingCapCrossingRef([[maybe_unused]] const KineticDelaunay
   }
 }
 
-std::vector<std::array<size_t, 4>> KineticDelaunay::getCrossingIntersectionDebugData() const
+std::vector<std::array<size_t, 6>> KineticDelaunay::getCrossingIntersectionDebugData() const
 {
-  std::vector<std::array<size_t, 4>> result;
+  std::vector<std::array<size_t, 6>> result;
   result.reserve(crossing_data.edge_intersections.size());
 
   for (size_t d_edge_id = 0; d_edge_id < crossing_data.delaunay_edge_intersections.size(); ++d_edge_id)
@@ -1063,7 +1063,8 @@ std::vector<std::array<size_t, 4>> KineticDelaunay::getCrossingIntersectionDebug
       {
         if (*v_it == ref)
         {
-          result.push_back({ ref->delaunay_edge_id, ref->voronoi_edge_id, d_index, v_index });
+          result.push_back({ ref->delaunay_edge_id, ref->voronoi_edge_id, d_index, v_index,
+            ref->prev_segment_mesh_pair_index, ref->next_segment_mesh_pair_index });
           break;
         }
       }
