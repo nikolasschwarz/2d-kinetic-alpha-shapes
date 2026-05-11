@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -1151,6 +1152,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         owner_segment_id = segment_builder_.strand_to_segment_indices[cell_id].back();
       }
+      const size_t stored_segment_pair_index = segment_builder_.segment_mesh_pairs.size();
       segment_builder_.segment_mesh_pairs.push_back(
         MeshStructure::SegmentMeshPair { owner_segment_id, static_cast<size_t>(-1), 0, 0, 1 });
       std::string suffix = std::string("_delaunay") + std::to_string(affected_face_id) + "_strand" + std::to_string(cell_id);
@@ -1158,6 +1160,13 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         suffix += "_failed";
       }
+      KINDS_INFO("Radius: stored extracted strand meshlet segment segment_mesh_pairs_index=" << stored_segment_pair_index
+                                                                                              << " cell_id=" << cell_id
+                                                                                              << " owner_segment_id=" << owner_segment_id
+                                                                                              << " delaunay_face=" << affected_face_id
+                                                                                              << " t=" << t << " polygon_vertices=" << poly.size()
+                                                                                              << " failed_meshlet=" << (failed ? "true" : "false")
+                                                                                              << " meshlet_suffix=" << suffix);
       segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::move(suffix), t);
       segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
     };
@@ -1237,9 +1246,21 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
       = segment_builder_.getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
 
+    KINDS_INFO("Radius: extracted boundary intersection segment for reseed d_edge_id=" << d_edge_id << " he_even=" << he_even
+                                                                                        << " ordered_crossing_count=" << refs.size()
+                                                                                        << " t=" << t);
+
+    auto format_crossing = [](KineticDelaunay::CrossingData::EdgeIntersectionRef r) {
+      std::ostringstream o;
+      o << "de=" << r->delaunay_edge_id << " ve=" << r->voronoi_edge_id << " param=" << r->delaunay_edge_param;
+      return o.str();
+    };
+
     {
       const size_t first_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
+      KINDS_INFO("Radius: passing extracted segment interval [null,first_crossing] to startNewMeshFromIntersections voronoi_cell="
+                   << first_cell << " t=" << t << " first_crossing={" << format_crossing(refs.front()) << "}");
       segment_builder_.startNewMeshFromIntersections(
         first_cell, t, std::nullopt, refs.front(), false, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::NewSegment);
@@ -1248,6 +1269,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      KINDS_INFO("Radius: passing extracted segment interval [crossing,crossing] to startNewMeshFromIntersections k=" << k
+                   << " voronoi_cell=" << mid_cell << " t=" << t << " start={" << format_crossing(refs[k]) << "} end={"
+                   << format_crossing(refs[k + 1]) << "}");
       segment_builder_.startNewMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], false, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::NewSegment);
@@ -1255,6 +1279,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       const size_t last_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+      KINDS_INFO("Radius: passing extracted segment interval [last_crossing,null] to startNewMeshFromIntersections voronoi_cell="
+                   << last_cell << " t=" << t << " last_crossing={" << format_crossing(refs.back()) << "}");
       segment_builder_.startNewMeshFromIntersections(
         last_cell, t, refs.back(), std::nullopt, false, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::NewSegment);

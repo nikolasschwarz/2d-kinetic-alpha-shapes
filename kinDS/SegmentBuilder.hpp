@@ -113,6 +113,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
       start_crossing_to_segment;
   };
 
+  /** Delaunay-boundary strip in canonical interval order (even-half-edge list / increasing parameter). */
   struct BoundaryIntersectionInterval
   {
     size_t voronoi_cell_id = static_cast<size_t>(-1);
@@ -132,7 +133,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::vector<std::vector<size_t>> polygons; ///< One simple polygon per closed walk (mesh vertex indices).
     std::vector<bool> segment_used;             ///< Parallel to ordered_segments: true if that segment was visited.
     std::vector<size_t> mesh_vertex_ids;        ///< Extended cap vertex id trail including boundary intersection verts.
-    std::vector<BoundaryIntersectionInterval> traced_boundary_intervals; ///< Delaunay-boundary intervals seen during trace.
+    std::vector<BoundaryIntersectionInterval> traced_boundary_intervals; ///< Boundary intervals in canonical order (see @ref BoundaryIntersectionInterval).
   };
 
   std::vector<std::list<MeshingData>> segment_mesh_pair_last_left_and_right_vertex;
@@ -203,45 +204,32 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> getBoundaryIntersectionsInBoundaryOrder(
     size_t delaunay_edge_id) const;
   /**
-   * @brief Writes one mesh-pair link for a single-intersection edge using strand-side identity.
+   * @brief Writes one-null interval links by identifying which endpoint vertex is null.
    *
-   * @details Used for one-null intervals when only one crossing exists on the Delaunay edge. The side is inferred
-   * from `strand_hint` (same strand id used for event-time endpoint geometry): if it matches the even-half-edge
-   * origin, write to `prev`; otherwise write to `next`.
-   *
-   * @param intersection_pair_index Pair id to write into crossing link fields.
-   * @param strand_hint Strand/cell hint used during mesh vertex generation.
-   * @param ref Crossing reference on the affected Delaunay edge.
-   * @param interval_tag Debug tag (e.g. "[ref,null]" / "[null,ref]") for diagnostic logs.
-   * @return true if the single-intersection fallback applied and wrote a link; false otherwise.
-   */
-  bool writeSingleIntersectionPairLinkByStrandHint(size_t intersection_pair_index, size_t strand_hint,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef ref, const char* interval_tag);
-  /**
-   * @brief Writes one-null interval links using boundary direction relative to list direction.
-   *
-   * @details For `[ref,null]`, writes the boundary-prev side; for `[null,ref]`, writes the boundary-next side.
-   * Mapping to `prev`/`next` is derived from `isOnComponentBoundaryOutside(2*d_edge)`.
+   * @details The null endpoint corresponds to one Delaunay edge origin (even or odd). If it maps to
+   * the even-half-edge origin, we write `prev`; otherwise we write `next`.
    *
    * @param intersection_pair_index Pair id to write into crossing link fields.
+   * @param null_vertex_id Delaunay vertex id corresponding to the null endpoint.
    * @param ref Non-null crossing reference of the one-null interval.
-   * @param interval_is_ref_to_null True for `[ref,null]`, false for `[null,ref]`.
+   * @param interval_is_ref_to_null True for `[ref,null]`, false for `[null,ref]` (debug context).
+   * @return true if the pair index was stored in @c prev_segment_mesh_pair_index, false if in @c next_segment_mesh_pair_index.
    */
-  void writeOneNullIntersectionPairLinkByBoundaryDirection(
-    size_t intersection_pair_index, KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool interval_is_ref_to_null);
+  bool writeOneNullIntersectionPairLinkByNullVertex(size_t intersection_pair_index, size_t null_vertex_id,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool interval_is_ref_to_null);
   /**
    * @brief Centralized writer for crossing `prev`/`next` mesh-pair links.
    *
    * @details Handles all interval forms:
    * - `[ref0,ref1]`: writes by actual crossing list order on the Delaunay edge.
-   * - one-null: first tries the single-intersection strand-hint fallback, then uses boundary-direction mapping.
+   * - one-null: maps `prev`/`next` from whether `voronoi_cell_id` matches the even-half-edge origin on the edge.
    *
    * @param intersection_pair_index Pair id to write into crossing link fields.
-   * @param strand_hint Strand/cell hint used for single-intersection side inference.
+   * @param voronoi_cell_id Current interval Voronoi cell id (identifies the open site for one-null intervals).
    * @param start_intersection Interval start crossing (or null endpoint).
    * @param end_intersection Interval end crossing (or null endpoint).
    */
-  void writeIntersectionPairLinks(size_t intersection_pair_index, size_t strand_hint,
+  void writeIntersectionPairLinks(size_t intersection_pair_index, size_t voronoi_cell_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection);
   size_t determineVoronoiCellForBoundaryIntersectionInterval(size_t delaunay_edge_id,
