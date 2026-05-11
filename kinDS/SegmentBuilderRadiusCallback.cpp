@@ -313,6 +313,158 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     break;
   }
   }
+
+  // Wedge caps on boundary-interval strip meshes (intersection meshlets) at triangle corners — not `boundary_mesh`.
+  // Triangle Delaunay edges are handled by the switch above; skip those. Resolve strip via one-null interval on the
+  // incident boundary edge (even vs odd Delaunay origin), same pairing as `resolveIntersectionMeshPairIndex`.
+  //
+  // `mesh_start` / `mesh_end` follow interval order (see `startNewMeshFromIntersections`): for `[null, ref]` the open
+  // site is interval *start* → update `mesh_start_vertex_id`; for `[ref, null]` the open site is interval *end* →
+  // update `mesh_end_vertex_id`. That matches even-origin vs odd-origin from `determineVoronoiCellForBoundaryIntersectionInterval`.
+  const auto& crossing_data = segment_builder_.kin_del.getCrossingData();
+  std::unordered_set<size_t> radius_tri_edge_evens;
+  for (size_t i = 0; i < 3; ++i)
+  {
+    radius_tri_edge_evens.insert(face_half_edges[i] & ~static_cast<size_t>(1));
+  }
+  std::unordered_set<size_t> processed_extra_boundary_edge_evens;
+  for (size_t ti = 0; ti < 3; ++ti)
+  {
+    const int corner = graph.getHalfEdges()[face_half_edges[ti]].origin;
+    if (corner < 0)
+    {
+      continue;
+    }
+    const size_t corner_u = static_cast<size_t>(corner);
+    const glm::dvec2 p_corner = segment_builder_.kin_del.getPointAt(t, corner_u);
+    const size_t corner_component = segment_builder_.kin_del.component_data.component_map[corner_u];
+
+    for (auto it = graph.incidentEdgesBegin(corner_u); it != graph.incidentEdgesEnd(corner_u); ++it)
+    {
+      const size_t inc_he = *it;
+      const size_t inc_even = inc_he & ~static_cast<size_t>(1);
+      if (radius_tri_edge_evens.count(inc_even) != 0u)
+      {
+        continue;
+      }
+      if (!segment_builder_.kin_del.isOnComponentBoundary(inc_even))
+      {
+        continue;
+      }
+      if (!processed_extra_boundary_edge_evens.insert(inc_even).second)
+      {
+        continue;
+      }
+
+      const size_t d_edge_id = inc_even >> 1;
+      const auto& d_inters = crossing_data.delaunay_edge_intersections[d_edge_id];
+      if (d_inters.empty())
+      {
+        continue;
+      }
+
+      const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+        = segment_builder_.getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
+      if (refs.empty())
+      {
+        continue;
+      }
+
+      const size_t he_even_corner = d_edge_id * 2u;
+      const size_t he_odd_corner = he_even_corner | 1u;
+      const int even_origin = graph.getHalfEdges()[he_even_corner].origin;
+      const int odd_origin = graph.getHalfEdges()[he_odd_corner].origin;
+
+      size_t pair_idx = static_cast<size_t>(-1);
+      bool update_start_endpoint = false;
+
+      if (corner == even_origin && refs.front()->prev_segment_mesh_pair_index != static_cast<size_t>(-1))
+      {
+        if (refs.front()->delaunay_ref == d_inters.begin())
+        {
+          pair_idx = refs.front()->prev_segment_mesh_pair_index;
+          // `[null, first]` — open site is interval start (left / mesh_start).
+          update_start_endpoint = true;
+        }
+      }
+      else if (corner == odd_origin && refs.back()->next_segment_mesh_pair_index != static_cast<size_t>(-1))
+      {
+        const auto d_last_ref = refs.back()->delaunay_ref;
+        if (d_last_ref != d_inters.end() && std::next(d_last_ref) == d_inters.end())
+        {
+          pair_idx = refs.back()->next_segment_mesh_pair_index;
+          // `[last, null]` — open site is interval end (right / mesh_end).
+          update_start_endpoint = false;
+        }
+      }
+
+      if (pair_idx == static_cast<size_t>(-1) || pair_idx >= segment_builder_.intersection_meshes.size()
+        || pair_idx >= segment_builder_.intersection_mesh_pair_last_left_and_right_vertex.size())
+      {
+        continue;
+      }
+
+      auto& segs = segment_builder_.intersection_mesh_pair_last_left_and_right_vertex[pair_idx];
+      if (segs.empty())
+      {
+        continue;
+      }
+      auto& seg = segs.front();
+      if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+      {
+        continue;
+      }
+
+      const bool boundary_even_he_is_outside = segment_builder_.kin_del.isOnComponentBoundaryOutside(he_even_corner);
+      const int inside_boundary_he_id
+        = boundary_even_he_is_outside ? static_cast<int>(he_odd_corner) : static_cast<int>(he_even_corner);
+
+      std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
+      segment_builder_.updateBoundary(t, he_visited, corner_component);
+      auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[corner_component][0];
+      const auto centroid = polygonCentroid(boundary_polygon);
+
+      auto& mesh = segment_builder_.intersection_meshes[pair_idx];
+      const glm::dvec3 corner_pos { p_corner[0], p_corner[1], t };
+      const std::string radius_corner_meta = SegmentBuilder::composeBoundaryMetadata(
+        SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
+      auto with_pos = [&radius_corner_meta](const char* pos) -> std::string
+      {
+        if (radius_corner_meta.empty() || radius_corner_meta.back() != '}')
+        {
+          return radius_corner_meta;
+        }
+        std::string out = radius_corner_meta;
+        out.pop_back();
+        out += ",\"pos\":\"";
+        out += pos;
+        out += "\"}";
+        return out;
+      };
+      const std::string vertex_meta = with_pos(update_start_endpoint ? "left" : "right");
+      const glm::dvec3 vertex_color
+        = update_start_endpoint ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
+      const size_t new_vid = segment_builder_.addMeshletVertex(
+        mesh, boundary_polygon, centroid, corner_pos, corner_u, t, std::nullopt, vertex_meta, vertex_color);
+      const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
+      const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
+      segment_builder_.addBoundaryIntervalTriangleOriented(
+        mesh, last_left, last_right, new_vid, inside_boundary_he_id, t, radius_corner_meta);
+
+      if (update_start_endpoint)
+      {
+        seg.mesh_start_vertex_id = static_cast<int>(new_vid);
+        seg.start_half_edge_id = inside_boundary_he_id;
+        seg.start_crossing = std::nullopt;
+      }
+      else
+      {
+        seg.mesh_end_vertex_id = static_cast<int>(new_vid);
+        seg.end_half_edge_id = inside_boundary_he_id;
+        seg.end_crossing = std::nullopt;
+      }
+    }
+  }
 }
 
 void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
