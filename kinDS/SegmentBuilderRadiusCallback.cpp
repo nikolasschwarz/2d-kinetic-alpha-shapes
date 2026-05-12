@@ -444,25 +444,14 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       const std::string vertex_meta = with_pos(update_start_endpoint ? "left" : "right");
       const glm::dvec3 vertex_color
         = update_start_endpoint ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
+      const size_t eff_l = segment_builder_.intersectionStripEffectiveVertexIndex(seg, true);
+      const size_t eff_r = segment_builder_.intersectionStripEffectiveVertexIndex(seg, false);
       const size_t new_vid = segment_builder_.addMeshletVertex(
         mesh, boundary_polygon, centroid, corner_pos, corner_u, t, std::nullopt, vertex_meta, vertex_color);
-      const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
-      const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
       segment_builder_.addBoundaryIntervalTriangleOriented(
-        mesh, last_left, last_right, new_vid, inside_boundary_he_id, t, radius_corner_meta);
-
-      if (update_start_endpoint)
-      {
-        seg.mesh_start_vertex_id = static_cast<int>(new_vid);
-        seg.start_half_edge_id = inside_boundary_he_id;
-        seg.start_crossing = std::nullopt;
-      }
-      else
-      {
-        seg.mesh_end_vertex_id = static_cast<int>(new_vid);
-        seg.end_half_edge_id = inside_boundary_he_id;
-        seg.end_crossing = std::nullopt;
-      }
+        mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, radius_corner_meta);
+      segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_endpoint, new_vid,
+        inside_boundary_he_id, std::nullopt, boundary_polygon, centroid, corner_u, t, true);
     }
   }
 }

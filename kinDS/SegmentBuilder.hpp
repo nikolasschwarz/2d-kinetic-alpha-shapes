@@ -78,6 +78,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// `CrossingData` / `delaunay_edge_intersections` order follows the even directed Delaunay half-edge; when the strand
     /// lies on the odd Voronoi half-edge of this dual edge, walk those lists in the opposite direction along the boundary.
     bool closing_strand_at_voronoi_even_he = true;
+    /// Placeholders on interval start side ("left"); XY filled when the next fixed left endpoint is inserted.
+    std::vector<int> flexible_left_vertex_ids;
+    /// Placeholders on interval end side ("right"); XY filled when the next fixed right endpoint is inserted.
+    std::vector<int> flexible_right_vertex_ids;
   };
 
   /**
@@ -174,6 +178,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::unique_ptr<SegmentBuilderSubdivisionCallback> subdivision_callback_;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
   bool visual_debug = true; // Always-on visual debug for now (SVG exports)
+  /// When true, one-sided intersection-strip updates append a flexible placeholder on the opposite side (full scheme).
+  /// When false (default), ablation: same triangles/endpoints as before flex vectors existed; `MeshingData` flex lists stay empty.
+  bool intersection_strip_flexible_vertices_enabled = true;
 
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
@@ -250,6 +257,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   size_t addMeshletTriangle(
     VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}");
+
+  /**
+   * Same as @ref addMeshletTriangle after orienting `(u,v,w)` from combinatorics only: @p inside_boundary_he_id is the
+   * *inside* boundary Delaunay half-edge on this strip; its twin is the *outside* boundary half-edge (`index ^ 1`).
+   * Apex order relative to strip `(u,v)` is chosen from that outside half-edge index alone (no vertex cross products).
+   */
   size_t addBoundaryIntervalTriangleOriented(VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id,
     double t, const std::string& metadata = "{}");
 
@@ -257,6 +270,33 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
     const std::optional<glm::dvec3>& debug_color = std::nullopt);
+
+  /// Effective strip corner for triangles: latest flexible on @p left_side, else fixed @c mesh_start / @c mesh_end.
+  size_t intersectionStripEffectiveVertexIndex(const MeshingData& seg, bool left_side) const;
+
+  /// When @ref intersection_strip_flexible_vertices_enabled: appends a placeholder (xy = @p centroid, z=@p t, metadata
+  /// `pos` left/right) and a wedge triangle `(eff_left, eff_right, flex)` per @ref intersectionStripEffectiveVertexIndex
+  /// (snapshot before the new flex is appended). Otherwise no-op.
+  void addFlexibleVertexToIntersectionMesh(VoronoiMesh& mesh, MeshingData& seg, bool flexible_on_left_side,
+    const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
+    const std::string& metadata = "{}");
+
+  /**
+   * After a one-sided @c addMeshletVertex + triangle: lerp flexibles on the updated side, assign endpoint,
+   * optionally append one flexible on the opposite side. If @p keep_strip_alive is false, only interpolation runs
+   * (e.g. strip is about to be cleared).
+   */
+  void applyIntersectionStripOneSidedFixedVertex(VoronoiMesh& mesh, MeshingData& seg, bool fixed_start_side,
+    size_t new_fixed_vertex_index, int inside_half_edge_id,
+    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& new_crossing_for_updated_side,
+    const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
+    bool keep_strip_alive);
+
+  /**
+   * For a merge closure vertex (`pos` uniform): both flex chains lerp from their fixed corners to the same
+   * @p closure_vertex_index, then lists are cleared. No endpoint reassignment and no new flex.
+   */
+  void applyIntersectionStripUniformClosureVertex(VoronoiMesh& mesh, MeshingData& seg, size_t closure_vertex_index);
 
   /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p position.
   void warnIfVoronoiVertexOutsideAlphaShape(

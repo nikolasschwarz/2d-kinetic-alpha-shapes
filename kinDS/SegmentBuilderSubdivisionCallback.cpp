@@ -305,25 +305,15 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
         const glm::dvec3 vertex_color
           = update_start_on_neighbor ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
 
+        const size_t eff_l = segment_builder_.intersectionStripEffectiveVertexIndex(seg, true);
+        const size_t eff_r = segment_builder_.intersectionStripEffectiveVertexIndex(seg, false);
         const size_t new_vid = segment_builder_.addMeshletVertex(mesh, neighbor_boundary, neighbor_centroid, crossing_pos,
           neighbor_cell, t, std::nullopt, vertex_meta, vertex_color);
-        const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
-        const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
         segment_builder_.addBoundaryIntervalTriangleOriented(
-          mesh, last_left, last_right, new_vid, inside_boundary_he_id, t, base_meta);
-
-        if (update_start_on_neighbor)
-        {
-          seg.mesh_start_vertex_id = static_cast<int>(new_vid);
-          seg.start_half_edge_id = inside_boundary_he_id;
-          seg.start_crossing = shared_ref;
-        }
-        else
-        {
-          seg.mesh_end_vertex_id = static_cast<int>(new_vid);
-          seg.end_half_edge_id = inside_boundary_he_id;
-          seg.end_crossing = shared_ref;
-        }
+          mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, base_meta);
+        segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_on_neighbor, new_vid,
+          inside_boundary_he_id, std::make_optional(shared_ref), neighbor_boundary, neighbor_centroid, neighbor_cell, t,
+          true);
       };
 
   // finish old meshes

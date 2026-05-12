@@ -27,6 +27,61 @@ using namespace kinDS;
 
 namespace
 {
+void interpolateFlexibleVerticesAlongEdge(
+  VoronoiMesh& mesh, std::vector<int>& flex, size_t anchor_old_vertex, size_t anchor_new_vertex)
+{
+  if (flex.empty())
+  {
+    return;
+  }
+  auto& verts = mesh.getVertices();
+  if (anchor_old_vertex >= verts.size() || anchor_new_vertex >= verts.size())
+  {
+    return;
+  }
+  const glm::dvec3 p0 = verts[anchor_old_vertex];
+  const glm::dvec3 p1 = verts[anchor_new_vertex];
+  const double z0 = p0.z;
+  const double z1 = p1.z;
+  const double denom = z1 - z0;
+  const size_t k = flex.size();
+  for (size_t j = 0; j < k; ++j)
+  {
+    const int fj = flex[j];
+    if (fj < 0)
+    {
+      continue;
+    }
+    const size_t fju = static_cast<size_t>(fj);
+    if (fju >= verts.size())
+    {
+      continue;
+    }
+    const double fz = verts[fju].z;
+    double s = 0.0;
+    if (std::abs(denom) > 1e-18)
+    {
+      s = (fz - z0) / denom;
+      if (s < 0.0)
+      {
+        s = 0.0;
+      }
+      else if (s > 1.0)
+      {
+        s = 1.0;
+      }
+    }
+    else
+    {
+      // Anchors share z: cannot parameterize by z; fall back to uniform spacing along the segment in xy.
+      s = static_cast<double>(j + 1) / static_cast<double>(k + 1);
+    }
+    const double x = p0.x + s * (p1.x - p0.x);
+    const double y = p0.y + s * (p1.y - p0.y);
+    mesh.replaceVertex(fju, glm::dvec3(x, y, fz));
+  }
+}
+
 const char* boundaryEventTypeToString(SegmentBuilder::BoundaryEventType event_type)
 {
   switch (event_type)
@@ -1408,8 +1463,12 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
 
   size_t ordered_new_start_vertex_index = new_start_vertex_index;
   size_t ordered_new_end_vertex_index = new_end_vertex_index;
-  const size_t last_left = static_cast<size_t>(seg.mesh_start_vertex_id);
-  const size_t last_right = static_cast<size_t>(seg.mesh_end_vertex_id);
+  const int old_fixed_start_id = seg.mesh_start_vertex_id;
+  const int old_fixed_end_id = seg.mesh_end_vertex_id;
+  const size_t last_left = static_cast<size_t>(old_fixed_start_id);
+  const size_t last_right = static_cast<size_t>(old_fixed_end_id);
+  const size_t eff_left = intersectionStripEffectiveVertexIndex(seg, true);
+  const size_t eff_right = intersectionStripEffectiveVertexIndex(seg, false);
   if (last_left < mesh.getVertices().size() && last_right < mesh.getVertices().size())
   {
     const glm::dvec3& prev_start = mesh.getVertices()[last_left];
@@ -1430,27 +1489,68 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
       std::swap(ordered_new_start_vertex_index, ordered_new_end_vertex_index);
     }
   }
+
+  // Single new anchor (collapsed interval / one mesh vertex for both ends): both flex chains meet that point.
+  const bool uniform_finish_targets = (ordered_new_start_vertex_index == ordered_new_end_vertex_index);
+  const size_t flex_interp_target = ordered_new_start_vertex_index;
+  interpolateFlexibleVerticesAlongEdge(mesh, seg.flexible_left_vertex_ids, static_cast<size_t>(old_fixed_start_id),
+    uniform_finish_targets ? flex_interp_target : ordered_new_start_vertex_index);
+  interpolateFlexibleVerticesAlongEdge(mesh, seg.flexible_right_vertex_ids, static_cast<size_t>(old_fixed_end_id),
+    uniform_finish_targets ? flex_interp_target : ordered_new_end_vertex_index);
+  seg.flexible_left_vertex_ids.clear();
+  seg.flexible_right_vertex_ids.clear();
+
   const int inside_boundary_he_id = (seg.start_half_edge_id >= 0) ? seg.start_half_edge_id : seg.end_half_edge_id;
-  if (last_left == last_right)
+  const auto& verts_after = mesh.getVertices();
+  bool start_apex_first = false;
+  if (eff_left != eff_right)
+  {
+    const double zl = verts_after[eff_left].z;
+    const double zr = verts_after[eff_right].z;
+    constexpr double z_eps = 1e-12;
+    if (std::abs(zl - zr) > z_eps)
+    {
+      start_apex_first = zl < zr;
+    }
+    else
+    {
+      // Flexible placeholders often share z with strip corners; pick the diagonal from projected order along eff_l–eff_r.
+      const glm::dvec2 pl(verts_after[eff_left].x, verts_after[eff_left].y);
+      const glm::dvec2 pr(verts_after[eff_right].x, verts_after[eff_right].y);
+      const glm::dvec2 ps(verts_after[ordered_new_start_vertex_index].x, verts_after[ordered_new_start_vertex_index].y);
+      const glm::dvec2 pe(verts_after[ordered_new_end_vertex_index].x, verts_after[ordered_new_end_vertex_index].y);
+      const glm::dvec2 d = pr - pl;
+      const double strip_len2 = glm::dot(d, d);
+      if (strip_len2 > 1e-24)
+      {
+        start_apex_first = glm::dot(ps - pl, d) < glm::dot(pe - pl, d);
+      }
+      else
+      {
+        start_apex_first = zl < zr;
+      }
+    }
+  }
+  if (eff_left == eff_right)
   {
     addBoundaryIntervalTriangleOriented(
-      mesh, ordered_new_start_vertex_index, last_right, ordered_new_end_vertex_index, inside_boundary_he_id, t,
+      mesh, ordered_new_start_vertex_index, eff_right, ordered_new_end_vertex_index, inside_boundary_he_id, t,
       boundary_finish_meta);
   }
-  else if (mesh.getVertices()[last_left][2] < mesh.getVertices()[last_right][2])
+  else if (start_apex_first)
   {
     addBoundaryIntervalTriangleOriented(
-      mesh, last_left, last_right, ordered_new_start_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
+      mesh, eff_left, eff_right, ordered_new_start_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
     addBoundaryIntervalTriangleOriented(
-      mesh, ordered_new_start_vertex_index, last_right, ordered_new_end_vertex_index, inside_boundary_he_id, t,
+      mesh, ordered_new_start_vertex_index, eff_right, ordered_new_end_vertex_index, inside_boundary_he_id, t,
       boundary_finish_meta);
   }
   else
   {
     addBoundaryIntervalTriangleOriented(
-      mesh, last_left, last_right, ordered_new_end_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
+      mesh, eff_left, eff_right, ordered_new_end_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
     addBoundaryIntervalTriangleOriented(
-      mesh, last_left, ordered_new_end_vertex_index, ordered_new_start_vertex_index, inside_boundary_he_id, t,
+      mesh, eff_left, ordered_new_end_vertex_index, ordered_new_start_vertex_index, inside_boundary_he_id, t,
       boundary_finish_meta);
   }
 
@@ -1797,39 +1897,20 @@ size_t kinDS::SegmentBuilder::addMeshletTriangle(
 size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(
   VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id, double t, const std::string& metadata)
 {
+  (void)t;
   if (inside_boundary_he_id < 0 || static_cast<size_t>(inside_boundary_he_id) >= kin_del.getGraph().getHalfEdges().size())
   {
     return addMeshletTriangle(mesh, u, v, w, metadata);
   }
 
-  const auto& graph = kin_del.getGraph();
-  const auto& he = graph.getHalfEdges()[static_cast<size_t>(inside_boundary_he_id)];
-  const int a_vid = he.origin;
-  const int b_vid = graph.destination(static_cast<size_t>(inside_boundary_he_id));
-  if (a_vid < 0 || b_vid < 0)
+  // `inside_boundary_he_id` is the inside-directed boundary half-edge; its twin is the outside one on the same Delaunay edge.
+  const size_t outside_he = static_cast<size_t>(inside_boundary_he_id) ^ 1u;
+  if (outside_he >= kin_del.getGraph().getHalfEdges().size())
   {
     return addMeshletTriangle(mesh, u, v, w, metadata);
   }
 
-  const glm::dvec2 a = kin_del.getPointAt(t, static_cast<size_t>(a_vid));
-  const glm::dvec2 b = kin_del.getPointAt(t, static_cast<size_t>(b_vid));
-  const glm::dvec2 edge = b - a;
-  const double edge_len2 = glm::dot(edge, edge);
-  if (!(edge_len2 > 1e-24))
-  {
-    return addMeshletTriangle(mesh, u, v, w, metadata);
-  }
-
-  // `inside_boundary_he_id` is directed along the inside boundary. The outside normal is on the right-hand side.
-  const glm::dvec2 outward_n(edge.y, -edge.x);
-  const auto& verts = mesh.getVertices();
-  const glm::dvec3 pu = verts[u];
-  const glm::dvec3 pv = verts[v];
-  const glm::dvec3 pw = verts[w];
-  const glm::dvec3 tri_n = glm::cross(pv - pu, pw - pu);
-  const glm::dvec2 tri_n_xy(tri_n.x, tri_n.y);
-
-  if (glm::dot(tri_n_xy, outward_n) > 0.0)
+  if ((outside_he & 1u) != 0u)
   {
     std::swap(v, w);
   }
@@ -1892,6 +1973,130 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   double v = 0.5 + texture_diameter * rel_dist * 0.5 * std::sin(angle);
   mesh.addUV(u, v, vertex[2] * uv_height_factor);
   return index;
+}
+
+size_t SegmentBuilder::intersectionStripEffectiveVertexIndex(const MeshingData& seg, bool left_side) const
+{
+  if (left_side)
+  {
+    if (!seg.flexible_left_vertex_ids.empty())
+    {
+      const int v = seg.flexible_left_vertex_ids.back();
+      if (v >= 0)
+      {
+        return static_cast<size_t>(v);
+      }
+    }
+    if (seg.mesh_start_vertex_id < 0)
+    {
+      throw std::runtime_error("intersectionStripEffectiveVertexIndex: invalid mesh_start_vertex_id.");
+    }
+    return static_cast<size_t>(seg.mesh_start_vertex_id);
+  }
+  if (!seg.flexible_right_vertex_ids.empty())
+  {
+    const int v = seg.flexible_right_vertex_ids.back();
+    if (v >= 0)
+    {
+      return static_cast<size_t>(v);
+    }
+  }
+  if (seg.mesh_end_vertex_id < 0)
+  {
+    throw std::runtime_error("intersectionStripEffectiveVertexIndex: invalid mesh_end_vertex_id.");
+  }
+  return static_cast<size_t>(seg.mesh_end_vertex_id);
+}
+
+void SegmentBuilder::addFlexibleVertexToIntersectionMesh(VoronoiMesh& mesh, MeshingData& seg, bool flexible_on_left_side,
+  const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
+  const std::string& metadata)
+{
+  if (!intersection_strip_flexible_vertices_enabled)
+  {
+    return;
+  }
+  if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+  {
+    return;
+  }
+  // Wedge base must match crossing/finish: latest flex on a side wins over fixed mesh_start/mesh_end. Snapshot before
+  // appending the new placeholder so the base is (eff_l, eff_r), not always (mesh_start, mesh_end).
+  const size_t eff_l = intersectionStripEffectiveVertexIndex(seg, true);
+  const size_t eff_r = intersectionStripEffectiveVertexIndex(seg, false);
+  if (eff_l == eff_r)
+  {
+    return;
+  }
+
+  // XY must not be degenerate on the strip line or (0,0): addBoundaryIntervalTriangleOriented uses mesh positions for winding.
+  const glm::dvec3 placeholder(centroid.x, centroid.y, t);
+  const std::string vertex_meta = appendBoundaryVertexPosMetadata(metadata, flexible_on_left_side ? "left" : "right");
+  const size_t idx = addMeshletVertex(mesh, boundary_polygon, centroid, placeholder, strand_id, t, std::nullopt, vertex_meta,
+    std::nullopt);
+  if (flexible_on_left_side)
+  {
+    seg.flexible_left_vertex_ids.push_back(static_cast<int>(idx));
+  }
+  else
+  {
+    seg.flexible_right_vertex_ids.push_back(static_cast<int>(idx));
+  }
+
+  const int inside_he = seg.start_half_edge_id >= 0 ? seg.start_half_edge_id : seg.end_half_edge_id;
+  if (inside_he < 0)
+  {
+    return;
+  }
+  addBoundaryIntervalTriangleOriented(mesh, eff_l, eff_r, idx, inside_he, t, vertex_meta);
+}
+
+void SegmentBuilder::applyIntersectionStripOneSidedFixedVertex(VoronoiMesh& mesh, MeshingData& seg, bool fixed_start_side,
+  size_t new_fixed_vertex_index, int inside_half_edge_id,
+  const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& new_crossing_for_updated_side,
+  const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
+  bool keep_strip_alive)
+{
+  const int old_fixed = fixed_start_side ? seg.mesh_start_vertex_id : seg.mesh_end_vertex_id;
+  if (old_fixed < 0)
+  {
+    return;
+  }
+  std::vector<int>& flex = fixed_start_side ? seg.flexible_left_vertex_ids : seg.flexible_right_vertex_ids;
+  interpolateFlexibleVerticesAlongEdge(mesh, flex, static_cast<size_t>(old_fixed), new_fixed_vertex_index);
+  flex.clear();
+  if (!keep_strip_alive)
+  {
+    return;
+  }
+  if (fixed_start_side)
+  {
+    seg.mesh_start_vertex_id = static_cast<int>(new_fixed_vertex_index);
+    seg.start_half_edge_id = inside_half_edge_id;
+    seg.start_crossing = new_crossing_for_updated_side;
+  }
+  else
+  {
+    seg.mesh_end_vertex_id = static_cast<int>(new_fixed_vertex_index);
+    seg.end_half_edge_id = inside_half_edge_id;
+    seg.end_crossing = new_crossing_for_updated_side;
+  }
+  addFlexibleVertexToIntersectionMesh(mesh, seg, !fixed_start_side, boundary_polygon, centroid, strand_id, t,
+    "{\"intersection_flexible_placeholder\":true}");
+}
+
+void SegmentBuilder::applyIntersectionStripUniformClosureVertex(VoronoiMesh& mesh, MeshingData& seg, size_t closure_vertex_index)
+{
+  if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+  {
+    return;
+  }
+  interpolateFlexibleVerticesAlongEdge(
+    mesh, seg.flexible_left_vertex_ids, static_cast<size_t>(seg.mesh_start_vertex_id), closure_vertex_index);
+  interpolateFlexibleVerticesAlongEdge(
+    mesh, seg.flexible_right_vertex_ids, static_cast<size_t>(seg.mesh_end_vertex_id), closure_vertex_index);
+  seg.flexible_left_vertex_ids.clear();
+  seg.flexible_right_vertex_ids.clear();
 }
 
 void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset)
