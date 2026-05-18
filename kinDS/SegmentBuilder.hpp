@@ -210,11 +210,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
     BoundaryEventType event_type = BoundaryEventType::Init,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted);
+    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
 
   void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false,
     BoundaryEventType event_type = BoundaryEventType::Init,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment);
+    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
   size_t startNewMeshFromIntersections(size_t voronoi_cell_id, double t,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,

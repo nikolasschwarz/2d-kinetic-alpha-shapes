@@ -558,7 +558,8 @@ void kinDS::SegmentBuilder::meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewM
 }
 
 void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector<BoundaryPoint>& boundary_points,
-  BoundaryEventType event_type, BoundarySegmentAction segment_action)
+  BoundaryEventType event_type, BoundarySegmentAction segment_action,
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
   // check if half-edge is infinite
   if (kin_del.getGraph().isInfinite(he_id) && kin_del.computeBoundaryOnTheFly())
@@ -639,18 +640,52 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
       return p;
     }
     const auto& ref = at_start ? segment.start_crossing : segment.end_crossing;
-    glm::dvec2 xy;
-    if (ref.has_value() && tryComputeCrossingIntersectionPosition2D(kin_del, ref, t, xy))
+    if (ref.has_value())
     {
-      // Case 2: Crossing iterator resolved in CrossingData; use its current geometric 2D position.
-      const glm::dvec3 p(xy, t);
-      if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
+      const KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref = ref.value();
+      const glm::dvec3 old_chord_pos
+        = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
+      KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref = orig_ref;
+      if (auto neighbor_opt = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, orig_ref->voronoi_edge_id,
+            boundary_transition_shift);
+        neighbor_opt.has_value())
       {
-        KINDS_WARNING("finishMesh endpoint_position_at_t(" << endpoint_label
-          << "): degenerate CrossingData endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t << " -> (" << p.x
-          << ", " << p.y << ", " << p.z << ").");
+        position_ref = neighbor_opt.value();
       }
-      return p;
+      glm::dvec2 xy;
+      if (tryComputeCrossingIntersectionPosition2D(kin_del, position_ref, t, xy))
+      {
+        const glm::dvec3 p(xy, t);
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
+        {
+          KINDS_WARNING("finishMesh endpoint_position_at_t(" << endpoint_label
+            << "): degenerate CrossingData endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t << " -> (" << p.x
+            << ", " << p.y << ", " << p.z << ").");
+        }
+        if (position_ref != orig_ref)
+        {
+          logRadiusBoundaryTransitionVertexShift(
+            "finishMesh_strip_endpoint", t, orig_ref, position_ref, old_chord_pos, p);
+        }
+        return p;
+      }
+      if (boundary_transition_shift != nullptr)
+      {
+        const glm::dvec3 p = closingMeshVoronoiDelaunayCrossingPosition(
+          t, position_ref->voronoi_edge_id, position_ref->delaunay_edge_id);
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
+        {
+          KINDS_WARNING("finishMesh endpoint_position_at_t(" << endpoint_label
+            << "): degenerate chord endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t << " -> (" << p.x << ", "
+            << p.y << ", " << p.z << ").");
+        }
+        if (position_ref != orig_ref)
+        {
+          logRadiusBoundaryTransitionVertexShift(
+            "finishMesh_strip_endpoint", t, orig_ref, position_ref, old_chord_pos, p);
+        }
+        return p;
+      }
     }
     // Case 3: Crossing ref missing/stale for this boundary half-edge. Fall back to geometric Voronoi-Delaunay chord
     // intersection using the endpoint Delaunay edge id.
@@ -805,7 +840,8 @@ static glm::dvec2 intersectSegments(
 }
 
 void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh,
-  BoundaryEventType event_type, BoundarySegmentAction segment_action)
+  BoundaryEventType event_type, BoundarySegmentAction segment_action,
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
   // check if half-edge is infinite
   if (kin_del.getGraph().isInfinite(half_edge_id) && kin_del.computeBoundaryOnTheFly())
@@ -963,8 +999,22 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
 
       if (inside != next_inside)
       {
-        const glm::dvec3 intersection_point
-          = closingMeshVoronoiDelaunayCrossingPosition(t, voronoi_edge_id, crossed_he_id / 2);
+        KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref = crossing_ref;
+        const glm::dvec3 old_chord_pos = closingMeshVoronoiDelaunayCrossingPosition(
+          t, crossing_ref->voronoi_edge_id, crossing_ref->delaunay_edge_id);
+        if (auto neighbor_opt
+          = neighborIntersectionOnTargetAlongVoronoiEdge(crossing_ref, voronoi_edge_id, boundary_transition_shift);
+          neighbor_opt.has_value())
+        {
+          position_ref = neighbor_opt.value();
+        }
+        const glm::dvec3 intersection_point = closingMeshVoronoiDelaunayCrossingPosition(
+          t, position_ref->voronoi_edge_id, position_ref->delaunay_edge_id);
+        if (position_ref != crossing_ref)
+        {
+          logRadiusBoundaryTransitionVertexShift(
+            "startNewMesh_strip_crossing", t, crossing_ref, position_ref, old_chord_pos, intersection_point);
+        }
         const std::string meta_cross = makeRegularStripVertexMetadataJson(t, voronoi_edge_id, even_id,
           strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
           std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(crossing_ref), "cross", nullptr);

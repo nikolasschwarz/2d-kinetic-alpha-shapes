@@ -1385,46 +1385,6 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
   }
 
-  if (segment_builder_.kin_del.computeBoundaryOnTheFly())
-  {
-    // Close/extend existing strip meshes at the current kinetic time, then rebuild crossing iterators for the whole
-    // meshing state (full `computeEdgeIntersections` invalidates all `EdgeIntersectionRef`s), then seed fresh strips.
-    for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
-    {
-      const size_t he_even = 2 * voronoi_edge_id;
-      if (he_even >= graph.getHalfEdges().size())
-      {
-        continue;
-      }
-      if (graph.isInfinite(he_even))
-      {
-        continue;
-      }
-      const auto& he = graph.getHalfEdges()[he_even];
-      const auto& twin_he = graph.getHalfEdges()[he_even ^ 1];
-      const size_t vertex = std::max(he.origin, twin_he.origin);
-      const size_t component_id = segment_builder_.kin_del.component_data.component_map[vertex];
-      std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
-      segment_builder_.updateBoundary(t, he_visited, component_id);
-      auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-      segment_builder_.finishMesh(he_even, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
-    }
-  }
-
-  for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
-  {
-    const size_t he_even = 2 * voronoi_edge_id;
-    if (he_even >= segment_builder_.kin_del.getGraph().getHalfEdges().size())
-    {
-      continue;
-    }
-    segment_builder_.startNewMesh(he_even, t, true, SegmentBuilder::BoundaryEventType::Radius,
-      SegmentBuilder::BoundarySegmentAction::NewSegment);
-  }
-
-  // After the radius topology update, start/reseed all boundary-interval meshes on
-  // boundary Delaunay edges of the affected (now updated) triangle.
   const size_t updated_face_id = graph.getHalfEdges()[radius->half_edge_id].face;
   const auto& updated_face_he = graph.getFaces()[updated_face_id].half_edges;
 
@@ -1506,6 +1466,47 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     = (segment_builder_.radius_boundary_transition_shift_enabled && radius_boundary_shift_ctx.roles_valid)
     ? &radius_boundary_shift_ctx
     : nullptr;
+
+  if (segment_builder_.kin_del.computeBoundaryOnTheFly())
+  {
+    // Close/extend existing strip meshes at the current kinetic time, then rebuild crossing iterators for the whole
+    // meshing state (full `computeEdgeIntersections` invalidates all `EdgeIntersectionRef`s), then seed fresh strips.
+    for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
+    {
+      const size_t he_even = 2 * voronoi_edge_id;
+      if (he_even >= graph.getHalfEdges().size())
+      {
+        continue;
+      }
+      if (graph.isInfinite(he_even))
+      {
+        continue;
+      }
+      const auto& he = graph.getHalfEdges()[he_even];
+      const auto& twin_he = graph.getHalfEdges()[he_even ^ 1];
+      const size_t vertex = std::max(he.origin, twin_he.origin);
+      const size_t component_id = segment_builder_.kin_del.component_data.component_map[vertex];
+      std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
+      segment_builder_.updateBoundary(t, he_visited, component_id);
+      auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
+      segment_builder_.finishMesh(he_even, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_boundary_shift_arg);
+    }
+  }
+
+  for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
+  {
+    const size_t he_even = 2 * voronoi_edge_id;
+    if (he_even >= segment_builder_.kin_del.getGraph().getHalfEdges().size())
+    {
+      continue;
+    }
+    segment_builder_.startNewMesh(he_even, t, true, SegmentBuilder::BoundaryEventType::Radius,
+      SegmentBuilder::BoundarySegmentAction::NewSegment, radius_boundary_shift_arg);
+  }
+
+  // After the radius topology update, start/reseed all boundary-interval meshes on
+  // boundary Delaunay edges of the affected (now updated) triangle.
 
   std::unordered_set<size_t> started_boundary_he_even;
   for (size_t he_id : updated_face_he)
