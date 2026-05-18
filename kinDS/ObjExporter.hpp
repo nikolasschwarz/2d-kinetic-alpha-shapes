@@ -40,8 +40,9 @@ class ObjExporter
       {
         return "brown";
       }
-      // Regular Voronoi-edge meshlets (strip seed / finish) tag mesh_type in vertex and face JSON.
-      if (metadata.find("\"mesh_type\":\"regular\"") != std::string::npos)
+      // Radius-event regular meshes get explicit lightweight metadata.
+      if (metadata.find("\"event_type\":\"Radius\"") != std::string::npos
+        && metadata.find("\"mesh_type\":\"regular\"") != std::string::npos)
       {
         return "yellow";
       }

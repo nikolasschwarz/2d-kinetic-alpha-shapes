@@ -45,11 +45,8 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       const size_t pre_even_flip_he = flip->half_edge_id & ~1;
       const size_t pre_left_voronoi_vertex_id = graph.getHalfEdges()[pre_even_flip_he].face;
-      const std::string flip_before_meta = segment_builder_.regularMeshletVertexEventJson(flip->occurrence_time,
-        pre_even_flip_he, SegmentBuilder::BoundaryEventType::Flip, SegmentBuilder::BoundarySegmentAction::SegmentRemapped,
-        std::nullopt, "flip_before", nullptr);
       size_t event_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
-        flip->occurrence_time, std::optional<size_t>(pre_left_voronoi_vertex_id), flip_before_meta);
+        flip->occurrence_time, std::optional<size_t>(pre_left_voronoi_vertex_id));
       size_t last_left = last_segments.front().mesh_start_vertex_id;
       size_t last_right = last_segments.back().mesh_end_vertex_id;
       // create one triangle to the event point
@@ -158,12 +155,9 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
   if (seed_mesh_with_flip_vertex)
   {
-    const std::string flip_seed_meta = segment_builder_.regularMeshletVertexEventJson(flip->occurrence_time, even_flip_he,
-      SegmentBuilder::BoundaryEventType::Flip, SegmentBuilder::BoundarySegmentAction::NewSegment, std::nullopt,
-      "flip_face_seed", nullptr);
     size_t index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
       glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time,
-      std::optional<size_t>(left_voronoi_vertex_id), flip_seed_meta);
+      std::optional<size_t>(left_voronoi_vertex_id));
     segment_builder_.segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
       SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
   }
@@ -191,13 +185,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     }
 
     // Same geometric seed as above; alpha warning already emitted from addMeshletVertex for the new meshlet.
-    const size_t neighbor_even = he_id & ~1;
-    const std::string flip_neighbor_meta = segment_builder_.regularMeshletVertexEventJson(flip->occurrence_time,
-      neighbor_even, SegmentBuilder::BoundaryEventType::Flip, SegmentBuilder::BoundarySegmentAction::SegmentRemapped,
-      std::nullopt, "flip_neighbor_extend", nullptr);
     size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid,
-      glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time,
-      std::nullopt, flip_neighbor_meta);
+      glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time);
 
     int he_id_left = segments.front().start_half_edge_id;
     int he_id_right = segments.back().end_half_edge_id;

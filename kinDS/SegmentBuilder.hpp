@@ -9,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <array>
 #include <unordered_map>
 #include <vector>
 
@@ -21,14 +20,6 @@ class SegmentBuilderRadiusCallback;
 class SegmentBuilderCrossingCallback;
 class SegmentBuilderSubdivisionCallback;
 
-/// Source/target Delaunay edges for one radius 2↔1 boundary transition (passed into mesh seeding only; toggles stay on @ref SegmentBuilder).
-struct RadiusBoundaryTransitionShiftContext
-{
-  bool roles_valid = false;
-  std::array<size_t, 2> source_delaunay_edges {};
-  size_t target_delaunay_edge = 0;
-};
-
 class SegmentBuilder : public KineticDelaunay::CallbackManager
 {
  public:
@@ -38,8 +29,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     Section,
     Radius,
     Crossing,
-    Subdivision,
-    Flip
+    Subdivision
   };
 
   enum class BoundarySegmentAction
@@ -58,12 +48,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   friend class SegmentBuilderRadiusCallback;
   friend class SegmentBuilderCrossingCallback;
   friend class SegmentBuilderSubdivisionCallback;
-
-  /// JSON for a regular Voronoi-edge meshlet vertex (strip fields + optional crossing / `op` / `pos`).
-  std::string regularMeshletVertexEventJson(double t, size_t even_half_edge_id, BoundaryEventType event_type,
-    BoundarySegmentAction segment_action,
-    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> crossing = std::nullopt,
-    const char* op = nullptr, const char* pos = nullptr) const;
 
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
@@ -194,33 +178,20 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::unique_ptr<SegmentBuilderSubdivisionCallback> subdivision_callback_;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
   bool visual_debug = true; // Always-on visual debug for now (SVG exports)
-  /// When false (default), radius handling skips the strand meshlet that traces a polygon over the affected Delaunay triangle.
-  bool radius_strand_meshlet_trace_enabled = false;
-  /// When true, radius events may snap intersection-mesh vertices for 2↔1 component-boundary transitions (XY shift only).
-  bool radius_boundary_transition_shift_enabled = true;
-
   /// When true, one-sided intersection-strip updates append a flexible placeholder on the opposite side (full scheme).
   /// When false (default), ablation: same triangles/endpoints as before flex vectors existed; `MeshingData` flex lists stay empty.
   bool intersection_strip_flexible_vertices_enabled = true;
 
- public:
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
-  void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr,
-    BoundaryEventType event_type = BoundaryEventType::Section,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted);
+  void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points);
 
-  void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr,
-    BoundaryEventType event_type = BoundaryEventType::Init,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment);
+  void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false);
   size_t startNewMeshFromIntersections(size_t voronoi_cell_id, double t,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
     bool reuse_existing_pair_and_mesh = false, BoundaryEventType event_type = BoundaryEventType::Init,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment, bool force_single_seed_vertex = false,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment, bool force_single_seed_vertex = false);
   size_t resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
@@ -229,8 +200,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
     BoundaryEventType event_type = BoundaryEventType::Section,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted);
   /**
    * @brief Returns Delaunay-edge intersections in component-boundary traversal order.
    *
@@ -363,7 +333,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   int closingMeshAppendVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position,
-    std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}");
+    std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt);
 
   /**
    * @brief Finds the CrossingData intersection record for a Voronoi/Delaunay edge pair.
@@ -397,33 +367,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   glm::dvec3 closingMeshVoronoiDelaunayCrossingPosition(
     double t, size_t voronoi_edge_id, size_t delaunay_edge_id) const;
 
-  /// If @p crossing_ref is on a radius transition source Delaunay edge, returns an adjacent crossing on the same Voronoi-edge
-  /// list whose Delaunay edge is the transition target (vertex position only; stored crossing iterators unchanged).
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> neighborIntersectionOnTargetAlongVoronoiEdge(
-    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, size_t voronoi_edge_id,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-
-  void logRadiusBoundaryTransitionVertexShift(const char* context, double t,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef from_ref, KineticDelaunay::CrossingData::EdgeIntersectionRef to_ref,
-    const glm::dvec3& old_pos, const glm::dvec3& new_pos) const;
-
-  static bool delaunayUndirectedEdgeHasVertex(
-    const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t vertex_id);
-  /// The finite strand vertex at the other end of @p delaunay_edge_id from @p site_vertex_id, if @p site_vertex_id is an
-  /// endpoint of that undirected edge and the opposite origin is non-negative.
-  static std::optional<size_t> oppositeFiniteDelaunayVertexOnUndirectedEdge(
-    const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t site_vertex_id);
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> cornerCrossingAdjacentToSiteOnBoundaryDelaunayEdge(
-    size_t delaunay_edge_id, size_t site_vertex_id) const;
-  glm::dvec3 crossingPositionWithRadiusBoundaryTransitionShift(double t,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-  /// When @p site_vertex_id is the junction of the two transition source edges, blends shifted corner crossings (inverse
-  /// distance weights from the unshifted site). If a source edge has no boundary intersections, that anchor uses the
-  /// finite Delaunay vertex at the opposite end of that edge (old=new for that leg). Otherwise returns @c nullopt.
-  std::optional<glm::dvec3> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
-    size_t strip_delaunay_edge_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-
   /**
    * @brief Raw inside Voronoi polylines on one dual edge, oriented by @p reverse (no strand lookup).
    *
@@ -433,10 +376,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * as the second argument for strand/end circumcenters so alpha-shape warnings can be logged; use @c std::nullopt for
    * boundary crossing points.
    */
-  std::vector<MeshingData> extractSegmentsForVoronoiEdge(double t, size_t strand_id, int incident_edge_index,
-    size_t voronoi_edge_id,
-    const std::function<int(const glm::dvec3&, std::optional<size_t>, const std::string&)>& track_vertex,
-    BoundaryEventType cap_event, BoundarySegmentAction cap_action, bool reverse = false);
+  std::vector<MeshingData> extractSegmentsForVoronoiEdge(double t, int incident_edge_index, size_t voronoi_edge_id,
+    const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex, bool reverse = false);
 
   /**
    * @brief Extracts raw inside Voronoi polylines for one dual edge incident to the strand (one Voronoi edge id).
@@ -448,9 +389,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   std::vector<MeshingData> closingMeshExtractRawSegmentsForVoronoiEdge(size_t strand_id, double t, VoronoiMesh& mesh,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, int incident_edge_index,
-    size_t incident_he,
-    const std::function<int(const glm::dvec3&, std::optional<size_t>, const std::string&)>& track_vertex,
-    BoundaryEventType cap_event, BoundarySegmentAction cap_action);
+    size_t incident_he, const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex);
 
   /**
    * @brief Builds ordered segment pointers and a start-ref map from a raw segment list.
@@ -491,8 +430,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid,
     std::vector<size_t> mesh_vertex_ids, const std::vector<MeshingData*>& ordered_segments,
     const std::unordered_map<KineticDelaunay::CrossingData::EdgeIntersectionRef, size_t, ClosingMeshCrossingIteratorHash,
-      ClosingMeshCrossingIteratorEq>& start_crossing_to_segment, BoundaryEventType cap_event,
-    BoundarySegmentAction cap_action);
+      ClosingMeshCrossingIteratorEq>& start_crossing_to_segment);
 
   /**
    * @brief Warns about ordered segments that were never visited by the boundary trace.
@@ -512,9 +450,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void closingMeshTriangulatePolygonsFan(VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons);
 
   size_t createClosingMesh(size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon,
-    const glm::dvec2& centroid, std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals = nullptr,
-    BoundaryEventType cap_event = BoundaryEventType::Init,
-    BoundarySegmentAction cap_action = BoundarySegmentAction::NewSegment);
+    const glm::dvec2& centroid, std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals = nullptr);
 
   void accumulateSegmentProperties();
 

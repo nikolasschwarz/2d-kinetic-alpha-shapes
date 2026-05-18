@@ -321,17 +321,15 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
                                                    end = graph.incidentEdgesEnd(strand_id);
     it != end; ++it)
   {
-    segment_builder_.finishMesh(*it, t, boundary_polygon, nullptr, SegmentBuilder::BoundaryEventType::Subdivision,
-      SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+    segment_builder_.finishMesh(*it, t, boundary_polygon);
   }
 
   size_t new_segment_id = segment_builder_.segment_properties.size();
 
   // Create closing mesh and retrieve the exact Delaunay-boundary intervals traced for this strand.
   std::vector<SegmentBuilder::BoundaryIntersectionInterval> traced_boundary_intervals;
-  size_t closing_mesh_index = segment_builder_.createClosingMesh(strand_id, t, boundary_polygon, centroid,
-    &traced_boundary_intervals, SegmentBuilder::BoundaryEventType::Subdivision,
-    SegmentBuilder::BoundarySegmentAction::NewSegment);
+  size_t closing_mesh_index
+    = segment_builder_.createClosingMesh(strand_id, t, boundary_polygon, centroid, &traced_boundary_intervals);
 
   // Finish boundary-interval meshes using the interval list produced during closing-mesh tracing.
   for (size_t interval_idx = 0; interval_idx < traced_boundary_intervals.size(); ++interval_idx)
@@ -396,8 +394,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
                                                    end = graph.incidentEdgesEnd(strand_id);
     it != end; ++it)
   {
-    segment_builder_.startNewMesh(*it, t, false, nullptr, SegmentBuilder::BoundaryEventType::Subdivision,
-      SegmentBuilder::BoundarySegmentAction::NewSegment);
+    segment_builder_.startNewMesh(*it, t);
 
     // insert vertices into adjacent meshes
     auto& he = graph.getHalfEdges()[*it];
@@ -418,12 +415,8 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     VoronoiMesh& adjacent_mesh = segment_builder_.meshes[adjacent_segment_mesh_pair_index];
 
     glm::dvec3 vertex = segment_builder_.computeVoronoiVertex(adjacent_he_id, t);
-    const size_t adj_even = adjacent_he_id & ~1;
-    const std::string adj_meta = segment_builder_.regularMeshletVertexEventJson(t, adj_even,
-      SegmentBuilder::BoundaryEventType::Subdivision, SegmentBuilder::BoundarySegmentAction::SegmentRemapped,
-      std::nullopt, "subdivision_adjacent_incident", nullptr);
     size_t new_vertex_index = segment_builder_.addMeshletVertex(
-      adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t, std::optional<size_t>(voronoi_vertex_id), adj_meta);
+      adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t, std::optional<size_t>(voronoi_vertex_id));
     auto& segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[adjacent_segment_mesh_pair_index];
 
     if (!segments.empty())
