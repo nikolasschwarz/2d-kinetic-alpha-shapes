@@ -113,6 +113,19 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::vector<int> flexible_right_vertex_ids;
   };
 
+  /// One inside-alpha strip on a Voronoi edge: each end is either an open circumcenter (@c *_open_voronoi_half_edge_id)
+  /// or a stored boundary crossing (@c *_crossing plus the inside directed Delaunay half-edge id).
+  struct RegularMeshStripIntervalEndpoints
+  {
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_crossing;
+    std::optional<size_t> start_open_voronoi_half_edge_id;
+    int start_crossed_inside_half_edge_id = -1;
+
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_crossing;
+    std::optional<size_t> end_open_voronoi_half_edge_id;
+    int end_crossed_inside_half_edge_id = -1;
+  };
+
   /**
    * @brief Lookup structures built from complete raw segments for closing-cap polygon tracing.
    *
@@ -212,6 +225,30 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool intersection_strip_flexible_vertices_enabled = true;
 
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
+
+  std::vector<RegularMeshStripIntervalEndpoints> collectRegularMeshStripIntervalsOnVoronoiEdge(size_t even_half_edge_id,
+    size_t voronoi_edge_id, size_t left_containing_tri_id) const;
+
+  MeshingData meshRegularStripInterval(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
+    const glm::dvec2& centroid, size_t even_half_edge_id, size_t voronoi_edge_id, double t, int strand_even_origin_i,
+    int strand_odd_origin_i, BoundaryEventType event_type, BoundarySegmentAction segment_action,
+    const RegularMeshStripIntervalEndpoints& interval,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+
+  static RegularMeshStripIntervalEndpoints regularMeshStripIntervalFromMeshingData(const MeshingData& segment,
+    size_t even_half_edge_id, size_t odd_half_edge_id);
+
+  glm::dvec3 regularMeshStripIntervalEndpointPositionAt(const RegularMeshStripIntervalEndpoints& interval, bool at_start,
+    size_t even_half_edge_id, size_t odd_half_edge_id, size_t voronoi_edge_id, double t,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr) const;
+
+  void finishRegularMeshStripInterval(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
+    const glm::dvec2& centroid, size_t even_half_edge_id, size_t voronoi_edge_id, double t, size_t strand_vertex_id,
+    int strand_even_origin_i, int strand_odd_origin_i, BoundaryEventType event_type, BoundarySegmentAction segment_action,
+    const RegularMeshStripIntervalEndpoints& interval, size_t last_start_vertex_index, size_t last_end_vertex_index,
+    const std::string& finish_face_metadata,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
+    size_t& out_start_vertex_index, size_t& out_end_vertex_index);
 
   void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
     BoundaryEventType event_type = BoundaryEventType::Init,
