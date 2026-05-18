@@ -3,6 +3,7 @@
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
+#include <array>
 #include <functional>
 #include <list>
 #include <limits>
@@ -14,6 +15,14 @@
 
 namespace kinDS
 {
+/// Source/target Delaunay edges for one radius 2↔1 boundary transition (passed into intersection meshing only).
+struct RadiusBoundaryTransitionShiftContext
+{
+  bool roles_valid = false;
+  std::array<size_t, 2> source_delaunay_edges {};
+  size_t target_delaunay_edge = 0;
+};
+
 class SegmentBuilderSectionCallback;
 class SegmentBuilderFlipCallback;
 class SegmentBuilderRadiusCallback;
@@ -53,6 +62,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   static std::string composeRegularStripFaceMetadata(double kinetic_time, size_t voronoi_edge_id,
     size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
     BoundarySegmentAction segment_action, const char* op);
+
+  /// When true, radius 2↔1 transitions snap intersection-mesh crossing vertices along the internal Voronoi edge (XY only).
+  bool radius_boundary_transition_shift_enabled = false;
 
  private:
   friend class SegmentBuilderSectionCallback;
@@ -207,7 +219,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
     bool reuse_existing_pair_and_mesh = false, BoundaryEventType event_type = BoundaryEventType::Init,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment, bool force_single_seed_vertex = false);
+    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment, bool force_single_seed_vertex = false,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
   size_t resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
@@ -216,7 +229,22 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
     BoundaryEventType event_type = BoundaryEventType::Section,
-    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted);
+    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+
+  /// If @p crossing_ref is on a radius transition source Delaunay edge, returns an adjacent crossing on the same
+  /// Voronoi-edge list whose Delaunay edge is the transition target (vertex position only).
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> neighborIntersectionOnTargetAlongVoronoiEdge(
+    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, size_t voronoi_edge_id,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
+  glm::dvec3 crossingPositionWithRadiusBoundaryTransitionShift(double t,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
+  void logRadiusBoundaryTransitionVertexShift(const char* context, double t,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef from_ref, KineticDelaunay::CrossingData::EdgeIntersectionRef to_ref,
+    const glm::dvec3& old_pos, const glm::dvec3& new_pos) const;
   /**
    * @brief Returns Delaunay-edge intersections in component-boundary traversal order.
    *

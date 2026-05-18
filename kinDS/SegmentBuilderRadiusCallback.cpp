@@ -32,6 +32,49 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   const auto& face_half_edges = graph.getFaces()[face_id].half_edges;
   const double t = radius->occurrence_time;
 
+  std::array<bool, 3> is_boundary_edge {};
+  size_t boundary_edge_count = 0;
+  for (size_t i = 0; i < 3; ++i)
+  {
+    const size_t he_id = face_half_edges[i];
+    is_boundary_edge[i] = segment_builder_.kin_del.isOnComponentBoundary(he_id);
+    if (is_boundary_edge[i])
+    {
+      ++boundary_edge_count;
+    }
+  }
+
+  // Pre-flip 2-boundary case: finishing intersection strips on the two boundary edges before the flip; neighbor remap
+  // uses the third (internal) Delaunay edge as target — same as post-flip 2->1 classification after topology updates.
+  RadiusBoundaryTransitionShiftContext radius_pre_finish_shift_ctx {};
+  const RadiusBoundaryTransitionShiftContext* radius_finish_shift_arg = nullptr;
+  if (segment_builder_.radius_boundary_transition_shift_enabled && boundary_edge_count == 2)
+  {
+    size_t out = 0;
+    size_t internal_corner_i = static_cast<size_t>(-1);
+    for (size_t i = 0; i < 3; ++i)
+    {
+      if (is_boundary_edge[i])
+      {
+        radius_pre_finish_shift_ctx.source_delaunay_edges[out++] = face_half_edges[i] / 2;
+      }
+      else
+      {
+        internal_corner_i = i;
+      }
+    }
+    if (out == 2 && internal_corner_i < 3)
+    {
+      radius_pre_finish_shift_ctx.target_delaunay_edge = face_half_edges[internal_corner_i] / 2;
+      radius_pre_finish_shift_ctx.roles_valid = true;
+      radius_finish_shift_arg = &radius_pre_finish_shift_ctx;
+      KINDS_DEBUG("Radius beforeEvent: finishMeshFromIntersections shift context (pre-flip 2 boundary) sources=("
+                  << radius_pre_finish_shift_ctx.source_delaunay_edges[0] << ","
+                  << radius_pre_finish_shift_ctx.source_delaunay_edges[1] << ") target_internal_delaunay_edge="
+                  << radius_pre_finish_shift_ctx.target_delaunay_edge << " face=" << face_id << " t=" << t);
+    }
+  }
+
   // Before the radius topology update, finish all active boundary-interval meshes on
   // boundary Delaunay edges of the affected triangle.
   std::unordered_set<size_t> processed_boundary_he_even;
@@ -62,7 +105,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
       segment_builder_.finishMeshFromIntersections(
         first_cell, t, std::nullopt, refs.front(), SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_finish_shift_arg);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
@@ -70,27 +113,23 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
       segment_builder_.finishMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_finish_shift_arg);
     }
     {
       const size_t last_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
       segment_builder_.finishMeshFromIntersections(
         last_cell, t, refs.back(), std::nullopt, SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_finish_shift_arg);
     }
   }
 
-  std::array<bool, 3> is_boundary_edge;
-  size_t boundary_edge_count = 0;
+  radius_pre_boundary_edge_count_ = boundary_edge_count;
+  radius_pre_face_id_ = face_id;
   for (size_t i = 0; i < 3; ++i)
   {
-    size_t he_id = face_half_edges[i];
-    is_boundary_edge[i] = segment_builder_.kin_del.isOnComponentBoundary(he_id);
-    if (is_boundary_edge[i])
-    {
-      boundary_edge_count++;
-    }
+    radius_pre_face_he_[i] = face_half_edges[i];
+    radius_pre_is_boundary_edge_[i] = is_boundary_edge[i];
   }
 
   switch (boundary_edge_count)
@@ -1379,6 +1418,86 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   // boundary Delaunay edges of the affected (now updated) triangle.
   const size_t updated_face_id = graph.getHalfEdges()[radius->half_edge_id].face;
   const auto& updated_face_he = graph.getFaces()[updated_face_id].half_edges;
+
+  RadiusBoundaryTransitionShiftContext radius_boundary_shift_ctx {};
+  if (segment_builder_.radius_boundary_transition_shift_enabled)
+  {
+    std::array<bool, 3> post_is_boundary_edge {};
+    size_t post_boundary_edge_count = 0;
+    for (size_t i = 0; i < 3; ++i)
+    {
+      post_is_boundary_edge[i] = segment_builder_.kin_del.isOnComponentBoundary(updated_face_he[i]);
+      if (post_is_boundary_edge[i])
+      {
+        ++post_boundary_edge_count;
+      }
+    }
+
+    const size_t pre_boundary_edge_count = radius_pre_boundary_edge_count_;
+
+    if (pre_boundary_edge_count == 2 && post_boundary_edge_count == 1)
+    {
+      size_t out = 0;
+      for (size_t i = 0; i < 3; ++i)
+      {
+        if (radius_pre_is_boundary_edge_[i])
+        {
+          radius_boundary_shift_ctx.source_delaunay_edges[out++] = radius_pre_face_he_[i] / 2;
+        }
+      }
+      for (size_t i = 0; i < 3; ++i)
+      {
+        if (post_is_boundary_edge[i])
+        {
+          radius_boundary_shift_ctx.target_delaunay_edge = updated_face_he[i] / 2;
+          break;
+        }
+      }
+      if (out == 2)
+      {
+        radius_boundary_shift_ctx.roles_valid = true;
+        KINDS_DEBUG("Radius boundary transition 2->1: source_delaunay_edges=("
+                    << radius_boundary_shift_ctx.source_delaunay_edges[0] << ","
+                    << radius_boundary_shift_ctx.source_delaunay_edges[1] << ") target_delaunay_edge="
+                    << radius_boundary_shift_ctx.target_delaunay_edge << " pre_face=" << radius_pre_face_id_
+                    << " post_face=" << updated_face_id << " t=" << t);
+      }
+    }
+    else if (pre_boundary_edge_count == 1 && post_boundary_edge_count == 2)
+    {
+      size_t out = 0;
+      for (size_t i = 0; i < 3; ++i)
+      {
+        if (post_is_boundary_edge[i])
+        {
+          radius_boundary_shift_ctx.source_delaunay_edges[out++] = updated_face_he[i] / 2;
+        }
+      }
+      for (size_t i = 0; i < 3; ++i)
+      {
+        if (radius_pre_is_boundary_edge_[i])
+        {
+          radius_boundary_shift_ctx.target_delaunay_edge = radius_pre_face_he_[i] / 2;
+          break;
+        }
+      }
+      if (out == 2)
+      {
+        radius_boundary_shift_ctx.roles_valid = true;
+        KINDS_DEBUG("Radius boundary transition 1->2: source_delaunay_edges=("
+                    << radius_boundary_shift_ctx.source_delaunay_edges[0] << ","
+                    << radius_boundary_shift_ctx.source_delaunay_edges[1] << ") target_delaunay_edge="
+                    << radius_boundary_shift_ctx.target_delaunay_edge << " pre_face=" << radius_pre_face_id_
+                    << " post_face=" << updated_face_id << " t=" << t);
+      }
+    }
+  }
+
+  const RadiusBoundaryTransitionShiftContext* radius_boundary_shift_arg
+    = (segment_builder_.radius_boundary_transition_shift_enabled && radius_boundary_shift_ctx.roles_valid)
+    ? &radius_boundary_shift_ctx
+    : nullptr;
+
   std::unordered_set<size_t> started_boundary_he_even;
   for (size_t he_id : updated_face_he)
   {
@@ -1419,7 +1538,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                    << first_cell << " t=" << t << " first_crossing={" << format_crossing(refs.front()) << "}");
       segment_builder_.startNewMeshFromIntersections(
         first_cell, t, std::nullopt, refs.front(), false, SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::NewSegment);
+        SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
@@ -1430,7 +1549,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                    << format_crossing(refs[k + 1]) << "}");
       segment_builder_.startNewMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], false, SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::NewSegment);
+        SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
     }
     {
       const size_t last_cell
@@ -1439,7 +1558,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                    << last_cell << " t=" << t << " last_crossing={" << format_crossing(refs.back()) << "}");
       segment_builder_.startNewMeshFromIntersections(
         last_cell, t, refs.back(), std::nullopt, false, SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::NewSegment);
+        SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
     }
   }
 }
