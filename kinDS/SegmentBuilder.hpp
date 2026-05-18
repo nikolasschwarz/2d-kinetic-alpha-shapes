@@ -42,6 +42,18 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   static std::string composeBoundaryMetadata(BoundaryEventType event_type, BoundarySegmentAction segment_action);
 
+  /// JSON for Voronoi-edge strip meshlet vertices (OBJ inline comments when exporting with metadata).
+  static std::string composeRegularStripVertexMetadata(double kinetic_time, size_t voronoi_edge_id,
+    size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
+    BoundarySegmentAction segment_action,
+    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing, const char* pos,
+    const char* op = nullptr);
+
+  /// JSON for Voronoi-edge strip meshlet faces (quads emitted as two triangles in @ref finishMesh, etc.).
+  static std::string composeRegularStripFaceMetadata(double kinetic_time, size_t voronoi_edge_id,
+    size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
+    BoundarySegmentAction segment_action, const char* op);
+
  private:
   friend class SegmentBuilderSectionCallback;
   friend class SegmentBuilderFlipCallback;
@@ -184,9 +196,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
-  void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points);
+  void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
+    BoundaryEventType event_type = BoundaryEventType::Init,
+    BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted);
 
-  void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false);
+  void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false,
+    BoundaryEventType event_type = BoundaryEventType::Init,
+    BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment);
   size_t startNewMeshFromIntersections(size_t voronoi_cell_id, double t,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,

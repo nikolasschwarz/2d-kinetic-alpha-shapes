@@ -32,7 +32,8 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t component_index = segment_builder_.kin_del.component_data.component_map[vertex];
     auto& boundary_points = segment_builder_.kin_del.component_data.component_boundaries[component_index][0];
 
-    segment_builder_.finishMesh(i, index, boundary_points);
+    segment_builder_.finishMesh(i, index, boundary_points, SegmentBuilder::BoundaryEventType::Section,
+      SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
 
     // Advance boundary-interval meshes on boundary Delaunay edges using the same interval decomposition as init():
     // [null, first], [k, k+1], [last, null].

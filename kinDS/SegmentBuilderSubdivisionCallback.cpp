@@ -321,7 +321,8 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
                                                    end = graph.incidentEdgesEnd(strand_id);
     it != end; ++it)
   {
-    segment_builder_.finishMesh(*it, t, boundary_polygon);
+    segment_builder_.finishMesh(*it, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Subdivision,
+      SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
   }
 
   size_t new_segment_id = segment_builder_.segment_properties.size();
@@ -394,7 +395,8 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
                                                    end = graph.incidentEdgesEnd(strand_id);
     it != end; ++it)
   {
-    segment_builder_.startNewMesh(*it, t);
+    segment_builder_.startNewMesh(*it, t, false, SegmentBuilder::BoundaryEventType::Subdivision,
+      SegmentBuilder::BoundarySegmentAction::NewSegment);
 
     // insert vertices into adjacent meshes
     auto& he = graph.getHalfEdges()[*it];
@@ -414,9 +416,19 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
       = segment_builder_.half_edge_index_to_segment_mesh_pair_index[adjacent_he_id];
     VoronoiMesh& adjacent_mesh = segment_builder_.meshes[adjacent_segment_mesh_pair_index];
 
+    const size_t adj_even = adjacent_he_id & ~size_t(1);
+    const auto& adj_he = graph.getHalfEdges()[adj_even];
+    const auto& adj_twin = graph.getHalfEdges()[adj_even ^ size_t(1)];
+    const std::string adj_vertex_meta = SegmentBuilder::composeRegularStripVertexMetadata(t, adj_even / 2, adj_even,
+      static_cast<int>(adj_he.origin), static_cast<int>(adj_twin.origin), SegmentBuilder::BoundaryEventType::Subdivision,
+      SegmentBuilder::BoundarySegmentAction::SegmentRemapped, std::nullopt, "cross", "subdivision_adjacent_incident");
+    const std::string adj_face_meta = SegmentBuilder::composeRegularStripFaceMetadata(t, adj_even / 2, adj_even,
+      static_cast<int>(adj_he.origin), static_cast<int>(adj_twin.origin), SegmentBuilder::BoundaryEventType::Subdivision,
+      SegmentBuilder::BoundarySegmentAction::SegmentRemapped, "subdivision_adjacent_extend");
+
     glm::dvec3 vertex = segment_builder_.computeVoronoiVertex(adjacent_he_id, t);
     size_t new_vertex_index = segment_builder_.addMeshletVertex(
-      adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t, std::optional<size_t>(voronoi_vertex_id));
+      adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t, std::optional<size_t>(voronoi_vertex_id), adj_vertex_meta);
     auto& segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[adjacent_segment_mesh_pair_index];
 
     if (!segments.empty())
@@ -430,7 +442,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
         size_t last_right = segments.front().mesh_end_vertex_id;
         {
           const size_t tris_before = adjacent_mesh.getTriangleCount();
-          segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index);
+          segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index, adj_face_meta);
           std::ostringstream note;
           note << "extend_subdivision_adjacent d_tris=" << (adjacent_mesh.getTriangleCount() - tris_before);
           segment_builder_.meshletDiagnosticLogLine("extend_mesh", adjacent_he_id, t, note.str().c_str());
@@ -443,7 +455,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
         size_t last_right = segments.back().mesh_end_vertex_id;
         {
           const size_t tris_before = adjacent_mesh.getTriangleCount();
-          segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index);
+          segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index, adj_face_meta);
           std::ostringstream note;
           note << "extend_subdivision_adjacent d_tris=" << (adjacent_mesh.getTriangleCount() - tris_before);
           segment_builder_.meshletDiagnosticLogLine("extend_mesh", adjacent_he_id, t, note.str().c_str());

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -1258,14 +1259,26 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         return;
       }
-      const std::string radius_regular_meta = "{\"event_type\":\"Radius\",\"mesh_type\":\"regular\"}";
+      std::ostringstream radius_meta_stream;
+      radius_meta_stream << std::setprecision(17);
+      radius_meta_stream << "{\"mesh_type\":\"regular\",\"event_type\":\"radius_event\",\"segment_action\":\"new_segment\",\"time\":"
+        << t << ",\"delaunay_face_id\":" << affected_face_id << ",\"strand_cell_id\":" << cell_id
+        << ",\"failed_meshlet\":" << (failed ? "true" : "false") << "}";
+      const std::string radius_vertex_meta = radius_meta_stream.str();
+      std::ostringstream radius_fan_stream;
+      radius_fan_stream << std::setprecision(17);
+      radius_fan_stream << "{\"mesh_type\":\"regular\",\"event_type\":\"radius_event\",\"segment_action\":\"new_segment\",\"time\":"
+        << t << ",\"delaunay_face_id\":" << affected_face_id << ",\"strand_cell_id\":" << cell_id
+        << ",\"op\":\"radius_strand_cell_fan\",\"failed_meshlet\":" << (failed ? "true" : "false") << "}";
+      const std::string radius_fan_meta = radius_fan_stream.str();
       VoronoiMesh mesh;
       std::vector<size_t> ids;
       ids.reserve(poly.size());
       for (const auto& p : poly)
       {
         ids.push_back(segment_builder_.addMeshletVertex(mesh, segment_builder_.kin_del.component_data.component_boundaries[component_id][0],
-          segment_builder_.kin_del.component_data.component_centroids[component_id], p, cell_id, t));
+          segment_builder_.kin_del.component_data.component_centroids[component_id], p, cell_id, t, std::nullopt,
+          radius_vertex_meta));
       }
       double signed_area2 = 0.0;
       for (size_t i = 0; i < ids.size(); ++i)
@@ -1280,11 +1293,11 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         if (use_default_winding)
         {
-          segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i - 1], ids[i], radius_regular_meta);
+          segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i - 1], ids[i], radius_fan_meta);
         }
         else
         {
-          segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i], ids[i - 1], radius_regular_meta);
+          segment_builder_.addMeshletTriangle(mesh, ids[0], ids[i], ids[i - 1], radius_fan_meta);
         }
       }
       size_t owner_segment_id = static_cast<size_t>(-1);
@@ -1346,7 +1359,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
       segment_builder_.updateBoundary(t, he_visited, component_id);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-      segment_builder_.finishMesh(he_even, t, boundary_polygon);
+      segment_builder_.finishMesh(he_even, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
   }
 
@@ -1357,7 +1371,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       continue;
     }
-    segment_builder_.startNewMesh(he_even, t, true);
+    segment_builder_.startNewMesh(he_even, t, true, SegmentBuilder::BoundaryEventType::Radius,
+      SegmentBuilder::BoundarySegmentAction::NewSegment);
   }
 
   // After the radius topology update, start/reseed all boundary-interval meshes on

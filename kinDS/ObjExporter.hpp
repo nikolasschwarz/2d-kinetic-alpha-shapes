@@ -40,8 +40,9 @@ class ObjExporter
       {
         return "brown";
       }
-      // Radius-event regular meshes get explicit lightweight metadata.
-      if (metadata.find("\"event_type\":\"Radius\"") != std::string::npos
+      // Radius-event regular meshes: metadata uses lowercase event tag from @ref boundaryEventTypeToString.
+      if ((metadata.find("\"event_type\":\"radius_event\"") != std::string::npos
+            || metadata.find("\"event_type\":\"Radius\"") != std::string::npos)
         && metadata.find("\"mesh_type\":\"regular\"") != std::string::npos)
       {
         return "yellow";
