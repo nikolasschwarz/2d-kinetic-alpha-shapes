@@ -465,7 +465,16 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       const auto centroid = polygonCentroid(boundary_polygon);
 
       auto& mesh = segment_builder_.intersection_meshes[pair_idx];
-      const glm::dvec3 corner_pos { p_corner[0], p_corner[1], t };
+      glm::dvec3 corner_pos { p_corner[0], p_corner[1], t };
+      if (radius_finish_shift_arg != nullptr)
+      {
+        if (auto site_shifted = segment_builder_.radiusTransitionInterpolatedSitePosition(
+              t, corner_u, d_edge_id, radius_finish_shift_arg);
+          site_shifted.has_value())
+        {
+          corner_pos = site_shifted.value();
+        }
+      }
       const std::string radius_corner_meta = SegmentBuilder::composeBoundaryMetadata(
         SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
       auto with_pos = [&radius_corner_meta](const char* pos) -> std::string

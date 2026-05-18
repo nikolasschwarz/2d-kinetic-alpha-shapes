@@ -245,6 +245,18 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void logRadiusBoundaryTransitionVertexShift(const char* context, double t,
     KineticDelaunay::CrossingData::EdgeIntersectionRef from_ref, KineticDelaunay::CrossingData::EdgeIntersectionRef to_ref,
     const glm::dvec3& old_pos, const glm::dvec3& new_pos) const;
+
+  static bool delaunayUndirectedEdgeHasVertex(
+    const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t vertex_id);
+
+  static std::optional<size_t> oppositeFiniteDelaunayVertexOnUndirectedEdge(
+    const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t site_vertex_id);
+
+  /// When @p site_vertex_id is the junction of the two transition source edges, blends shifted corner crossings
+  /// (inverse-distance weights from the unshifted site in XY). Otherwise returns @c nullopt.
+  std::optional<glm::dvec3> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
+    size_t strip_delaunay_edge_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
   /**
    * @brief Returns Delaunay-edge intersections in component-boundary traversal order.
    *

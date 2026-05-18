@@ -1166,6 +1166,147 @@ glm::dvec3 SegmentBuilder::crossingPositionWithRadiusBoundaryTransitionShift(dou
   return closingMeshVoronoiDelaunayCrossingPosition(t, use_ref->voronoi_edge_id, use_ref->delaunay_edge_id);
 }
 
+bool SegmentBuilder::delaunayUndirectedEdgeHasVertex(
+  const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t vertex_id)
+{
+  const size_t he_even = 2 * delaunay_edge_id;
+  if (he_even + 1 >= graph.getHalfEdges().size())
+  {
+    return false;
+  }
+  const int a = graph.getHalfEdges()[he_even].origin;
+  const int b = graph.getHalfEdges()[he_even + 1].origin;
+  return (a >= 0 && static_cast<size_t>(a) == vertex_id) || (b >= 0 && static_cast<size_t>(b) == vertex_id);
+}
+
+std::optional<size_t> SegmentBuilder::oppositeFiniteDelaunayVertexOnUndirectedEdge(
+  const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t site_vertex_id)
+{
+  const size_t he_even = 2 * delaunay_edge_id;
+  if (he_even + 1 >= graph.getHalfEdges().size())
+  {
+    return std::nullopt;
+  }
+  const int a = graph.getHalfEdges()[he_even].origin;
+  const int b = graph.getHalfEdges()[he_even + 1].origin;
+  if (a >= 0 && static_cast<size_t>(a) == site_vertex_id)
+  {
+    if (b >= 0)
+    {
+      return static_cast<size_t>(b);
+    }
+    return std::nullopt;
+  }
+  if (b >= 0 && static_cast<size_t>(b) == site_vertex_id)
+  {
+    if (a >= 0)
+    {
+      return static_cast<size_t>(a);
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+std::optional<glm::dvec3> SegmentBuilder::radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
+  size_t strip_delaunay_edge_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
+{
+  if (!radius_boundary_transition_shift_enabled || boundary_transition_shift == nullptr
+    || !boundary_transition_shift->roles_valid)
+  {
+    return std::nullopt;
+  }
+  const auto& graph = kin_del.getGraph();
+  const size_t s0 = boundary_transition_shift->source_delaunay_edges[0];
+  const size_t s1 = boundary_transition_shift->source_delaunay_edges[1];
+  if (!delaunayUndirectedEdgeHasVertex(graph, s0, site_vertex_id)
+    || !delaunayUndirectedEdgeHasVertex(graph, s1, site_vertex_id))
+  {
+    return std::nullopt;
+  }
+  const size_t d_strip = strip_delaunay_edge_id;
+  if (d_strip != s0 && d_strip != s1)
+  {
+    return std::nullopt;
+  }
+  const size_t d_other = (d_strip == s0) ? s1 : s0;
+
+  const auto anchor_old_and_new = [&](size_t delaunay_edge_id) -> std::optional<std::pair<glm::dvec3, glm::dvec3>>
+  {
+    const size_t he_even = 2 * delaunay_edge_id;
+    if (he_even + 1 >= graph.getHalfEdges().size())
+    {
+      return std::nullopt;
+    }
+    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+      = getBoundaryIntersectionsInBoundaryOrder(delaunay_edge_id);
+    if (!refs.empty())
+    {
+      const int o0 = graph.getHalfEdges()[he_even].origin;
+      const int o1 = graph.getHalfEdges()[he_even + 1].origin;
+      std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> ref;
+      if (o0 >= 0 && static_cast<size_t>(o0) == site_vertex_id)
+      {
+        ref = refs.front();
+      }
+      else if (o1 >= 0 && static_cast<size_t>(o1) == site_vertex_id)
+      {
+        ref = refs.back();
+      }
+      if (!ref.has_value())
+      {
+        return std::nullopt;
+      }
+      const glm::dvec3 p_old
+        = closingMeshVoronoiDelaunayCrossingPosition(t, ref.value()->voronoi_edge_id, ref.value()->delaunay_edge_id);
+      const glm::dvec3 p_new = crossingPositionWithRadiusBoundaryTransitionShift(t, ref.value(), boundary_transition_shift);
+      return std::make_pair(p_old, p_new);
+    }
+    if (!delaunayUndirectedEdgeHasVertex(graph, delaunay_edge_id, site_vertex_id))
+    {
+      return std::nullopt;
+    }
+    if (auto v_opp = oppositeFiniteDelaunayVertexOnUndirectedEdge(graph, delaunay_edge_id, site_vertex_id);
+      v_opp.has_value())
+    {
+      const glm::dvec2 xy = kin_del.getPointAt(t, v_opp.value());
+      const glm::dvec3 p(xy, t);
+      return std::make_pair(p, p);
+    }
+    return std::nullopt;
+  };
+
+  const auto a0 = anchor_old_and_new(d_strip);
+  const auto a1 = anchor_old_and_new(d_other);
+  if (!a0.has_value() || !a1.has_value())
+  {
+    return std::nullopt;
+  }
+
+  const glm::dvec3 p0_old = a0.value().first;
+  const glm::dvec3 p1_old = a1.value().first;
+  const glm::dvec2 site_xy = kin_del.getPointAt(t, site_vertex_id);
+  const double d0 = glm::length(glm::dvec2(p0_old.x, p0_old.y) - site_xy);
+  const double d1 = glm::length(glm::dvec2(p1_old.x, p1_old.y) - site_xy);
+  const double sum = d0 + d1;
+  if (!(sum > 1e-30))
+  {
+    return std::nullopt;
+  }
+
+  const glm::dvec3 p0_new = a0.value().second;
+  const glm::dvec3 p1_new = a1.value().second;
+
+  const double w0 = d1 / sum;
+  const double w1 = d0 / sum;
+  const glm::dvec3 out(w0 * p0_new.x + w1 * p1_new.x, w0 * p0_new.y + w1 * p1_new.y, t);
+  KINDS_DEBUG("Radius boundary transition corner site: cell=" << site_vertex_id << " strip_d=" << d_strip << " other_d="
+                                                                << d_other << " w0=" << w0 << " w1=" << w1 << " d0=" << d0
+                                                                << " d1=" << d1 << " t=" << t << " out=(" << out.x << ","
+                                                                << out.y << ")");
+  return out;
+}
+
 size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, double event_time) const
@@ -1399,6 +1540,19 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
         }
         return new_pos;
       }
+      if (auto site_shifted
+        = radiusTransitionInterpolatedSitePosition(t, voronoi_cell_id, delaunay_edge_id, boundary_transition_shift);
+        site_shifted.has_value())
+      {
+        const glm::dvec2 p_site = kin_del.getPointAt(t, voronoi_cell_id);
+        KINDS_DEBUG("Radius boundary transition [startNewMeshFromIntersections_site]: cell=" << voronoi_cell_id
+                                                                                              << " strip_d=" << delaunay_edge_id
+                                                                                              << " t=" << t << " old=("
+                                                                                              << p_site.x << "," << p_site.y
+                                                                                              << ") new=(" << site_shifted->x
+                                                                                              << "," << site_shifted->y << ")");
+        return site_shifted.value();
+      }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id);
       return glm::dvec3(p.x, p.y, t);
     };
@@ -1591,11 +1745,28 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   auto& boundary_polygon = kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = kin_del.component_data.component_centroids[component_id];
 
+  const size_t strip_delaunay_edge_id_for_site
+    = start_intersection.has_value() ? start_intersection.value()->delaunay_edge_id : end_intersection.value()->delaunay_edge_id;
+
   auto endpoint_position_at_t = [&](bool at_start) -> glm::dvec3
   {
     const auto& input_ref = at_start ? start_intersection : end_intersection;
     if (!input_ref.has_value())
     {
+      if (auto site_shifted = radiusTransitionInterpolatedSitePosition(
+            t, voronoi_cell_id, strip_delaunay_edge_id_for_site, boundary_transition_shift);
+        site_shifted.has_value())
+      {
+        const glm::dvec2 p_site = kin_del.getPointAt(t, voronoi_cell_id);
+        KINDS_DEBUG("Radius boundary transition [finishMeshFromIntersections_site]: cell=" << voronoi_cell_id
+                                                                                           << " strip_d="
+                                                                                           << strip_delaunay_edge_id_for_site
+                                                                                           << " t=" << t << " old=(" << p_site.x
+                                                                                           << "," << p_site.y << ") new=("
+                                                                                           << site_shifted->x << ","
+                                                                                           << site_shifted->y << ")");
+        return site_shifted.value();
+      }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id);
       return glm::dvec3(p.x, p.y, t);
     }

@@ -273,6 +273,7 @@ static void kinetic_delaunay_example()
     10.0, false);
 
   kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);
+  mesh_builder.radius_boundary_transition_shift_enabled = true;
   kinetic_delaunay.init(&mesh_builder);
   auto points = kinetic_delaunay.getPointsAt(0.0);
 
@@ -294,10 +295,10 @@ static void kinetic_delaunay_example()
   kinetic_delaunay.compute();
 
   // mesh_builder.printDebugInfo();
-
+  bool merge_by_segment = true;
   // auto meshes = mesh_builder.extractMeshes();
-  auto meshes = mesh_builder.extractSegmentMeshlets(false);
-  auto mesh_suffixes = mesh_builder.extractSegmentMeshletExportSuffixes(false);
+  auto meshes = mesh_builder.extractSegmentMeshlets(merge_by_segment);
+  auto mesh_suffixes = mesh_builder.extractSegmentMeshletExportSuffixes(merge_by_segment);
   //(0.1, 0.01, subdivisions);
 
   for (size_t i = 0; i < meshes.first.size(); ++i)
