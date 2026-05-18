@@ -66,6 +66,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// When true, radius 2↔1 transitions snap intersection-mesh crossing vertices along the internal Voronoi edge (XY only).
   bool radius_boundary_transition_shift_enabled = false;
 
+  /// Material table for meshlet OBJ export (`material_ids` index into this list).
+  static constexpr int RegularMeshletMaterialId = 0;
+  static constexpr int BoundaryIntervalMeshletMaterialId = 1;
+  static inline const std::vector<std::string> MeshletExportMaterialNames = { "yellow", "brown" };
+
  private:
   friend class SegmentBuilderSectionCallback;
   friend class SegmentBuilderFlipCallback;
@@ -313,8 +318,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   size_t addBoundaryVertex(glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t);
 
-  size_t addMeshletTriangle(
-    VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}");
+  size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}",
+    int material_id = RegularMeshletMaterialId);
 
   /**
    * Same as @ref addMeshletTriangle after orienting `(u,v,w)` from combinatorics only: @p inside_boundary_he_id is the

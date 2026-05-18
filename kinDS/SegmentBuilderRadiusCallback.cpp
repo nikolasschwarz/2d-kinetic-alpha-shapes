@@ -1375,13 +1375,19 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
     if (!success)
     {
-      // Debug: export partial polygon so failed traversals are visible in OBJ exports.
-      emit_radius_cell_mesh(polygon, true);
+      // Debug fan meshlet only when boundary-transition vertex shift is off (shift path uses interval/strip meshes).
+      if (!segment_builder_.radius_boundary_transition_shift_enabled)
+      {
+        emit_radius_cell_mesh(polygon, true);
+      }
       encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
       continue;
     }
 
-    emit_radius_cell_mesh(polygon, false);
+    if (!segment_builder_.radius_boundary_transition_shift_enabled)
+    {
+      emit_radius_cell_mesh(polygon, false);
+    }
     encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
   }
 

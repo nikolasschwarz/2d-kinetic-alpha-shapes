@@ -92,6 +92,7 @@ class VoronoiMesh
   size_t addUV(glm::dvec3 uv);
   void startNewGroup();
   void setGroupOffsets(const std::vector<size_t>& offsets);
+  void setMaterialNames(std::vector<std::string> names) { material_names = std::move(names); }
   VoronoiMesh& operator+=(const VoronoiMesh& other);
   void flipOrientation();
 

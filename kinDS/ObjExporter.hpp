@@ -33,37 +33,17 @@ class ObjExporter
 
     std::string active_material_name;
     const auto& material_ids = mesh.getMaterialIDs();
-    auto materialFromMetadata = [](const std::string& metadata) -> std::string
-    {
-      // Boundary-interval meshes carry segment_action in metadata.
-      if (metadata.find("\"segment_action\"") != std::string::npos)
-      {
-        return "brown";
-      }
-      // Radius-event regular meshes: metadata uses lowercase event tag from @ref boundaryEventTypeToString.
-      if ((metadata.find("\"event_type\":\"radius_event\"") != std::string::npos
-            || metadata.find("\"event_type\":\"Radius\"") != std::string::npos)
-        && metadata.find("\"mesh_type\":\"regular\"") != std::string::npos)
-      {
-        return "yellow";
-      }
-      return {};
-    };
+    const auto& material_names = mesh.getMaterialNames();
     for (size_t i = 3 * lb; i < 3 * ub; i += 3)
     {
       std::string desired_material_name;
       if (!material_ids.empty() && (i / 3) < material_ids.size())
       {
         const int current_material_id = material_ids[i / 3];
-        if (current_material_id >= 0 && static_cast<size_t>(current_material_id) < mesh.getMaterialNames().size())
+        if (current_material_id >= 0 && static_cast<size_t>(current_material_id) < material_names.size())
         {
-          desired_material_name = mesh.getMaterialNames()[static_cast<size_t>(current_material_id)];
+          desired_material_name = material_names[static_cast<size_t>(current_material_id)];
         }
-      }
-      if (desired_material_name.empty() && include_metadata)
-      {
-        const std::string metadata = (i / 3 < face_metadata.size()) ? face_metadata[i / 3] : "{}";
-        desired_material_name = materialFromMetadata(metadata);
       }
       if (!desired_material_name.empty() && desired_material_name != active_material_name)
       {
@@ -136,7 +116,13 @@ class ObjExporter
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    // Legacy material kept for existing exports.
+    // Component boundary shell (bark / interior).
+    file << "newmtl bark\n";
+    file << "Ka 0.3 0.2 0.1\n";
+    file << "Kd 0.5 0.35 0.15\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
     file << "newmtl interior\n";
     file << "Ka 0.8 0.8 0.8\n";
     file << "Kd 0.8 0.8 0.8\n";

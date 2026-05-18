@@ -2307,32 +2307,41 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(glm::dvec3 vertex, glm::dvec2 ce
 }
 
 size_t kinDS::SegmentBuilder::addMeshletTriangle(
-  VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata)
+  VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata, int material_id)
 {
-  return mesh.addTriangle(u, v, w, u, v, w, -1, metadata); // For meshlets, the UVs are assigned per vertex so the indices match
+  if (mesh.getMaterialNames().empty())
+  {
+    mesh.setMaterialNames({ MeshletExportMaterialNames[static_cast<size_t>(RegularMeshletMaterialId)] });
+  }
+  return mesh.addTriangle(u, v, w, u, v, w, material_id, metadata);
 }
 
 size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(
   VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id, double t, const std::string& metadata)
 {
   (void)t;
+  if (mesh.getMaterialNames().empty())
+  {
+    mesh.setMaterialNames({ MeshletExportMaterialNames[static_cast<size_t>(BoundaryIntervalMeshletMaterialId)] });
+  }
+  const int boundary_material_id = 0;
   if (inside_boundary_he_id < 0 || static_cast<size_t>(inside_boundary_he_id) >= kin_del.getGraph().getHalfEdges().size())
   {
-    return addMeshletTriangle(mesh, u, v, w, metadata);
+    return addMeshletTriangle(mesh, u, v, w, metadata, boundary_material_id);
   }
 
   // `inside_boundary_he_id` is the inside-directed boundary half-edge; its twin is the outside one on the same Delaunay edge.
   const size_t outside_he = static_cast<size_t>(inside_boundary_he_id) ^ 1u;
   if (outside_he >= kin_del.getGraph().getHalfEdges().size())
   {
-    return addMeshletTriangle(mesh, u, v, w, metadata);
+    return addMeshletTriangle(mesh, u, v, w, metadata, boundary_material_id);
   }
 
   if ((outside_he & 1u) != 0u)
   {
     std::swap(v, w);
   }
-  return addMeshletTriangle(mesh, u, v, w, metadata);
+  return addMeshletTriangle(mesh, u, v, w, metadata, boundary_material_id);
 }
 
 void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
@@ -4148,7 +4157,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
   std::vector<std::vector<int>> neighbor_segments; // accessed as [segment_id][triangle_index]
   for (size_t segment_id = 0; segment_id < segment_properties.size(); ++segment_id)
   {
-    VoronoiMesh segment_mesh;
+    VoronoiMesh segment_mesh(MeshletExportMaterialNames);
     std::vector<int> neighbor_segments_for_meshlet;
     const auto& properties = segment_properties[segment_id];
     double earliest_creation = std::numeric_limits<double>::quiet_NaN();

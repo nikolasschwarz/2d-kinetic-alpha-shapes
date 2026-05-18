@@ -2,6 +2,7 @@
 #include "Logger.hpp"
 #include "VoronoiMesh.hpp"
 #include "glm/gtx/norm.hpp"
+#include <algorithm>
 #include <array>
 #include <iomanip>
 #include <sstream>
@@ -197,6 +198,42 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   else
   {
     face_metadata.insert(face_metadata.end(), other.triangles.size() / 3, "{}");
+  }
+
+  std::vector<int> other_material_id_remap(other.material_names.size(), -1);
+  for (size_t i = 0; i < other.material_names.size(); ++i)
+  {
+    const auto it = std::find(material_names.begin(), material_names.end(), other.material_names[i]);
+    if (it == material_names.end())
+    {
+      other_material_id_remap[i] = static_cast<int>(material_names.size());
+      material_names.push_back(other.material_names[i]);
+    }
+    else
+    {
+      other_material_id_remap[i] = static_cast<int>(std::distance(material_names.begin(), it));
+    }
+  }
+
+  const size_t other_triangle_count = other.triangles.size() / 3;
+  if (other.material_ids.size() == other_triangle_count)
+  {
+    material_ids.reserve(material_ids.size() + other_triangle_count);
+    for (int id : other.material_ids)
+    {
+      if (id < 0 || id >= static_cast<int>(other_material_id_remap.size()))
+      {
+        material_ids.push_back(-1);
+      }
+      else
+      {
+        material_ids.push_back(other_material_id_remap[static_cast<size_t>(id)]);
+      }
+    }
+  }
+  else
+  {
+    material_ids.insert(material_ids.end(), other_triangle_count, -1);
   }
 
   return *this;
