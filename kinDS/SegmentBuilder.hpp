@@ -250,11 +250,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
     size_t& out_start_vertex_index, size_t& out_end_vertex_index);
 
+  /// Extends strips on one Voronoi edge to @p t (quads via @ref finishRegularMeshStripInterval). See implementation for strip state.
   void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
     BoundaryEventType event_type = BoundaryEventType::Init,
     BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
 
+  /// Seeds strip corner vertices on one Voronoi edge at @p t (no quads). See implementation for strip state.
   void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false,
     BoundaryEventType event_type = BoundaryEventType::Init,
     BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment,

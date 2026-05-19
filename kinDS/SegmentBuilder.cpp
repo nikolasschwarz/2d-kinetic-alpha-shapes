@@ -744,11 +744,19 @@ void SegmentBuilder::finishRegularMeshStripInterval(VoronoiMesh& mesh, const std
   }
 }
 
+/**
+ * @brief Extends every active strip on one Voronoi edge to time @p t (emit quads as two triangles per strip).
+ *
+ * @details Expects @ref startNewMesh to have run earlier on this edge so @c last_segments holds seeded corners.
+ * Per strip, the “before” state is (@c last_left, @c last_right) = (@c mesh_start_vertex_id, @c mesh_end_vertex_id).
+ * @ref finishRegularMeshStripInterval places new corners at the interval endpoints at @p t, connects them to the old
+ * corners, then overwrites @c mesh_start_vertex_id / @c mesh_end_vertex_id so a later finish continues from the new front.
+ * Strips with either corner unset (@c -1) are skipped (e.g. open strip never fully seeded).
+ */
 void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector<BoundaryPoint>& boundary_points,
   BoundaryEventType event_type, BoundarySegmentAction segment_action,
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
-  // check if half-edge is infinite
   if (kin_del.getGraph().isInfinite(he_id) && kin_del.computeBoundaryOnTheFly())
   {
     meshletDiagnosticLogLine("finish_mesh_skip", he_id, t, "reason=infinite_boundary_on_the_fly");
@@ -764,12 +772,11 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
 
   meshletDiagnosticLogLine("finish_mesh_enter", he_id, t, "");
 
+  // Live strip state for this dual edge (same list @ref startNewMesh populated).
   auto& last_segments = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
   if (last_segments.empty())
   {
     meshletDiagnosticLogLine("finish_mesh_noop", he_id, t, "last_segments empty (no extension)");
-    // this can happen if the first Voronoi vertex was discarded because it was outside of the boundary, in this case we
-    // just don't create any triangles
     return;
   }
 
@@ -804,12 +811,14 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
     }
   }
 
+  // Strand site used as @c origin for addMeshletVertex on this edge (finite endpoint of the even directed edge).
   size_t v = he.origin;
   if (v == -1)
   {
     v = kin_del.getGraph().destination(even_id);
   }
 
+  // Snapshot interval topology from current MeshingData (crossing refs refreshed after any CrossingData rebuild).
   std::vector<RegularMeshStripIntervalEndpoints> finish_intervals;
   finish_intervals.reserve(last_segments.size());
   for (auto& segment : last_segments)
@@ -826,6 +835,7 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
   size_t loops_ran = 0;
   size_t tris_before = mesh.getTriangleCount();
 
+  // Parallel walk: one finish_interval per processable strip, in list order.
   auto interval_it = finish_intervals.begin();
   for (auto& segment : last_segments)
   {
@@ -843,6 +853,7 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
     finishRegularMeshStripInterval(mesh, boundary_points, centroid, even_id, voronoi_edge_id, t, v, strand_even_origin_i,
       strand_odd_origin_i, event_type, segment_action, interval, last_left, last_right, finish_face_meta,
       boundary_transition_shift, new_start_vertex_index, new_end_vertex_index);
+    // After finish: strip front is at the new corners; next event’s finish will use these as last_left / last_right.
     segment.mesh_start_vertex_id = static_cast<int>(new_start_vertex_index);
     segment.mesh_end_vertex_id = static_cast<int>(new_end_vertex_index);
   }
@@ -860,6 +871,7 @@ void kinDS::SegmentBuilder::finishMesh(size_t he_id, double t, const std::vector
     KINDS_WARNING("meshlet_diag finish_mesh: expected triangle extension (processable_strips=" << processable_strips
       << ") but triangle count unchanged for dual_edge=" << voronoi_edge_id << " he=" << he_id << " t=" << t << ".");
   }
+  // Strips may exist in the list but be “open” on one side (only one seeded corner) — nothing to extrude this step.
   if (!last_segments.empty() && processable_strips == 0)
   {
     KINDS_DEBUG("meshlet_diag finish_mesh: strips present but none had both mesh_start/end set — no extension for he="
@@ -1117,17 +1129,35 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
   return segment;
 }
 
+/**
+ * @brief (Re)builds the regular strip meshlet(s) on one undirected Voronoi / Delaunay dual edge at time @p t.
+ *
+ * @details One call corresponds to “open” or “re-open” meshing on this edge. Each inside-alpha interval along the edge
+ * becomes one @ref MeshingData strip stored in @c segment_mesh_pair_last_left_and_right_vertex[pair]. A strip’s state
+ * after this function (before any @ref finishMesh):
+ *   - @c mesh_start_vertex_id / @c mesh_end_vertex_id: mesh indices of the **left** and **right** strip corners seeded
+ *     at interval endpoints (circumcenter or boundary crossing).
+ *   - @c start_half_edge_id / @c end_half_edge_id: inside-oriented Delaunay half-edge at each boundary endpoint, or @c -1
+ *     for an open circumcenter end.
+ *   - @c start_crossing / @c end_crossing: iterators into @c CrossingData when the endpoint is a stored crossing (refreshed
+ *     after collection).
+ * No quads are emitted here; @ref finishMesh advances the corners and adds triangles between old and new positions.
+ *
+ * @param half_edge_id Directed Delaunay half-edge on the strand side used for lookup (even or odd of the dual edge).
+ * @param reuse_existing_pair_and_mesh If true, append vertices into the mesh already tied to this edge and replace the
+ *   strip list; if false, allocate a new @c SegmentMeshPair and mesh when none exists yet.
+ */
 void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh,
   BoundaryEventType event_type, BoundarySegmentAction segment_action,
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
-  // check if half-edge is infinite
   if (kin_del.getGraph().isInfinite(half_edge_id) && kin_del.computeBoundaryOnTheFly())
   {
     meshletDiagnosticLogLine("start_new_mesh_skip", half_edge_id, t, "reason=infinite_boundary_on_the_fly");
     return;
   }
-  
+
+  // Canonical even/odd pair for the undirected dual edge: even = left Voronoi vertex, odd = right Voronoi vertex.
   size_t even_id = half_edge_id & ~1;
   size_t odd_id = even_id + 1;
   {
@@ -1140,6 +1170,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   const auto& he = graph.getHalfEdges()[even_id];
   const auto& twin_he = graph.getHalfEdges()[odd_id];
 
+  // --- SegmentMeshPair: book-keeping linking this Voronoi-edge mesh to the two incident strand segments (sites). ---
   size_t segment_mesh_pair_index = static_cast<size_t>(-1);
   bool created_new_pair = false;
   if (reuse_existing_pair_and_mesh && even_id < half_edge_index_to_segment_mesh_pair_index.size())
@@ -1168,6 +1199,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   KINDS_DEBUG("Using mesh pair index " << segment_mesh_pair_index << " for half-edge " << even_id << " (segment indices "
     << segment_mesh_pair.segment_index0 << ", " << segment_mesh_pair.segment_index1 << ")");
 
+  // Component boundary + centroid for alpha-shape checks and texture coordinates on new vertices.
   size_t vertex = std::max(he.origin, twin_he.origin);
   size_t component_id = kin_del.component_data.component_map[vertex];
 
@@ -1177,8 +1209,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   auto& boundary_polygon = kin_del.component_data.component_boundaries[component_id][0];
   auto& centroid = kin_del.component_data.component_centroids[component_id];
 
-  // New pair: build into a fresh mesh and register. Reuse: append strip vertices onto the existing mesh; strip
-  // metadata below is cleared and rebuilt — mesh vertex indices from addMeshletVertex are absolute (append order).
+  // --- Target mesh: new pair → local mesh registered at end; reuse → append to existing VoronoiMesh for this pair. ---
   VoronoiMesh mesh_local;
   const bool reuse_in_place = !created_new_pair && segment_mesh_pair_index < meshes.size();
   VoronoiMesh& mesh = reuse_in_place ? meshes[segment_mesh_pair_index] : mesh_local;
@@ -1188,6 +1219,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
   const int strand_even_origin_i = static_cast<int>(he.origin);
   const int strand_odd_origin_i = static_cast<int>(twin_he.origin);
 
+  // Walk the dual edge from the left circumcenter: inside intervals are strips bounded by crossings or open ends.
   const size_t left_voronoi_vertex_id = kin_del.getGraph().getHalfEdges()[even_id].face;
   const size_t left_containing_tri_id = kin_del.getCrossingDataContainingTriId(left_voronoi_vertex_id);
   const size_t right_voronoi_vertex_id = kin_del.getGraph().getHalfEdges()[odd_id].face;
@@ -1201,6 +1233,7 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
     : 0;
   const bool ending_inside = !strip_intervals.empty() && strip_intervals.back().end_open_voronoi_half_edge_id.has_value();
 
+  // Replace strip list for this pair: previous MeshingData (if any) is discarded; new strips hold seeded corners only.
   if (segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
   {
     segment_mesh_pair_last_left_and_right_vertex.resize(segment_mesh_pair_index + 1);
@@ -1226,7 +1259,6 @@ void SegmentBuilder::startNewMesh(size_t half_edge_id, double t, bool reuse_exis
 
   if (reuse_in_place)
   {
-    // Preserve initial creation timestamp (e.g. t=0 seed in init); reuse updates should not rewrite birth time.
     if (!std::isfinite(mesh.getCreationKineticTime()))
     {
       mesh.setCreationKineticTime(t);
