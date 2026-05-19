@@ -4,7 +4,6 @@
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
 #include <array>
-#include <cstdint>
 #include <functional>
 #include <list>
 #include <limits>
@@ -22,20 +21,6 @@ struct RadiusBoundaryTransitionShiftContext
   bool roles_valid = false;
   std::array<size_t, 2> source_delaunay_edges {};
   size_t target_delaunay_edge = 0;
-};
-
-/// Stable identity for a Voronoi–Delaunay crossing (survives @c CrossingData list reallocation).
-struct CrossingIntersectionKey
-{
-  size_t voronoi_edge_id = 0;
-  size_t delaunay_edge_id = 0;
-  uint64_t delaunay_param_bits = 0;
-
-  bool operator==(const CrossingIntersectionKey& other) const noexcept
-  {
-    return voronoi_edge_id == other.voronoi_edge_id && delaunay_edge_id == other.delaunay_edge_id
-      && delaunay_param_bits == other.delaunay_param_bits;
-  }
 };
 
 class SegmentBuilderSectionCallback;
@@ -264,27 +249,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const std::string& finish_face_metadata,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
     size_t& out_start_vertex_index, size_t& out_end_vertex_index);
-
-  static CrossingIntersectionKey crossingIntersectionKey(KineticDelaunay::CrossingData::EdgeIntersectionRef ref);
-
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> findCrossingRefByKey(
-    const CrossingIntersectionKey& key) const;
-
-  std::optional<RegularMeshStripIntervalEndpoints> regularMeshStripIntervalContainingCrossing(size_t even_half_edge_id,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref) const;
-
-  void finishRegularMeshStripForCrossing(size_t even_half_edge_id, double t,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, const std::vector<BoundaryPoint>& boundary_polygon,
-    BoundaryEventType event_type, BoundarySegmentAction segment_action,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
-
-  void appendRegularMeshStripInterval(size_t even_half_edge_id, double t, const RegularMeshStripIntervalEndpoints& interval,
-    BoundaryEventType event_type, BoundarySegmentAction segment_action,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
-
-  void reseedRegularMeshStripForCrossing(size_t even_half_edge_id, double t,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, BoundaryEventType event_type,
-    BoundarySegmentAction segment_action, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
 
   void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
     BoundaryEventType event_type = BoundaryEventType::Init,

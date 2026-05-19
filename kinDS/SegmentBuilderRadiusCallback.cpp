@@ -766,25 +766,36 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     }
   }
 
-  struct VoronoiEdgeCellKey
+  struct IntersectionKey
   {
     size_t voronoi_edge_id = 0;
-    size_t cell_id = 0;
+    size_t delaunay_edge_id = 0;
+    uint64_t delaunay_param_bits = 0;
 
-    bool operator==(const VoronoiEdgeCellKey& other) const noexcept
+    bool operator==(const IntersectionKey& other) const noexcept
     {
-      return voronoi_edge_id == other.voronoi_edge_id && cell_id == other.cell_id;
+      return voronoi_edge_id == other.voronoi_edge_id && delaunay_edge_id == other.delaunay_edge_id
+        && delaunay_param_bits == other.delaunay_param_bits;
     }
   };
-  struct VoronoiEdgeCellKeyHash
+  struct IntersectionKeyHash
   {
-    size_t operator()(const VoronoiEdgeCellKey& k) const noexcept
+    size_t operator()(const IntersectionKey& k) const noexcept
     {
-      return std::hash<size_t> {}(k.voronoi_edge_id) ^ (std::hash<size_t> {}(k.cell_id) << 1);
+      size_t h = std::hash<size_t> {}(k.voronoi_edge_id);
+      h ^= std::hash<size_t> {}(k.delaunay_edge_id) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      h ^= std::hash<uint64_t> {}(k.delaunay_param_bits) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      return h;
     }
   };
-  std::unordered_map<VoronoiEdgeCellKey, CrossingIntersectionKey, VoronoiEdgeCellKeyHash>
-    radius_regular_strip_crossing_keys;
+  auto ref_key = [](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> IntersectionKey
+  {
+    IntersectionKey k;
+    k.voronoi_edge_id = ref->voronoi_edge_id;
+    k.delaunay_edge_id = ref->delaunay_edge_id;
+    std::memcpy(&k.delaunay_param_bits, &ref->delaunay_edge_param, sizeof(uint64_t));
+    return k;
+  };
 
   auto edge_touches_cell = [&](size_t voronoi_edge_id, size_t cell_id) -> bool
   {
@@ -1362,37 +1373,6 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
     };
 
-    for (size_t voronoi_edge_id : encountered_voronoi_edges)
-    {
-      if (!edge_touches_cell(voronoi_edge_id, cell_id))
-      {
-        continue;
-      }
-
-      std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> ref_on_edge;
-      if (seed_ref->voronoi_edge_id == voronoi_edge_id)
-      {
-        ref_on_edge = seed_ref;
-      }
-      else
-      {
-        ref_on_edge = other_triangle_intersection_on_same_voronoi_edge(voronoi_edge_id, seed_ref);
-      }
-      if (!ref_on_edge.has_value())
-      {
-        if (auto vv_opt = choose_voronoi_vertex_towards_inside(voronoi_edge_id, std::nullopt))
-        {
-          ref_on_edge = first_triangle_intersection_on_voronoi_edge(voronoi_edge_id, vv_opt.value(), std::nullopt);
-        }
-      }
-      if (!ref_on_edge.has_value())
-      {
-        continue;
-      }
-      radius_regular_strip_crossing_keys[VoronoiEdgeCellKey { voronoi_edge_id, cell_id }]
-        = SegmentBuilder::crossingIntersectionKey(ref_on_edge.value());
-    }
-
     if (!success)
     {
       // Debug fan meshlet only when boundary-transition vertex shift is off (shift path uses interval/strip meshes).
@@ -1495,15 +1475,16 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
   if (segment_builder_.kin_del.computeBoundaryOnTheFly())
   {
-    for (const auto& entry : radius_regular_strip_crossing_keys)
+    // Close/extend existing strip meshes at the current kinetic time, then rebuild crossing iterators for the whole
+    // meshing state (full `computeEdgeIntersections` invalidates all `EdgeIntersectionRef`s), then seed fresh strips.
+    for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
     {
-      const size_t he_even = 2 * entry.first.voronoi_edge_id;
-      if (he_even >= graph.getHalfEdges().size() || graph.isInfinite(he_even))
+      const size_t he_even = 2 * voronoi_edge_id;
+      if (he_even >= graph.getHalfEdges().size())
       {
         continue;
       }
-      const auto crossing_ref_opt = segment_builder_.findCrossingRefByKey(entry.second);
-      if (!crossing_ref_opt.has_value())
+      if (graph.isInfinite(he_even))
       {
         continue;
       }
@@ -1514,27 +1495,20 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
       segment_builder_.updateBoundary(t, he_visited, component_id);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-      segment_builder_.finishRegularMeshStripForCrossing(he_even, t, crossing_ref_opt.value(), boundary_polygon,
-        SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentCompleted,
-        radius_boundary_shift_arg);
+      segment_builder_.finishMesh(he_even, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Radius,
+        SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_boundary_shift_arg);
     }
   }
 
-  for (const auto& entry : radius_regular_strip_crossing_keys)
+  for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
   {
-    const size_t he_even = 2 * entry.first.voronoi_edge_id;
-    if (he_even >= graph.getHalfEdges().size() || graph.isInfinite(he_even))
+    const size_t he_even = 2 * voronoi_edge_id;
+    if (he_even >= segment_builder_.kin_del.getGraph().getHalfEdges().size())
     {
       continue;
     }
-    const auto crossing_ref_opt = segment_builder_.findCrossingRefByKey(entry.second);
-    if (!crossing_ref_opt.has_value())
-    {
-      continue;
-    }
-    segment_builder_.reseedRegularMeshStripForCrossing(he_even, t, crossing_ref_opt.value(),
-      SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::NewSegment,
-      radius_boundary_shift_arg);
+    segment_builder_.startNewMesh(he_even, t, true, SegmentBuilder::BoundaryEventType::Radius,
+      SegmentBuilder::BoundarySegmentAction::NewSegment, radius_boundary_shift_arg);
   }
 
   // After the radius topology update, start/reseed all boundary-interval meshes on
