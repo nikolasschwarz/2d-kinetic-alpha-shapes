@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <limits>
 #include <glm/gtx/exterior_product.hpp>
@@ -694,6 +695,225 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
     }
   }
   return glm::dvec3(0.0);
+}
+
+CrossingIntersectionKey SegmentBuilder::crossingIntersectionKey(KineticDelaunay::CrossingData::EdgeIntersectionRef ref)
+{
+  CrossingIntersectionKey key;
+  key.voronoi_edge_id = ref->voronoi_edge_id;
+  key.delaunay_edge_id = ref->delaunay_edge_id;
+  std::memcpy(&key.delaunay_param_bits, &ref->delaunay_edge_param, sizeof(uint64_t));
+  return key;
+}
+
+std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> SegmentBuilder::findCrossingRefByKey(
+  const CrossingIntersectionKey& key) const
+{
+  const auto& crossing_data = kin_del.getCrossingData();
+  if (key.voronoi_edge_id >= crossing_data.voronoi_edge_intersections.size())
+  {
+    return std::nullopt;
+  }
+  const auto& v_list = crossing_data.voronoi_edge_intersections[key.voronoi_edge_id];
+  for (auto ref : v_list)
+  {
+    if (ref->delaunay_edge_id != key.delaunay_edge_id)
+    {
+      continue;
+    }
+    uint64_t param_bits = 0;
+    std::memcpy(&param_bits, &ref->delaunay_edge_param, sizeof(uint64_t));
+    if (param_bits == key.delaunay_param_bits)
+    {
+      return ref;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<SegmentBuilder::RegularMeshStripIntervalEndpoints> SegmentBuilder::regularMeshStripIntervalContainingCrossing(
+  size_t even_half_edge_id, KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref) const
+{
+  const size_t voronoi_edge_id = even_half_edge_id / 2;
+  const auto& graph = kin_del.getGraph();
+  const size_t left_voronoi_vertex_id = graph.getHalfEdges()[even_half_edge_id].face;
+  const size_t left_containing_tri_id = kin_del.getCrossingDataContainingTriId(left_voronoi_vertex_id);
+  const std::vector<RegularMeshStripIntervalEndpoints> intervals
+    = collectRegularMeshStripIntervalsOnVoronoiEdge(even_half_edge_id, voronoi_edge_id, left_containing_tri_id);
+  for (const RegularMeshStripIntervalEndpoints& interval : intervals)
+  {
+    if ((interval.start_crossing.has_value() && interval.start_crossing.value() == crossing_ref)
+      || (interval.end_crossing.has_value() && interval.end_crossing.value() == crossing_ref))
+    {
+      return interval;
+    }
+  }
+  return std::nullopt;
+}
+
+void SegmentBuilder::finishRegularMeshStripForCrossing(size_t even_half_edge_id, double t,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, const std::vector<BoundaryPoint>& boundary_polygon,
+  BoundaryEventType event_type, BoundarySegmentAction segment_action,
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
+{
+  if (kin_del.getGraph().isInfinite(even_half_edge_id) && kin_del.computeBoundaryOnTheFly())
+  {
+    return;
+  }
+
+  const size_t voronoi_edge_id = even_half_edge_id / 2;
+  if (even_half_edge_id >= half_edge_index_to_segment_mesh_pair_index.size())
+  {
+    return;
+  }
+  const size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[even_half_edge_id];
+  if (segment_mesh_pair_index >= meshes.size() || segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
+  {
+    return;
+  }
+
+  auto& last_segments = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
+  VoronoiMesh& mesh = meshes[segment_mesh_pair_index];
+  const size_t odd_half_edge_id = even_half_edge_id + 1;
+  const auto& he = kin_del.getGraph().getHalfEdges()[even_half_edge_id];
+  const auto& twin_he = kin_del.getGraph().getHalfEdges()[odd_half_edge_id];
+  const int strand_even_origin_i = static_cast<int>(he.origin);
+  const int strand_odd_origin_i = static_cast<int>(twin_he.origin);
+  const glm::dvec2 centroid = polygonCentroid(boundary_polygon);
+  const std::string finish_face_meta = makeRegularStripFaceMetadataJson(t, voronoi_edge_id, even_half_edge_id,
+    strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, "finish_strip");
+
+  size_t strand_vertex = he.origin;
+  if (strand_vertex == static_cast<size_t>(-1))
+  {
+    strand_vertex = kin_del.getGraph().destination(even_half_edge_id);
+  }
+
+  for (auto& segment : last_segments)
+  {
+    if (segment.mesh_start_vertex_id < 0 || segment.mesh_end_vertex_id < 0)
+    {
+      continue;
+    }
+    refreshMeshingDataCrossingRefs(segment, voronoi_edge_id);
+    if ((segment.start_crossing.has_value() && segment.start_crossing.value() == crossing_ref)
+      || (segment.end_crossing.has_value() && segment.end_crossing.value() == crossing_ref))
+    {
+      const RegularMeshStripIntervalEndpoints interval
+        = regularMeshStripIntervalFromMeshingData(segment, even_half_edge_id, odd_half_edge_id);
+      const size_t last_left = static_cast<size_t>(segment.mesh_start_vertex_id);
+      const size_t last_right = static_cast<size_t>(segment.mesh_end_vertex_id);
+      size_t new_start_vertex_index = 0;
+      size_t new_end_vertex_index = 0;
+      finishRegularMeshStripInterval(mesh, boundary_polygon, centroid, even_half_edge_id, voronoi_edge_id, t, strand_vertex,
+        strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, interval, last_left, last_right,
+        finish_face_meta, boundary_transition_shift, new_start_vertex_index, new_end_vertex_index);
+      segment.mesh_start_vertex_id = static_cast<int>(new_start_vertex_index);
+      segment.mesh_end_vertex_id = static_cast<int>(new_end_vertex_index);
+      return;
+    }
+  }
+
+  KINDS_DEBUG("finishRegularMeshStripForCrossing: no strip matched crossing on voronoi_edge=" << voronoi_edge_id
+    << " de=" << crossing_ref->delaunay_edge_id << " t=" << t);
+}
+
+void SegmentBuilder::appendRegularMeshStripInterval(size_t even_half_edge_id, double t,
+  const RegularMeshStripIntervalEndpoints& interval, BoundaryEventType event_type, BoundarySegmentAction segment_action,
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
+{
+  if (kin_del.getGraph().isInfinite(even_half_edge_id) && kin_del.computeBoundaryOnTheFly())
+  {
+    return;
+  }
+
+  const size_t voronoi_edge_id = even_half_edge_id / 2;
+  if (even_half_edge_id >= half_edge_index_to_segment_mesh_pair_index.size())
+  {
+    return;
+  }
+  const size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[even_half_edge_id];
+  if (segment_mesh_pair_index >= meshes.size())
+  {
+    return;
+  }
+
+  const auto& he = kin_del.getGraph().getHalfEdges()[even_half_edge_id];
+  const auto& twin_he = kin_del.getGraph().getHalfEdges()[even_half_edge_id + 1];
+  const size_t vertex = std::max(he.origin, twin_he.origin);
+  const size_t component_id = kin_del.component_data.component_map[vertex];
+  std::vector<bool> he_visited(kin_del.getGraph().getHalfEdges().size(), false);
+  updateBoundary(t, he_visited, component_id);
+  auto& boundary_polygon = kin_del.component_data.component_boundaries[component_id][0];
+  const auto& centroid = kin_del.component_data.component_centroids[component_id];
+
+  if (kin_del.computeBoundaryOnTheFly())
+  {
+    const size_t strand_he = interval.start_open_voronoi_half_edge_id.has_value()
+      ? interval.start_open_voronoi_half_edge_id.value()
+      : (interval.end_open_voronoi_half_edge_id.has_value() ? interval.end_open_voronoi_half_edge_id.value()
+                                                             : even_half_edge_id);
+    const size_t strand_face_id = kin_del.getGraph().getHalfEdges()[strand_he].face;
+    const size_t containing_tri_id = kin_del.getCrossingDataContainingTriId(strand_face_id);
+    if (!kin_del.getFaceInside(containing_tri_id))
+    {
+      return;
+    }
+  }
+
+  if (segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
+  {
+    segment_mesh_pair_last_left_and_right_vertex.resize(segment_mesh_pair_index + 1);
+  }
+
+  VoronoiMesh& mesh = meshes[segment_mesh_pair_index];
+  const int strand_even_origin_i = static_cast<int>(he.origin);
+  const int strand_odd_origin_i = static_cast<int>(twin_he.origin);
+  MeshingData segment = meshRegularStripInterval(mesh, boundary_polygon, centroid, even_half_edge_id, voronoi_edge_id, t,
+    strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, interval, boundary_transition_shift);
+  refreshMeshingDataCrossingRefs(segment, voronoi_edge_id);
+  segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index].push_back(std::move(segment));
+}
+
+void SegmentBuilder::reseedRegularMeshStripForCrossing(size_t even_half_edge_id, double t,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, BoundaryEventType event_type,
+  BoundarySegmentAction segment_action, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
+{
+  const std::optional<RegularMeshStripIntervalEndpoints> interval_opt
+    = regularMeshStripIntervalContainingCrossing(even_half_edge_id, crossing_ref);
+  if (!interval_opt.has_value())
+  {
+    return;
+  }
+
+  const size_t voronoi_edge_id = even_half_edge_id / 2;
+  if (even_half_edge_id >= half_edge_index_to_segment_mesh_pair_index.size())
+  {
+    return;
+  }
+  const size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[even_half_edge_id];
+  if (segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
+  {
+    return;
+  }
+
+  auto& last_segments = segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
+  for (auto it = last_segments.begin(); it != last_segments.end();)
+  {
+    refreshMeshingDataCrossingRefs(*it, voronoi_edge_id);
+    if ((it->start_crossing.has_value() && it->start_crossing.value() == crossing_ref)
+      || (it->end_crossing.has_value() && it->end_crossing.value() == crossing_ref))
+    {
+      it = last_segments.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+
+  appendRegularMeshStripInterval(even_half_edge_id, t, interval_opt.value(), event_type, segment_action,
+    boundary_transition_shift);
 }
 
 void SegmentBuilder::finishRegularMeshStripInterval(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
