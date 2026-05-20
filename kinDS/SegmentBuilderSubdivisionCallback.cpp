@@ -218,103 +218,14 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     throw std::runtime_error(oss.str());
   };
 
-  // Extend adjacent boundary-interval strips (intersection meshlets) at the Voronoi–Delaunay crossings shared with
-  // each traced interval — one neighbor toward boundary-prev and one toward boundary-next (same convention as
-  // `writeIntersectionPairLinks`: start_ref->prev / end_ref->next).
   auto extend_intersection_neighbor_at_shared_crossing
     = [&](size_t neighbor_pair_idx, KineticDelaunay::CrossingData::EdgeIntersectionRef shared_ref,
-        bool update_start_on_neighbor, size_t cur_pair_idx) {
-        if (neighbor_pair_idx == static_cast<size_t>(-1) || neighbor_pair_idx == cur_pair_idx)
-        {
-          return;
-        }
-        if (neighbor_pair_idx >= segment_builder_.intersection_meshes.size()
-          || neighbor_pair_idx >= segment_builder_.intersection_mesh_pair_last_left_and_right_vertex.size())
-        {
-          return;
-        }
-        auto& segs = segment_builder_.intersection_mesh_pair_last_left_and_right_vertex[neighbor_pair_idx];
-        if (segs.empty())
-        {
-          return;
-        }
-        auto& seg = segs.front();
-        if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
-        {
-          return;
-        }
-
-        size_t neighbor_cell = strand_id;
-        if (neighbor_pair_idx < segment_builder_.intersection_mesh_pair_metadata.size())
-        {
-          const size_t cid = segment_builder_.intersection_mesh_pair_metadata[neighbor_pair_idx].voronoi_cell_id;
-          if (cid != static_cast<size_t>(-1))
-          {
-            neighbor_cell = cid;
-          }
-        }
-
-        const size_t d_edge_id = shared_ref->delaunay_edge_id;
-        const size_t he_even = 2 * d_edge_id;
-        if (he_even + 1 >= graph.getHalfEdges().size())
-        {
-          return;
-        }
-        int inside_boundary_he_id = -1;
-        if (segment_builder_.kin_del.isOnComponentBoundary(he_even))
-        {
-          const bool boundary_even_out = segment_builder_.kin_del.isOnComponentBoundaryOutside(he_even);
-          inside_boundary_he_id = static_cast<int>(boundary_even_out ? he_even + 1 : he_even);
-        }
-        if (inside_boundary_he_id < 0)
-        {
-          inside_boundary_he_id = update_start_on_neighbor
-            ? (seg.start_half_edge_id >= 0 ? seg.start_half_edge_id : seg.end_half_edge_id)
-            : (seg.end_half_edge_id >= 0 ? seg.end_half_edge_id : seg.start_half_edge_id);
-        }
-        if (inside_boundary_he_id < 0)
-        {
-          return;
-        }
-
-        const size_t neighbor_component = segment_builder_.kin_del.component_data.component_map[neighbor_cell];
-        std::vector<bool> he_vis(graph.getHalfEdges().size(), false);
-        segment_builder_.updateBoundary(t, he_vis, neighbor_component);
-        auto& neighbor_boundary = segment_builder_.kin_del.component_data.component_boundaries[neighbor_component][0];
-        const auto neighbor_centroid = polygonCentroid(neighbor_boundary);
-
-        auto& mesh = segment_builder_.intersection_meshes[neighbor_pair_idx];
-        const glm::dvec3 crossing_pos = segment_builder_.closingMeshVoronoiDelaunayCrossingPosition(
-          t, shared_ref->voronoi_edge_id, shared_ref->delaunay_edge_id);
-
-        const std::string base_meta = SegmentBuilder::composeBoundaryMetadata(
-          SegmentBuilder::BoundaryEventType::Subdivision, SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
-        auto with_pos = [&base_meta](const char* pos) -> std::string {
-          if (base_meta.empty() || base_meta.back() != '}')
-          {
-            return base_meta;
-          }
-          std::string out = base_meta;
-          out.pop_back();
-          out += ",\"pos\":\"";
-          out += pos;
-          out += "\"}";
-          return out;
-        };
-        const std::string vertex_meta = with_pos(update_start_on_neighbor ? "left" : "right");
-        const glm::dvec3 vertex_color
-          = update_start_on_neighbor ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
-
-        const size_t eff_l = segment_builder_.intersectionStripEffectiveVertexIndex(seg, true);
-        const size_t eff_r = segment_builder_.intersectionStripEffectiveVertexIndex(seg, false);
-        const size_t new_vid = segment_builder_.addMeshletVertex(mesh, neighbor_boundary, neighbor_centroid, crossing_pos,
-          neighbor_cell, t, std::nullopt, vertex_meta, vertex_color);
-        segment_builder_.addBoundaryIntervalTriangleOriented(
-          mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, base_meta);
-        segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_on_neighbor, new_vid,
-          inside_boundary_he_id, std::make_optional(shared_ref), neighbor_boundary, neighbor_centroid, neighbor_cell, t,
-          true);
-      };
+        bool update_start_on_neighbor, size_t cur_pair_idx)
+  {
+    segment_builder_.extendIntersectionMeshAtSharedCrossing(neighbor_pair_idx, shared_ref, update_start_on_neighbor, t,
+      SegmentBuilder::BoundaryEventType::Subdivision, SegmentBuilder::BoundarySegmentAction::SegmentRemapped, nullptr, true,
+      cur_pair_idx);
+  };
 
   // finish old meshes
   for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),

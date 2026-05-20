@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -242,25 +243,31 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t even_half_edge_id, size_t odd_half_edge_id, size_t voronoi_edge_id, double t,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr) const;
 
-  void finishRegularMeshStripInterval(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
+  /// @return `{ new_start_vertex_index, new_end_vertex_index }` — use structured binding, e.g. `auto [left, right] = ...`.
+  std::tuple<size_t, size_t> finishRegularMeshStripInterval(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, size_t even_half_edge_id, size_t voronoi_edge_id, double t, size_t strand_vertex_id,
     int strand_even_origin_i, int strand_odd_origin_i, BoundaryEventType event_type, BoundarySegmentAction segment_action,
     const RegularMeshStripIntervalEndpoints& interval, size_t last_start_vertex_index, size_t last_end_vertex_index,
     const std::string& finish_face_metadata,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
-    size_t& out_start_vertex_index, size_t& out_end_vertex_index);
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
+
+  /// True when some crossing on this strip's Voronoi-edge list between @c start_crossing and @c end_crossing (inclusive;
+  /// open ends use the list head/tail) has @c voronoi_edge_id equal to @p voronoi_edge_id. Used when @c only_adjacent_segment is set.
+  bool regularMeshStripCrossingTouchesVoronoiEdge(const MeshingData& segment, size_t voronoi_edge_id) const;
 
   /// Extends strips on one Voronoi edge to @p t (quads via @ref finishRegularMeshStripInterval). See implementation for strip state.
-  void finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
+  /// @return Copies of @ref MeshingData strips that were extended (empty on early exit or when every strip was skipped).
+  std::vector<MeshingData> finishMesh(size_t half_edge_id, double t, const std::vector<BoundaryPoint>& boundary_points,
     BoundaryEventType event_type = BoundaryEventType::Init,
     BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr, bool only_adjacent_segment = false);
 
   /// Seeds strip corner vertices on one Voronoi edge at @p t (no quads). See implementation for strip state.
-  void startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false,
+  /// @return Copies of @ref MeshingData strips that were seeded (empty on early exit or when every interval was skipped).
+  std::vector<MeshingData> startNewMesh(size_t half_edge_id, double t, bool reuse_existing_pair_and_mesh = false,
     BoundaryEventType event_type = BoundaryEventType::Init,
     BoundarySegmentAction segment_action = BoundarySegmentAction::NewSegment,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr, bool only_adjacent_segment = false);
   size_t startNewMeshFromIntersections(size_t voronoi_cell_id, double t,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
@@ -384,6 +391,19 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const std::string& metadata = "{}");
 
   /**
+   * @brief Wedge-extend a boundary-interval intersection mesh at a shared Voronoi–Delaunay crossing.
+   *
+   * @details Uses @p neighbor_pair_idx from the crossing's @c prev_segment_mesh_pair_index (update strip start) or
+   * @c next_segment_mesh_pair_index (update strip end). No-op when the pair index is invalid or @p skip_pair_idx matches.
+   * When @p append_flexible_placeholder is false, endpoint assignment still runs but no flex placeholder wedge is added.
+   */
+  void extendIntersectionMeshAtSharedCrossing(size_t neighbor_pair_idx,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef shared_ref, bool update_start_on_neighbor, double t,
+    BoundaryEventType event_type, BoundarySegmentAction segment_action,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr,
+    bool append_flexible_placeholder = true, std::optional<size_t> skip_pair_idx = std::nullopt);
+
+  /**
    * After a one-sided @c addMeshletVertex + triangle: lerp flexibles on the updated side, assign endpoint,
    * optionally append one flexible on the opposite side. If @p keep_strip_alive is false, only interpolation runs
    * (e.g. strip is about to be cleared).
@@ -392,7 +412,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t new_fixed_vertex_index, int inside_half_edge_id,
     const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& new_crossing_for_updated_side,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
-    bool keep_strip_alive);
+    bool keep_strip_alive, bool append_flexible_placeholder = true);
 
   /**
    * For a merge closure vertex (`pos` uniform): both flex chains lerp from their fixed corners to the same

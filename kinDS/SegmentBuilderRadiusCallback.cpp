@@ -1473,6 +1473,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     ? &radius_boundary_shift_ctx
     : nullptr;
 
+  std::vector<SegmentBuilder::MeshingData> radius_operated_finished_strips;
+  std::vector<SegmentBuilder::MeshingData> radius_operated_started_strips;
+
   if (segment_builder_.kin_del.computeBoundaryOnTheFly())
   {
     // Close/extend existing strip meshes at the current kinetic time, then rebuild crossing iterators for the whole
@@ -1495,8 +1498,10 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
       segment_builder_.updateBoundary(t, he_visited, component_id);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-      segment_builder_.finishMesh(he_even, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Radius,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_boundary_shift_arg);
+      std::vector<SegmentBuilder::MeshingData> finished_strips = segment_builder_.finishMesh(he_even, t, boundary_polygon,
+        SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentCompleted,
+        radius_boundary_shift_arg, true);
+      radius_operated_finished_strips.insert(radius_operated_finished_strips.end(), finished_strips.begin(), finished_strips.end());
     }
   }
 
@@ -1507,8 +1512,65 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       continue;
     }
-    segment_builder_.startNewMesh(he_even, t, true, SegmentBuilder::BoundaryEventType::Radius,
-      SegmentBuilder::BoundarySegmentAction::NewSegment, radius_boundary_shift_arg);
+    std::vector<SegmentBuilder::MeshingData> started_strips = segment_builder_.startNewMesh(he_even, t, true,
+      SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::NewSegment, radius_boundary_shift_arg,
+      true);
+    radius_operated_started_strips.insert(radius_operated_started_strips.end(), started_strips.begin(), started_strips.end());
+  }
+
+  std::unordered_set<size_t> triangle_voronoi_edge_ids;
+  for (size_t i = 0; i < 3; ++i)
+  {
+    triangle_voronoi_edge_ids.insert(updated_face_he[i] / 2);
+  }
+
+  std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> radius_strip_endpoint_intersections_off_triangle;
+  std::unordered_set<IntersectionKey, IntersectionKeyHash> off_triangle_strip_endpoint_keys;
+  auto collect_strip_endpoint_intersections_off_triangle = [&](const std::vector<SegmentBuilder::MeshingData>& strips)
+  {
+    for (const SegmentBuilder::MeshingData& strip : strips)
+    {
+      const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>* endpoints[]
+        = { &strip.start_crossing, &strip.end_crossing };
+      for (const auto* endpoint : endpoints)
+      {
+        if (!endpoint->has_value())
+        {
+          continue;
+        }
+        const KineticDelaunay::CrossingData::EdgeIntersectionRef ref = endpoint->value();
+        if (triangle_voronoi_edge_ids.find(ref->voronoi_edge_id) != triangle_voronoi_edge_ids.end())
+        {
+          continue;
+        }
+        if (off_triangle_strip_endpoint_keys.insert(ref_key(ref)).second)
+        {
+          radius_strip_endpoint_intersections_off_triangle.push_back(ref);
+        }
+      }
+    }
+  };
+  collect_strip_endpoint_intersections_off_triangle(radius_operated_finished_strips);
+  collect_strip_endpoint_intersections_off_triangle(radius_operated_started_strips);
+
+  KINDS_DEBUG("Radius: strip endpoint intersections off updated triangle voronoi edges count="
+              << radius_strip_endpoint_intersections_off_triangle.size() << " face=" << updated_face_id << " t=" << t);
+
+  for (const KineticDelaunay::CrossingData::EdgeIntersectionRef& endpoint_ref :
+    radius_strip_endpoint_intersections_off_triangle)
+  {
+    if (endpoint_ref->prev_segment_mesh_pair_index != static_cast<size_t>(-1))
+    {
+      segment_builder_.extendIntersectionMeshAtSharedCrossing(endpoint_ref->prev_segment_mesh_pair_index, endpoint_ref, false,
+        t, SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped,
+        radius_boundary_shift_arg, false);
+    }
+    if (endpoint_ref->next_segment_mesh_pair_index != static_cast<size_t>(-1))
+    {
+      segment_builder_.extendIntersectionMeshAtSharedCrossing(endpoint_ref->next_segment_mesh_pair_index, endpoint_ref, true, t,
+        SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped,
+        radius_boundary_shift_arg, false);
+    }
   }
 
   // After the radius topology update, start/reseed all boundary-interval meshes on
