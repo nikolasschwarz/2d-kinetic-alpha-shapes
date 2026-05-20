@@ -501,6 +501,8 @@ std::vector<glm::dvec3>& VoronoiMesh::getNormals() { return normals; }
 
 const std::vector<glm::dvec3>& VoronoiMesh::getUVs() const { return uvs; }
 
+std::vector<glm::dvec3>& VoronoiMesh::getUVs() { return uvs; }
+
 const std::vector<size_t>& VoronoiMesh::getUVIndices() const { return uv_indices; }
 
 void VoronoiMesh::printStatistics() const

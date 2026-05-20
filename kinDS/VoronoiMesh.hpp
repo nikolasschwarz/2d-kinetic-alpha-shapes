@@ -114,6 +114,7 @@ class VoronoiMesh
   const std::vector<glm::dvec3>& getNormals() const;
   std::vector<glm::dvec3>& getNormals();
   const std::vector<glm::dvec3>& getUVs() const;
+  std::vector<glm::dvec3>& getUVs();
   const std::vector<size_t>& getUVIndices() const;
   void printStatistics() const;
   bool hasValidUVIndex(size_t triangle_vertex_index) const;

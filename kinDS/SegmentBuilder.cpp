@@ -28,6 +28,39 @@ using namespace kinDS;
 
 namespace
 {
+std::optional<glm::dvec3> meshVertexUv(const VoronoiMesh& mesh, size_t vertex_index)
+{
+  const std::vector<glm::dvec3>& uvs = mesh.getUVs();
+  if (vertex_index < uvs.size())
+  {
+    return uvs[vertex_index];
+  }
+  for (size_t triangle_corner : mesh.findTriangleCorners(vertex_index, true))
+  {
+    if (mesh.hasValidUVIndex(triangle_corner))
+    {
+      return mesh.getUV(triangle_corner);
+    }
+  }
+  return std::nullopt;
+}
+
+void setMeshVertexUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec3& uv)
+{
+  std::vector<glm::dvec3>& uvs = mesh.getUVs();
+  if (vertex_index < uvs.size())
+  {
+    uvs[vertex_index] = uv;
+  }
+  for (size_t triangle_corner : mesh.findTriangleCorners(vertex_index))
+  {
+    if (mesh.hasValidUVIndex(triangle_corner))
+    {
+      mesh.setUV(uv, triangle_corner);
+    }
+  }
+}
+
 void interpolateFlexibleVerticesAlongEdge(
   VoronoiMesh& mesh, std::vector<int>& flex, size_t anchor_old_vertex, size_t anchor_new_vertex)
 {
@@ -45,6 +78,9 @@ void interpolateFlexibleVerticesAlongEdge(
   const double z0 = p0.z;
   const double z1 = p1.z;
   const double denom = z1 - z0;
+  const std::optional<glm::dvec3> uv0 = meshVertexUv(mesh, anchor_old_vertex);
+  const std::optional<glm::dvec3> uv1 = meshVertexUv(mesh, anchor_new_vertex);
+  const bool interpolate_uv = uv0.has_value() && uv1.has_value();
   const size_t k = flex.size();
   for (size_t j = 0; j < k; ++j)
   {
@@ -80,6 +116,11 @@ void interpolateFlexibleVerticesAlongEdge(
     const double x = p0.x + s * (p1.x - p0.x);
     const double y = p0.y + s * (p1.y - p0.y);
     mesh.replaceVertex(fju, glm::dvec3(x, y, fz));
+    if (interpolate_uv)
+    {
+      const glm::dvec3 uv_interp = *uv0 + s * (*uv1 - *uv0);
+      setMeshVertexUv(mesh, fju, uv_interp);
+    }
   }
 }
 
