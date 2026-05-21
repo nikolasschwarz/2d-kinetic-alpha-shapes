@@ -40,7 +40,8 @@ class TreeMesher
  public:
   TreeMesher(StrandTree& strand_tree);
   TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::function<void(size_t)>)> parallel_for);
-  const std::vector<VoronoiMesh>& runMeshingAlgorithm();
+  /// @param visual_debug When true, SegmentBuilder callbacks export debug SVG snapshots during meshing.
+  const std::vector<VoronoiMesh>& runMeshingAlgorithm(bool visual_debug = false);
   const VoronoiMesh& getBoundaryMesh() const;
   const std::vector<std::vector<int>>& getMeshingNeighborIndices() const;
   const std::vector<size_t>& getMeshingToPhysicsSegmentIndices() const;
@@ -59,7 +60,7 @@ class TreeMesher
   void fixFailedSegments(const MeshIntersection& boundary_intersector);
   std::pair<std::vector<float>, std::vector<float>> computeTopAndBottomBoundaryDistances(
     const std::vector<float>& boundary_distance_by_segment_id);
-  void runKineticDelaunay();
+  void runKineticDelaunay(bool visual_debug);
   void mapMeshingToPhysicsSegmentIndices();
 };
 }

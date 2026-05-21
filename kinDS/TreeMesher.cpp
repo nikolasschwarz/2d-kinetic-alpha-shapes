@@ -346,7 +346,7 @@ std::pair<std::vector<float>, std::vector<float>> TreeMesher::computeTopAndBotto
   return std::make_pair(bottom_boundary_distances_by_strand_id, top_boundary_distances_by_strand_id);
 }
 
-void TreeMesher::runKineticDelaunay()
+void TreeMesher::runKineticDelaunay(bool visual_debug)
 {
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing...");
   // sort subdivisions into a single array
@@ -356,7 +356,8 @@ void TreeMesher::runKineticDelaunay()
 
   bool transform_mesh_at_construction = false;
 
-  mesh_builder = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction);
+  mesh_builder
+    = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction, visual_debug);
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
 
@@ -392,9 +393,9 @@ void TreeMesher::mapMeshingToPhysicsSegmentIndices()
   }
 }
 
-const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm()
+const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm(bool visual_debug)
 {
-  runKineticDelaunay();
+  runKineticDelaunay(visual_debug);
 
   auto& boundary_mesh = getBoundaryMesh();
 

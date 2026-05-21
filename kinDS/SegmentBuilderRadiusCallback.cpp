@@ -2,6 +2,7 @@
 
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "SegmentBuilderVisualDebug.hpp"
 #include "Logger.hpp"
 
 #include <algorithm>
@@ -26,9 +27,13 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
-  size_t face_id = segment_builder_.kin_del.getGraph().getHalfEdges()[radius->half_edge_id].face;
-  bool is_inside = segment_builder_.kin_del.getFaceInside(face_id);
   auto& graph = segment_builder_.kin_del.getGraph();
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
+    radius->occurrence_time, "before", "radius_he" + std::to_string(radius->half_edge_id),
+    VisualDebugHighlight::forRadius(graph, radius->half_edge_id));
+
+  size_t face_id = graph.getHalfEdges()[radius->half_edge_id].face;
+  bool is_inside = segment_builder_.kin_del.getFaceInside(face_id);
   const auto& face_half_edges = graph.getFaces()[face_id].half_edges;
   const double t = radius->occurrence_time;
 
@@ -529,17 +534,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     segment_builder_.kin_del.component_data.component_last_updated[component_id] = radius->occurrence_time;
   }
 
-  if (segment_builder_.visual_debug)
-  {
-    std::vector<glm::dvec2> points = segment_builder_.kin_del.getPointsAt(radius->occurrence_time);
-    std::string filename = "t" + std::to_string(radius->occurrence_time) + "_segmentbuilder_after_radius_he"
-      + std::to_string(radius->half_edge_id) + ".svg";
-    const auto& containing_tri_ids = segment_builder_.kin_del.getCrossingData().getContainingTriIds();
-    auto intersection_debug_data = segment_builder_.kin_del.getCrossingIntersectionDebugData();
-    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &segment_builder_.kin_del.getFacesInside(), true,
-      &containing_tri_ids, &intersection_debug_data);
-    KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
-  }
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
+    radius->occurrence_time, "after", "radius_he" + std::to_string(radius->half_edge_id),
+    VisualDebugHighlight::forRadius(graph, radius->half_edge_id));
 
   auto triangle_he_ids = graph.getTriangleHalfEdgeIndices(radius->half_edge_id);
   std::unordered_set<size_t> affected_delaunay_edges;

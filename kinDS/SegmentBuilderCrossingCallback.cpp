@@ -1,8 +1,8 @@
 #include "SegmentBuilderCrossingCallback.hpp"
 
 #include "SegmentBuilder.hpp"
-#include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "SegmentBuilderVisualDebug.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -28,6 +28,15 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+
+  auto& graph = segment_builder_.kin_del.getGraph();
+  const size_t old_tri = graph.getHalfEdges()[crossing->half_edge_id].face;
+  const size_t new_tri = graph.getHalfEdges()[crossing->half_edge_id ^ 1].face;
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
+    crossing->occurrence_time, "before",
+    "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_"
+      + std::to_string(new_tri),
+    VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id));
 
   // Snapshot crossed-edge boundary interval links before CrossingData mutates them.
   crossing_edge_snapshot_.clear();
@@ -70,20 +79,13 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
   // Defer SVG until after SegmentBuilder updates crossing `prev`/`next` mesh-pair links (boundary merge/split) and
   // strip meshing so debug output matches runtime linkage.
   const auto write_crossing_visual_debug_svg = [&]() {
-    if (!segment_builder_.visual_debug)
-    {
-      return;
-    }
-    std::vector<glm::dvec2> points = segment_builder_.kin_del.getPointsAt(crossing->occurrence_time);
-    const size_t old_tri = graph.getHalfEdges()[crossing->half_edge_id].face;
-    const size_t new_tri = graph.getHalfEdges()[crossing->half_edge_id ^ 1].face;
-    const std::string filename = "t" + std::to_string(crossing->occurrence_time) + "_segmentbuilder_after_crossing_v"
-      + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_" + std::to_string(new_tri) + ".svg";
-    const auto& containing_tri_ids = segment_builder_.kin_del.getCrossingData().getContainingTriIds();
-    const auto intersection_debug_data = segment_builder_.kin_del.getCrossingIntersectionDebugData();
-    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &segment_builder_.kin_del.getFacesInside(), true,
-      &containing_tri_ids, &intersection_debug_data);
-    KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
+    const size_t post_old_tri = graph.getHalfEdges()[crossing->half_edge_id].face;
+    const size_t post_new_tri = graph.getHalfEdges()[crossing->half_edge_id ^ 1].face;
+    writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
+      crossing->occurrence_time, "after",
+      "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(post_old_tri) + "_to_"
+        + std::to_string(post_new_tri),
+      VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id));
   };
 
   const size_t voronoi_vertex_id = crossing->voronoi_vertex_id;

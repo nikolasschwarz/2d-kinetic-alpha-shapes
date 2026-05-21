@@ -2,6 +2,7 @@
 
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "SegmentBuilderVisualDebug.hpp"
 
 namespace kinDS
 {
@@ -15,6 +16,12 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
   const size_t index = section->section_id;
 
   auto& graph = segment_builder_.kin_del.getGraph();
+
+  const double t = static_cast<double>(index);
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "before",
+    "section_" + std::to_string(index),
+    VisualDebugHighlight::forSectionBoundary(
+      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }));
 
   segment_builder_.advanceBoundaryMeshes(index);
 
@@ -75,26 +82,23 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     }
   }
 
-  // Visual debug: export SVG with Voronoi vertex labels at section boundaries.
-  if (segment_builder_.visual_debug)
-  {
-    double t = static_cast<double>(index);
-    std::vector<glm::dvec2> points = segment_builder_.kin_del.getPointsAt(t);
-
-    std::string filename
-      = "t" + std::to_string(t) + "_segmentbuilder_between_section_" + std::to_string(index) + ".svg";
-    const auto& containing_tri_ids = segment_builder_.kin_del.getCrossingData().getContainingTriIds();
-    auto intersection_debug_data = segment_builder_.kin_del.getCrossingIntersectionDebugData();
-    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &segment_builder_.kin_del.getFacesInside(), true,
-      &containing_tri_ids, &intersection_debug_data);
-    KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
-  }
 }
 
 void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)
 {
-  (void)e;
-  // No SegmentBuilder hook needed after section processing currently.
+  auto* section = dynamic_cast<KineticDelaunay::SectionEvent*>(&e);
+  if (!section)
+  {
+    return;
+  }
+
+  const size_t index = section->section_id;
+  auto& graph = segment_builder_.kin_del.getGraph();
+  const double t = static_cast<double>(index);
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "after",
+    "section_" + std::to_string(index),
+    VisualDebugHighlight::forSectionBoundary(
+      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }));
 }
 } // namespace kinDS
 

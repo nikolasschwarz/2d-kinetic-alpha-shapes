@@ -1009,13 +1009,15 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
 }
 
 SegmentBuilder::SegmentBuilder(
-  KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh)
+  KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh,
+  bool visual_debug)
   : kin_del(kin_del)
   , section_callback_(std::make_unique<SegmentBuilderSectionCallback>(*this))
   , flip_callback_(std::make_unique<SegmentBuilderFlipCallback>(*this))
   , radius_callback_(std::make_unique<SegmentBuilderRadiusCallback>(*this))
   , crossing_callback_(std::make_unique<SegmentBuilderCrossingCallback>(*this))
   , subdivision_callback_(std::make_unique<SegmentBuilderSubdivisionCallback>(*this))
+  , visual_debug(visual_debug)
   , create_transformed_mesh(create_transformed_mesh)
   , boundary_mesh({ "bark", "interior" })
 {
@@ -1024,13 +1026,14 @@ SegmentBuilder::SegmentBuilder(
   kin_del.setSubdivisionSchedule(std::move(subdivisions));
 }
 
-SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh)
+SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh, bool visual_debug)
   : kin_del(kin_del)
   , section_callback_(std::make_unique<SegmentBuilderSectionCallback>(*this))
   , flip_callback_(std::make_unique<SegmentBuilderFlipCallback>(*this))
   , radius_callback_(std::make_unique<SegmentBuilderRadiusCallback>(*this))
   , crossing_callback_(std::make_unique<SegmentBuilderCrossingCallback>(*this))
   , subdivision_callback_(std::make_unique<SegmentBuilderSubdivisionCallback>(*this))
+  , visual_debug(visual_debug)
   , create_transformed_mesh(create_transformed_mesh)
   , boundary_mesh({ "bark", "interior" })
 {

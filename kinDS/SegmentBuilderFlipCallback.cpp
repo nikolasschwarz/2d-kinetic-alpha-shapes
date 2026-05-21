@@ -2,6 +2,7 @@
 
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "SegmentBuilderVisualDebug.hpp"
 
 #include <cmath>
 #include <optional>
@@ -18,6 +19,10 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     return;
   }
   auto& graph = segment_builder_.kin_del.getGraph();
+
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
+    flip->occurrence_time, "before", "flip_he" + std::to_string(flip->half_edge_id),
+    VisualDebugHighlight::forFlip(graph, flip->half_edge_id));
 
   auto vertex = graph.getHalfEdges()[flip->half_edge_id].origin;
   if (vertex == -1)
@@ -219,17 +224,10 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     }
   }
 
-  if (segment_builder_.visual_debug)
-  {
-    std::vector<glm::dvec2> points = segment_builder_.kin_del.getPointsAt(flip->occurrence_time);
-    std::string filename = "t" + std::to_string(flip->occurrence_time) + "_segmentbuilder_after_flip_he"
-      + std::to_string(flip->half_edge_id) + ".svg";
-    const auto& containing_tri_ids = segment_builder_.kin_del.getCrossingData().getContainingTriIds();
-    auto intersection_debug_data = segment_builder_.kin_del.getCrossingIntersectionDebugData();
-    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &segment_builder_.kin_del.getFacesInside(), true,
-      &containing_tri_ids, &intersection_debug_data);
-    KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
-  }
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
+    flip->occurrence_time, "after", "flip_he" + std::to_string(flip->half_edge_id),
+    VisualDebugHighlight::forFlip(graph, flip->half_edge_id));
+
   if (segment_builder_.kin_del.isOnComponentBoundary(flip->half_edge_id))
   {
     size_t outer_he_id = segment_builder_.kin_del.isOnComponentBoundaryOutside(flip->half_edge_id) ? flip->half_edge_id

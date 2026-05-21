@@ -1,6 +1,6 @@
 #include "SegmentBuilderSubdivisionCallback.hpp"
 
-#include "HalfEdgeDelaunayGraphToSVG.hpp"
+#include "SegmentBuilderVisualDebug.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "KineticDelaunaySubdivisionEvent.hpp"
 #include "Logger.hpp"
@@ -408,13 +408,9 @@ void SegmentBuilderSubdivisionCallback::afterEvent(KineticDelaunay::Event& e)
   }
 
   auto& graph = segment_builder_.kin_del.getGraph();
-  std::vector<glm::dvec2> points = segment_builder_.kin_del.getPointsAt(sub->occurrence_time);
-  std::string filename = "t" + std::to_string(sub->occurrence_time) + "_segmentbuilder_after_subdivision_strand"
-    + std::to_string(sub->strand_id) + "_seq" + std::to_string(sub->queue_sequence_) + ".svg";
-  const auto& containing_tri_ids = segment_builder_.kin_del.getCrossingData().getContainingTriIds();
-  auto intersection_debug_data = segment_builder_.kin_del.getCrossingIntersectionDebugData();
-  HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &segment_builder_.kin_del.getFacesInside(), true,
-    &containing_tri_ids, &intersection_debug_data);
-  KINDS_INFO("SegmentBuilder wrote SVG: " << filename);
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
+    sub->occurrence_time, "after",
+    "subdivision_strand" + std::to_string(sub->strand_id) + "_seq" + std::to_string(sub->queue_sequence_),
+    VisualDebugHighlight::forSubdivisionStrand(graph, sub->strand_id));
 }
 } // namespace kinDS

@@ -2,9 +2,11 @@
 
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "Logger.hpp"
+#include "VisualDebugHighlight.hpp"
 #include "simple_svg.hpp"
 #include <array>
 #include <glm/glm.hpp>
+#include <vector>
 
 namespace kinDS
 {
@@ -32,6 +34,9 @@ class HalfEdgeDelaunayGraphToSVG
  public:
   HalfEdgeDelaunayGraphToSVG() = delete;
   ~HalfEdgeDelaunayGraphToSVG() = delete;
+
+  /// Multiplier for text size and label placement offsets in @ref write and @ref writeVoronoi.
+  static constexpr double label_scale = 15.0;
 
   struct BoundingBox
   {
@@ -237,11 +242,12 @@ class HalfEdgeDelaunayGraphToSVG
     return false;
   }
 
-  static std::vector<std::pair<glm::dvec2, std::array<size_t, 4>>> computeIntersectionMarkerData(
+  // [delaunay_list_index, voronoi_list_index, prev_pair_idx, next_pair_idx, voronoi_edge_id]
+  static std::vector<std::pair<glm::dvec2, std::array<size_t, 5>>> computeIntersectionMarkerData(
     const std::vector<glm::dvec2>& points, const HalfEdgeDelaunayGraph& graph,
     const std::vector<IntersectionDebugInfo>& intersection_debug_info)
   {
-    std::vector<std::pair<glm::dvec2, std::array<size_t, 4>>> markers;
+    std::vector<std::pair<glm::dvec2, std::array<size_t, 5>>> markers;
     auto circumcenters = graph.computeCircumcenters(points);
     markers.reserve(intersection_debug_info.size());
 
@@ -275,7 +281,7 @@ class HalfEdgeDelaunayGraphToSVG
           << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
         continue;
       }
-      markers.push_back({ intersection, { d_index, v_index, prev_pair_idx, next_pair_idx } });
+      markers.push_back({ intersection, { d_index, v_index, prev_pair_idx, next_pair_idx, v_edge_id } });
     }
     return markers;
   }
@@ -296,7 +302,8 @@ class HalfEdgeDelaunayGraphToSVG
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
     const std::string& filename, double margin = 0.0, const std::vector<bool>* face_inside = nullptr,
     bool draw_voronoi_edges = false, const std::vector<size_t>* voronoi_vertex_to_tri = nullptr,
-    const std::vector<IntersectionDebugInfo>* intersection_debug_info = nullptr)
+    const std::vector<IntersectionDebugInfo>* intersection_debug_info = nullptr,
+    const VisualDebugHighlight* highlight = nullptr)
   {
     BoundingBox bb = computeBoundingBox(points, margin);
     svg::Document doc = setupDocument(points, filename, bb);
@@ -318,6 +325,78 @@ class HalfEdgeDelaunayGraphToSVG
       }
     };
     std::vector<Label> labels;
+
+    constexpr double label_unit = 0.01 * label_scale;
+    const double label_font_size = label_unit;
+    const double label_pad_sm = 0.5 * label_unit;
+    const double label_pad_inf_face = 3.0 * label_unit;
+    const double label_pad_he_along = label_unit;
+    const double label_glyph_advance = 0.55 * label_unit;
+    const double label_secondary_line_dy = 1.2 * label_unit;
+    const double label_bbox_margin = label_unit;
+
+    const bool selective = highlight != nullptr;
+    const svg::Color dim_inside_face(210, 235, 210);
+    const svg::Color dim_outside_face(240, 215, 215);
+    const svg::Color dim_edge(170, 170, 170);
+    const svg::Color site_vertex_circle(173, 216, 230);
+    const svg::Color site_vertex_circle_hi(135, 206, 250);
+    const svg::Color dim_voronoi_edge(200, 160, 200);
+    const svg::Color dim_voronoi_vertex(160, 120, 160);
+    const svg::Color hi_inside_face(255, 210, 60);
+    const svg::Color hi_outside_face(255, 90, 90);
+    const svg::Color hi_edge(255, 120, 0);
+    const svg::Color hi_primary_edge(220, 0, 120);
+    const svg::Color hi_voronoi_edge(200, 0, 200);
+    const svg::Color hi_voronoi_vertex(120, 0, 180);
+
+    auto triangle_inside = [&](size_t face_id) -> bool
+    {
+      return face_inside && face_id < face_inside->size() && (*face_inside)[face_id];
+    };
+
+    auto face_fill_color = [&](size_t face_id) -> svg::Color
+    {
+      const bool inside = triangle_inside(face_id);
+      if (!selective)
+      {
+        return inside ? svg::Color(svg::Color::Green) : svg::Color(svg::Color::Red);
+      }
+      const bool affected = highlight->affectsDelaunayFace(face_id);
+      if (inside)
+      {
+        return affected ? hi_inside_face : dim_inside_face;
+      }
+      return affected ? hi_outside_face : dim_outside_face;
+    };
+
+    auto label_delaunay_face = [&](size_t face_id, double x, double y, const svg::Color& color)
+    {
+      if (!selective || highlight->affectsDelaunayFace(face_id))
+      {
+        labels.push_back(Label(x, y, std::to_string(face_id), color, label_font_size));
+      }
+    };
+
+    constexpr double delaunay_edge_stroke_w = 0.006;
+    constexpr double voronoi_edge_stroke_w = 0.004;
+
+    auto delaunay_edge_color = [&](size_t voronoi_edge_id) -> svg::Color
+    {
+      if (!selective)
+      {
+        return svg::Color(svg::Color::Black);
+      }
+      if (highlight->affectsPrimaryVoronoiEdge(voronoi_edge_id))
+      {
+        return hi_primary_edge;
+      }
+      if (highlight->affectsVoronoiEdge(voronoi_edge_id))
+      {
+        return hi_edge;
+      }
+      return dim_edge;
+    };
 
     // Draw faces
     for (size_t face_id = 0; face_id < graph.getFaces().size(); face_id++)
@@ -367,21 +446,15 @@ class HalfEdgeDelaunayGraphToSVG
             edge_dir /= std::sqrt(len2);
           }
           glm::dvec2 edge_normal(edge_dir.y, -edge_dir.x);
-          glm::dvec2 label_pos = midpoint + 0.03 * edge_normal;
+          glm::dvec2 label_pos = midpoint + label_pad_inf_face * edge_normal;
 
-          labels.push_back(
-            Label(label_pos.x, label_pos.y, std::to_string(face_id), svg::Color(svg::Color::Black), 0.01));
+          label_delaunay_face(face_id, label_pos.x, label_pos.y, svg::Color(svg::Color::Black));
         }
 
         continue;
       }
 
-      svg::Color face_color { svg::Color::Green };
-
-      if (face_inside && !(*face_inside)[face_id])
-      {
-        face_color = svg::Color { svg::Color::Red };
-      }
+      const svg::Color face_color = face_fill_color(face_id);
 
       std::array<glm::dvec2, 3> face_vertices
         = { points[face_vertex_indices[0]], points[face_vertex_indices[1]], points[face_vertex_indices[2]] };
@@ -392,9 +465,8 @@ class HalfEdgeDelaunayGraphToSVG
            << svg::Point(face_vertices[2][0], face_vertices[2][1]);
       doc << face;
 
-      // Draw face id at incenter
       glm::dvec2 incenter = triangleIncenter(face_vertices[0], face_vertices[1], face_vertices[2]);
-      labels.push_back(Label(incenter[0], incenter[1], std::to_string(face_id), svg::Color(svg::Color::White), 0.01));
+      label_delaunay_face(face_id, incenter[0], incenter[1], svg::Color(svg::Color::White));
     }
 
     // Draw edges
@@ -408,8 +480,10 @@ class HalfEdgeDelaunayGraphToSVG
         glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
         if (clipSegmentToBoundingBox(start, end, bb))
         {
-          doc << svg::Line(
-            svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
+          const size_t voronoi_edge_id = he_id / 2;
+          const double stroke_w = selective ? delaunay_edge_stroke_w : 0.01;
+          doc << svg::Line(svg::Point(start[0], start[1]), svg::Point(end[0], end[1]),
+            svg::Stroke(stroke_w, delaunay_edge_color(voronoi_edge_id)));
         }
       }
     }
@@ -422,12 +496,16 @@ class HalfEdgeDelaunayGraphToSVG
       {
         continue;
       }
-      doc << svg::Circle(
-        svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
+      const bool affected = !selective || highlight->affectsDelaunayVertex(v);
+      const double radius = affected ? 0.028 : 0.012;
+      const svg::Color fill_c = affected ? site_vertex_circle_hi : site_vertex_circle;
+      doc << svg::Circle(svg::Point(point[0], point[1]), radius, svg::Fill(fill_c), svg::Stroke(0.0, svg::Color::Black));
 
-      // Draw vertex id
-      labels.push_back(
-        Label(point[0] - 0.005, point[1] - 0.005, std::to_string(v), svg::Color(svg::Color::White), 0.01));
+      if (!selective || highlight->affectsDelaunayVertex(v))
+      {
+        labels.push_back(Label(point[0] - label_pad_sm, point[1] - label_pad_sm, std::to_string(v),
+          svg::Color(svg::Color::Black), label_font_size));
+      }
     }
 
     for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
@@ -452,9 +530,17 @@ class HalfEdgeDelaunayGraphToSVG
           const std::string label_text = std::to_string(current_he_id) + " (" + std::to_string(source) + " --> "
             + std::to_string(destination) + ")";
           // Rotate 90 degrees to get normal
-          glm::dvec2 label_pos
-            = midpoint + std::pow(-1, i) * 0.01 * edge_normal - glm::dvec2(0.005, 0.005); // Offset by 0.02 units
-          labels.push_back(Label(label_pos[0], label_pos[1], label_text, svg::Color(svg::Color::Yellow), 0.01));
+          glm::dvec2 label_pos = midpoint + std::pow(-1, i) * label_pad_he_along * edge_normal
+            - glm::dvec2(label_pad_sm, label_pad_sm);
+          const size_t undirected_edge_id = he_id / 2;
+          if (!selective || highlight->affectsDirectedHalfEdge(current_he_id)
+            || highlight->affectsPrimaryVoronoiEdge(undirected_edge_id))
+          {
+            const svg::Color label_color = selective && highlight->affectsPrimaryVoronoiEdge(undirected_edge_id)
+              ? hi_primary_edge
+              : hi_edge;
+            labels.push_back(Label(label_pos[0], label_pos[1], label_text, label_color, label_font_size));
+          }
         }
       }
     }
@@ -496,7 +582,21 @@ class HalfEdgeDelaunayGraphToSVG
 
           if (clipSegmentToBoundingBox(p0, p1, bb))
           {
-            doc << svg::Line(svg::Point(p0.x, p0.y), svg::Point(p1.x, p1.y), svg::Stroke(0.005, svg::Color::Red));
+            const size_t voronoi_edge_id = he_id / 2;
+            svg::Color stroke_c = dim_voronoi_edge;
+            if (selective)
+            {
+              if (highlight->affectsPrimaryVoronoiEdge(voronoi_edge_id))
+              {
+                stroke_c = hi_primary_edge;
+              }
+              else if (highlight->affectsVoronoiEdge(voronoi_edge_id))
+              {
+                stroke_c = hi_voronoi_edge;
+              }
+            }
+            doc << svg::Line(svg::Point(p0.x, p0.y), svg::Point(p1.x, p1.y),
+              svg::Stroke(voronoi_edge_stroke_w, stroke_c));
           }
         }
       }
@@ -507,37 +607,41 @@ class HalfEdgeDelaunayGraphToSVG
         const auto& cc = circumcenters[i];
         if (!cc.second && isWithinBoundingBox(cc.first, bb))
         {
+          const bool affected = !selective || highlight->affectsVoronoiVertex(i);
+          const double radius = affected ? 0.026 : 0.012;
+          const svg::Color fill_c = affected ? hi_voronoi_vertex : dim_voronoi_vertex;
           doc << svg::Circle(
-            svg::Point(cc.first[0], cc.first[1]), 0.02, svg::Fill(purple), svg::Stroke(0.0, svg::Color::Black));
+            svg::Point(cc.first[0], cc.first[1]), radius, svg::Fill(fill_c), svg::Stroke(0.0, svg::Color::Black));
 
-          // Label Voronoi vertex. If crossing data is provided, use "id/containingTriId".
-          // Otherwise, just use "id" (no slash).
-          std::string label_text;
-          if (voronoi_vertex_to_tri && i < voronoi_vertex_to_tri->size())
+          if (!selective || highlight->affectsVoronoiVertex(i))
           {
-            size_t tri_id = (*voronoi_vertex_to_tri)[i];
-            if (tri_id != invalid_id)
+            std::string label_text;
+            if (voronoi_vertex_to_tri && i < voronoi_vertex_to_tri->size())
             {
-              label_text = std::to_string(i) + "/" + std::to_string(tri_id);
+              size_t tri_id = (*voronoi_vertex_to_tri)[i];
+              if (tri_id != invalid_id)
+              {
+                label_text = std::to_string(i) + "/" + std::to_string(tri_id);
+              }
+              else
+              {
+                label_text = std::to_string(i);
+              }
             }
             else
             {
               label_text = std::to_string(i);
             }
-          }
-          else
-          {
-            label_text = std::to_string(i);
-          }
 
-          labels.push_back(
-            Label(cc.first[0] - 0.005, cc.first[1] - 0.005, label_text, svg::Color(svg::Color::White), 0.01));
+            labels.push_back(Label(cc.first[0] - label_pad_sm, cc.first[1] - label_pad_sm, label_text,
+              svg::Color(svg::Color::White), label_font_size));
+          }
         }
       }
     }
 
     // Helper to draw intersection markers and labels, if the caller provides them.
-    auto drawIntersections = [&](const std::vector<std::pair<glm::dvec2, std::array<size_t, 4>>>& intersections)
+    auto drawIntersections = [&](const std::vector<std::pair<glm::dvec2, std::array<size_t, 5>>>& intersections)
     {
       svg::Color light_blue(173, 216, 230);
       svg::Color pale_pink(255, 182, 193);
@@ -561,56 +665,75 @@ class HalfEdgeDelaunayGraphToSVG
         // Draw a small dot at the intersection.
         doc << svg::Circle(svg::Point(p.x, p.y), 0.01, svg::Fill(light_blue), svg::Stroke(0.0, light_blue));
 
-        // Label as "(d,v)" with d in light blue and v in pale pink.
-        const double x0 = p.x + 0.005;
-        const double y0 = p.y + 0.005;
-        const double font_size = 0.01;
-        // crude glyph advance for this SVG font size/layout
-        const double dx = 0.0055;
+        // Label as "(d,v)[voronoi_edge_id]" with d in light blue, v in pale pink, bracket id in pale pink.
+        const double x0 = p.x + label_pad_sm;
+        const double y0 = p.y + label_pad_sm;
+        const double dx = label_glyph_advance;
 
         std::string d_text = std::to_string(inter.second[0]);
         std::string v_text = std::to_string(inter.second[1]);
+        const std::string bracket_suffix = "[" + std::to_string(inter.second[4]) + "]";
 
         // "(d," in light blue
         std::string prefix_text = "(" + d_text + ",";
-        doc << svg::Text(svg::Point(x0, y0), prefix_text, svg::Fill(light_blue), svg::Font(font_size));
+        doc << svg::Text(svg::Point(x0, y0), prefix_text, svg::Fill(light_blue), svg::Font(label_font_size));
 
         // "v" in pale pink
         double vx = x0 + dx * static_cast<double>(prefix_text.size());
-        doc << svg::Text(svg::Point(vx, y0), v_text, svg::Fill(pale_pink), svg::Font(font_size));
+        doc << svg::Text(svg::Point(vx, y0), v_text, svg::Fill(pale_pink), svg::Font(label_font_size));
 
-        // ")" in light blue
+        // ")[voronoi_edge_id]" — ")" light blue, bracket id pale pink
         double suffix_x = vx + dx * static_cast<double>(v_text.size());
-        doc << svg::Text(svg::Point(suffix_x, y0), ")", svg::Fill(light_blue), svg::Font(font_size));
+        doc << svg::Text(svg::Point(suffix_x, y0), ")", svg::Fill(light_blue), svg::Font(label_font_size));
+        suffix_x += dx;
+        doc << svg::Text(svg::Point(suffix_x, y0), bracket_suffix, svg::Fill(pale_pink), svg::Font(label_font_size));
 
         // Additional line below the relative indices to avoid overlap with "(d,v)".
         // Skip it when both links are invalid to keep the debug view uncluttered.
         if (!(inter.second[2] == static_cast<size_t>(-1) && inter.second[3] == static_cast<size_t>(-1)))
         {
-          const double y1 = y0 + 0.012;
+          const double y1 = y0 + label_secondary_line_dy;
           const std::string prev_text = (inter.second[2] == static_cast<size_t>(-1)) ? "X" : std::to_string(inter.second[2]);
           const std::string next_text = (inter.second[3] == static_cast<size_t>(-1)) ? "X" : std::to_string(inter.second[3]);
           const std::string mesh_pair_text = "m(" + prev_text + "," + next_text + ")";
-          doc << svg::Text(svg::Point(x0, y1), mesh_pair_text, svg::Fill(mint_green), svg::Font(font_size));
+          doc << svg::Text(svg::Point(x0, y1), mesh_pair_text, svg::Fill(mint_green), svg::Font(label_font_size));
         }
       }
     };
 
     if (intersection_debug_info)
     {
-      auto marker_data = computeIntersectionMarkerData(points, graph, *intersection_debug_info);
-      drawIntersections(marker_data);
+      std::vector<IntersectionDebugInfo> filtered_intersections;
+      if (selective)
+      {
+        filtered_intersections.reserve(intersection_debug_info->size());
+        for (const IntersectionDebugInfo& item : *intersection_debug_info)
+        {
+          if (highlight->affectsCrossing(item[0], item[1]))
+          {
+            filtered_intersections.push_back(item);
+          }
+        }
+      }
+      const std::vector<IntersectionDebugInfo>& intersections_for_markers
+        = selective ? filtered_intersections : *intersection_debug_info;
+      if (!selective || !intersections_for_markers.empty())
+      {
+        auto marker_data = computeIntersectionMarkerData(points, graph, intersections_for_markers);
+        drawIntersections(marker_data);
+      }
     }
 
     for (const auto& label : labels)
     {
-      if (!isWithinBoundingBox(glm::dvec2(label.x, label.y), bb, 0.01))
+      if (!isWithinBoundingBox(glm::dvec2(label.x, label.y), bb, label_bbox_margin))
       {
         continue;
       }
       doc << svg::Text(svg::Point(label.x, label.y), label.text, svg::Fill(label.color), svg::Font(label.font_size));
     }
 
+    KINDS_DEBUG("Wrote SVG: " << filename);
     doc.save();
   }
 
@@ -638,11 +761,16 @@ class HalfEdgeDelaunayGraphToSVG
     BoundingBox bb = computeBoundingBox(allFinitePoints, margin);
     svg::Document doc = setupDocument(points, filename, bb);
 
+    constexpr double label_unit = 0.01 * label_scale;
+    const double label_font_size = label_unit;
+    const double label_pad_sm = 0.5 * label_unit;
+    const svg::Color site_vertex_circle(173, 216, 230);
+
     // Draw vertices
     for (auto& point : points)
     {
-      doc << svg::Circle(
-        svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
+      doc << svg::Circle(svg::Point(point[0], point[1]), 0.02, svg::Fill(site_vertex_circle),
+        svg::Stroke(0.0, svg::Color::Black));
     }
 
     // Draw Voronoi edges
@@ -690,8 +818,8 @@ class HalfEdgeDelaunayGraphToSVG
 
         // Label Voronoi vertex with "id/triId". For the generic Voronoi writer, we label with "i/i".
         std::string label_text = std::to_string(i) + "/" + std::to_string(i);
-        doc << svg::Text(svg::Point(circumcenter.first[0] - 0.005, circumcenter.first[1] - 0.005), label_text,
-          svg::Fill(svg::Color::White), svg::Font(0.01));
+        doc << svg::Text(svg::Point(circumcenter.first[0] - label_pad_sm, circumcenter.first[1] - label_pad_sm),
+          label_text, svg::Fill(svg::Color::White), svg::Font(label_font_size));
       }
     }
 
@@ -714,11 +842,12 @@ class HalfEdgeDelaunayGraphToSVG
       // Draw vertices
       for (auto& point : points)
       {
-        doc << svg::Circle(
-          svg::Point(point[0], point[1]), 0.02, svg::Fill(svg::Color::Blue), svg::Stroke(0.0, svg::Color::Black));
+        doc << svg::Circle(svg::Point(point[0], point[1]), 0.02, svg::Fill(site_vertex_circle),
+          svg::Stroke(0.0, svg::Color::Black));
       }
     }
 
+    KINDS_DEBUG("Wrote SVG: " << filename);
     doc.save();
   }
 };

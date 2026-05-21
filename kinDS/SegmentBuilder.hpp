@@ -220,7 +220,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::unique_ptr<SegmentBuilderCrossingCallback> crossing_callback_;
   std::unique_ptr<SegmentBuilderSubdivisionCallback> subdivision_callback_;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
-  bool visual_debug = true; // Always-on visual debug for now (SVG exports)
+  bool visual_debug = false; // SVG exports when true (set from @ref TreeMesher::runMeshingAlgorithm)
   /// When true, one-sided intersection-strip updates append a flexible placeholder on the opposite side (full scheme).
   /// When false (default), ablation: same triangles/endpoints as before flex vectors existed; `MeshingData` flex lists stay empty.
   bool intersection_strip_flexible_vertices_enabled = true;
@@ -590,10 +590,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t half_edge_even, double t, bool initial_left_inside, const VoronoiMesh& mesh, const std::list<MeshingData>& strips) const;
 
 
-  SegmentBuilder(
-    KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh);
+  SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh,
+    bool visual_debug = false);
 
-  SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh);
+  SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh, bool visual_debug = false);
 
   ~SegmentBuilder() override;
 
