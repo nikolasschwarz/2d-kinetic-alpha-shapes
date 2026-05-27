@@ -194,23 +194,24 @@ struct Layout
   Point origin_offset;
 };
 
-// Convert coordinates in user space to SVG native space.
+// Convert coordinates in user space to SVG native space (origin_offset shifts world origin; scale enlarges).
 inline double translateX(double x, Layout const& layout)
 {
+  const double xs = layout.scale * (x + layout.origin_offset.x);
   if (layout.origin == Layout::BottomRight || layout.origin == Layout::TopRight)
-    return layout.dimensions.width - x;
-  else
-    return x;
+    return layout.dimensions.width - xs;
+  return xs;
 }
 
 inline double translateY(double y, Layout const& layout)
 {
+  const double ys = layout.scale * (y + layout.origin_offset.y);
   if (layout.origin == Layout::BottomLeft || layout.origin == Layout::BottomRight)
-    return layout.dimensions.height - y;
-  else
-    return y;
+    return layout.dimensions.height - ys;
+  return ys;
 }
-inline double translateScale(double dimension, Layout const& layout) { return dimension; }
+
+inline double translateScale(double dimension, Layout const& layout) { return layout.scale * dimension; }
 
 class Serializeable
 {
@@ -489,6 +490,56 @@ class ShapeColl : public Shape
 
  private:
   std::vector<std::shared_ptr<Serializeable>> elements;
+};
+
+/** SVG `<g>` wrapping child shapes (e.g. multi-part intersection labels). */
+class Group : public Shape
+{
+ public:
+  explicit Group(std::string element_id = {})
+    : Shape(Fill(), Stroke())
+    , element_id_(std::move(element_id))
+  {
+  }
+
+  template<typename T> Group& operator<<(const T& serializeable)
+  {
+    static_assert(std::is_base_of<Serializeable, T>::value, "Must be derived from Serializeable");
+    elements_.push_back(std::make_shared<T>(serializeable));
+    return *this;
+  }
+
+  std::string toString(Layout const& layout) const override
+  {
+    std::stringstream ss;
+    ss << "<g";
+    if (!element_id_.empty())
+    {
+      ss << " id=\"" << element_id_ << "\"";
+    }
+    ss << ">\n";
+    for (const auto& element : elements_)
+    {
+      ss << element->toString(layout);
+    }
+    ss << "</g>\n";
+    return ss.str();
+  }
+
+  void offset(Point const& offset) override
+  {
+    for (const auto& element : elements_)
+    {
+      if (Shape* shape = dynamic_cast<Shape*>(element.get()))
+      {
+        shape->offset(offset);
+      }
+    }
+  }
+
+ private:
+  std::string element_id_;
+  std::vector<std::shared_ptr<Serializeable>> elements_;
 };
 
 template<typename T> inline std::string vectorToString(std::vector<T> collection, Layout const& layout)
@@ -1003,8 +1054,7 @@ class Document
         << "?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" "
         << "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n<svg "
         << attribute("viewBox",
-             std::to_string(-layout.origin_offset.x) + " " + std::to_string(-layout.origin_offset.y) + " "
-               + std::to_string(layout.dimensions.width) + " " + std::to_string(layout.dimensions.height))
+             "0 0 " + std::to_string(layout.dimensions.width) + " " + std::to_string(layout.dimensions.height))
         //<< attribute("width", layout.scale * layout.dimensions.width, "px")
         //<< attribute("height", layout.dimensions.height, "px")
         << attribute("xmlns", "http://www.w3.org/2000/svg") << attribute("version", "1.1") << ">\n";

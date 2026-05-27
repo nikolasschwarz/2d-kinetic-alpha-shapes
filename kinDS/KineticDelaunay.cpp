@@ -1,14 +1,21 @@
 #include "KineticDelaunay.hpp"
+#include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "KineticDelaunayFlipEvent.hpp"
 #include "KineticDelaunayHelpers.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
 #include "KineticDelaunaySectionEvent.hpp"
 #include "KineticDelaunaySubdivisionEvent.hpp"
+#include "VisualDebugHighlight.hpp"
+#include <cctype>
 #include <cmath>
 #include <glm/geometric.hpp>
 #include <limits>
 #include <optional>
+#include <sstream>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 using namespace kinDS;
 
@@ -465,20 +472,46 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
             // there is an intersection, either update the existing intersection or add a new one
             // Compute the parameter along the delaunay edge
 
+            const size_t voronoi_edge_id = he_id / 2;
             if (v_intersections.empty())
             {
-              // add a new intersection
+              // New intersection with the flipped (quad) Delaunay edge; sole entry on this Voronoi edge.
               crossing_data.edge_intersections.emplace_back();
-              auto intersection = std::prev(crossing_data.edge_intersections.end());
-              intersection->delaunay_edge_id = he_id / 2;
-              intersection->voronoi_edge_id = he_id / 2;
-              intersection->delaunay_edge_param = 0.0;
+              const CrossingData::EdgeIntersectionRef intersection
+                = std::prev(crossing_data.edge_intersections.end());
+              intersection->delaunay_edge_id = quad_index;
+              intersection->voronoi_edge_id = voronoi_edge_id;
+              intersection->prev_segment_mesh_pair_index = static_cast<size_t>(-1);
+              intersection->next_segment_mesh_pair_index = static_cast<size_t>(-1);
+              intersection->delaunay_edge_param
+                = delaunayVoronoiEdgeIntersection(quad_index, voronoi_edge_id, t).first;
+
+              auto& v_list = crossing_data.voronoi_edge_intersections[voronoi_edge_id];
+              intersection->voronoi_ref = v_list.emplace(v_list.end(), intersection);
+
+              auto& d_list = crossing_data.delaunay_edge_intersections[quad_index];
+              intersection->delaunay_ref = d_list.emplace(d_list.end(), intersection);
             }
             else
             {
-              // update the existing intersection
-              auto intersection = v_intersections.front();
-              intersection->delaunay_edge_param = 0.0;
+              // Update the existing sole intersection (parameter along the flip edge).
+              const CrossingData::EdgeIntersectionRef intersection = v_intersections.front();
+              const size_t old_delaunay_edge_id = intersection->delaunay_edge_id;
+              intersection->delaunay_edge_id = quad_index;
+              intersection->delaunay_edge_param
+                = delaunayVoronoiEdgeIntersection(quad_index, voronoi_edge_id, t).first;
+
+              if (old_delaunay_edge_id != quad_index)
+              {
+                // I don't think this case can occurr, but the AI suggested it, so I'm leaving it in.
+                KINDS_DEBUG("Old Delaunay edge id: " << old_delaunay_edge_id << " is not the same as the new quad index: " << quad_index);
+                if (old_delaunay_edge_id < crossing_data.delaunay_edge_intersections.size())
+                {
+                  crossing_data.delaunay_edge_intersections[old_delaunay_edge_id].erase(intersection->delaunay_ref);
+                }
+                auto& d_list = crossing_data.delaunay_edge_intersections[quad_index];
+                intersection->delaunay_ref = d_list.emplace(d_list.end(), intersection);
+              }
             }
           }
         }
@@ -501,7 +534,8 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
 
     for (CrossingData::EdgeIntersectionRef& intersection : d_edge_intersections)
     {
-      KINDS_INFO("Processing intersection with Voronoi edge: " << intersection->voronoi_edge_id);
+      KINDS_INFO("Processing intersection with Voronoi edge: "
+        << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id);
       // get the next and previous intersections to check if they match with the flipped edge
       auto& v_edge_intersections = crossing_data.voronoi_edge_intersections[intersection->voronoi_edge_id];
       auto v_ref = intersection->voronoi_ref;
@@ -511,6 +545,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
       // check if next or previous matches the face
       size_t face_inside_old = pre_flip_quad_faces.at(he_id);
       size_t face_inside_new = graph.getHalfEdges()[he_id].face;
+      KINDS_INFO("face_inside_old: " << face_inside_old << ", face_inside_new: " << face_inside_new);
 
       v_next = std::next(v_ref);
       if (v_ref == v_edge_intersections.begin())
@@ -530,11 +565,17 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
 
       if (v_prev != v_edge_intersections.end())
       {
+        KINDS_INFO("Found previous intersection with Voronoi edge: "
+          << (*v_prev)->voronoi_edge_id << " and Delaunay edge: " << (*v_prev)->delaunay_edge_id);
         size_t d_edge_id = (*v_prev)->delaunay_edge_id;
         size_t prev_face0 = graph.getHalfEdges()[2 * d_edge_id].face;
         size_t prev_face1 = graph.getHalfEdges()[2 * d_edge_id + 1].face;
+        KINDS_INFO("Faces of Delaunay edge at previous intersection: " << prev_face0 << ", " << prev_face1);
 
-        use_prev = (face_inside_old == prev_face0) || (face_inside_old == prev_face1);
+        // need to compare to both face ids of the quad because the flip might have caused a mismatch between two
+        // neighboring intersections
+        use_prev = (face_id0 == prev_face0) || (face_id0 == prev_face1) || (face_id1 == prev_face0)
+          || (face_id1 == prev_face1);
 
         if (use_prev)
         {
@@ -544,27 +585,42 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
             intersected_before = true;
             v_intersection = v_prev;
 
-            if (v_ref == v_edge_intersections.begin())
+            if (v_prev == v_edge_intersections.begin())
             {
               v_prev = v_edge_intersections.end();
             }
             else
             {
-              v_prev = std::next(v_prev);
+              v_prev = std::prev(v_prev);
             }
+
+            KINDS_INFO("Intersection existed before, moving v_prev to "
+              << (v_prev != v_edge_intersections.end() ? "previous" : "end"));
           }
         }
       }
       else
       {
+
         size_t start_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id].face;
         size_t containing_triangle_id = crossing_data.getContainingTriId(start_voronoi_vertex_id);
+        KINDS_INFO("start_voronoi_vertex_id: " << start_voronoi_vertex_id
+                                               << ", containing_triangle_id: " << containing_triangle_id
+                                               << ", face_id0: " << face_id0 << ", face_id1: " << face_id1);
 
-        // unlike the intersection data, this has already been updated, so we need to compare to the new face
-        use_prev = containing_triangle_id == face_inside_new;
+        use_prev = containing_triangle_id == face_id0 || containing_triangle_id == face_id1;
         if (use_prev)
         {
+          KINDS_INFO("No previous intersection found for Voronoi edge: "
+            << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
+            << ", now using location of endpoint");
           at_end = true;
+        }
+        else
+        {
+          KINDS_INFO("No previous intersection found for Voronoi edge: "
+            << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
+            << ", and endpoint is not in the quadrilateral, attempting to use next intersection");
         }
       }
 
@@ -573,11 +629,14 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
       {
         if (v_next != v_edge_intersections.end())
         {
+          KINDS_INFO("Found next intersection with Voronoi edge: "
+            << (*v_next)->voronoi_edge_id << " and Delaunay edge: " << (*v_next)->delaunay_edge_id);
           size_t d_edge_id = (*v_next)->delaunay_edge_id;
           size_t next_face0 = graph.getHalfEdges()[2 * d_edge_id].face;
           size_t next_face1 = graph.getHalfEdges()[2 * d_edge_id + 1].face;
 
-          use_next = (face_inside_new == next_face0) || (face_inside_new == next_face1);
+          use_next = (face_id0 == next_face0) || (face_id0 == next_face1) || (face_id1 == next_face0)
+            || (face_id1 == next_face1);
           if (use_next)
           {
             // check if it intersected before
@@ -597,17 +656,37 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
           size_t end_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id + 1].face;
           size_t containing_triangle_id = crossing_data.getContainingTriId(end_voronoi_vertex_id);
           // output values
-          KINDS_INFO("end_voronoi_vertex_id: " << end_voronoi_vertex_id << ", containing_triangle_id: "
-                                               << containing_triangle_id << ", face_inside_old: " << face_inside_old);
-          use_next = containing_triangle_id == face_inside_old;
+          KINDS_INFO("end_voronoi_vertex_id: " << end_voronoi_vertex_id
+                                               << ", containing_triangle_id: " << containing_triangle_id
+                                               << ", face_id0: " << face_id0 << ", face_id1: " << face_id1);
+          use_next = containing_triangle_id == face_id0 || containing_triangle_id == face_id1;
           if (use_next)
           {
+            KINDS_INFO("No next intersection found for Voronoi edge: "
+              << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
+              << ", now using location of endpoint");
             at_end = true;
+          }
+          else
+          {
+            KINDS_ERROR("No next intersection found for Voronoi edge: "
+              << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
+              << ", and endpoint is not in the quadrilateral");
+            throw std::runtime_error(
+              "Logic error: no next intersection found and endpoint is not in the quadrilateral");
           }
         }
       }
 
-      assert(use_next != use_prev);
+      if (use_next == use_prev)
+      {
+        KINDS_ERROR("use_next: " << use_next << ", use_prev: " << use_prev);
+        throw std::runtime_error("Logic error: use_next and use_prev cannot be equal!");
+      }
+
+      KINDS_INFO("Using " << (use_prev ? "previous" : "next") << " intersection for Voronoi edge: "
+                          << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id);
+
       if (use_prev)
       {
         v_next = v_prev;
@@ -622,6 +701,10 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
           quad_he_id_it = std::find(quad_he_ids.begin(), quad_he_ids.end(), (*v_next)->delaunay_edge_id * 2 + 1);
         }
 
+        if (quad_he_id_it == quad_he_ids.end())
+        {
+          throw std::runtime_error("Logic error: could not find matching half-edge in quadrilateral for intersection");
+        }
         // TODO: There appears to be a logic error here. Why do we even deed the search? I need to think this through
         // again.
 
@@ -646,7 +729,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
               = delaunayVoronoiEdgeIntersection(quad_index, intersection->voronoi_edge_id, t);
 
             new_intersection->delaunay_edge_param = new_intersection_params.first;
-            v_edge_intersections.insert(v_next, new_intersection);
+            new_intersection->voronoi_ref = v_edge_intersections.insert(v_next, new_intersection);
             crossing_data.delaunay_edge_intersections[quad_index].push_back(new_intersection); // sort later
           }
         }
@@ -689,16 +772,22 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
           auto new_intersection_params = delaunayVoronoiEdgeIntersection(quad_index, intersection->voronoi_edge_id, t);
 
           new_intersection->delaunay_edge_param = new_intersection_params.first;
-          v_edge_intersections.insert(v_next, new_intersection);
+          new_intersection->voronoi_ref = v_edge_intersections.insert(v_next, new_intersection);
           crossing_data.delaunay_edge_intersections[quad_index].push_back(new_intersection); // sort later
         }
       }
     }
   }
 
-  crossing_data.delaunay_edge_intersections[quad_index].sort(
-    [&](const CrossingData::EdgeIntersectionRef& a, const CrossingData::EdgeIntersectionRef& b)
-    { return a->delaunay_edge_param < b->delaunay_edge_param; });
+  {
+    auto& quad_d_intersections = crossing_data.delaunay_edge_intersections[quad_index];
+    quad_d_intersections.sort([&](const CrossingData::EdgeIntersectionRef& a, const CrossingData::EdgeIntersectionRef& b)
+      { return a->delaunay_edge_param < b->delaunay_edge_param; });
+    for (auto it = quad_d_intersections.begin(); it != quad_d_intersections.end(); ++it)
+    {
+      (*it)->delaunay_ref = it;
+    }
+  }
 
   // Recompute all crossing events
   for (size_t voronoi_vertex : vertices0)
@@ -905,6 +994,11 @@ void KineticDelaunay::computeComponentData(double t)
 
 const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const { return crossing_data; }
 
+void KineticDelaunay::validateCrossingIntersectionInvariants(const char* context, double t) const
+{
+  crossing_data.validateIntersectionInvariants(context, this, t);
+}
+
 namespace
 {
 glm::dvec2 intersect_segments_2d_closing(
@@ -1053,9 +1147,9 @@ void kinDS::validateClosingCapCrossingRef([[maybe_unused]] const KineticDelaunay
   }
 }
 
-std::vector<std::array<size_t, 6>> KineticDelaunay::getCrossingIntersectionDebugData() const
+std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> KineticDelaunay::getCrossingIntersectionDebugData() const
 {
-  std::vector<std::array<size_t, 6>> result;
+  std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> result;
   result.reserve(crossing_data.edge_intersections.size());
 
   for (size_t d_edge_id = 0; d_edge_id < crossing_data.delaunay_edge_intersections.size(); ++d_edge_id)
@@ -1071,8 +1165,15 @@ std::vector<std::array<size_t, 6>> KineticDelaunay::getCrossingIntersectionDebug
       {
         if (*v_it == ref)
         {
-          result.push_back({ ref->delaunay_edge_id, ref->voronoi_edge_id, d_index, v_index,
-            ref->prev_segment_mesh_pair_index, ref->next_segment_mesh_pair_index });
+          HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo info;
+          info.delaunay_edge_id = ref->delaunay_edge_id;
+          info.voronoi_edge_id = ref->voronoi_edge_id;
+          info.delaunay_list_index = d_index;
+          info.voronoi_list_index = v_index;
+          info.prev_segment_mesh_pair_index = ref->prev_segment_mesh_pair_index;
+          info.next_segment_mesh_pair_index = ref->next_segment_mesh_pair_index;
+          info.delaunay_edge_param = ref->delaunay_edge_param;
+          result.push_back(info);
           break;
         }
       }
@@ -1591,6 +1692,385 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
       (*it)->delaunay_ref = it;
     }
   }
+
+  validateIntersectionInvariants("computeEdgeIntersections", &kd, t);
+}
+
+namespace
+{
+struct IntersectionLogEntry
+{
+  size_t delaunay_edge_id;
+  size_t voronoi_edge_id;
+  double delaunay_edge_param;
+};
+
+struct InvariantViolationScope
+{
+  std::optional<size_t> primary_dual_edge;
+  std::unordered_set<size_t> auxiliary_dual_edges;
+  std::unordered_set<uint64_t> crossing_keys;
+  std::vector<IntersectionLogEntry> intersection_log;
+
+  void noteIntersection(size_t delaunay_edge_id, size_t voronoi_edge_id, double delaunay_edge_param)
+  {
+    crossing_keys.insert((static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id);
+    intersection_log.push_back({ delaunay_edge_id, voronoi_edge_id, delaunay_edge_param });
+  }
+
+  void setPrimaryDualEdge(size_t edge_id) { primary_dual_edge = edge_id; }
+
+  void noteAuxiliaryDualEdge(size_t edge_id) { auxiliary_dual_edges.insert(edge_id); }
+};
+
+std::string formatIntersectionLogEntry(const IntersectionLogEntry& entry)
+{
+  std::ostringstream oss;
+  oss.setf(std::ios::fixed);
+  oss.precision(15);
+  oss << "(d=" << entry.delaunay_edge_id << ",v=" << entry.voronoi_edge_id
+      << ",param=" << entry.delaunay_edge_param << ")";
+  return oss.str();
+}
+
+std::string formatDelaunayEdgeIntersectionList(
+  const KineticDelaunay::CrossingData& crossing_data, size_t delaunay_edge_id)
+{
+  std::ostringstream oss;
+  oss << "delaunay_edge_intersections[" << delaunay_edge_id << "]={";
+  if (delaunay_edge_id < crossing_data.delaunay_edge_intersections.size())
+  {
+    const auto& d_list = crossing_data.delaunay_edge_intersections[delaunay_edge_id];
+    size_t list_index = 0;
+    for (auto d_it = d_list.begin(); d_it != d_list.end(); ++d_it, ++list_index)
+    {
+      if (list_index > 0)
+      {
+        oss << ", ";
+      }
+      const auto& ir = **d_it;
+      oss << "[" << list_index << "]" << formatIntersectionLogEntry({ ir.delaunay_edge_id, ir.voronoi_edge_id,
+        ir.delaunay_edge_param });
+    }
+  }
+  oss << "}";
+  return oss.str();
+}
+
+void logInvariantViolationScope(const InvariantViolationScope& scope)
+{
+  if (scope.primary_dual_edge.has_value())
+  {
+    KINDS_ERROR("  primary dual edge (magenta): " << *scope.primary_dual_edge);
+  }
+  if (!scope.auxiliary_dual_edges.empty())
+  {
+    KINDS_ERROR("  auxiliary dual edges:");
+    for (size_t edge_id : scope.auxiliary_dual_edges)
+    {
+      KINDS_ERROR("    " << edge_id);
+    }
+  }
+  if (!scope.intersection_log.empty())
+  {
+    KINDS_ERROR("  highlighted intersections:");
+    for (const IntersectionLogEntry& entry : scope.intersection_log)
+    {
+      KINDS_ERROR("    " << formatIntersectionLogEntry(entry));
+    }
+  }
+}
+
+std::string sanitizeContextForFilename(const char* context)
+{
+  std::string safe = (context != nullptr && context[0] != '\0') ? context : "unknown";
+  for (char& c : safe)
+  {
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_'))
+    {
+      c = '_';
+    }
+  }
+  return safe;
+}
+
+void exportCrossingInvariantFailureDebugSvg(const KineticDelaunay& kd, const char* context, double t,
+  const InvariantViolationScope& scope)
+{
+  const VisualDebugHighlight highlight = VisualDebugHighlight::forInvariantViolation(
+    kd.getGraph(), scope.primary_dual_edge, scope.auxiliary_dual_edges, scope.crossing_keys);
+
+  const std::vector<glm::dvec2> points = kd.getPointsAt(t);
+  const std::string filename
+    = "t" + std::to_string(t) + "_crossing_invariant_FAIL_" + sanitizeContextForFilename(context) + ".svg";
+  const auto& containing_tri_ids = kd.getCrossingData().getContainingTriIds();
+  const auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
+
+  KINDS_ERROR("Writing crossing invariant failure debug SVG: " << filename);
+  HalfEdgeDelaunayGraphToSVG::write(points, kd.getGraph(), filename, 0.1, &kd.getFacesInside(), true,
+    &containing_tri_ids, &intersection_debug_data, &highlight);
+}
+
+[[noreturn]] void failCrossingIntersectionInvariant(const char* context, const std::string& detail,
+  const InvariantViolationScope& scope, const KineticDelaunay* kd, double t)
+{
+  if (kd != nullptr)
+  {
+    exportCrossingInvariantFailureDebugSvg(*kd, context, t, scope);
+  }
+  KINDS_ERROR("validateIntersectionInvariants(" << context << "): " << detail);
+  logInvariantViolationScope(scope);
+  throw std::runtime_error(std::string("validateIntersectionInvariants(") + context + "): " + detail);
+}
+
+bool listContainsIterator(const std::list<KineticDelaunay::CrossingData::EdgeIntersectionRef>& list,
+  const std::list<KineticDelaunay::CrossingData::EdgeIntersectionRef>::iterator& target)
+{
+  for (auto it = list.begin(); it != list.end(); ++it)
+  {
+    if (it == target)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+void noteAllIntersections(const KineticDelaunay::CrossingData& crossing_data, InvariantViolationScope& scope)
+{
+  for (auto ref = crossing_data.edge_intersections.begin(); ref != crossing_data.edge_intersections.end(); ++ref)
+  {
+    scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+  }
+}
+} // namespace
+
+void KineticDelaunay::CrossingData::validateIntersectionInvariants(
+  const char* context, const KineticDelaunay* kd, double t) const
+{
+  const char* ctx = (context != nullptr && context[0] != '\0') ? context : "unknown";
+
+  size_t delaunay_list_entries = 0;
+  for (const auto& d_list : delaunay_edge_intersections)
+  {
+    delaunay_list_entries += d_list.size();
+  }
+
+  size_t voronoi_list_entries = 0;
+  for (const auto& v_list : voronoi_edge_intersections)
+  {
+    voronoi_list_entries += v_list.size();
+  }
+
+  const size_t global_count = edge_intersections.size();
+  if (delaunay_list_entries != global_count)
+  {
+    InvariantViolationScope scope;
+    noteAllIntersections(*this, scope);
+    for (size_t d_id = 0; d_id < delaunay_edge_intersections.size(); ++d_id)
+    {
+      if (!delaunay_edge_intersections[d_id].empty())
+      {
+        scope.noteAuxiliaryDualEdge(d_id);
+      }
+    }
+    failCrossingIntersectionInvariant(ctx, "delaunay_edge_intersections has " + std::to_string(delaunay_list_entries)
+        + " entries but edge_intersections has " + std::to_string(global_count),
+      scope, kd, t);
+  }
+  if (voronoi_list_entries != global_count)
+  {
+    InvariantViolationScope scope;
+    noteAllIntersections(*this, scope);
+    for (size_t v_id = 0; v_id < voronoi_edge_intersections.size(); ++v_id)
+    {
+      if (!voronoi_edge_intersections[v_id].empty())
+      {
+        scope.noteAuxiliaryDualEdge(v_id);
+      }
+    }
+    failCrossingIntersectionInvariant(ctx, "voronoi_edge_intersections has " + std::to_string(voronoi_list_entries)
+        + " entries but edge_intersections has " + std::to_string(global_count),
+      scope, kd, t);
+  }
+
+  for (auto ref = edge_intersections.begin(); ref != edge_intersections.end(); ++ref)
+  {
+    const size_t d_id = ref->delaunay_edge_id;
+    const size_t v_id = ref->voronoi_edge_id;
+
+    if (d_id >= delaunay_edge_intersections.size())
+    {
+      InvariantViolationScope scope;
+      scope.setPrimaryDualEdge(d_id);
+      scope.noteIntersection(d_id, v_id, ref->delaunay_edge_param);
+      failCrossingIntersectionInvariant(ctx,
+        "intersection has delaunay_edge_id=" + std::to_string(d_id) + " >= delaunay_edge_intersections.size()="
+          + std::to_string(delaunay_edge_intersections.size()),
+        scope, kd, t);
+    }
+    if (v_id >= voronoi_edge_intersections.size())
+    {
+      InvariantViolationScope scope;
+      scope.setPrimaryDualEdge(v_id);
+      scope.noteIntersection(d_id, v_id, ref->delaunay_edge_param);
+      failCrossingIntersectionInvariant(ctx,
+        "intersection has voronoi_edge_id=" + std::to_string(v_id) + " >= voronoi_edge_intersections.size()="
+          + std::to_string(voronoi_edge_intersections.size()),
+        scope, kd, t);
+    }
+
+    if (*ref->delaunay_ref != ref)
+    {
+      InvariantViolationScope scope;
+      scope.setPrimaryDualEdge(d_id);
+      scope.noteIntersection(d_id, v_id, ref->delaunay_edge_param);
+      failCrossingIntersectionInvariant(ctx,
+        "delaunay_ref does not dereference to owning intersection (d=" + std::to_string(d_id) + ", v="
+          + std::to_string(v_id) + ", param=" + std::to_string(ref->delaunay_edge_param) + ")",
+        scope, kd, t);
+    }
+    if (*ref->voronoi_ref != ref)
+    {
+      InvariantViolationScope scope;
+      scope.setPrimaryDualEdge(d_id);
+      scope.noteIntersection(d_id, v_id, ref->delaunay_edge_param);
+      failCrossingIntersectionInvariant(ctx,
+        "voronoi_ref does not dereference to owning intersection (d=" + std::to_string(d_id) + ", v="
+          + std::to_string(v_id) + ", param=" + std::to_string(ref->delaunay_edge_param) + ")",
+        scope, kd, t);
+    }
+
+    const auto& d_list = delaunay_edge_intersections[d_id];
+    const auto& v_list = voronoi_edge_intersections[v_id];
+
+    if (!listContainsIterator(d_list, ref->delaunay_ref))
+    {
+      InvariantViolationScope scope;
+      scope.setPrimaryDualEdge(d_id);
+      scope.noteIntersection(d_id, v_id, ref->delaunay_edge_param);
+      failCrossingIntersectionInvariant(ctx,
+        "delaunay_ref is not an iterator into delaunay_edge_intersections[" + std::to_string(d_id) + "] (v="
+          + std::to_string(v_id) + ", param=" + std::to_string(ref->delaunay_edge_param) + ")",
+        scope, kd, t);
+    }
+    if (!listContainsIterator(v_list, ref->voronoi_ref))
+    {
+      InvariantViolationScope scope;
+      scope.setPrimaryDualEdge(d_id);
+      scope.noteIntersection(d_id, v_id, ref->delaunay_edge_param);
+      failCrossingIntersectionInvariant(ctx,
+        "voronoi_ref is not an iterator into voronoi_edge_intersections[" + std::to_string(v_id) + "] (d="
+          + std::to_string(d_id) + ", param=" + std::to_string(ref->delaunay_edge_param) + ")",
+        scope, kd, t);
+    }
+  }
+
+  for (size_t d_id = 0; d_id < delaunay_edge_intersections.size(); ++d_id)
+  {
+    const auto& d_list = delaunay_edge_intersections[d_id];
+    double prev_param = -std::numeric_limits<double>::infinity();
+    std::optional<EdgeIntersectionRef> prev_ref;
+    size_t list_index = 0;
+    for (auto d_it = d_list.begin(); d_it != d_list.end(); ++d_it, ++list_index)
+    {
+      const EdgeIntersectionRef ref = *d_it;
+      if (ref->delaunay_edge_id != d_id)
+      {
+        InvariantViolationScope scope;
+        scope.setPrimaryDualEdge(d_id);
+        scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+        if (ref->delaunay_edge_id != d_id)
+        {
+          scope.noteAuxiliaryDualEdge(ref->delaunay_edge_id);
+        }
+        failCrossingIntersectionInvariant(ctx,
+          "delaunay_edge_intersections[" + std::to_string(d_id) + "] entry at list index " + std::to_string(list_index)
+            + " has delaunay_edge_id=" + std::to_string(ref->delaunay_edge_id) + " but expected "
+            + std::to_string(d_id) + "; entry=" + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id,
+              ref->delaunay_edge_param }),
+          scope, kd, t);
+      }
+      if (ref->delaunay_ref != d_it)
+      {
+        InvariantViolationScope scope;
+        scope.setPrimaryDualEdge(d_id);
+        scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+        failCrossingIntersectionInvariant(ctx,
+          "delaunay_ref on record does not match list iterator at delaunay_edge_intersections[" + std::to_string(d_id)
+            + "] list index " + std::to_string(list_index) + "; entry="
+            + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param }),
+          scope, kd, t);
+      }
+      if (ref->delaunay_edge_param < prev_param)
+      {
+        InvariantViolationScope scope;
+        scope.setPrimaryDualEdge(d_id);
+        if (prev_ref.has_value())
+        {
+          const EdgeIntersectionRef& prev = *prev_ref;
+          scope.noteIntersection(prev->delaunay_edge_id, prev->voronoi_edge_id, prev->delaunay_edge_param);
+        }
+        scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+
+        std::string detail = "delaunay_edge_intersections[" + std::to_string(d_id)
+          + "] not sorted by delaunay_edge_param at list index " + std::to_string(list_index);
+        detail += "; " + formatDelaunayEdgeIntersectionList(*this, d_id);
+        if (prev_ref.has_value())
+        {
+          const EdgeIntersectionRef& prev = *prev_ref;
+          detail += "; out-of-order pair: "
+            + formatIntersectionLogEntry({ prev->delaunay_edge_id, prev->voronoi_edge_id, prev->delaunay_edge_param })
+            + " then "
+            + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param });
+          if (kd != nullptr)
+          {
+            detail += " (refs "
+              + formatCrossingIntersectionForLog(*kd, prev) + " then "
+              + formatCrossingIntersectionForLog(*kd, ref) + ")";
+          }
+        }
+        failCrossingIntersectionInvariant(ctx, detail, scope, kd, t);
+      }
+      prev_param = ref->delaunay_edge_param;
+      prev_ref = ref;
+    }
+  }
+
+  for (size_t v_id = 0; v_id < voronoi_edge_intersections.size(); ++v_id)
+  {
+    const auto& v_list = voronoi_edge_intersections[v_id];
+    for (auto v_it = v_list.begin(); v_it != v_list.end(); ++v_it)
+    {
+      const EdgeIntersectionRef ref = *v_it;
+      if (ref->voronoi_edge_id != v_id)
+      {
+        InvariantViolationScope scope;
+        scope.setPrimaryDualEdge(v_id);
+        scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+        if (ref->voronoi_edge_id != v_id)
+        {
+          scope.noteAuxiliaryDualEdge(ref->voronoi_edge_id);
+        }
+        failCrossingIntersectionInvariant(ctx,
+          "voronoi_edge_intersections[" + std::to_string(v_id) + "] entry has voronoi_edge_id="
+            + std::to_string(ref->voronoi_edge_id) + " but expected " + std::to_string(v_id) + "; entry="
+            + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param }),
+          scope, kd, t);
+      }
+      if (ref->voronoi_ref != v_it)
+      {
+        InvariantViolationScope scope;
+        scope.setPrimaryDualEdge(v_id);
+        scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+        failCrossingIntersectionInvariant(ctx,
+          "voronoi_ref on record does not match list iterator at voronoi_edge_intersections[" + std::to_string(v_id)
+            + "]; entry="
+            + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param }),
+          scope, kd, t);
+      }
+    }
+  }
 }
 
 void KineticDelaunay::CrossingData::removeIntersection(EdgeIntersectionRef intersection_ref)
@@ -1738,6 +2218,7 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
       }
     }
   }
+
 }
 
 const HalfEdgeDelaunayGraph& KineticDelaunay::getGraph() const { return graph; }

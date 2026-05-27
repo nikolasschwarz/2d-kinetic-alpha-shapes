@@ -41,9 +41,18 @@ static void exportSvgBeforeAssertion(const KineticDelaunay& kd, double t, const 
     &intersection_debug_data); // margin 0.1, draw Voronoi edges in red
 }
 
-// Validate CrossingData: each Voronoi vertex's containing tri matches the list, and the vertex lies inside that
-// triangle. The 'context' string is used to indicate where in the evolution we are (init, betweenSections, after event,
-// etc.).
+static void validateCrossingData(const KineticDelaunay& kd, double t, const std::string& context);
+
+// Export SVG, then intersection invariants, then geometric checks (init / between-sections; no afterEvent hook).
+static void exportSvgThenValidateCrossingData(
+  const KineticDelaunay& kd, double t, const std::string& filename, const std::string& context)
+{
+  exportSvgBeforeAssertion(kd, t, filename);
+  kd.getCrossingData().validateIntersectionInvariants(context.c_str(), &kd, t);
+  validateCrossingData(kd, t, context);
+}
+
+// Geometric CrossingData checks only. For flip/crossing, intersection invariants run in the library after afterEvent.
 static void validateCrossingData(const KineticDelaunay& kd, double t, const std::string& context)
 {
   const HalfEdgeDelaunayGraph& graph = kd.getGraph();
@@ -474,9 +483,8 @@ struct CrossingDataTestHandler : public KineticDelaunay::EventCallback
     const size_t index = section->section_id;
     std::string filename
       = "t" + std::to_string(index) + "_crossing_data_between_sections_" + std::to_string(index) + ".svg";
-    exportSvgBeforeAssertion(kd, static_cast<double>(index), filename);
     std::string ctx = "betweenSections(index=" + std::to_string(index) + ")";
-    validateCrossingData(kd, static_cast<double>(index), ctx);
+    exportSvgThenValidateCrossingData(kd, static_cast<double>(index), filename, ctx);
   }
 };
 
@@ -512,8 +520,7 @@ TEST_CASE("KineticDelaunay CrossingData consistency on demo data", "[KineticDela
   }
 
   // Export SVG and validate immediately after initialization at t = 0.
-  exportSvgBeforeAssertion(kd, 0.0, "t0_after_init.svg");
-  REQUIRE_NOTHROW(validateCrossingData(kd, 0.0, "after init"));
+  REQUIRE_NOTHROW(exportSvgThenValidateCrossingData(kd, 0.0, "t0_after_init.svg", "after init"));
 
   // The test passes if validateCrossingData never throws during the full evolution
   REQUIRE_NOTHROW(kd.compute());

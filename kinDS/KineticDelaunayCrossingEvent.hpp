@@ -101,6 +101,12 @@ struct KineticDelaunay::CrossingData
   // Remove a single intersection from all three data structures (global list,
   // per-Voronoi-edge list, and per-Delaunay-edge list).
   void removeIntersection(EdgeIntersectionRef intersection_ref);
+
+  /**
+   * Throws if per-edge lists, cached refs, or Delaunay-edge param ordering are inconsistent.
+   * When @p kd is non-null, writes a highlighted debug SVG before throwing.
+   */
+  void validateIntersectionInvariants(const char* context, const KineticDelaunay* kd = nullptr, double t = 0.0) const;
 };
 
 class KineticDelaunay::CrossingEvent final : public KineticDelaunay::Event
@@ -190,6 +196,9 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
   {
     event_handler->afterEvent(*this);
   }
+
+  // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
+  kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", occurrence_time);
 
   // Re-compute crossing events for this Voronoi vertex
   kd->crossing_event_manager_->computeEvents(occurrence_time, voronoi_vertex_id);

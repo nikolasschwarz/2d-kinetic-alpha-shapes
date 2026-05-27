@@ -162,6 +162,9 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
   {
     event_handler->afterEvent(*this);
   }
+
+  // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
+  kd->validateCrossingIntersectionInvariants("FlipEvent:afterEvent", occurrence_time);
 }
 
 } // namespace kinDS

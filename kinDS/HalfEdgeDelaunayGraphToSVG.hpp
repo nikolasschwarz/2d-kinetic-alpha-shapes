@@ -6,6 +6,9 @@
 #include "simple_svg.hpp"
 #include <array>
 #include <glm/glm.hpp>
+#include <sstream>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace kinDS
@@ -37,6 +40,9 @@ class HalfEdgeDelaunayGraphToSVG
 
   /// Multiplier for text size and label placement offsets in @ref write and @ref writeVoronoi.
   static constexpr double label_scale = 15.0;
+
+  /// Scales all SVG user units (geometry, strokes, fonts) so viewers can zoom in further.
+  static constexpr double coordinate_scale = 10.0;
 
   struct BoundingBox
   {
@@ -159,18 +165,35 @@ class HalfEdgeDelaunayGraphToSVG
   static svg::Document setupDocument(
     const std::vector<glm::dvec2> points, const std::string& filename, const BoundingBox& bb)
   {
-    // Create an SVG document with the bounding box
-    double width = bb.max_x - bb.min_x;
-    double height = bb.max_y - bb.min_y;
+    const double width = (bb.max_x - bb.min_x) * coordinate_scale;
+    const double height = (bb.max_y - bb.min_y) * coordinate_scale;
 
-    svg::Dimensions dimensions(width, height);
-
-    return svg::Document(
-      filename, svg::Layout(dimensions, svg::Layout::TopLeft, 1.0, svg::Point(-bb.min_x, -bb.min_y)));
+    return svg::Document(filename,
+      svg::Layout(svg::Dimensions(width, height), svg::Layout::TopLeft, coordinate_scale,
+        svg::Point(-bb.min_x, -bb.min_y)));
   }
 
-  // [delaunay_edge_id, voronoi_edge_id, delaunay_list_index, voronoi_list_index, prev_pair_idx, next_pair_idx]
-  typedef std::array<size_t, 6> IntersectionDebugInfo;
+  struct IntersectionDebugInfo
+  {
+    size_t delaunay_edge_id = 0;
+    size_t voronoi_edge_id = 0;
+    size_t delaunay_list_index = 0;
+    size_t voronoi_list_index = 0;
+    size_t prev_segment_mesh_pair_index = static_cast<size_t>(-1);
+    size_t next_segment_mesh_pair_index = static_cast<size_t>(-1);
+    double delaunay_edge_param = 0.0;
+  };
+
+  using IntersectionMarker = std::pair<glm::dvec2, IntersectionDebugInfo>;
+
+  static std::string formatIntersectionParam(double delaunay_edge_param)
+  {
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed);
+    oss.precision(6);
+    oss << delaunay_edge_param;
+    return oss.str();
+  }
 
   static bool lineIntersection(
     const glm::dvec2& a0, const glm::dvec2& a1, const glm::dvec2& b0, const glm::dvec2& b1, glm::dvec2& out)
@@ -242,35 +265,28 @@ class HalfEdgeDelaunayGraphToSVG
     return false;
   }
 
-  // [delaunay_list_index, voronoi_list_index, prev_pair_idx, next_pair_idx, voronoi_edge_id]
-  static std::vector<std::pair<glm::dvec2, std::array<size_t, 5>>> computeIntersectionMarkerData(
-    const std::vector<glm::dvec2>& points, const HalfEdgeDelaunayGraph& graph,
-    const std::vector<IntersectionDebugInfo>& intersection_debug_info)
+  static std::vector<IntersectionMarker> computeIntersectionMarkerData(const std::vector<glm::dvec2>& points,
+    const HalfEdgeDelaunayGraph& graph, const std::vector<IntersectionDebugInfo>& intersection_debug_info)
   {
-    std::vector<std::pair<glm::dvec2, std::array<size_t, 5>>> markers;
+    std::vector<IntersectionMarker> markers;
     auto circumcenters = graph.computeCircumcenters(points);
     markers.reserve(intersection_debug_info.size());
 
-    for (const auto& item : intersection_debug_info)
+    for (const IntersectionDebugInfo& item : intersection_debug_info)
     {
-      size_t d_edge_id = item[0];
-      size_t v_edge_id = item[1];
-      size_t d_index = item[2];
-      size_t v_index = item[3];
-      size_t prev_pair_idx = item[4];
-      size_t next_pair_idx = item[5];
-
       glm::dvec2 p0, p1, q0, q1;
-      if (!getDelaunayEdgeEndpoints(points, graph, d_edge_id, p0, p1))
+      if (!getDelaunayEdgeEndpoints(points, graph, item.delaunay_edge_id, p0, p1))
       {
         KINDS_DEBUG("Intersection marker skip: invalid Delaunay endpoints for (d,v)=("
-          << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
+          << item.delaunay_edge_id << "," << item.voronoi_edge_id << ") listIdx(d,v)=(" << item.delaunay_list_index
+          << "," << item.voronoi_list_index << ")");
         continue;
       }
-      if (!getVoronoiEdgeEndpoints(graph, circumcenters, v_edge_id, q0, q1))
+      if (!getVoronoiEdgeEndpoints(graph, circumcenters, item.voronoi_edge_id, q0, q1))
       {
         KINDS_DEBUG("Intersection marker skip: invalid Voronoi endpoints for (d,v)=("
-          << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
+          << item.delaunay_edge_id << "," << item.voronoi_edge_id << ") listIdx(d,v)=(" << item.delaunay_list_index
+          << "," << item.voronoi_list_index << ")");
         continue;
       }
 
@@ -278,10 +294,11 @@ class HalfEdgeDelaunayGraphToSVG
       if (!lineIntersection(p0, p1, q0, q1, intersection))
       {
         KINDS_DEBUG("Intersection marker skip: line intersection ill-defined for (d,v)=("
-          << d_edge_id << "," << v_edge_id << ") listIdx(d,v)=(" << d_index << "," << v_index << ")");
+          << item.delaunay_edge_id << "," << item.voronoi_edge_id << ") listIdx(d,v)=(" << item.delaunay_list_index
+          << "," << item.voronoi_list_index << ")");
         continue;
       }
-      markers.push_back({ intersection, { d_index, v_index, prev_pair_idx, next_pair_idx, v_edge_id } });
+      markers.push_back({ intersection, item });
     }
     return markers;
   }
@@ -332,10 +349,29 @@ class HalfEdgeDelaunayGraphToSVG
     const double label_pad_inf_face = 3.0 * label_unit;
     const double label_pad_he_along = label_unit;
     const double label_glyph_advance = 0.55 * label_unit;
+    const double intersection_label_glyph_advance = 0.42 * label_unit;
     const double label_secondary_line_dy = 1.2 * label_unit;
     const double label_bbox_margin = label_unit;
 
     const bool selective = highlight != nullptr;
+
+    std::unordered_set<size_t> delaunay_face_label_ids;
+    if (selective)
+    {
+      for (size_t face_id : highlight->delaunay_faces)
+      {
+        delaunay_face_label_ids.insert(face_id);
+        for (size_t he : graph.getFaces()[face_id].half_edges)
+        {
+          const int neighbor_face = graph.getHalfEdges()[he ^ 1].face;
+          if (neighbor_face >= 0)
+          {
+            delaunay_face_label_ids.insert(static_cast<size_t>(neighbor_face));
+          }
+        }
+      }
+    }
+
     const svg::Color dim_inside_face(210, 235, 210);
     const svg::Color dim_outside_face(240, 215, 215);
     const svg::Color dim_edge(170, 170, 170);
@@ -372,7 +408,7 @@ class HalfEdgeDelaunayGraphToSVG
 
     auto label_delaunay_face = [&](size_t face_id, double x, double y, const svg::Color& color)
     {
-      if (!selective || highlight->affectsDelaunayFace(face_id))
+      if (!selective || delaunay_face_label_ids.find(face_id) != delaunay_face_label_ids.end())
       {
         labels.push_back(Label(x, y, std::to_string(face_id), color, label_font_size));
       }
@@ -641,87 +677,104 @@ class HalfEdgeDelaunayGraphToSVG
     }
 
     // Helper to draw intersection markers and labels, if the caller provides them.
-    auto drawIntersections = [&](const std::vector<std::pair<glm::dvec2, std::array<size_t, 5>>>& intersections)
+    auto drawIntersections = [&](const std::vector<IntersectionMarker>& intersections)
     {
       svg::Color light_blue(173, 216, 230);
       svg::Color pale_pink(255, 182, 193);
       svg::Color mint_green(170, 255, 170);
       for (const auto& inter : intersections)
       {
+        const IntersectionDebugInfo& info = inter.second;
+        const size_t d_list_index = info.delaunay_list_index;
+        const size_t v_list_index = info.voronoi_list_index;
+        const size_t voronoi_edge_id = info.voronoi_edge_id;
+        const size_t delaunay_edge_id = info.delaunay_edge_id;
+
         glm::dvec2 p = inter.first;
         if (!std::isfinite(p.x) || !std::isfinite(p.y))
         {
-          KINDS_DEBUG("Intersection marker skip: non-finite intersection point for listIdx(d,v)=("
-            << inter.second[0] << "," << inter.second[1] << ")");
+          KINDS_DEBUG("Intersection marker skip: non-finite point for (d,v)=("
+            << delaunay_edge_id << "," << voronoi_edge_id << ") listIdx(" << d_list_index << "," << v_list_index
+            << ")");
           continue;
         }
         if (!isWithinBoundingBox(p, bb))
         {
           KINDS_DEBUG("Intersection marker skip: outside bbox for (d,v)=("
-            << inter.second[0] << "," << inter.second[1] << ") at (" << p.x << "," << p.y << ")");
+            << delaunay_edge_id << "," << voronoi_edge_id << ") at (" << p.x << "," << p.y << ")");
           continue;
         }
 
-        // Draw a small dot at the intersection.
-        doc << svg::Circle(svg::Point(p.x, p.y), 0.01, svg::Fill(light_blue), svg::Stroke(0.0, light_blue));
+        const bool emphasized = selective && highlight->emphasizesCrossing(delaunay_edge_id, voronoi_edge_id);
+        const double dot_radius = emphasized ? 0.022 : 0.01;
+        const svg::Color dot_fill = emphasized ? hi_voronoi_vertex : light_blue;
 
-        // Label as "(d,v)[voronoi_edge_id]" with d in light blue, v in pale pink, bracket id in pale pink.
-        const double x0 = p.x + label_pad_sm;
-        const double y0 = p.y + label_pad_sm;
-        const double dx = label_glyph_advance;
+        const bool show_intersection_labels
+          = !selective || highlight->shouldLabelCrossing(delaunay_edge_id, voronoi_edge_id);
 
-        std::string d_text = std::to_string(inter.second[0]);
-        std::string v_text = std::to_string(inter.second[1]);
-        const std::string bracket_suffix = "[" + std::to_string(inter.second[4]) + "]";
+        const std::string group_id = "intersection_dedge" + std::to_string(delaunay_edge_id) + "_vedge"
+          + std::to_string(voronoi_edge_id) + "_di" + std::to_string(d_list_index) + "_vi"
+          + std::to_string(v_list_index);
+        svg::Group intersection_group(group_id);
+        intersection_group << svg::Circle(
+          svg::Point(p.x, p.y), dot_radius, svg::Fill(dot_fill), svg::Stroke(0.0, dot_fill));
 
-        // "(d," in light blue
-        std::string prefix_text = "(" + d_text + ",";
-        doc << svg::Text(svg::Point(x0, y0), prefix_text, svg::Fill(light_blue), svg::Font(label_font_size));
-
-        // "v" in pale pink
-        double vx = x0 + dx * static_cast<double>(prefix_text.size());
-        doc << svg::Text(svg::Point(vx, y0), v_text, svg::Fill(pale_pink), svg::Font(label_font_size));
-
-        // ")[voronoi_edge_id]" — ")" light blue, bracket id pale pink
-        double suffix_x = vx + dx * static_cast<double>(v_text.size());
-        doc << svg::Text(svg::Point(suffix_x, y0), ")", svg::Fill(light_blue), svg::Font(label_font_size));
-        suffix_x += dx;
-        doc << svg::Text(svg::Point(suffix_x, y0), bracket_suffix, svg::Fill(pale_pink), svg::Font(label_font_size));
-
-        // Additional line below the relative indices to avoid overlap with "(d,v)".
-        // Skip it when both links are invalid to keep the debug view uncluttered.
-        if (!(inter.second[2] == static_cast<size_t>(-1) && inter.second[3] == static_cast<size_t>(-1)))
+        if (show_intersection_labels)
         {
+          // Keep edge ids and per-edge list positions explicit; these labels are read in SVG editors.
+          const double x0 = p.x + label_pad_sm;
+          const double y0 = p.y + label_pad_sm;
+          const double dx = intersection_label_glyph_advance;
+
+          const std::string d_edge_text = "d=" + std::to_string(delaunay_edge_id) + ",";
+          const std::string v_edge_text = "v=" + std::to_string(voronoi_edge_id) + ",";
+          const std::string param_text = "t=" + formatIntersectionParam(info.delaunay_edge_param);
+          const std::string d_index_text = "dIdx=" + std::to_string(d_list_index) + ",";
+          const std::string v_index_text = "vIdx=" + std::to_string(v_list_index);
+
+          intersection_group << svg::Text(
+            svg::Point(x0, y0), d_edge_text, svg::Fill(light_blue), svg::Font(label_font_size));
+
+          double label_x = x0 + dx * static_cast<double>(d_edge_text.size());
+          intersection_group << svg::Text(
+            svg::Point(label_x, y0), v_edge_text, svg::Fill(pale_pink), svg::Font(label_font_size));
+
+          label_x += dx * static_cast<double>(v_edge_text.size());
+          intersection_group << svg::Text(
+            svg::Point(label_x, y0), param_text, svg::Fill(mint_green), svg::Font(label_font_size));
+
           const double y1 = y0 + label_secondary_line_dy;
-          const std::string prev_text = (inter.second[2] == static_cast<size_t>(-1)) ? "X" : std::to_string(inter.second[2]);
-          const std::string next_text = (inter.second[3] == static_cast<size_t>(-1)) ? "X" : std::to_string(inter.second[3]);
-          const std::string mesh_pair_text = "m(" + prev_text + "," + next_text + ")";
-          doc << svg::Text(svg::Point(x0, y1), mesh_pair_text, svg::Fill(mint_green), svg::Font(label_font_size));
+          intersection_group << svg::Text(
+            svg::Point(x0, y1), d_index_text, svg::Fill(light_blue), svg::Font(label_font_size));
+
+          label_x = x0 + dx * static_cast<double>(d_index_text.size());
+          intersection_group << svg::Text(
+            svg::Point(label_x, y1), v_index_text, svg::Fill(pale_pink), svg::Font(label_font_size));
+
+          if (!(info.prev_segment_mesh_pair_index == static_cast<size_t>(-1)
+                && info.next_segment_mesh_pair_index == static_cast<size_t>(-1)))
+          {
+            const double y2 = y0 + 2.0 * label_secondary_line_dy;
+            const std::string prev_text = (info.prev_segment_mesh_pair_index == static_cast<size_t>(-1))
+              ? "X"
+              : std::to_string(info.prev_segment_mesh_pair_index);
+            const std::string next_text = (info.next_segment_mesh_pair_index == static_cast<size_t>(-1))
+              ? "X"
+              : std::to_string(info.next_segment_mesh_pair_index);
+            const std::string mesh_pair_text = "m(" + prev_text + "," + next_text + ")";
+            intersection_group << svg::Text(svg::Point(x0, y2), mesh_pair_text,
+              svg::Fill(mint_green), svg::Font(label_font_size));
+          }
         }
+
+        doc << intersection_group;
       }
     };
 
     if (intersection_debug_info)
     {
-      std::vector<IntersectionDebugInfo> filtered_intersections;
-      if (selective)
-      {
-        filtered_intersections.reserve(intersection_debug_info->size());
-        for (const IntersectionDebugInfo& item : *intersection_debug_info)
-        {
-          if (highlight->affectsCrossing(item[0], item[1]))
-          {
-            filtered_intersections.push_back(item);
-          }
-        }
-      }
-      const std::vector<IntersectionDebugInfo>& intersections_for_markers
-        = selective ? filtered_intersections : *intersection_debug_info;
-      if (!selective || !intersections_for_markers.empty())
-      {
-        auto marker_data = computeIntersectionMarkerData(points, graph, intersections_for_markers);
-        drawIntersections(marker_data);
-      }
+      auto marker_data = computeIntersectionMarkerData(points, graph, *intersection_debug_info);
+      drawIntersections(marker_data);
     }
 
     for (const auto& label : labels)

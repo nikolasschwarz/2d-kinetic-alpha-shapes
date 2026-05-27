@@ -215,8 +215,11 @@ class KineticDelaunay
   void computeComponentData(double t);
 
   const CrossingData& getCrossingData() const;
-  // [delaunay_edge_id, voronoi_edge_id, delaunay_list_index, voronoi_list_index, prev_pair_idx, next_pair_idx]
-  std::vector<std::array<size_t, 6>> getCrossingIntersectionDebugData() const;
+
+  /** Per-edge intersection list consistency; intended after @ref EventCallback::afterEvent (e.g. debug SVG export). */
+  void validateCrossingIntersectionInvariants(const char* context, double t) const;
+
+  std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> getCrossingIntersectionDebugData() const;
 
   const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
   void registerSectionEventCallback(EventCallback* callback);

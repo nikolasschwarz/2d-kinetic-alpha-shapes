@@ -124,9 +124,34 @@ bool VisualDebugHighlight::affectsPrimaryVoronoiEdge(size_t voronoi_edge_id) con
   return primary_voronoi_edges.find(voronoi_edge_id) != primary_voronoi_edges.end();
 }
 
-bool VisualDebugHighlight::affectsCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const
+bool VisualDebugHighlight::shouldLabelCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const
 {
+  if (!label_crossings_on_delaunay_edges.empty())
+  {
+    if (label_crossings_on_delaunay_edges.find(delaunay_edge_id) != label_crossings_on_delaunay_edges.end())
+    {
+      return true;
+    }
+  }
+  if (!crossing_intersection_keys.empty())
+  {
+    const uint64_t key = (static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id;
+    if (crossing_intersection_keys.find(key) != crossing_intersection_keys.end())
+    {
+      return true;
+    }
+  }
   return affectsVoronoiEdge(delaunay_edge_id) || affectsVoronoiEdge(voronoi_edge_id);
+}
+
+bool VisualDebugHighlight::emphasizesCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const
+{
+  if (crossing_intersection_keys.empty())
+  {
+    return false;
+  }
+  const uint64_t key = (static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id;
+  return crossing_intersection_keys.find(key) != crossing_intersection_keys.end();
 }
 
 VisualDebugHighlight VisualDebugHighlight::forFlip(const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id)
@@ -229,6 +254,37 @@ VisualDebugHighlight VisualDebugHighlight::forSectionBoundary(
     {
       edge_pending.push_back(even_he);
     }
+  }
+
+  std::vector<size_t> face_pending;
+  flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  return highlight;
+}
+
+VisualDebugHighlight VisualDebugHighlight::forInvariantViolation(const HalfEdgeDelaunayGraph& graph,
+  std::optional<size_t> primary_dual_edge, const std::unordered_set<size_t>& auxiliary_dual_edges,
+  const std::unordered_set<uint64_t>& crossing_intersection_keys)
+{
+  VisualDebugHighlight highlight;
+  highlight.crossing_intersection_keys = crossing_intersection_keys;
+  if (primary_dual_edge.has_value())
+  {
+    highlight.label_crossings_on_delaunay_edges.insert(*primary_dual_edge);
+  }
+
+  std::vector<size_t> edge_pending;
+  if (primary_dual_edge.has_value())
+  {
+    highlight.primary_voronoi_edges.insert(*primary_dual_edge);
+    edge_pending.push_back(*primary_dual_edge * 2);
+  }
+  for (size_t edge_id : auxiliary_dual_edges)
+  {
+    if (primary_dual_edge.has_value() && edge_id == *primary_dual_edge)
+    {
+      continue;
+    }
+    edge_pending.push_back(edge_id * 2);
   }
 
   std::vector<size_t> face_pending;
