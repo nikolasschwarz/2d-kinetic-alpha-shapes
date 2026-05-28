@@ -466,7 +466,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
   auto vertices1 = crossing_data.getVoronoiVerticesInTri(face_id1);
 
   // TODO: what if the edge function evaluates to 0. Perhaps we should look at the derivative.
-  auto reassign_vertices = [&](const std::vector<size_t>& vertices, size_t target_face_id)
+  auto reassign_vertices = [&](const std::vector<size_t>& vertices, size_t target_face_id, bool target_positive_side)
   {
     for (size_t voronoi_vertex : vertices)
     {
@@ -475,7 +475,9 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
       if (voronoi_pos.z != 0)
       {
         glm::dvec2 event_pos = glm::dvec2(voronoi_pos.x / voronoi_pos.z, voronoi_pos.y / voronoi_pos.z);
-        if (glm::cross(event_pos - pu, edge_vector) > 0)
+        const double side = glm::cross(edge_vector, event_pos - pu);
+        const bool is_on_target_side = target_positive_side ? (side > 0.0) : (side < 0.0);
+        if (is_on_target_side)
         {
           crossing_data.moveVertex(voronoi_vertex, target_face_id, t);
         }
@@ -488,8 +490,8 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
     }
   };
 
-  reassign_vertices(vertices0, face_id1);
-  reassign_vertices(vertices1, face_id0);
+  reassign_vertices(vertices0, face_id1, true);
+  reassign_vertices(vertices1, face_id0, false);
 
   // get updated vertices
   vertices0 = crossing_data.getVoronoiVerticesInTri(face_id0);
@@ -2142,6 +2144,20 @@ void KineticDelaunay::CrossingData::validateIntersectionInvariants(
         }
 
         constexpr double param_order_eps = 1e-12;
+        if (recomputed_d_param < -param_order_eps || recomputed_d_param > 1.0 + param_order_eps)
+        {
+          InvariantViolationScope scope;
+          scope.setPrimaryDualEdge(d_id);
+          scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+          scope.noteAuxiliaryDualEdge(ref->voronoi_edge_id);
+          failCrossingIntersectionInvariant(ctx,
+            "recomputed Delaunay-edge parameter is outside [0,1] for delaunay_edge_intersections["
+              + std::to_string(d_id) + "] list index " + std::to_string(list_index) + "; entry="
+              + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param })
+              + ", recomputedDParam=" + std::to_string(recomputed_d_param) + "; "
+              + formatDelaunayEdgeIntersectionList(*this, *kd, d_id, t),
+            scope, kd, t);
+        }
         if (recomputed_d_param + param_order_eps < prev_recomputed_d_param)
         {
           InvariantViolationScope scope;
@@ -2233,6 +2249,19 @@ void KineticDelaunay::CrossingData::validateIntersectionInvariants(
         }
 
         constexpr double param_order_eps = 1e-12;
+        if (v_param < -param_order_eps || v_param > 1.0 + param_order_eps)
+        {
+          InvariantViolationScope scope;
+          scope.setPrimaryDualEdge(v_id);
+          scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
+          scope.noteAuxiliaryDualEdge(ref->delaunay_edge_id);
+          failCrossingIntersectionInvariant(ctx,
+            "recomputed Voronoi-edge parameter is outside [0,1] for voronoi_edge_intersections[" + std::to_string(v_id)
+              + "] list index " + std::to_string(list_index) + "; entry="
+              + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param })
+              + ", vParam=" + std::to_string(v_param) + "; " + formatVoronoiEdgeIntersectionList(*this, *kd, v_id, t),
+            scope, kd, t);
+        }
         if (v_param + param_order_eps < prev_v_param)
         {
           InvariantViolationScope scope;
