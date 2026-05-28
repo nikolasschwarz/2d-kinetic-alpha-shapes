@@ -342,6 +342,7 @@ class HalfEdgeDelaunayGraphToSVG
       }
     };
     std::vector<Label> labels;
+    std::unordered_set<size_t> labeled_delaunay_vertices;
 
     constexpr double label_unit = 0.01 * label_scale;
     const double label_font_size = label_unit;
@@ -412,6 +413,20 @@ class HalfEdgeDelaunayGraphToSVG
       {
         labels.push_back(Label(x, y, std::to_string(face_id), color, label_font_size));
       }
+    };
+
+    auto label_delaunay_vertex = [&](size_t vertex_id, const svg::Color& color)
+    {
+      if (vertex_id >= points.size() || !labeled_delaunay_vertices.insert(vertex_id).second)
+      {
+        return;
+      }
+      const glm::dvec2 point = points[vertex_id];
+      std::ostringstream label_text;
+      label_text.setf(std::ios::fixed);
+      label_text.precision(6);
+      label_text << vertex_id << " (" << point[0] << "," << point[1] << ")";
+      labels.push_back(Label(point[0] - label_pad_sm, point[1] - label_pad_sm, label_text.str(), color, label_font_size));
     };
 
     constexpr double delaunay_edge_stroke_w = 0.006;
@@ -539,8 +554,7 @@ class HalfEdgeDelaunayGraphToSVG
 
       if (!selective || highlight->affectsDelaunayVertex(v))
       {
-        labels.push_back(Label(point[0] - label_pad_sm, point[1] - label_pad_sm, std::to_string(v),
-          svg::Color(svg::Color::Black), label_font_size));
+        label_delaunay_vertex(v, svg::Color(svg::Color::Black));
       }
     }
 
@@ -722,6 +736,18 @@ class HalfEdgeDelaunayGraphToSVG
 
         if (show_intersection_labels)
         {
+          if (voronoi_edge_id < graph.getHalfEdges().size() / 2)
+          {
+            for (size_t quad_he_id : graph.getQuadBoundaryHalfEdgeIndices(voronoi_edge_id))
+            {
+              const int vertex_id = graph.getHalfEdges()[quad_he_id].origin;
+              if (vertex_id >= 0)
+              {
+                label_delaunay_vertex(static_cast<size_t>(vertex_id), svg::Color(svg::Color::Black));
+              }
+            }
+          }
+
           // Keep edge ids and per-edge list positions explicit; these labels are read in SVG editors.
           const double x0 = p.x + label_pad_sm;
           const double y0 = p.y + label_pad_sm;
@@ -732,6 +758,16 @@ class HalfEdgeDelaunayGraphToSVG
           const std::string param_text = "dParam=" + formatIntersectionParam(info.delaunay_edge_param);
           const std::string d_index_text = "dIdx=" + std::to_string(d_list_index) + ",";
           const std::string v_index_text = "vIdx=" + std::to_string(v_list_index);
+          int delaunay_face0 = -1;
+          int delaunay_face1 = -1;
+          const size_t d_he0 = 2 * delaunay_edge_id;
+          if (d_he0 + 1 < graph.getHalfEdges().size())
+          {
+            delaunay_face0 = graph.getHalfEdges()[d_he0].face;
+            delaunay_face1 = graph.getHalfEdges()[d_he0 ^ 1].face;
+          }
+          const std::string faces_text
+            = "faces=(" + std::to_string(delaunay_face0) + "," + std::to_string(delaunay_face1) + ")";
 
           intersection_group << svg::Text(
             svg::Point(x0, y0), d_edge_text, svg::Fill(label_blue), svg::Font(label_font_size));
@@ -752,10 +788,14 @@ class HalfEdgeDelaunayGraphToSVG
           intersection_group << svg::Text(
             svg::Point(label_x, y1), v_index_text, svg::Fill(label_pink), svg::Font(label_font_size));
 
+          const double y2 = y0 + 2.0 * label_secondary_line_dy;
+          intersection_group << svg::Text(svg::Point(x0, y2), faces_text,
+            svg::Fill(svg::Color(svg::Color::Black)), svg::Font(label_font_size));
+
           if (!(info.prev_segment_mesh_pair_index == static_cast<size_t>(-1)
                 && info.next_segment_mesh_pair_index == static_cast<size_t>(-1)))
           {
-            const double y2 = y0 + 2.0 * label_secondary_line_dy;
+            const double y3 = y0 + 3.0 * label_secondary_line_dy;
             const std::string prev_text = (info.prev_segment_mesh_pair_index == static_cast<size_t>(-1))
               ? "X"
               : std::to_string(info.prev_segment_mesh_pair_index);
@@ -763,7 +803,7 @@ class HalfEdgeDelaunayGraphToSVG
               ? "X"
               : std::to_string(info.next_segment_mesh_pair_index);
             const std::string mesh_pair_text = "m(" + prev_text + "," + next_text + ")";
-            intersection_group << svg::Text(svg::Point(x0, y2), mesh_pair_text,
+            intersection_group << svg::Text(svg::Point(x0, y3), mesh_pair_text,
               svg::Fill(label_green), svg::Font(label_font_size));
           }
         }

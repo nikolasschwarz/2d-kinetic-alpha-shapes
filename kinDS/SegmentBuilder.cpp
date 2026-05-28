@@ -12,17 +12,17 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <glm/gtx/exterior_product.hpp>
 #include <iomanip>
 #include <limits>
-#include <glm/gtx/exterior_product.hpp>
 #include <map>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <optional>
-#include <sstream>
-#include <stdexcept>
 
 using namespace kinDS;
 
@@ -183,8 +183,8 @@ std::string appendBoundaryVertexPosMetadata(const std::string& base_meta, const 
   return out;
 }
 
-std::optional<std::pair<size_t, size_t>> closingMeshIntersectionListIndices(const KineticDelaunay& kd,
-  KineticDelaunay::CrossingData::EdgeIntersectionRef ref)
+std::optional<std::pair<size_t, size_t>> closingMeshIntersectionListIndices(
+  const KineticDelaunay& kd, KineticDelaunay::CrossingData::EdgeIntersectionRef ref)
 {
   const auto& crossing_data = kd.getCrossingData();
   const auto& ir = *ref;
@@ -224,14 +224,14 @@ void logClosingMeshIntersectionVertex(const KineticDelaunay& kd, KineticDelaunay
   const auto idx = closingMeshIntersectionListIndices(kd, ref);
   if (idx.has_value())
   {
-    KINDS_DEBUG("Adding vertex at intersection of Delaunay edge " << ir.delaunay_edge_id << " and Voronoi edge "
-                                                                 << ir.voronoi_edge_id << " with intersection indices ("
-                                                                 << idx->first << "," << idx->second << ")");
+    KINDS_DEBUG("Adding vertex at intersection of Delaunay edge "
+      << ir.delaunay_edge_id << " and Voronoi edge " << ir.voronoi_edge_id << " with intersection indices ("
+      << idx->first << "," << idx->second << ")");
   }
   else
   {
-    KINDS_DEBUG("Adding vertex at intersection of Delaunay edge " << ir.delaunay_edge_id << " and Voronoi edge "
-                                                                 << ir.voronoi_edge_id << " with intersection indices (?,?)");
+    KINDS_DEBUG("Adding vertex at intersection of Delaunay edge "
+      << ir.delaunay_edge_id << " and Voronoi edge " << ir.voronoi_edge_id << " with intersection indices (?,?)");
   }
 }
 
@@ -245,12 +245,13 @@ void logClosingMeshStripEndpointVertex(const KineticDelaunay& kd, size_t segment
   }
   else if (closing_voronoi_edge_id == static_cast<size_t>(-1))
   {
-    KINDS_DEBUG("Polygon walk: using mesh vertex on segment " << segment_index << " of Voronoi edge ? (strip circumcenter).");
+    KINDS_DEBUG(
+      "Polygon walk: using mesh vertex on segment " << segment_index << " of Voronoi edge ? (strip circumcenter).");
   }
   else
   {
     KINDS_DEBUG("Polygon walk: using mesh vertex on segment " << segment_index << " of Voronoi edge "
-                                                             << closing_voronoi_edge_id << " (strip circumcenter).");
+                                                              << closing_voronoi_edge_id << " (strip circumcenter).");
   }
 }
 
@@ -269,42 +270,39 @@ void logExtractionClosingMeshStripEndpoint(const KineticDelaunay& kd, double t, 
     {
       if (have_xy)
       {
-        KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge " << ir.delaunay_edge_id << " / Voronoi edge "
-                                                                               << ir.voronoi_edge_id << ", list indices ("
-                                                                               << idx->first << "," << idx->second
-                                                                               << "), 2D=(" << xy.x << "," << xy.y << ")");
+        KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge "
+          << ir.delaunay_edge_id << " / Voronoi edge " << ir.voronoi_edge_id << ", list indices (" << idx->first << ","
+          << idx->second << "), 2D=(" << xy.x << "," << xy.y << ")");
       }
       else
       {
-        KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge " << ir.delaunay_edge_id << " / Voronoi edge "
-                                                                               << ir.voronoi_edge_id << ", list indices ("
-                                                                               << idx->first << "," << idx->second << ")");
+        KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge "
+          << ir.delaunay_edge_id << " / Voronoi edge " << ir.voronoi_edge_id << ", list indices (" << idx->first << ","
+          << idx->second << ")");
       }
     }
     else if (have_xy)
     {
-      KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge " << ir.delaunay_edge_id << " / Voronoi edge "
-                                                                             << ir.voronoi_edge_id
-                                                                             << ", list indices (?,?), 2D=(" << xy.x
-                                                                             << "," << xy.y << ")");
+      KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge "
+        << ir.delaunay_edge_id << " / Voronoi edge " << ir.voronoi_edge_id << ", list indices (?,?), 2D=(" << xy.x
+        << "," << xy.y << ")");
     }
     else
     {
-      KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge " << ir.delaunay_edge_id << " / Voronoi edge "
-                                                                           << ir.voronoi_edge_id << ", list indices (?,?)");
+      KINDS_DEBUG("Closing mesh extraction: strip endpoint at Delaunay edge "
+        << ir.delaunay_edge_id << " / Voronoi edge " << ir.voronoi_edge_id << ", list indices (?,?)");
     }
   }
   else if (closing_voronoi_edge_id == static_cast<size_t>(-1))
   {
     KINDS_DEBUG("Closing mesh extraction: strip endpoint on extraction segment " << extraction_index
-                                                                                << " of Voronoi edge ? (circumcenter, "
-                                                                                   "no crossing ref).");
+                                                                                 << " of Voronoi edge ? (circumcenter, "
+                                                                                    "no crossing ref).");
   }
   else
   {
-    KINDS_DEBUG("Closing mesh extraction: strip endpoint on extraction segment " << extraction_index << " of Voronoi edge "
-                                                                                << closing_voronoi_edge_id
-                                                                                << " (circumcenter, no crossing ref).");
+    KINDS_DEBUG("Closing mesh extraction: strip endpoint on extraction segment "
+      << extraction_index << " of Voronoi edge " << closing_voronoi_edge_id << " (circumcenter, no crossing ref).");
   }
 }
 
@@ -315,14 +313,15 @@ std::string makeRegularStripVertexMetadataJson(double kinetic_time, size_t voron
 {
   std::ostringstream o;
   o << std::setprecision(17);
-  o << "{\"mesh_type\":\"regular\",\"event_type\":\"" << boundaryEventTypeToString(event_type) << "\",\"segment_action\":\""
-    << boundarySegmentActionToString(segment_action) << "\",\"time\":" << kinetic_time << ",\"voronoi_edge_id\":" << voronoi_edge_id
-    << ",\"even_half_edge_id\":" << even_half_edge_id << ",\"strand_even_origin\":" << strand_even_origin
-    << ",\"strand_odd_origin\":" << strand_odd_origin;
+  o << "{\"mesh_type\":\"regular\",\"event_type\":\"" << boundaryEventTypeToString(event_type)
+    << "\",\"segment_action\":\"" << boundarySegmentActionToString(segment_action) << "\",\"time\":" << kinetic_time
+    << ",\"voronoi_edge_id\":" << voronoi_edge_id << ",\"even_half_edge_id\":" << even_half_edge_id
+    << ",\"strand_even_origin\":" << strand_even_origin << ",\"strand_odd_origin\":" << strand_odd_origin;
   if (crossing.has_value())
   {
     const auto& ir = *crossing.value();
-    o << ",\"crossing_delaunay_edge_id\":" << ir.delaunay_edge_id << ",\"crossing_voronoi_edge_id\":" << ir.voronoi_edge_id
+    o << ",\"crossing_delaunay_edge_id\":" << ir.delaunay_edge_id
+      << ",\"crossing_voronoi_edge_id\":" << ir.voronoi_edge_id
       << ",\"crossing_delaunay_param\":" << ir.delaunay_edge_param;
   }
   o << ",\"pos\":\"" << pos << "\"";
@@ -340,10 +339,11 @@ std::string makeRegularStripFaceMetadataJson(double kinetic_time, size_t voronoi
 {
   std::ostringstream o;
   o << std::setprecision(17);
-  o << "{\"mesh_type\":\"regular\",\"event_type\":\"" << boundaryEventTypeToString(event_type) << "\",\"segment_action\":\""
-    << boundarySegmentActionToString(segment_action) << "\",\"time\":" << kinetic_time << ",\"voronoi_edge_id\":" << voronoi_edge_id
-    << ",\"even_half_edge_id\":" << even_half_edge_id << ",\"strand_even_origin\":" << strand_even_origin
-    << ",\"strand_odd_origin\":" << strand_odd_origin << ",\"op\":\"" << op << "\"}";
+  o << "{\"mesh_type\":\"regular\",\"event_type\":\"" << boundaryEventTypeToString(event_type)
+    << "\",\"segment_action\":\"" << boundarySegmentActionToString(segment_action) << "\",\"time\":" << kinetic_time
+    << ",\"voronoi_edge_id\":" << voronoi_edge_id << ",\"even_half_edge_id\":" << even_half_edge_id
+    << ",\"strand_even_origin\":" << strand_even_origin << ",\"strand_odd_origin\":" << strand_odd_origin
+    << ",\"op\":\"" << op << "\"}";
   return o.str();
 }
 } // namespace
@@ -523,7 +523,8 @@ bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
   return true;
 }
 
-void kinDS::SegmentBuilder::meshletDiagnosticLogLine(const char* tag, size_t half_edge_id, double t, const char* extra_note) const
+void kinDS::SegmentBuilder::meshletDiagnosticLogLine(
+  const char* tag, size_t half_edge_id, double t, const char* extra_note) const
 {
   const size_t even = half_edge_id & ~1;
   const size_t dual_edge = even / 2;
@@ -551,7 +552,8 @@ void kinDS::SegmentBuilder::meshletDiagnosticLogLine(const char* tag, size_t hal
     }
   }
   std::ostringstream oss;
-  oss << "meshlet_diag " << tag << " he=" << half_edge_id << " even=" << even << " dual_edge=" << dual_edge << " t=" << t;
+  oss << "meshlet_diag " << tag << " he=" << half_edge_id << " even=" << even << " dual_edge=" << dual_edge
+      << " t=" << t;
   if (even < half_edge_index_to_segment_mesh_pair_index.size() && !pi_ok)
   {
     oss << " pair=INVALID(raw_pi=" << pi << ")";
@@ -583,18 +585,20 @@ void kinDS::SegmentBuilder::meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewM
   const size_t nv = mesh.getVertices().size();
   if (nv == 0 && initial_left_inside)
   {
-    KINDS_WARNING("meshlet_diag unexpected_empty after startNewMesh: dual_edge=" << dual_edge << " t=" << t
+    KINDS_WARNING("meshlet_diag unexpected_empty after startNewMesh: dual_edge="
+      << dual_edge << " t=" << t
       << " — left circumcenter face was inside alpha-shape but mesh has no vertices (strips=" << strips.size() << ").");
   }
   if (nv == 0 && with_any_mesh_id > 0)
   {
-    KINDS_WARNING("meshlet_diag unexpected_empty after startNewMesh: dual_edge=" << dual_edge << " t=" << t
+    KINDS_WARNING("meshlet_diag unexpected_empty after startNewMesh: dual_edge="
+      << dual_edge << " t=" << t
       << " — strip entries reference mesh vertex ids but mesh has no vertices (strips=" << strips.size() << ").");
   }
   if (nv > 0 && strips.empty())
   {
-    KINDS_WARNING("meshlet_diag inconsistent after startNewMesh: dual_edge=" << dual_edge << " t=" << t
-      << " — mesh has " << nv << " vertices but strip list is empty.");
+    KINDS_WARNING("meshlet_diag inconsistent after startNewMesh: dual_edge="
+      << dual_edge << " t=" << t << " — mesh has " << nv << " vertices but strip list is empty.");
   }
 }
 
@@ -635,9 +639,9 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
       const glm::dvec3 p = computeVoronoiVertex(interval.start_open_voronoi_half_edge_id.value(), t);
       if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
       {
-        KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt(" << endpoint_label
-          << "): degenerate circumcenter endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t << " -> (" << p.x
-          << ", " << p.y << ", " << p.z << ").");
+        KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt("
+          << endpoint_label << "): degenerate circumcenter endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t
+          << " -> (" << p.x << ", " << p.y << ", " << p.z << ").");
       }
       return p;
     }
@@ -647,7 +651,8 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
       const glm::dvec3 old_chord_pos
         = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
       KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref = orig_ref;
-      if (auto neighbor_opt = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, voronoi_edge_id, boundary_transition_shift);
+      if (auto neighbor_opt
+        = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, voronoi_edge_id, boundary_transition_shift);
         neighbor_opt.has_value())
       {
         position_ref = neighbor_opt.value();
@@ -658,9 +663,9 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
         const glm::dvec3 p(xy, t);
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
         {
-          KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt(" << endpoint_label
-            << "): degenerate CrossingData endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t << " -> (" << p.x
-            << ", " << p.y << ", " << p.z << ").");
+          KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt("
+            << endpoint_label << "): degenerate CrossingData endpoint for voronoi_edge=" << voronoi_edge_id
+            << " t=" << t << " -> (" << p.x << ", " << p.y << ", " << p.z << ").");
         }
         if (position_ref != orig_ref)
         {
@@ -691,9 +696,9 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
       const glm::dvec3 p = computeVoronoiVertex(interval.end_open_voronoi_half_edge_id.value(), t);
       if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
       {
-        KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt(" << endpoint_label
-          << "): degenerate circumcenter endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t << " -> (" << p.x
-          << ", " << p.y << ", " << p.z << ").");
+        KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt("
+          << endpoint_label << "): degenerate circumcenter endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t
+          << " -> (" << p.x << ", " << p.y << ", " << p.z << ").");
       }
       return p;
     }
@@ -703,7 +708,8 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
       const glm::dvec3 old_chord_pos
         = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
       KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref = orig_ref;
-      if (auto neighbor_opt = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, voronoi_edge_id, boundary_transition_shift);
+      if (auto neighbor_opt
+        = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, voronoi_edge_id, boundary_transition_shift);
         neighbor_opt.has_value())
       {
         position_ref = neighbor_opt.value();
@@ -745,11 +751,10 @@ std::tuple<size_t, size_t> SegmentBuilder::finishRegularMeshStripInterval(Vorono
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
   const size_t odd_half_edge_id = even_half_edge_id + 1;
-  const glm::dvec3 new_start_pos
-    = regularMeshStripIntervalEndpointPositionAt(interval, true, even_half_edge_id, odd_half_edge_id, voronoi_edge_id, t,
-      boundary_transition_shift);
-  const glm::dvec3 new_end_pos = regularMeshStripIntervalEndpointPositionAt(interval, false, even_half_edge_id,
-    odd_half_edge_id, voronoi_edge_id, t, boundary_transition_shift);
+  const glm::dvec3 new_start_pos = regularMeshStripIntervalEndpointPositionAt(
+    interval, true, even_half_edge_id, odd_half_edge_id, voronoi_edge_id, t, boundary_transition_shift);
+  const glm::dvec3 new_end_pos = regularMeshStripIntervalEndpointPositionAt(
+    interval, false, even_half_edge_id, odd_half_edge_id, voronoi_edge_id, t, boundary_transition_shift);
 
   const auto& graph = kin_del.getGraph();
   const std::optional<size_t> start_vv = interval.start_open_voronoi_half_edge_id.has_value()
@@ -775,19 +780,23 @@ std::tuple<size_t, size_t> SegmentBuilder::finishRegularMeshStripInterval(Vorono
   }
   else if (mesh.getVertices()[last_start_vertex_index][2] < mesh.getVertices()[last_end_vertex_index][2])
   {
-    addMeshletTriangle(mesh, last_start_vertex_index, last_end_vertex_index, new_start_vertex_index, finish_face_metadata);
+    addMeshletTriangle(
+      mesh, last_start_vertex_index, last_end_vertex_index, new_start_vertex_index, finish_face_metadata);
     addMeshletTriangle(mesh, new_start_vertex_index, last_end_vertex_index, new_end_vertex_index, finish_face_metadata);
   }
   else
   {
-    addMeshletTriangle(mesh, last_start_vertex_index, last_end_vertex_index, new_end_vertex_index, finish_face_metadata);
-    addMeshletTriangle(mesh, last_start_vertex_index, new_end_vertex_index, new_start_vertex_index, finish_face_metadata);
+    addMeshletTriangle(
+      mesh, last_start_vertex_index, last_end_vertex_index, new_end_vertex_index, finish_face_metadata);
+    addMeshletTriangle(
+      mesh, last_start_vertex_index, new_end_vertex_index, new_start_vertex_index, finish_face_metadata);
   }
 
   return { new_start_vertex_index, new_end_vertex_index };
 }
 
-bool SegmentBuilder::regularMeshStripCrossingTouchesVoronoiEdge(const MeshingData& segment, size_t voronoi_edge_id) const
+bool SegmentBuilder::regularMeshStripCrossingTouchesVoronoiEdge(
+  const MeshingData& segment, size_t voronoi_edge_id) const
 {
   /*if (!kin_del.computeBoundaryOnTheFly())
   {
@@ -861,8 +870,8 @@ bool SegmentBuilder::regularMeshStripCrossingTouchesVoronoiEdge(const MeshingDat
  * @details Expects @ref startNewMesh to have run earlier on this edge so @c last_segments holds seeded corners.
  * Per strip, the “before” state is (@c last_left, @c last_right) = (@c mesh_start_vertex_id, @c mesh_end_vertex_id).
  * @ref finishRegularMeshStripInterval places new corners at the interval endpoints at @p t, connects them to the old
- * corners, then overwrites @c mesh_start_vertex_id / @c mesh_end_vertex_id so a later finish continues from the new front.
- * Strips with either corner unset (@c -1) are skipped (e.g. open strip never fully seeded).
+ * corners, then overwrites @c mesh_start_vertex_id / @c mesh_end_vertex_id so a later finish continues from the new
+ * front. Strips with either corner unset (@c -1) are skipped (e.g. open strip never fully seeded).
  */
 std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_t he_id, double t,
   const std::vector<BoundaryPoint>& boundary_points, BoundaryEventType event_type, BoundarySegmentAction segment_action,
@@ -876,9 +885,11 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
   }
 
   size_t segment_mesh_pair_index = half_edge_index_to_segment_mesh_pair_index[he_id];
-  if (segment_mesh_pair_index >= meshes.size() || segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
+  if (segment_mesh_pair_index >= meshes.size()
+    || segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
   {
-    KINDS_WARNING("meshlet_diag finish_mesh: invalid pair index he=" << he_id << " t=" << t << " pair=" << segment_mesh_pair_index);
+    KINDS_WARNING(
+      "meshlet_diag finish_mesh: invalid pair index he=" << he_id << " t=" << t << " pair=" << segment_mesh_pair_index);
     return operated_segments;
   }
 
@@ -902,8 +913,8 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
   const int strand_odd_origin_i = static_cast<int>(twin_he_finish.origin);
   glm::dvec2 centroid = polygonCentroid(boundary_points);
 
-  const std::string finish_face_meta = makeRegularStripFaceMetadataJson(t, voronoi_edge_id, even_id, strand_even_origin_i,
-    strand_odd_origin_i, event_type, segment_action, "finish_strip");
+  const std::string finish_face_meta = makeRegularStripFaceMetadataJson(
+    t, voronoi_edge_id, even_id, strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, "finish_strip");
 
   if (mesh.getVertices().empty())
   {
@@ -917,9 +928,9 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
     }
     if (closed_strip_refs > 0)
     {
-      KINDS_WARNING("meshlet_diag finish_mesh_enter: mesh has no vertices but " << closed_strip_refs
-        << " strip(s) have mesh_start/end set (expected non-empty mesh) dual_edge=" << voronoi_edge_id << " he=" << he_id
-        << " t=" << t << ".");
+      KINDS_WARNING("meshlet_diag finish_mesh_enter: mesh has no vertices but "
+        << closed_strip_refs << " strip(s) have mesh_start/end set (expected non-empty mesh) dual_edge="
+        << voronoi_edge_id << " he=" << he_id << " t=" << t << ".");
     }
   }
 
@@ -958,16 +969,18 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
 
     if (only_adjacent_segment)
     {
+      // TODO: describe purpose of this assertion in comment
       assert(boundary_transition_shift != nullptr);
       if (!regularMeshStripCrossingTouchesVoronoiEdge(segment, voronoi_edge_id))
       {
-        const size_t crossing_voronoi_edge_id_start
-          = segment.start_crossing.has_value() ? segment.start_crossing.value()->voronoi_edge_id : static_cast<size_t>(-1);
+        const size_t crossing_voronoi_edge_id_start = segment.start_crossing.has_value()
+          ? segment.start_crossing.value()->voronoi_edge_id
+          : static_cast<size_t>(-1);
         const size_t crossing_voronoi_edge_id_end
           = segment.end_crossing.has_value() ? segment.end_crossing.value()->voronoi_edge_id : static_cast<size_t>(-1);
         meshletDiagnosticLogLine("finish_mesh_skip_interval", he_id, t,
-          ("reason=only_adjacent_segment crossing_voronoi_edge_ids=" + std::to_string(crossing_voronoi_edge_id_start) + ","
-            + std::to_string(crossing_voronoi_edge_id_end))
+          ("reason=only_adjacent_segment crossing_voronoi_edge_ids=" + std::to_string(crossing_voronoi_edge_id_start)
+            + "," + std::to_string(crossing_voronoi_edge_id_end))
             .c_str());
         continue;
       }
@@ -977,9 +990,9 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
     const RegularMeshStripIntervalEndpoints& interval = *interval_it++;
     const size_t last_left = static_cast<size_t>(segment.mesh_start_vertex_id);
     const size_t last_right = static_cast<size_t>(segment.mesh_end_vertex_id);
-    const auto [new_start_vertex_index, new_end_vertex_index] = finishRegularMeshStripInterval(mesh, boundary_points, centroid,
-      even_id, voronoi_edge_id, t, v, strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, interval,
-      last_left, last_right, finish_face_meta, boundary_transition_shift);
+    const auto [new_start_vertex_index, new_end_vertex_index] = finishRegularMeshStripInterval(mesh, boundary_points,
+      centroid, even_id, voronoi_edge_id, t, v, strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
+      interval, last_left, last_right, finish_face_meta, boundary_transition_shift);
     // After finish: strip front is at the new corners; next event’s finish will use these as last_left / last_right.
     segment.mesh_start_vertex_id = static_cast<int>(new_start_vertex_index);
     segment.mesh_end_vertex_id = static_cast<int>(new_end_vertex_index);
@@ -996,8 +1009,9 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
   }
   if (processable_strips > 0 && tris_after == tris_before)
   {
-    KINDS_WARNING("meshlet_diag finish_mesh: expected triangle extension (processable_strips=" << processable_strips
-      << ") but triangle count unchanged for dual_edge=" << voronoi_edge_id << " he=" << he_id << " t=" << t << ".");
+    KINDS_WARNING("meshlet_diag finish_mesh: expected triangle extension (processable_strips="
+      << processable_strips << ") but triangle count unchanged for dual_edge=" << voronoi_edge_id << " he=" << he_id
+      << " t=" << t << ".");
   }
   // Strips may exist in the list but be “open” on one side (only one seeded corner) — nothing to extrude this step.
   if (!last_segments.empty() && processable_strips == 0)
@@ -1008,9 +1022,8 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
   return operated_segments;
 }
 
-SegmentBuilder::SegmentBuilder(
-  KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions, bool create_transformed_mesh,
-  bool visual_debug)
+SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions,
+  bool create_transformed_mesh, bool visual_debug)
   : kin_del(kin_del)
   , section_callback_(std::make_unique<SegmentBuilderSectionCallback>(*this))
   , flip_callback_(std::make_unique<SegmentBuilderFlipCallback>(*this))
@@ -1021,8 +1034,8 @@ SegmentBuilder::SegmentBuilder(
   , create_transformed_mesh(create_transformed_mesh)
   , boundary_mesh({ "bark", "interior" })
 {
-  assert(std::is_sorted(subdivisions.begin(), subdivisions.end(),
-    [](const auto& a, const auto& b) { return a.second < b.second; }));
+  assert(std::is_sorted(
+    subdivisions.begin(), subdivisions.end(), [](const auto& a, const auto& b) { return a.second < b.second; }));
   kin_del.setSubdivisionSchedule(std::move(subdivisions));
 }
 
@@ -1068,7 +1081,8 @@ static glm::dvec2 intersectSegments(
   return p + t * r;
 }
 
-std::vector<SegmentBuilder::RegularMeshStripIntervalEndpoints> SegmentBuilder::collectRegularMeshStripIntervalsOnVoronoiEdge(
+std::vector<SegmentBuilder::RegularMeshStripIntervalEndpoints>
+SegmentBuilder::collectRegularMeshStripIntervalsOnVoronoiEdge(
   size_t even_half_edge_id, size_t voronoi_edge_id, size_t left_containing_tri_id) const
 {
   std::vector<RegularMeshStripIntervalEndpoints> intervals;
@@ -1093,10 +1107,12 @@ std::vector<SegmentBuilder::RegularMeshStripIntervalEndpoints> SegmentBuilder::c
     if (voronoi_edge_id >= crossing_data.voronoi_edge_intersections.size())
     {
       std::ostringstream oss;
-      oss << "collectRegularMeshStripIntervalsOnVoronoiEdge: voronoi_edge_intersections has no slot for voronoi_edge_id="
-          << voronoi_edge_id << " (even_half_edge_id=" << even_half_edge_id << ", voronoi_vertices=[" << left_voronoi_vertex_id
-          << "," << right_voronoi_vertex_id << "], left_containing_tri_id=" << left_containing_tri_id
-          << ", voronoi_edge_intersections.size=" << crossing_data.voronoi_edge_intersections.size() << ")";
+      oss
+        << "collectRegularMeshStripIntervalsOnVoronoiEdge: voronoi_edge_intersections has no slot for voronoi_edge_id="
+        << voronoi_edge_id << " (even_half_edge_id=" << even_half_edge_id << ", voronoi_vertices=["
+        << left_voronoi_vertex_id << "," << right_voronoi_vertex_id
+        << "], left_containing_tri_id=" << left_containing_tri_id
+        << ", voronoi_edge_intersections.size=" << crossing_data.voronoi_edge_intersections.size() << ")";
       throw std::runtime_error(oss.str());
     }
 
@@ -1122,12 +1138,16 @@ std::vector<SegmentBuilder::RegularMeshStripIntervalEndpoints> SegmentBuilder::c
       else
       {
         std::ostringstream oss;
-        oss << "collectRegularMeshStripIntervalsOnVoronoiEdge: cannot orient crossing along voronoi_edge_intersections at step "
+        oss << "collectRegularMeshStripIntervalsOnVoronoiEdge: cannot orient crossing along voronoi_edge_intersections "
+               "at step "
             << step_index << " (voronoi_edge_id=" << voronoi_edge_id << ", even_half_edge_id=" << even_half_edge_id
-            << ", delaunay_edge_id=" << d << ", current_face_id=" << current_face_id << ", face(he0)="
-            << graph.getHalfEdges()[he0].face << ", face(he1)=" << graph.getHalfEdges()[he1].face
-            << ", left_containing_tri_id=" << left_containing_tri_id << ", voronoi_vertices=[" << left_voronoi_vertex_id
-            << "," << right_voronoi_vertex_id << "])";
+            << ", delaunay_edge_id=" << d << ", current_face_id=" << current_face_id << ", he0=" << he0
+            << ", he1=" << he1 << ", face(he0)=" << graph.getHalfEdges()[he0].face
+            << ", face(he1)=" << graph.getHalfEdges()[he1].face << ", left_containing_tri_id=" << left_containing_tri_id
+            << ", voronoi_vertices=[" << left_voronoi_vertex_id << "," << right_voronoi_vertex_id
+            << "], he0_origin=" << graph.getHalfEdges()[he0].origin
+            << ", he1_origin=" << graph.getHalfEdges()[he1].origin << ")";
+        KINDS_ERROR(oss.str());
         throw std::runtime_error(oss.str());
       }
       directed_crossings_with_ref.emplace_back(crossed_he_id, iref);
@@ -1198,8 +1218,8 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
     {
       position_ref = neighbor_opt.value();
     }
-    const glm::dvec3 intersection_point = closingMeshVoronoiDelaunayCrossingPosition(
-      t, position_ref->voronoi_edge_id, position_ref->delaunay_edge_id);
+    const glm::dvec3 intersection_point
+      = closingMeshVoronoiDelaunayCrossingPosition(t, position_ref->voronoi_edge_id, position_ref->delaunay_edge_id);
     if (position_ref != crossing_ref)
     {
       logRadiusBoundaryTransitionVertexShift(
@@ -1216,8 +1236,8 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
     const std::string meta_start = makeRegularStripVertexMetadataJson(t, voronoi_edge_id, even_half_edge_id,
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
       std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(interval.start_crossing), "left", nullptr);
-    start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, crossing_position(interval.start_crossing.value()),
-      static_cast<size_t>(-1), t, std::nullopt, meta_start);
+    start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid,
+      crossing_position(interval.start_crossing.value()), static_cast<size_t>(-1), t, std::nullopt, meta_start);
   }
   else if (interval.start_open_voronoi_half_edge_id.has_value())
   {
@@ -1227,8 +1247,8 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
     const int origin = graph.getHalfEdges()[open_he].origin;
     const std::string meta_start = makeRegularStripVertexMetadataJson(t, voronoi_edge_id, even_half_edge_id,
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, std::nullopt, "left", nullptr);
-    start_vertex_index
-      = addMeshletVertex(mesh, boundary_polygon, centroid, pos, origin, t, std::optional<size_t>(voronoi_vertex_id), meta_start);
+    start_vertex_index = addMeshletVertex(
+      mesh, boundary_polygon, centroid, pos, origin, t, std::optional<size_t>(voronoi_vertex_id), meta_start);
   }
 
   int end_half_edge_id = -1;
@@ -1239,8 +1259,8 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
     const std::string meta_end = makeRegularStripVertexMetadataJson(t, voronoi_edge_id, even_half_edge_id,
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
       std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(interval.end_crossing), "right", nullptr);
-    end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, crossing_position(interval.end_crossing.value()),
-      static_cast<size_t>(-1), t, std::nullopt, meta_end);
+    end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid,
+      crossing_position(interval.end_crossing.value()), static_cast<size_t>(-1), t, std::nullopt, meta_end);
   }
   else if (interval.end_open_voronoi_half_edge_id.has_value())
   {
@@ -1250,8 +1270,8 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
     const int origin = graph.getHalfEdges()[open_he].origin;
     const std::string meta_end = makeRegularStripVertexMetadataJson(t, voronoi_edge_id, even_half_edge_id,
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, std::nullopt, "right", nullptr);
-    end_vertex_index
-      = addMeshletVertex(mesh, boundary_polygon, centroid, pos, origin, t, std::optional<size_t>(voronoi_vertex_id), meta_end);
+    end_vertex_index = addMeshletVertex(
+      mesh, boundary_polygon, centroid, pos, origin, t, std::optional<size_t>(voronoi_vertex_id), meta_end);
   }
 
   MeshingData segment { static_cast<int>(start_vertex_index), static_cast<int>(end_vertex_index), start_half_edge_id,
@@ -1269,11 +1289,11 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
  * after this function (before any @ref finishMesh):
  *   - @c mesh_start_vertex_id / @c mesh_end_vertex_id: mesh indices of the **left** and **right** strip corners seeded
  *     at interval endpoints (circumcenter or boundary crossing).
- *   - @c start_half_edge_id / @c end_half_edge_id: inside-oriented Delaunay half-edge at each boundary endpoint, or @c -1
- *     for an open circumcenter end.
- *   - @c start_crossing / @c end_crossing: iterators into @c CrossingData when the endpoint is a stored crossing (refreshed
- *     after collection).
- * No quads are emitted here; @ref finishMesh advances the corners and adds triangles between old and new positions.
+ *   - @c start_half_edge_id / @c end_half_edge_id: inside-oriented Delaunay half-edge at each boundary endpoint, or @c
+ * -1 for an open circumcenter end.
+ *   - @c start_crossing / @c end_crossing: iterators into @c CrossingData when the endpoint is a stored crossing
+ * (refreshed after collection). No quads are emitted here; @ref finishMesh advances the corners and adds triangles
+ * between old and new positions.
  *
  * @param half_edge_id Directed Delaunay half-edge on the strand side used for lookup (even or odd of the dual edge).
  * @param reuse_existing_pair_and_mesh If true, append vertices into the mesh already tied to this edge and replace the
@@ -1329,8 +1349,9 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
     segment_mesh_pairs[segment_mesh_pair_index] = segment_mesh_pair;
   }
 
-  KINDS_DEBUG("Using mesh pair index " << segment_mesh_pair_index << " for half-edge " << even_id << " (segment indices "
-    << segment_mesh_pair.segment_index0 << ", " << segment_mesh_pair.segment_index1 << ")");
+  KINDS_DEBUG("Using mesh pair index " << segment_mesh_pair_index << " for half-edge " << even_id
+                                       << " (segment indices " << segment_mesh_pair.segment_index0 << ", "
+                                       << segment_mesh_pair.segment_index1 << ")");
 
   // Component boundary + centroid for alpha-shape checks and texture coordinates on new vertices.
   size_t vertex = std::max(he.origin, twin_he.origin);
@@ -1360,11 +1381,12 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
 
   const std::vector<RegularMeshStripIntervalEndpoints> strip_intervals
     = collectRegularMeshStripIntervalsOnVoronoiEdge(even_id, voronoi_edge_id, left_containing_tri_id);
-  const size_t voronoi_edge_crossing_count = kin_del.computeBoundaryOnTheFly()
-    && voronoi_edge_id < kin_del.getCrossingData().voronoi_edge_intersections.size()
+  const size_t voronoi_edge_crossing_count
+    = kin_del.computeBoundaryOnTheFly() && voronoi_edge_id < kin_del.getCrossingData().voronoi_edge_intersections.size()
     ? kin_del.getCrossingData().voronoi_edge_intersections[voronoi_edge_id].size()
     : 0;
-  const bool ending_inside = !strip_intervals.empty() && strip_intervals.back().end_open_voronoi_half_edge_id.has_value();
+  const bool ending_inside
+    = !strip_intervals.empty() && strip_intervals.back().end_open_voronoi_half_edge_id.has_value();
 
   // Replace strip list for this pair: previous MeshingData (if any) is discarded; new strips hold seeded corners only.
   if (segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
@@ -1403,15 +1425,15 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
           ? crossing_probe.end_crossing.value()->voronoi_edge_id
           : static_cast<size_t>(-1);
         meshletDiagnosticLogLine("start_new_mesh_skip_interval", half_edge_id, t,
-          ("reason=only_adjacent_segment crossing_voronoi_edge_ids=" + std::to_string(crossing_voronoi_edge_id_start) + ","
-            + std::to_string(crossing_voronoi_edge_id_end))
+          ("reason=only_adjacent_segment crossing_voronoi_edge_ids=" + std::to_string(crossing_voronoi_edge_id_start)
+            + "," + std::to_string(crossing_voronoi_edge_id_end))
             .c_str());
         continue;
       }
     }
 
-    segments_for_pair.emplace_back(meshRegularStripInterval(mesh, boundary_polygon, centroid, even_id, voronoi_edge_id, t,
-      strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, interval, boundary_transition_shift));
+    segments_for_pair.emplace_back(meshRegularStripInterval(mesh, boundary_polygon, centroid, even_id, voronoi_edge_id,
+      t, strand_even_origin_i, strand_odd_origin_i, event_type, segment_action, interval, boundary_transition_shift));
   }
 
   for (auto& seg : segments_for_pair)
@@ -1451,14 +1473,17 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
     meshletDiagnosticLogLine("start_new_mesh_end", even_id, t, oss.str().c_str());
   }
 
-  KINDS_DEBUG("startNewMesh summary: vertices_added=" << vertices_added << " mesh_vertex_count_after=" << vertex_count_after
+  KINDS_DEBUG("startNewMesh summary: vertices_added="
+    << vertices_added << " mesh_vertex_count_after=" << vertex_count_after
     << " mesh_vertex_count_before=" << vertex_count_before << " half_edge_id=" << half_edge_id << " even_id=" << even_id
     << " voronoi_edge_id=" << voronoi_edge_id << " t=" << t << " pair_idx=" << segment_mesh_pair_index
-    << " created_new_pair=" << (created_new_pair ? "true" : "false") << " reuse_in_place=" << (reuse_in_place ? "true" : "false")
-    << " boundary_on_the_fly=" << (kin_del.computeBoundaryOnTheFly() ? "true" : "false") << " strip_segments="
-    << segments_for_pair.size() << " voronoi_edge_crossing_list_size=" << voronoi_edge_crossing_count
-    << " initial_left_inside=" << (initial_left_inside ? "true" : "false") << " ending_inside=" << (ending_inside ? "true" : "false")
-    << " component_id=" << component_id << " voronoi_vertices=[" << left_voronoi_vertex_id << "," << right_voronoi_vertex_id << "]"
+    << " created_new_pair=" << (created_new_pair ? "true" : "false")
+    << " reuse_in_place=" << (reuse_in_place ? "true" : "false") << " boundary_on_the_fly="
+    << (kin_del.computeBoundaryOnTheFly() ? "true" : "false") << " strip_segments=" << segments_for_pair.size()
+    << " voronoi_edge_crossing_list_size=" << voronoi_edge_crossing_count
+    << " initial_left_inside=" << (initial_left_inside ? "true" : "false")
+    << " ending_inside=" << (ending_inside ? "true" : "false") << " component_id=" << component_id
+    << " voronoi_vertices=[" << left_voronoi_vertex_id << "," << right_voronoi_vertex_id << "]"
     << " segment_indices=[" << segment_mesh_pair.segment_index0 << "," << segment_mesh_pair.segment_index1 << "]");
 
   if (segment_mesh_pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
@@ -1493,22 +1518,22 @@ std::string SegmentBuilder::composeRegularStripFaceMetadata(double kinetic_time,
 }
 
 void SegmentBuilder::logRadiusBoundaryTransitionVertexShift(const char* context, double t,
-  KineticDelaunay::CrossingData::EdgeIntersectionRef from_ref, KineticDelaunay::CrossingData::EdgeIntersectionRef to_ref,
-  const glm::dvec3& old_pos, const glm::dvec3& new_pos) const
+  KineticDelaunay::CrossingData::EdgeIntersectionRef from_ref,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef to_ref, const glm::dvec3& old_pos, const glm::dvec3& new_pos) const
 {
   if (from_ref == to_ref)
   {
     return;
   }
-  KINDS_DEBUG("Radius boundary transition [" << context << "]: vertex shifted from Delaunay edge "
-                                              << from_ref->delaunay_edge_id << " (Voronoi edge "
-                                              << from_ref->voronoi_edge_id << ") to Delaunay edge "
-                                              << to_ref->delaunay_edge_id << " (Voronoi edge " << to_ref->voronoi_edge_id
-                                              << ") at t=" << t << "; old=(" << old_pos.x << "," << old_pos.y << "," << old_pos.z
-                                              << ") new=(" << new_pos.x << "," << new_pos.y << "," << new_pos.z << ")");
+  KINDS_DEBUG("Radius boundary transition ["
+    << context << "]: vertex shifted from Delaunay edge " << from_ref->delaunay_edge_id << " (Voronoi edge "
+    << from_ref->voronoi_edge_id << ") to Delaunay edge " << to_ref->delaunay_edge_id << " (Voronoi edge "
+    << to_ref->voronoi_edge_id << ") at t=" << t << "; old=(" << old_pos.x << "," << old_pos.y << "," << old_pos.z
+    << ") new=(" << new_pos.x << "," << new_pos.y << "," << new_pos.z << ")");
 }
 
-std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> SegmentBuilder::neighborIntersectionOnTargetAlongVoronoiEdge(
+std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>
+SegmentBuilder::neighborIntersectionOnTargetAlongVoronoiEdge(
   KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, size_t voronoi_edge_id,
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
 {
@@ -1555,13 +1580,12 @@ std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> SegmentBuilder
     }
     KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: source crossing has no adjacent crossing on target "
                   "delaunay_edge="
-                    << target_d_edge << " along voronoi_edge=" << voronoi_edge_id << " (source delaunay_edge=" << d_edge
-                    << ").");
+      << target_d_edge << " along voronoi_edge=" << voronoi_edge_id << " (source delaunay_edge=" << d_edge << ").");
     return std::nullopt;
   }
 
-  KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: crossing iterator not in voronoi_edge=" << voronoi_edge_id
-                                                                                                       << " list.");
+  KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: crossing iterator not in voronoi_edge="
+    << voronoi_edge_id << " list.");
   return std::nullopt;
 }
 
@@ -1677,7 +1701,8 @@ std::optional<glm::dvec3> SegmentBuilder::radiusTransitionInterpolatedSitePositi
       }
       const glm::dvec3 p_old
         = closingMeshVoronoiDelaunayCrossingPosition(t, ref.value()->voronoi_edge_id, ref.value()->delaunay_edge_id);
-      const glm::dvec3 p_new = crossingPositionWithRadiusBoundaryTransitionShift(t, ref.value(), boundary_transition_shift);
+      const glm::dvec3 p_new
+        = crossingPositionWithRadiusBoundaryTransitionShift(t, ref.value(), boundary_transition_shift);
       return std::make_pair(p_old, p_new);
     }
     if (!delaunayUndirectedEdgeHasVertex(graph, delaunay_edge_id, site_vertex_id))
@@ -1718,10 +1743,9 @@ std::optional<glm::dvec3> SegmentBuilder::radiusTransitionInterpolatedSitePositi
   const double w0 = d1 / sum;
   const double w1 = d0 / sum;
   const glm::dvec3 out(w0 * p0_new.x + w1 * p1_new.x, w0 * p0_new.y + w1 * p1_new.y, t);
-  KINDS_DEBUG("Radius boundary transition corner site: cell=" << site_vertex_id << " strip_d=" << d_strip << " other_d="
-                                                                << d_other << " w0=" << w0 << " w1=" << w1 << " d0=" << d0
-                                                                << " d1=" << d1 << " t=" << t << " out=(" << out.x << ","
-                                                                << out.y << ")");
+  KINDS_DEBUG("Radius boundary transition corner site: cell="
+    << site_vertex_id << " strip_d=" << d_strip << " other_d=" << d_other << " w0=" << w0 << " w1=" << w1
+    << " d0=" << d0 << " d1=" << d1 << " t=" << t << " out=(" << out.x << "," << out.y << ")");
   return out;
 }
 
@@ -1731,13 +1755,12 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
 {
   if (!start_intersection.has_value() && !end_intersection.has_value())
   {
-    const std::string msg
-      = "resolveIntersectionMeshPairIndex: both start_intersection and end_intersection are null.";
+    const std::string msg = "resolveIntersectionMeshPairIndex: both start_intersection and end_intersection are null.";
     KINDS_ERROR(msg);
     throw std::runtime_error(msg);
   }
 
-  if(start_intersection.has_value() && end_intersection.has_value())
+  if (start_intersection.has_value() && end_intersection.has_value())
   {
     if (start_intersection.value()->delaunay_edge_id != end_intersection.value()->delaunay_edge_id)
     {
@@ -1753,18 +1776,20 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     auto& start_value = start_intersection.value();
     auto& end_value = end_intersection.value();
 
-    if(start_value->next_segment_mesh_pair_index == end_value->prev_segment_mesh_pair_index)
+    if (start_value->next_segment_mesh_pair_index == end_value->prev_segment_mesh_pair_index)
     {
       return start_value->next_segment_mesh_pair_index;
     }
 
     // Try to recover, perhaps they are swapped, but issue a warning since this should not happen
-    if(start_value->prev_segment_mesh_pair_index == end_value->next_segment_mesh_pair_index)
+    if (start_value->prev_segment_mesh_pair_index == end_value->next_segment_mesh_pair_index)
     {
-      KINDS_WARNING("resolveIntersectionMeshPairIndex: start/end intersection mesh pair index mismatch but recoverable by swapping start/end (start_next="
+      KINDS_WARNING("resolveIntersectionMeshPairIndex: start/end intersection mesh pair index mismatch but recoverable "
+                    "by swapping start/end (start_next="
         << start_value->next_segment_mesh_pair_index << ", start_prev=" << start_value->prev_segment_mesh_pair_index
-        << ", end_next=" << end_value->next_segment_mesh_pair_index << ", end_prev=" << end_value->prev_segment_mesh_pair_index
-        << ", voronoi_cell_id=" << voronoi_cell_id << ", event_time=" << event_time << ").");
+        << ", end_next=" << end_value->next_segment_mesh_pair_index
+        << ", end_prev=" << end_value->prev_segment_mesh_pair_index << ", voronoi_cell_id=" << voronoi_cell_id
+        << ", event_time=" << event_time << ").");
       return start_value->prev_segment_mesh_pair_index;
     }
 
@@ -1777,29 +1802,33 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
   }
 
   // Now handle cases where one is null
-  if(start_intersection.has_value())
+  if (start_intersection.has_value())
   {
     // Verify that this is indeed the last intersection in the delaunay edge
     size_t delaunay_edge_id = start_intersection.value()->delaunay_edge_id;
     auto d_ref = start_intersection.value()->delaunay_ref;
     auto next_ref = std::next(d_ref);
-    if(next_ref != kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].end())
+    if (next_ref != kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].end())
     {
       std::ostringstream oss;
-      oss << "resolveIntersectionMeshPairIndex: start_intersection is not the last one on its Delaunay edge (total_on_edge=" << kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].size()
+      oss << "resolveIntersectionMeshPairIndex: start_intersection is not the last one on its Delaunay edge "
+             "(total_on_edge="
+          << kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].size()
           << ", voronoi_cell_id=" << voronoi_cell_id << ", event_time=" << event_time << ").";
       KINDS_ERROR(oss.str());
       throw std::runtime_error(oss.str());
     }
 
     // check if value is valid
-    if(start_intersection.value()->next_segment_mesh_pair_index == static_cast<size_t>(-1))
+    if (start_intersection.value()->next_segment_mesh_pair_index == static_cast<size_t>(-1))
     {
       // print the other value for debugging
       size_t prev_index = start_intersection.value()->prev_segment_mesh_pair_index;
       std::ostringstream oss;
-      oss << "resolveIntersectionMeshPairIndex: start_intersection has invalid next_segment_mesh_pair_index (voronoi_cell_id=" << voronoi_cell_id
-          << ", event_time=" << event_time << ", prev_segment_mesh_pair_index=" << prev_index << ").";
+      oss << "resolveIntersectionMeshPairIndex: start_intersection has invalid next_segment_mesh_pair_index "
+             "(voronoi_cell_id="
+          << voronoi_cell_id << ", event_time=" << event_time << ", prev_segment_mesh_pair_index=" << prev_index
+          << ").";
       KINDS_ERROR(oss.str());
       throw std::runtime_error(oss.str());
     }
@@ -1811,22 +1840,26 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     // Verify that this is indeed the first intersection in the delaunay edge
     size_t delaunay_edge_id = end_intersection.value()->delaunay_edge_id;
     auto d_ref = end_intersection.value()->delaunay_ref;
-    if(d_ref != kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].begin())
+    if (d_ref != kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].begin())
     {
       std::ostringstream oss;
-      oss << "resolveIntersectionMeshPairIndex: end_intersection is not the first one on its Delaunay edge (voronoi_cell_id=" << voronoi_cell_id << ", event_time=" << event_time << ").";
+      oss << "resolveIntersectionMeshPairIndex: end_intersection is not the first one on its Delaunay edge "
+             "(voronoi_cell_id="
+          << voronoi_cell_id << ", event_time=" << event_time << ").";
       KINDS_ERROR(oss.str());
       throw std::runtime_error(oss.str());
     }
 
     // check if value is valid
-    if(end_intersection.value()->prev_segment_mesh_pair_index == static_cast<size_t>(-1))
+    if (end_intersection.value()->prev_segment_mesh_pair_index == static_cast<size_t>(-1))
     {
       // print the other value for debugging
       size_t next_index = end_intersection.value()->next_segment_mesh_pair_index;
       std::ostringstream oss;
-      oss << "resolveIntersectionMeshPairIndex: end_intersection has invalid prev_segment_mesh_pair_index (voronoi_cell_id=" << voronoi_cell_id
-          << ", event_time=" << event_time << ", next_segment_mesh_pair_index=" << next_index << ").";
+      oss << "resolveIntersectionMeshPairIndex: end_intersection has invalid prev_segment_mesh_pair_index "
+             "(voronoi_cell_id="
+          << voronoi_cell_id << ", event_time=" << event_time << ", next_segment_mesh_pair_index=" << next_index
+          << ").";
       KINDS_ERROR(oss.str());
       throw std::runtime_error(oss.str());
     }
@@ -1850,12 +1883,14 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
 
   // Interval semantics (start/end of the strip) and mesh topology are passed explicitly; only `SegmentBuilder`
   // state is captured via `[this]`.
-  const auto finish_for_delaunay_edge = [this, boundary_transition_shift](const HalfEdgeDelaunayGraph& graph,
-    size_t delaunay_edge_id, size_t voronoi_cell_id, double t,
-    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& interval_start_crossing,
-    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& interval_end_crossing,
-    bool reuse_existing_pair_and_mesh, BoundaryEventType event_type, BoundarySegmentAction segment_action,
-    bool force_single_seed_vertex) -> size_t {
+  const auto finish_for_delaunay_edge
+    = [this, boundary_transition_shift](const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id,
+        size_t voronoi_cell_id, double t,
+        const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& interval_start_crossing,
+        const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& interval_end_crossing,
+        bool reuse_existing_pair_and_mesh, BoundaryEventType event_type, BoundarySegmentAction segment_action,
+        bool force_single_seed_vertex) -> size_t
+  {
     // Directed half-edges for this undirected Delaunay edge: even index is one orientation, odd is the twin.
     const size_t he_even = 2 * delaunay_edge_id;
     const size_t he_odd = he_even + 1;
@@ -1864,8 +1899,9 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       return static_cast<size_t>(-1);
     }
 
-    // `MeshingData` stores the *inside* boundary half-edge for each endpoint that is an actual crossing (not an open site).
-    // On a boundary Delaunay edge, one directed half-edge points outward from the meshed component; we store the opposite.
+    // `MeshingData` stores the *inside* boundary half-edge for each endpoint that is an actual crossing (not an open
+    // site). On a boundary Delaunay edge, one directed half-edge points outward from the meshed component; we store the
+    // opposite.
     int inside_boundary_he_id = -1;
     if (kin_del.isOnComponentBoundary(he_even))
     {
@@ -1880,7 +1916,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       // Pair lookup keys off the same interval tuple the caller passed (cell, start/end refs, time).
       intersection_pair_index
         = resolveIntersectionMeshPairIndex(voronoi_cell_id, interval_start_crossing, interval_end_crossing, t);
-      if (intersection_pair_index != static_cast<size_t>(-1) && intersection_pair_index >= intersection_segment_mesh_pairs.size())
+      if (intersection_pair_index != static_cast<size_t>(-1)
+        && intersection_pair_index >= intersection_segment_mesh_pairs.size())
       {
         intersection_pair_index = static_cast<size_t>(-1);
       }
@@ -1892,7 +1929,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
 
     const auto& he = graph.getHalfEdges()[he_even];
     const auto& twin_he = graph.getHalfEdges()[he_odd];
-    const size_t owner_segment_id = (voronoi_cell_id < strand_to_segment_indices.size() && !strand_to_segment_indices[voronoi_cell_id].empty())
+    const size_t owner_segment_id
+      = (voronoi_cell_id < strand_to_segment_indices.size() && !strand_to_segment_indices[voronoi_cell_id].empty())
       ? strand_to_segment_indices[voronoi_cell_id].back()
       : static_cast<size_t>(-1);
     MeshStructure::SegmentMeshPair segment_mesh_pair;
@@ -1913,16 +1951,20 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     {
       intersection_mesh_pair_metadata[intersection_pair_index]
         = MeshStructure::IntersectionMeshPairMetadata { voronoi_cell_id, owner_segment_id,
-            interval_start_crossing.has_value() ? interval_start_crossing.value()->delaunay_edge_id : static_cast<size_t>(-1),
-            interval_end_crossing.has_value() ? interval_end_crossing.value()->delaunay_edge_id : static_cast<size_t>(-1) };
+            interval_start_crossing.has_value() ? interval_start_crossing.value()->delaunay_edge_id
+                                                : static_cast<size_t>(-1),
+            interval_end_crossing.has_value() ? interval_end_crossing.value()->delaunay_edge_id
+                                              : static_cast<size_t>(-1) };
     }
     else
     {
       intersection_mesh_pair_metadata.resize(intersection_pair_index + 1);
       intersection_mesh_pair_metadata[intersection_pair_index]
         = MeshStructure::IntersectionMeshPairMetadata { voronoi_cell_id, owner_segment_id,
-            interval_start_crossing.has_value() ? interval_start_crossing.value()->delaunay_edge_id : static_cast<size_t>(-1),
-            interval_end_crossing.has_value() ? interval_end_crossing.value()->delaunay_edge_id : static_cast<size_t>(-1) };
+            interval_start_crossing.has_value() ? interval_start_crossing.value()->delaunay_edge_id
+                                                : static_cast<size_t>(-1),
+            interval_end_crossing.has_value() ? interval_end_crossing.value()->delaunay_edge_id
+                                              : static_cast<size_t>(-1) };
     }
 
     const size_t component_vertex = std::max(he.origin, twin_he.origin);
@@ -1943,7 +1985,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
         const KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref = ref.value();
         const glm::dvec3 old_pos
           = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
-        const glm::dvec3 new_pos = crossingPositionWithRadiusBoundaryTransitionShift(t, orig_ref, boundary_transition_shift);
+        const glm::dvec3 new_pos
+          = crossingPositionWithRadiusBoundaryTransitionShift(t, orig_ref, boundary_transition_shift);
         if (boundary_transition_shift != nullptr && new_pos != old_pos)
         {
           KineticDelaunay::CrossingData::EdgeIntersectionRef use_ref = orig_ref;
@@ -1963,12 +2006,9 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
         site_shifted.has_value())
       {
         const glm::dvec2 p_site = kin_del.getPointAt(t, voronoi_cell_id);
-        KINDS_DEBUG("Radius boundary transition [startNewMeshFromIntersections_site]: cell=" << voronoi_cell_id
-                                                                                              << " strip_d=" << delaunay_edge_id
-                                                                                              << " t=" << t << " old=("
-                                                                                              << p_site.x << "," << p_site.y
-                                                                                              << ") new=(" << site_shifted->x
-                                                                                              << "," << site_shifted->y << ")");
+        KINDS_DEBUG("Radius boundary transition [startNewMeshFromIntersections_site]: cell="
+          << voronoi_cell_id << " strip_d=" << delaunay_edge_id << " t=" << t << " old=(" << p_site.x << "," << p_site.y
+          << ") new=(" << site_shifted->x << "," << site_shifted->y << ")");
         return site_shifted.value();
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id);
@@ -1977,21 +2017,24 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
 
     const glm::dvec3 start_pos = intersection_or_cell_position(interval_start_crossing);
     const glm::dvec3 end_pos = intersection_or_cell_position(interval_end_crossing);
-    // Open interval ends are tagged with the owning Voronoi cell id so vertex export can distinguish site vertices from crossings.
+    // Open interval ends are tagged with the owning Voronoi cell id so vertex export can distinguish site vertices from
+    // crossings.
     const std::optional<size_t> start_voronoi_vertex
       = interval_start_crossing.has_value() ? std::nullopt : std::optional<size_t>(voronoi_cell_id);
     const std::optional<size_t> end_voronoi_vertex
       = interval_end_crossing.has_value() ? std::nullopt : std::optional<size_t>(voronoi_cell_id);
 
     std::ostringstream boundary_start_meta_stream;
-    boundary_start_meta_stream << "{\"event_type\":\"" << boundaryEventTypeToString(event_type) << "\",\"segment_action\":\""
-                               << boundarySegmentActionToString(segment_action) << "\",\"voronoi_cell_id\":" << voronoi_cell_id
-                               << ",\"time\":" << t << ",\"start_ref\":";
+    boundary_start_meta_stream << "{\"event_type\":\"" << boundaryEventTypeToString(event_type)
+                               << "\",\"segment_action\":\"" << boundarySegmentActionToString(segment_action)
+                               << "\",\"voronoi_cell_id\":" << voronoi_cell_id << ",\"time\":" << t
+                               << ",\"start_ref\":";
     if (interval_start_crossing.has_value())
     {
       boundary_start_meta_stream << "{\"delaunay_edge_id\":" << interval_start_crossing.value()->delaunay_edge_id
                                  << ",\"voronoi_edge_id\":" << interval_start_crossing.value()->voronoi_edge_id
-                                 << ",\"delaunay_param\":" << interval_start_crossing.value()->delaunay_edge_param << "}";
+                                 << ",\"delaunay_param\":" << interval_start_crossing.value()->delaunay_edge_param
+                                 << "}";
     }
     else
     {
@@ -2019,16 +2062,17 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     const double dz = start_pos.z - end_pos.z;
     const bool same_endpoint = force_single_seed_vertex || (dx * dx + dy * dy + dz * dz) <= 1e-20;
 
-    // First vertex = interval start (left tag); second = interval end (right tag). Uniform when the strip collapses to one vertex.
+    // First vertex = interval start (left tag); second = interval end (right tag). Uniform when the strip collapses to
+    // one vertex.
     const std::string& start_vertex_meta = same_endpoint ? boundary_start_meta_uniform : boundary_start_meta_left;
-    const size_t start_vertex_index
-      = addMeshletVertex(mesh, boundary_polygon, centroid, start_pos, voronoi_cell_id, t, start_voronoi_vertex, start_vertex_meta,
-        same_endpoint ? std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 1.0))
-                      : std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 0.0)));
+    const size_t start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, start_pos, voronoi_cell_id, t,
+      start_voronoi_vertex, start_vertex_meta,
+      same_endpoint ? std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 1.0))
+                    : std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 0.0)));
     const size_t end_vertex_index = same_endpoint
       ? start_vertex_index
       : addMeshletVertex(mesh, boundary_polygon, centroid, end_pos, voronoi_cell_id, t, end_voronoi_vertex,
-        boundary_start_meta_right, glm::dvec3(0.0, 0.0, 1.0));
+          boundary_start_meta_right, glm::dvec3(0.0, 0.0, 1.0));
 
     std::list<MeshingData> local_segments;
     MeshingData seg { static_cast<int>(start_vertex_index), static_cast<int>(end_vertex_index),
@@ -2051,9 +2095,11 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       local_segments.emplace_back(std::move(seg));
     }
 
-    // Prev/next on `CrossingData` follow list order on the Delaunay edge for `[ref,ref]`; one-null cases use `voronoi_cell_id`
-    // vs even-half-edge origin inside `writeIntersectionPairLinks` (see there). Arguments mirror interval start/end crossings.
-    writeIntersectionPairLinks(intersection_pair_index, voronoi_cell_id, interval_start_crossing, interval_end_crossing);
+    // Prev/next on `CrossingData` follow list order on the Delaunay edge for `[ref,ref]`; one-null cases use
+    // `voronoi_cell_id` vs even-half-edge origin inside `writeIntersectionPairLinks` (see there). Arguments mirror
+    // interval start/end crossings.
+    writeIntersectionPairLinks(
+      intersection_pair_index, voronoi_cell_id, interval_start_crossing, interval_end_crossing);
 
     if (reuse_in_place)
     {
@@ -2077,20 +2123,23 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     {
       return static_cast<size_t>(-1);
     }
-    return finish_for_delaunay_edge(graph, start_intersection.value()->delaunay_edge_id, voronoi_cell_id, t, start_intersection,
-      end_intersection, reuse_existing_pair_and_mesh, event_type, segment_action, force_single_seed_vertex);
+    return finish_for_delaunay_edge(graph, start_intersection.value()->delaunay_edge_id, voronoi_cell_id, t,
+      start_intersection, end_intersection, reuse_existing_pair_and_mesh, event_type, segment_action,
+      force_single_seed_vertex);
   }
 
   // Crossing at start, open site at end `[ref, null]`.
   if (start_intersection.has_value())
   {
-    return finish_for_delaunay_edge(graph, start_intersection.value()->delaunay_edge_id, voronoi_cell_id, t, start_intersection,
-      end_intersection, reuse_existing_pair_and_mesh, event_type, segment_action, force_single_seed_vertex);
+    return finish_for_delaunay_edge(graph, start_intersection.value()->delaunay_edge_id, voronoi_cell_id, t,
+      start_intersection, end_intersection, reuse_existing_pair_and_mesh, event_type, segment_action,
+      force_single_seed_vertex);
   }
 
   // Open site at start, crossing at end `[null, ref]`.
-  return finish_for_delaunay_edge(graph, end_intersection.value()->delaunay_edge_id, voronoi_cell_id, t, start_intersection,
-    end_intersection, reuse_existing_pair_and_mesh, event_type, segment_action, force_single_seed_vertex);
+  return finish_for_delaunay_edge(graph, end_intersection.value()->delaunay_edge_id, voronoi_cell_id, t,
+    start_intersection, end_intersection, reuse_existing_pair_and_mesh, event_type, segment_action,
+    force_single_seed_vertex);
 }
 
 void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double t,
@@ -2110,11 +2159,12 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     || intersection_pair_index >= intersection_mesh_pair_last_left_and_right_vertex.size())
   {
     std::ostringstream oss;
-    oss << "finishMeshFromIntersections: failed to resolve mesh pair for extension (cell=" << voronoi_cell_id << ", t=" << t
-        << ", start_ref=";
+    oss << "finishMeshFromIntersections: failed to resolve mesh pair for extension (cell=" << voronoi_cell_id
+        << ", t=" << t << ", start_ref=";
     if (start_intersection.has_value())
     {
-      oss << "{d_edge=" << start_intersection.value()->delaunay_edge_id << ", v_edge=" << start_intersection.value()->voronoi_edge_id
+      oss << "{d_edge=" << start_intersection.value()->delaunay_edge_id
+          << ", v_edge=" << start_intersection.value()->voronoi_edge_id
           << ", param=" << start_intersection.value()->delaunay_edge_param << "}";
     }
     else
@@ -2124,7 +2174,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     oss << ", end_ref=";
     if (end_intersection.has_value())
     {
-      oss << "{d_edge=" << end_intersection.value()->delaunay_edge_id << ", v_edge=" << end_intersection.value()->voronoi_edge_id
+      oss << "{d_edge=" << end_intersection.value()->delaunay_edge_id
+          << ", v_edge=" << end_intersection.value()->voronoi_edge_id
           << ", param=" << end_intersection.value()->delaunay_edge_param << "}";
     }
     else
@@ -2133,7 +2184,7 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     }
     oss << ").";
     KINDS_ERROR(oss.str());
-    //throw std::runtime_error(oss.str());
+    // throw std::runtime_error(oss.str());
     return;
   }
 
@@ -2141,8 +2192,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   if (segs.empty())
   {
     std::ostringstream oss;
-    oss << "finishMeshFromIntersections: missing segment state for pair " << intersection_pair_index << " (cell=" << voronoi_cell_id
-        << ", t=" << t << ").";
+    oss << "finishMeshFromIntersections: missing segment state for pair " << intersection_pair_index
+        << " (cell=" << voronoi_cell_id << ", t=" << t << ").";
     throw std::runtime_error(oss.str());
   }
   auto& seg = segs.front();
@@ -2163,8 +2214,9 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   auto& boundary_polygon = kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = kin_del.component_data.component_centroids[component_id];
 
-  const size_t strip_delaunay_edge_id_for_site
-    = start_intersection.has_value() ? start_intersection.value()->delaunay_edge_id : end_intersection.value()->delaunay_edge_id;
+  const size_t strip_delaunay_edge_id_for_site = start_intersection.has_value()
+    ? start_intersection.value()->delaunay_edge_id
+    : end_intersection.value()->delaunay_edge_id;
 
   auto endpoint_position_at_t = [&](bool at_start) -> glm::dvec3
   {
@@ -2176,13 +2228,9 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
         site_shifted.has_value())
       {
         const glm::dvec2 p_site = kin_del.getPointAt(t, voronoi_cell_id);
-        KINDS_DEBUG("Radius boundary transition [finishMeshFromIntersections_site]: cell=" << voronoi_cell_id
-                                                                                           << " strip_d="
-                                                                                           << strip_delaunay_edge_id_for_site
-                                                                                           << " t=" << t << " old=(" << p_site.x
-                                                                                           << "," << p_site.y << ") new=("
-                                                                                           << site_shifted->x << ","
-                                                                                           << site_shifted->y << ")");
+        KINDS_DEBUG("Radius boundary transition [finishMeshFromIntersections_site]: cell="
+          << voronoi_cell_id << " strip_d=" << strip_delaunay_edge_id_for_site << " t=" << t << " old=(" << p_site.x
+          << "," << p_site.y << ") new=(" << site_shifted->x << "," << site_shifted->y << ")");
         return site_shifted.value();
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id);
@@ -2192,7 +2240,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     const KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref = input_ref.value();
     const glm::dvec3 old_pos
       = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
-    const glm::dvec3 new_pos = crossingPositionWithRadiusBoundaryTransitionShift(t, orig_ref, boundary_transition_shift);
+    const glm::dvec3 new_pos
+      = crossingPositionWithRadiusBoundaryTransitionShift(t, orig_ref, boundary_transition_shift);
     if (boundary_transition_shift != nullptr && new_pos != old_pos)
     {
       KineticDelaunay::CrossingData::EdgeIntersectionRef use_ref = orig_ref;
@@ -2201,7 +2250,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
         neighbor_opt.has_value())
       {
         use_ref = neighbor_opt.value();
-        logRadiusBoundaryTransitionVertexShift("finishMeshFromIntersections_interval", t, orig_ref, use_ref, old_pos, new_pos);
+        logRadiusBoundaryTransitionVertexShift(
+          "finishMeshFromIntersections_interval", t, orig_ref, use_ref, old_pos, new_pos);
       }
     }
     return new_pos;
@@ -2209,12 +2259,14 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
 
   const glm::dvec3 new_start_pos = endpoint_position_at_t(true);
   const glm::dvec3 new_end_pos = endpoint_position_at_t(false);
-  const std::optional<size_t> start_vv = !start_intersection.has_value() ? std::optional<size_t>(voronoi_cell_id) : std::nullopt;
-  const std::optional<size_t> end_vv = !end_intersection.has_value() ? std::optional<size_t>(voronoi_cell_id) : std::nullopt;
+  const std::optional<size_t> start_vv
+    = !start_intersection.has_value() ? std::optional<size_t>(voronoi_cell_id) : std::nullopt;
+  const std::optional<size_t> end_vv
+    = !end_intersection.has_value() ? std::optional<size_t>(voronoi_cell_id) : std::nullopt;
   std::ostringstream boundary_finish_meta_stream;
-  boundary_finish_meta_stream << "{\"event_type\":\"" << boundaryEventTypeToString(event_type) << "\",\"segment_action\":\""
-                              << boundarySegmentActionToString(segment_action) << "\",\"voronoi_cell_id\":" << voronoi_cell_id
-                              << ",\"time\":" << t << ",\"start_ref\":";
+  boundary_finish_meta_stream << "{\"event_type\":\"" << boundaryEventTypeToString(event_type)
+                              << "\",\"segment_action\":\"" << boundarySegmentActionToString(segment_action)
+                              << "\",\"voronoi_cell_id\":" << voronoi_cell_id << ",\"time\":" << t << ",\"start_ref\":";
   if (start_intersection.has_value())
   {
     boundary_finish_meta_stream << "{\"delaunay_edge_id\":" << start_intersection.value()->delaunay_edge_id
@@ -2240,12 +2292,10 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   const std::string boundary_finish_meta = boundary_finish_meta_stream.str();
   const std::string boundary_finish_meta_left = appendBoundaryVertexPosMetadata(boundary_finish_meta, "left");
   const std::string boundary_finish_meta_right = appendBoundaryVertexPosMetadata(boundary_finish_meta, "right");
-  const size_t new_start_vertex_index
-    = addMeshletVertex(mesh, boundary_polygon, centroid, new_start_pos, voronoi_cell_id, t, start_vv, boundary_finish_meta_left,
-      glm::dvec3(1.0, 0.0, 0.0));
-  const size_t new_end_vertex_index
-    = addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, voronoi_cell_id, t, end_vv, boundary_finish_meta_right,
-      glm::dvec3(0.0, 0.0, 1.0));
+  const size_t new_start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, new_start_pos,
+    voronoi_cell_id, t, start_vv, boundary_finish_meta_left, glm::dvec3(1.0, 0.0, 0.0));
+  const size_t new_end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, voronoi_cell_id,
+    t, end_vv, boundary_finish_meta_right, glm::dvec3(0.0, 0.0, 1.0));
 
   size_t ordered_new_start_vertex_index = new_start_vertex_index;
   size_t ordered_new_end_vertex_index = new_end_vertex_index;
@@ -2261,7 +2311,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     const glm::dvec3& prev_end = mesh.getVertices()[last_right];
     const glm::dvec3& curr_start = mesh.getVertices()[ordered_new_start_vertex_index];
     const glm::dvec3& curr_end = mesh.getVertices()[ordered_new_end_vertex_index];
-    const auto sqd = [](const glm::dvec3& a, const glm::dvec3& b) {
+    const auto sqd = [](const glm::dvec3& a, const glm::dvec3& b)
+    {
       const glm::dvec3 d = a - b;
       return d.x * d.x + d.y * d.y + d.z * d.z;
     };
@@ -2270,8 +2321,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     if (swapped_cost + 1e-18 < direct_cost)
     {
       KINDS_WARNING("finishMeshFromIntersections: detected swapped endpoint continuity for pair "
-                    << intersection_pair_index << " (cell=" << voronoi_cell_id << ", t=" << t
-                    << "), auto-correcting start/end assignment.");
+        << intersection_pair_index << " (cell=" << voronoi_cell_id << ", t=" << t
+        << "), auto-correcting start/end assignment.");
       std::swap(ordered_new_start_vertex_index, ordered_new_end_vertex_index);
     }
   }
@@ -2300,7 +2351,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     }
     else
     {
-      // Flexible placeholders often share z with strip corners; pick the diagonal from projected order along eff_l–eff_r.
+      // Flexible placeholders often share z with strip corners; pick the diagonal from projected order along
+      // eff_l–eff_r.
       const glm::dvec2 pl(verts_after[eff_left].x, verts_after[eff_left].y);
       const glm::dvec2 pr(verts_after[eff_right].x, verts_after[eff_right].y);
       const glm::dvec2 ps(verts_after[ordered_new_start_vertex_index].x, verts_after[ordered_new_start_vertex_index].y);
@@ -2319,25 +2371,22 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   }
   if (eff_left == eff_right)
   {
-    addBoundaryIntervalTriangleOriented(
-      mesh, ordered_new_start_vertex_index, eff_right, ordered_new_end_vertex_index, inside_boundary_he_id, t,
-      boundary_finish_meta);
+    addBoundaryIntervalTriangleOriented(mesh, ordered_new_start_vertex_index, eff_right, ordered_new_end_vertex_index,
+      inside_boundary_he_id, t, boundary_finish_meta);
   }
   else if (start_apex_first)
   {
     addBoundaryIntervalTriangleOriented(
       mesh, eff_left, eff_right, ordered_new_start_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
-    addBoundaryIntervalTriangleOriented(
-      mesh, ordered_new_start_vertex_index, eff_right, ordered_new_end_vertex_index, inside_boundary_he_id, t,
-      boundary_finish_meta);
+    addBoundaryIntervalTriangleOriented(mesh, ordered_new_start_vertex_index, eff_right, ordered_new_end_vertex_index,
+      inside_boundary_he_id, t, boundary_finish_meta);
   }
   else
   {
     addBoundaryIntervalTriangleOriented(
       mesh, eff_left, eff_right, ordered_new_end_vertex_index, inside_boundary_he_id, t, boundary_finish_meta);
-    addBoundaryIntervalTriangleOriented(
-      mesh, eff_left, ordered_new_end_vertex_index, ordered_new_start_vertex_index, inside_boundary_he_id, t,
-      boundary_finish_meta);
+    addBoundaryIntervalTriangleOriented(mesh, eff_left, ordered_new_end_vertex_index, ordered_new_start_vertex_index,
+      inside_boundary_he_id, t, boundary_finish_meta);
   }
 
   seg.mesh_start_vertex_id = static_cast<int>(ordered_new_start_vertex_index);
@@ -2365,9 +2414,8 @@ std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> SegmentBuilder::
   return refs;
 }
 
-bool SegmentBuilder::writeOneNullIntersectionPairLinkByNullVertex(
-  size_t intersection_pair_index, size_t null_vertex_id, KineticDelaunay::CrossingData::EdgeIntersectionRef ref,
-  bool interval_is_ref_to_null)
+bool SegmentBuilder::writeOneNullIntersectionPairLinkByNullVertex(size_t intersection_pair_index, size_t null_vertex_id,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool interval_is_ref_to_null)
 {
   const size_t d_edge_id = ref->delaunay_edge_id;
   const size_t he_even = 2 * d_edge_id;
@@ -2399,14 +2447,16 @@ void SegmentBuilder::writeIntersectionPairLinks(size_t intersection_pair_index, 
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection)
 {
   const auto edge_intersection_ref_desc
-    = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& ref) -> std::string {
-      if (!ref.has_value())
-      {
-        return "null";
-      }
-      return "{d_edge=" + std::to_string(ref.value()->delaunay_edge_id) + ", v_edge="
-        + std::to_string(ref.value()->voronoi_edge_id) + ", param=" + std::to_string(ref.value()->delaunay_edge_param) + "}";
-    };
+    = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& ref) -> std::string
+  {
+    if (!ref.has_value())
+    {
+      return "null";
+    }
+    return "{d_edge=" + std::to_string(ref.value()->delaunay_edge_id)
+      + ", v_edge=" + std::to_string(ref.value()->voronoi_edge_id)
+      + ", param=" + std::to_string(ref.value()->delaunay_edge_param) + "}";
+  };
 
   std::string wrote_pair_index_to;
 
@@ -2457,8 +2507,8 @@ void SegmentBuilder::writeIntersectionPairLinks(size_t intersection_pair_index, 
     {
       start_intersection.value()->next_segment_mesh_pair_index = intersection_pair_index;
       end_intersection.value()->prev_segment_mesh_pair_index = intersection_pair_index;
-      wrote_pair_index_to
-        = "start_ref->next_segment_mesh_pair_index, end_ref->prev_segment_mesh_pair_index (missing crossing list fallback)";
+      wrote_pair_index_to = "start_ref->next_segment_mesh_pair_index, end_ref->prev_segment_mesh_pair_index (missing "
+                            "crossing list fallback)";
     }
   }
   else
@@ -2484,9 +2534,9 @@ void SegmentBuilder::writeIntersectionPairLinks(size_t intersection_pair_index, 
   }
 
   std::ostringstream log;
-  log << "writeIntersectionPairLinks: pair=" << intersection_pair_index << " cell=" << voronoi_cell_id << " start_ref="
-      << edge_intersection_ref_desc(start_intersection) << " end_ref=" << edge_intersection_ref_desc(end_intersection)
-      << " wrote_pair_index_to=" << wrote_pair_index_to;
+  log << "writeIntersectionPairLinks: pair=" << intersection_pair_index << " cell=" << voronoi_cell_id
+      << " start_ref=" << edge_intersection_ref_desc(start_intersection)
+      << " end_ref=" << edge_intersection_ref_desc(end_intersection) << " wrote_pair_index_to=" << wrote_pair_index_to;
   KINDS_DEBUG(log.str());
 }
 
@@ -2548,12 +2598,14 @@ size_t SegmentBuilder::determineVoronoiCellForBoundaryIntersectionInterval(size_
   }
 
   std::ostringstream oss;
-  oss << "determineVoronoiCellForBoundaryIntersectionInterval: no shared Voronoi cell between intersection Voronoi edges "
-      << ve0 << " and " << ve1 << " on Delaunay edge " << delaunay_edge_id << ".";
+  oss
+    << "determineVoronoiCellForBoundaryIntersectionInterval: no shared Voronoi cell between intersection Voronoi edges "
+    << ve0 << " and " << ve1 << " on Delaunay edge " << delaunay_edge_id << ".";
   throw std::runtime_error(oss.str());
 }
 
-size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(VoronoiMesh&& mesh, std::string suffix, double creation_kinetic_time)
+size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(
+  VoronoiMesh&& mesh, std::string suffix, double creation_kinetic_time)
 {
   if (std::isfinite(creation_kinetic_time))
   {
@@ -2564,7 +2616,6 @@ size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(VoronoiMesh&& mesh, std:
   meshlet_export_suffixes.push_back(std::move(suffix));
   return index;
 }
-
 
 void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right)
 {
@@ -2693,12 +2744,14 @@ size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(
     mesh.setMaterialNames({ MeshletExportMaterialNames[static_cast<size_t>(BoundaryIntervalMeshletMaterialId)] });
   }
   const int boundary_material_id = 0;
-  if (inside_boundary_he_id < 0 || static_cast<size_t>(inside_boundary_he_id) >= kin_del.getGraph().getHalfEdges().size())
+  if (inside_boundary_he_id < 0
+    || static_cast<size_t>(inside_boundary_he_id) >= kin_del.getGraph().getHalfEdges().size())
   {
     return addMeshletTriangle(mesh, u, v, w, metadata, boundary_material_id);
   }
 
-  // `inside_boundary_he_id` is the inside-directed boundary half-edge; its twin is the outside one on the same Delaunay edge.
+  // `inside_boundary_he_id` is the inside-directed boundary half-edge; its twin is the outside one on the same Delaunay
+  // edge.
   const size_t outside_he = static_cast<size_t>(inside_boundary_he_id) ^ 1u;
   if (outside_he >= kin_del.getGraph().getHalfEdges().size())
   {
@@ -2720,9 +2773,10 @@ void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
   {
     return;
   }
-  KINDS_WARNING("SegmentBuilder: " << context << " - Voronoi vertex " << voronoi_vertex_id << " (containing Delaunay triangle "
-    << containing_tri_id << ") is outside the alpha-shape; position (" << position.x << ", " << position.y << ", "
-    << position.z << ").");
+  KINDS_WARNING("SegmentBuilder: " << context << " - Voronoi vertex " << voronoi_vertex_id
+                                   << " (containing Delaunay triangle " << containing_tri_id
+                                   << ") is outside the alpha-shape; position (" << position.x << ", " << position.y
+                                   << ", " << position.z << ").");
 }
 
 size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
@@ -2803,9 +2857,9 @@ size_t SegmentBuilder::intersectionStripEffectiveVertexIndex(const MeshingData& 
   return static_cast<size_t>(seg.mesh_end_vertex_id);
 }
 
-void SegmentBuilder::addFlexibleVertexToIntersectionMesh(VoronoiMesh& mesh, MeshingData& seg, bool flexible_on_left_side,
-  const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
-  const std::string& metadata)
+void SegmentBuilder::addFlexibleVertexToIntersectionMesh(VoronoiMesh& mesh, MeshingData& seg,
+  bool flexible_on_left_side, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid,
+  size_t strand_id, double t, const std::string& metadata)
 {
   if (!intersection_strip_flexible_vertices_enabled)
   {
@@ -2824,11 +2878,12 @@ void SegmentBuilder::addFlexibleVertexToIntersectionMesh(VoronoiMesh& mesh, Mesh
     return;
   }
 
-  // XY must not be degenerate on the strip line or (0,0): addBoundaryIntervalTriangleOriented uses mesh positions for winding.
+  // XY must not be degenerate on the strip line or (0,0): addBoundaryIntervalTriangleOriented uses mesh positions for
+  // winding.
   const glm::dvec3 placeholder(centroid.x, centroid.y, t);
   const std::string vertex_meta = appendBoundaryVertexPosMetadata(metadata, flexible_on_left_side ? "left" : "right");
-  const size_t idx = addMeshletVertex(mesh, boundary_polygon, centroid, placeholder, strand_id, t, std::nullopt, vertex_meta,
-    std::nullopt);
+  const size_t idx = addMeshletVertex(
+    mesh, boundary_polygon, centroid, placeholder, strand_id, t, std::nullopt, vertex_meta, std::nullopt);
   if (flexible_on_left_side)
   {
     seg.flexible_left_vertex_ids.push_back(static_cast<int>(idx));
@@ -2852,7 +2907,8 @@ void SegmentBuilder::extendIntersectionMeshAtSharedCrossing(size_t neighbor_pair
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, bool append_flexible_placeholder,
   std::optional<size_t> skip_pair_idx)
 {
-  if (neighbor_pair_idx == static_cast<size_t>(-1) || (skip_pair_idx.has_value() && neighbor_pair_idx == skip_pair_idx.value()))
+  if (neighbor_pair_idx == static_cast<size_t>(-1)
+    || (skip_pair_idx.has_value() && neighbor_pair_idx == skip_pair_idx.value()))
   {
     return;
   }
@@ -2946,8 +3002,8 @@ void SegmentBuilder::extendIntersectionMeshAtSharedCrossing(size_t neighbor_pair
     append_flexible_placeholder);
 }
 
-void SegmentBuilder::applyIntersectionStripOneSidedFixedVertex(VoronoiMesh& mesh, MeshingData& seg, bool fixed_start_side,
-  size_t new_fixed_vertex_index, int inside_half_edge_id,
+void SegmentBuilder::applyIntersectionStripOneSidedFixedVertex(VoronoiMesh& mesh, MeshingData& seg,
+  bool fixed_start_side, size_t new_fixed_vertex_index, int inside_half_edge_id,
   const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& new_crossing_for_updated_side,
   const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
   bool keep_strip_alive, bool append_flexible_placeholder)
@@ -2983,7 +3039,8 @@ void SegmentBuilder::applyIntersectionStripOneSidedFixedVertex(VoronoiMesh& mesh
   }
 }
 
-void SegmentBuilder::applyIntersectionStripUniformClosureVertex(VoronoiMesh& mesh, MeshingData& seg, size_t closure_vertex_index)
+void SegmentBuilder::applyIntersectionStripUniformClosureVertex(
+  VoronoiMesh& mesh, MeshingData& seg, size_t closure_vertex_index)
 {
   if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
   {
@@ -3228,7 +3285,8 @@ int kinDS::SegmentBuilder::closingMeshAppendVertex(VoronoiMesh& mesh,
   return static_cast<int>(vertex_id);
 }
 
-std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> kinDS::SegmentBuilder::closingMeshFindVoronoiEdgeIntersection(
+std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>
+kinDS::SegmentBuilder::closingMeshFindVoronoiEdgeIntersection(
   size_t voronoi_edge_id, size_t crossed_delaunay_he_id) const
 {
   const size_t d = crossed_delaunay_he_id / 2;
@@ -3342,7 +3400,8 @@ glm::dvec3 kinDS::SegmentBuilder::closingMeshVoronoiDelaunayCrossingPosition(
   const size_t d_b = graph.getHalfEdges()[d_he1].origin;
   if (d_a == size_t(-1) || d_b == size_t(-1))
   {
-    KINDS_WARNING("closingMeshVoronoiDelaunayCrossingPosition: degenerate Delaunay edge for voronoi_edge=" << voronoi_edge_id << " delaunay_edge=" << delaunay_edge_id << " t=" << t);
+    KINDS_WARNING("closingMeshVoronoiDelaunayCrossingPosition: degenerate Delaunay edge for voronoi_edge="
+      << voronoi_edge_id << " delaunay_edge=" << delaunay_edge_id << " t=" << t);
     return glm::dvec3(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), t);
   }
 
@@ -3353,7 +3412,8 @@ glm::dvec3 kinDS::SegmentBuilder::closingMeshVoronoiDelaunayCrossingPosition(
 }
 
 auto kinDS::SegmentBuilder::extractSegmentsForVoronoiEdge(double t, int incident_edge_index, size_t voronoi_edge_id,
-  const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex, bool reverse) -> std::vector<MeshingData>
+  const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex, bool reverse)
+  -> std::vector<MeshingData>
 {
   std::vector<MeshingData> out_segments;
   auto& graph = kin_del.getGraph();
@@ -3387,8 +3447,8 @@ auto kinDS::SegmentBuilder::extractSegmentsForVoronoiEdge(double t, int incident
   bool inside = kin_del.getFaceInside(strand_containing_tri_id);
   if (inside)
   {
-    out_segments.push_back(MeshingData { track_vertex(strand_cm_vertex, graph.getHalfEdges()[voronoi_he_strand_side].face),
-      -1, -1, -1 });
+    out_segments.push_back(
+      MeshingData { track_vertex(strand_cm_vertex, graph.getHalfEdges()[voronoi_he_strand_side].face), -1, -1, -1 });
     out_segments.back().closing_incident_edge_index = incident_edge_index;
     out_segments.back().closing_voronoi_edge_id = voronoi_edge_id;
     out_segments.back().closing_strand_at_voronoi_even_he = strand_at_voronoi_even_he;
@@ -3528,11 +3588,11 @@ SegmentBuilder::ClosingMeshOrderedIndex kinDS::SegmentBuilder::closingMeshBuildO
     if (s->start_crossing.has_value())
     {
       const auto ref = s->start_crossing.value();
-      const auto ins = out.start_crossing_to_segment.insert({ref, i});
+      const auto ins = out.start_crossing_to_segment.insert({ ref, i });
       if (!ins.second)
       {
         KINDS_ERROR("Closing mesh: duplicate start_crossing: ordered_seg[" << ins.first->second << "] and ordered_seg["
-                                                                             << i << "] share the same start crossing.");
+                                                                           << i << "] share the same start crossing.");
       }
     }
   }
@@ -3560,7 +3620,8 @@ void kinDS::SegmentBuilder::closingMeshValidateOrderedSegmentGeometry(
     {
       const std::string ctxs = std::string("ordered_seg[") + std::to_string(si)
         + "] incident=" + std::to_string(s->closing_incident_edge_index);
-      validateClosingCapCrossingRef(kin_del, (ctxs + " start_ref").c_str(), s->start_crossing, ve, s->start_half_edge_id);
+      validateClosingCapCrossingRef(
+        kin_del, (ctxs + " start_ref").c_str(), s->start_crossing, ve, s->start_half_edge_id);
       validateClosingCapCrossingRef(kin_del, (ctxs + " end_ref").c_str(), s->end_crossing, ve, s->end_half_edge_id);
     }
 
@@ -3582,9 +3643,9 @@ void kinDS::SegmentBuilder::closingMeshValidateOrderedSegmentGeometry(
       = [&](const glm::dvec2& p) -> double { return std::abs((p.x - L.x) * axis.y - (p.y - L.y) * axis.x) / axis_len; };
     if (perp_dist(ps) > k_closing_cap_geom_eps || perp_dist(pe) > k_closing_cap_geom_eps)
     {
-      KINDS_ERROR("Closing mesh ordered_seg["
-        << si << "]: mesh_start/end not collinear with canonical Voronoi "
-        << "edge " << ve << " (even->odd circumcenters); check segment direction vs inside walk.");
+      KINDS_ERROR("Closing mesh ordered_seg[" << si << "]: mesh_start/end not collinear with canonical Voronoi "
+                                              << "edge " << ve
+                                              << " (even->odd circumcenters); check segment direction vs inside walk.");
     }
     const double ts = glm::dot(ps - L, axis) / ax2;
     const double te = glm::dot(pe - L, axis) / ax2;
@@ -3602,22 +3663,20 @@ void kinDS::SegmentBuilder::closingMeshValidateOrderedSegmentGeometry(
     else if (te > ts + 1e-8)
     {
       KINDS_ERROR("Closing mesh ordered_seg[" << si << "]: mesh vertices reversed along Voronoi edge " << ve
-                                                << " (t_start=" << ts << " > t_end=" << te
-                                                << " along even->odd); expected mesh_start nearer "
-                                                << "voronoi_he_odd (strand-side).");
+                                              << " (t_start=" << ts << " > t_end=" << te
+                                              << " along even->odd); expected mesh_start nearer "
+                                              << "voronoi_he_odd (strand-side).");
     }
 
     glm::dvec2 ip;
-    if (s->start_crossing.has_value()
-      && tryComputeCrossingIntersectionPosition2D(kin_del, s->start_crossing, t, ip))
+    if (s->start_crossing.has_value() && tryComputeCrossingIntersectionPosition2D(kin_del, s->start_crossing, t, ip))
     {
       if (glm::distance(ip, ps) > k_closing_cap_geom_eps)
       {
         KINDS_ERROR("Closing mesh ordered_seg[" << si << "]: start_ref 2D position does not match mesh_start.");
       }
     }
-    if (s->end_crossing.has_value()
-      && tryComputeCrossingIntersectionPosition2D(kin_del, s->end_crossing, t, ip))
+    if (s->end_crossing.has_value() && tryComputeCrossingIntersectionPosition2D(kin_del, s->end_crossing, t, ip))
     {
       if (glm::distance(ip, pe) > k_closing_cap_geom_eps)
       {
@@ -3775,8 +3834,9 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
         if (joint_vv == static_cast<size_t>(-1))
         {
           KINDS_ERROR("Closing mesh: ordered_seg[" << current_segment_index
-            << "] has no boundary end_crossing but closing_voronoi_edge_id is unset; cannot resolve circumcenter Voronoi "
-               "vertex for join.");
+                                                   << "] has no boundary end_crossing but closing_voronoi_edge_id is "
+                                                      "unset; cannot resolve circumcenter Voronoi "
+                                                      "vertex for join.");
           exited_fail = true;
           break;
         }
@@ -3796,9 +3856,9 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
         if (next_j != static_cast<size_t>(-1))
         {
           record_cap_handoff(current_segment_index, next_j);
-          KINDS_DEBUG("Polygon walk: Voronoi-vertex join from ordered_seg[" << current_segment_index << "] to ordered_seg["
-            << next_j << "] at Voronoi vertex (circumcenter) id " << joint_vv
-            << " (strip end at circumcenter, no boundary end_crossing).");
+          KINDS_DEBUG("Polygon walk: Voronoi-vertex join from ordered_seg["
+            << current_segment_index << "] to ordered_seg[" << next_j << "] at Voronoi vertex (circumcenter) id "
+            << joint_vv << " (strip end at circumcenter, no boundary end_crossing).");
           current_segment_index = next_j;
           continue;
         }
@@ -3808,14 +3868,15 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
         {
           walk_closure_crossing_ref.reset();
           record_cap_handoff(current_segment_index, seed_index);
-          KINDS_DEBUG("Polygon walk: Voronoi-vertex join closes loop to seed ordered_seg[" << seed_index
-            << "] at Voronoi vertex (circumcenter) id " << joint_vv << ".");
+          KINDS_DEBUG("Polygon walk: Voronoi-vertex join closes loop to seed ordered_seg["
+            << seed_index << "] at Voronoi vertex (circumcenter) id " << joint_vv << ".");
           exited_closed_loop = true;
           break;
         }
-        KINDS_ERROR("Closing mesh: ordered_seg[" << current_segment_index
-          << "] ends at circumcenter Voronoi vertex id " << joint_vv
-          << " with no boundary end_crossing, but no unused strip has that id as its strand-side Voronoi vertex (and it "
+        KINDS_ERROR("Closing mesh: ordered_seg["
+          << current_segment_index << "] ends at circumcenter Voronoi vertex id " << joint_vv
+          << " with no boundary end_crossing, but no unused strip has that id as its strand-side Voronoi vertex (and "
+             "it "
              "does not match seed's strand-side Voronoi vertex); cannot continue cap walk.");
         exited_fail = true;
         break;
@@ -3860,8 +3921,8 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
 
         const auto& d_intersections = crossing_data.delaunay_edge_intersections[boundary_he / 2];
         // `delaunay_edge_intersections[e]` is ordered along the even Delaunay half-edge (2*e).
-        // For a boundary edge, select the inside-oriented half-edge; traverse forward iff that inside half-edge is even,
-        // otherwise traverse backward.
+        // For a boundary edge, select the inside-oriented half-edge; traverse forward iff that inside half-edge is
+        // even, otherwise traverse backward.
         const size_t inside_boundary_he
           = kin_del.isOnComponentBoundaryOutside(boundary_he) ? (boundary_he ^ 1) : boundary_he;
         const bool effective_list_forward = ((inside_boundary_he % 2) != 0);
@@ -3871,16 +3932,17 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
         // (a_walk -> b_walk) to (start_intersection, end_intersection).
         const auto append_traced_boundary_interval
           = [&](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& a_walk,
-              const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& b_walk) {
-            if (effective_list_forward)
-            {
-              result.traced_boundary_intervals.push_back(BoundaryIntersectionInterval { strand_id, a_walk, b_walk });
-            }
-            else
-            {
-              result.traced_boundary_intervals.push_back(BoundaryIntersectionInterval { strand_id, b_walk, a_walk });
-            }
-          };
+              const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& b_walk)
+        {
+          if (effective_list_forward)
+          {
+            result.traced_boundary_intervals.push_back(BoundaryIntersectionInterval { strand_id, a_walk, b_walk });
+          }
+          else
+          {
+            result.traced_boundary_intervals.push_back(BoundaryIntersectionInterval { strand_id, b_walk, a_walk });
+          }
+        };
 
         // Walk every crossing along this directed Delaunay half-edge after `current_ref_opt`: each crossing gets a
         // mesh vertex. Strand-incident crossings that match an ordered segment start_crossing hand off to that segment;
@@ -3895,7 +3957,8 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
           }
 
           auto find_next_intersection = [&](std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> ref_opt)
-            -> std::list<KineticDelaunay::CrossingData::EdgeIntersectionRef>::const_iterator {
+            -> std::list<KineticDelaunay::CrossingData::EdgeIntersectionRef>::const_iterator
+          {
             if (d_intersections.empty())
             {
               return d_intersections.end();
@@ -3933,7 +3996,8 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
             }
 
             const KineticDelaunay::CrossingData::EdgeIntersectionRef candidate_ref = *next_it;
-            const std::string candidate_log = formatCrossingIntersectionForLog(kin_del, std::make_optional(candidate_ref));
+            const std::string candidate_log
+              = formatCrossingIntersectionForLog(kin_del, std::make_optional(candidate_ref));
 
             append_traced_boundary_interval(last_ref_on_edge, candidate_ref);
             last_ref_on_edge = candidate_ref;
@@ -3948,21 +4012,22 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
             }
             if (next_segment_index == current_segment_index && next_segment_index != seed_index)
             {
-              KINDS_DEBUG("Skipping intersection " << candidate_log
-                                                 << " during walk: handoff would target current segment's own start.");
-              KINDS_ERROR("Closing mesh: Delaunay handoff from ordered_seg[" << current_segment_index
+              KINDS_DEBUG("Skipping intersection "
+                << candidate_log << " during walk: handoff would target current segment's own start.");
+              KINDS_ERROR("Closing mesh: Delaunay handoff from ordered_seg["
+                << current_segment_index
                 << "] targets its own start_crossing (only the seed loop may close onto seed).");
               exited_fail = true;
               exit_boundary_chain_to_voronoi = true;
               break;
             }
-            // Close the loop only when Delaunay walk reaches the seed strip's *start* crossing (end of prior strip hands
-            // off to start of next; the seed's start receives the last handoff).
+            // Close the loop only when Delaunay walk reaches the seed strip's *start* crossing (end of prior strip
+            // hands off to start of next; the seed's start receives the last handoff).
             const bool closes_polygon_at_seed_crossing = (next_segment_index == seed_index);
 
-            // Walking a new boundary half-edge resets current_ref_opt to nullopt; the first listed crossing on that edge
-            // can be the seed segment's start crossing — already emitted as mesh_start. Closing the loop must not add
-            // another mesh vertex there.
+            // Walking a new boundary half-edge resets current_ref_opt to nullopt; the first listed crossing on that
+            // edge can be the seed segment's start crossing — already emitted as mesh_start. Closing the loop must not
+            // add another mesh vertex there.
             if (!closes_polygon_at_seed_crossing)
             {
               const glm::dvec3 inter_pos = closingMeshVoronoiDelaunayCrossingPosition(
@@ -3976,7 +4041,7 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
               else
               {
                 KINDS_DEBUG("Skipping intersection " << candidate_log
-                                                   << " during walk: computed intersection position is non-finite.");
+                                                     << " during walk: computed intersection position is non-finite.");
                 KINDS_WARNING("Closing mesh: crossing on Delaunay edge has non-finite 2D position (boundary_he="
                   << boundary_he << ", crossing=" << candidate_log << ").");
               }
@@ -3984,8 +4049,8 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
             else
             {
               KINDS_DEBUG("Skipping intersection " << candidate_log
-                                                 << " during walk: closes loop at seed start crossing; "
-                                                    "seed start vertex already on polygon.");
+                                                   << " during walk: closes loop at seed start crossing; "
+                                                      "seed start vertex already on polygon.");
             }
 
             if (strand_inc)
@@ -4014,12 +4079,13 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
                 exit_boundary_chain_to_voronoi = true;
                 break;
               }
-              KINDS_ERROR("Closing mesh: strand-incident Voronoi crossing on Delaunay boundary matches no ordered segment "
-                          "start_crossing at boundary_he="
-                          << boundary_he << ".");
+              KINDS_ERROR(
+                "Closing mesh: strand-incident Voronoi crossing on Delaunay boundary matches no ordered segment "
+                "start_crossing at boundary_he="
+                << boundary_he << ".");
               KINDS_DEBUG("Skipping intersection " << candidate_log
-                                                 << " during walk: strand-incident crossing has no matching segment "
-                                                    "start_crossing.");
+                                                   << " during walk: strand-incident crossing has no matching segment "
+                                                      "start_crossing.");
               exited_fail = true;
               exit_boundary_chain_to_voronoi = true;
               break;
@@ -4051,9 +4117,9 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
         {
           if (static_cast<size_t>(corner_vertex_id) != strand_id)
           {
-            KINDS_ERROR("Closing mesh: Delaunay boundary walk (half-edge " << boundary_he << ") reached corner vertex "
-                                                                          << corner_vertex_id << " (expected strand "
-                                                                          << strand_id << ").");
+            KINDS_ERROR("Closing mesh: Delaunay boundary walk (half-edge "
+              << boundary_he << ") reached corner vertex " << corner_vertex_id << " (expected strand " << strand_id
+              << ").");
             exited_fail = true;
             const glm::dvec2 corner = kin_del.getPointAt(t, static_cast<size_t>(corner_vertex_id));
             const int cv = add_mesh_vertex(glm::dvec3(corner, t));
@@ -4081,8 +4147,9 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
       }
       if (!found_next_segment)
       {
-        KINDS_ERROR("Closing mesh: Delaunay boundary walk from end of ordered_seg[" << current_segment_index
-          << "] did not reach any strip's start_crossing (nor close the loop to ordered_seg[" << seed_index << "]).");
+        KINDS_ERROR("Closing mesh: Delaunay boundary walk from end of ordered_seg["
+          << current_segment_index << "] did not reach any strip's start_crossing (nor close the loop to ordered_seg["
+          << seed_index << "]).");
         exited_fail = true;
         break;
       }
@@ -4094,23 +4161,26 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
       {
         if (cap_start_hits[idx] != 1)
         {
-          KINDS_ERROR("Closing mesh: ordered_seg[" << idx << "] start: expected exactly one incoming handoff (Delaunay or "
-                                                     "Voronoi-vertex join), got "
-                                                     << cap_start_hits[idx] << ".");
+          KINDS_ERROR("Closing mesh: ordered_seg[" << idx
+                                                   << "] start: expected exactly one incoming handoff (Delaunay or "
+                                                      "Voronoi-vertex join), got "
+                                                   << cap_start_hits[idx] << ".");
           exited_fail = true;
         }
         if (cap_end_handed_off[idx] != 1)
         {
-          KINDS_ERROR("Closing mesh: ordered_seg[" << idx << "] end: expected exactly one outgoing handoff (Delaunay or "
-                                                     "Voronoi-vertex join), got "
-                                                     << cap_end_handed_off[idx] << ".");
+          KINDS_ERROR("Closing mesh: ordered_seg[" << idx
+                                                   << "] end: expected exactly one outgoing handoff (Delaunay or "
+                                                      "Voronoi-vertex join), got "
+                                                   << cap_end_handed_off[idx] << ".");
           exited_fail = true;
         }
       }
     }
     else if (!exited_fail && !walk_segment_order.empty())
     {
-      KINDS_ERROR("Closing mesh: polygon walk for seed ordered_seg[" << seed_index
+      KINDS_ERROR("Closing mesh: polygon walk for seed ordered_seg["
+        << seed_index
         << "] ended without closing the loop (each strip end must hand off via a Delaunay boundary walk or a Voronoi "
            "circumcenter join matching dual Voronoi vertex ids to another strip's strand end or seed's strand-side "
            "vertex).");
@@ -4136,9 +4206,9 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
         glm::dvec2 xy(0.0, 0.0);
         const bool have_xy = tryComputeCrossingIntersectionPosition2D(kin_del, walk_closure_crossing_ref, t, xy);
         const auto& ir = *walk_closure_crossing_ref.value();
-        const glm::dvec3 geom
-          = closingMeshVoronoiDelaunayCrossingPosition(t, ir.voronoi_edge_id, ir.delaunay_edge_id);
-        head << " Loop closed at crossing " << formatCrossingIntersectionForLog(kin_del, walk_closure_crossing_ref) << ".";
+        const glm::dvec3 geom = closingMeshVoronoiDelaunayCrossingPosition(t, ir.voronoi_edge_id, ir.delaunay_edge_id);
+        head << " Loop closed at crossing " << formatCrossingIntersectionForLog(kin_del, walk_closure_crossing_ref)
+             << ".";
         if (have_xy)
         {
           head << " CrossingData 2D=(" << xy.x << "," << xy.y << ")";
@@ -4208,12 +4278,10 @@ void kinDS::SegmentBuilder::closingMeshLogUnmatchedOrderedSegments(
       if (!segment_used[i])
       {
         const MeshingData* s = ordered_segments[i];
-        KINDS_WARNING("Closing mesh: unmatched ordered segment [" << i << "] incident_edge=" << s->closing_incident_edge_index
-                                                                  << " voronoi_edge="
-                                                                  << (s->closing_voronoi_edge_id == static_cast<size_t>(-1)
-                                                                        ? -1
-                                                                        : static_cast<int>(s->closing_voronoi_edge_id))
-                                                                  << ".");
+        KINDS_WARNING("Closing mesh: unmatched ordered segment ["
+          << i << "] incident_edge=" << s->closing_incident_edge_index << " voronoi_edge="
+          << (s->closing_voronoi_edge_id == static_cast<size_t>(-1) ? -1 : static_cast<int>(s->closing_voronoi_edge_id))
+          << ".");
       }
     }
   }
@@ -4271,11 +4339,11 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
     ++incident_edge_index;
     const size_t incident_he = *it;
     const size_t voronoi_edge_id = incident_he / 2;
-    std::vector<MeshingData> bucket = closingMeshExtractRawSegmentsForVoronoiEdge(strand_id, t, mesh, boundary_polygon,
-      centroid, incident_edge_index, incident_he, track_vertex);
+    std::vector<MeshingData> bucket = closingMeshExtractRawSegmentsForVoronoiEdge(
+      strand_id, t, mesh, boundary_polygon, centroid, incident_edge_index, incident_he, track_vertex);
     segments_by_voronoi_edge[voronoi_edge_id] = bucket;
-    closing_segments.insert(closing_segments.end(), std::make_move_iterator(bucket.begin()),
-      std::make_move_iterator(bucket.end()));
+    closing_segments.insert(
+      closing_segments.end(), std::make_move_iterator(bucket.begin()), std::make_move_iterator(bucket.end()));
   }
 
   {
@@ -4284,12 +4352,13 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
     {
       const int ve_log
         = seg.closing_voronoi_edge_id == static_cast<size_t>(-1) ? -1 : static_cast<int>(seg.closing_voronoi_edge_id);
-      KINDS_DEBUG("Closing mesh extraction, segment " << extraction_index << " (incident_edge="
-                                                       << seg.closing_incident_edge_index << " voronoi_edge=" << ve_log
-                                                       << " mesh_v " << seg.mesh_start_vertex_id << "->"
-                                                       << seg.mesh_end_vertex_id << "):");
-      logExtractionClosingMeshStripEndpoint(kin_del, t, extraction_index, seg.start_crossing, seg.closing_voronoi_edge_id);
-      logExtractionClosingMeshStripEndpoint(kin_del, t, extraction_index, seg.end_crossing, seg.closing_voronoi_edge_id);
+      KINDS_DEBUG("Closing mesh extraction, segment "
+        << extraction_index << " (incident_edge=" << seg.closing_incident_edge_index << " voronoi_edge=" << ve_log
+        << " mesh_v " << seg.mesh_start_vertex_id << "->" << seg.mesh_end_vertex_id << "):");
+      logExtractionClosingMeshStripEndpoint(
+        kin_del, t, extraction_index, seg.start_crossing, seg.closing_voronoi_edge_id);
+      logExtractionClosingMeshStripEndpoint(
+        kin_del, t, extraction_index, seg.end_crossing, seg.closing_voronoi_edge_id);
       ++extraction_index;
     }
   }
@@ -4309,7 +4378,8 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   closingMeshLogUnmatchedOrderedSegments(strand_id, t, index_data.ordered_segments, trace.segment_used);
   closingMeshTriangulatePolygonsFan(mesh, trace.polygons);
 
-  const size_t index = registerMeshletWithSuffix(std::move(mesh), std::string("_strand") + std::to_string(strand_id), t);
+  const size_t index
+    = registerMeshletWithSuffix(std::move(mesh), std::string("_strand") + std::to_string(strand_id), t);
   segment_mesh_pair_last_left_and_right_vertex.emplace_back();
   segment_mesh_pair_last_left_and_right_vertex.back() = std::move(closing_segments);
 
@@ -4474,22 +4544,22 @@ void SegmentBuilder::init()
     {
       const size_t first_cell
         = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      startNewMeshFromIntersections(first_cell, t, std::nullopt, refs.front(), false, BoundaryEventType::Init,
-        BoundarySegmentAction::NewSegment);
+      startNewMeshFromIntersections(
+        first_cell, t, std::nullopt, refs.front(), false, BoundaryEventType::Init, BoundarySegmentAction::NewSegment);
     }
 
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
-      const size_t mid_cell
-        = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      const size_t mid_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
       startNewMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], false, BoundaryEventType::Init, BoundarySegmentAction::NewSegment);
     }
 
     {
-      const size_t last_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      startNewMeshFromIntersections(last_cell, t, refs.back(), std::nullopt, false, BoundaryEventType::Init,
-        BoundarySegmentAction::NewSegment);
+      const size_t last_cell
+        = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+      startNewMeshFromIntersections(
+        last_cell, t, refs.back(), std::nullopt, false, BoundaryEventType::Init, BoundarySegmentAction::NewSegment);
     }
   }
 
@@ -4541,9 +4611,10 @@ void SegmentBuilder::finalize(double t)
       = getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
 
     {
-      const size_t first_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      finishMeshFromIntersections(first_cell, t, std::nullopt, refs.front(), BoundaryEventType::Section,
-        BoundarySegmentAction::SegmentCompleted);
+      const size_t first_cell
+        = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
+      finishMeshFromIntersections(
+        first_cell, t, std::nullopt, refs.front(), BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
@@ -4552,7 +4623,8 @@ void SegmentBuilder::finalize(double t)
         mid_cell, t, refs[k], refs[k + 1], BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
     }
     {
-      const size_t last_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+      const size_t last_cell
+        = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
       finishMeshFromIntersections(
         last_cell, t, refs.back(), std::nullopt, BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
     }
@@ -4632,7 +4704,8 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     std::vector<int> neighbor_segments_for_meshlet;
     const auto& properties = segment_properties[segment_id];
     double earliest_creation = std::numeric_limits<double>::quiet_NaN();
-    auto append_oriented_mesh = [&](VoronoiMesh mesh, size_t seg0, size_t seg1) {
+    auto append_oriented_mesh = [&](VoronoiMesh mesh, size_t seg0, size_t seg1)
+    {
       const double mesh_ct = mesh.getCreationKineticTime();
       if (std::isfinite(mesh_ct))
       {
@@ -4655,7 +4728,8 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     {
       size_t mesh_pair_index = properties.mesh_pair_indices[neighbor_index];
       VoronoiMesh mesh = meshes[mesh_pair_index];
-      append_oriented_mesh(mesh, segment_mesh_pairs[mesh_pair_index].segment_index0, segment_mesh_pairs[mesh_pair_index].segment_index1);
+      append_oriented_mesh(
+        mesh, segment_mesh_pairs[mesh_pair_index].segment_index0, segment_mesh_pairs[mesh_pair_index].segment_index1);
     }
 
     // Boundary-interval meshlets are tracked in a separate pair/index space and must be merged explicitly.
@@ -4718,10 +4792,7 @@ std::vector<std::string> kinDS::SegmentBuilder::extractSegmentMeshletExportSuffi
   return suffixes;
 }
 
-std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractBoundaryIntervalMeshlets() const
-{
-  return intersection_meshes;
-}
+std::vector<VoronoiMesh> kinDS::SegmentBuilder::extractBoundaryIntervalMeshlets() const { return intersection_meshes; }
 
 std::vector<std::string> kinDS::SegmentBuilder::extractBoundaryIntervalMeshletExportSuffixes() const
 {

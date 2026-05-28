@@ -26,6 +26,14 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
   const size_t strand_id = sub->strand_id;
   const double t = sub->occurrence_time;
 
+  if (segment_builder_.visual_debug)
+  {
+    auto& debug_graph = segment_builder_.kin_del.getGraph();
+    writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, debug_graph, t, "before",
+      "subdivision_strand" + std::to_string(strand_id) + "_seq" + std::to_string(sub->queue_sequence_),
+      VisualDebugHighlight::forSubdivisionStrand(debug_graph, strand_id));
+  }
+
   KINDS_DEBUG("Inserting subdivision for strand " << strand_id << " at t = " << t);
   //   Traverse all half-edges around this strand and insert a new vertex into the corresponding segment meshes
   auto& graph = segment_builder_.kin_del.getGraph();
@@ -397,20 +405,6 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
 
 void SegmentBuilderSubdivisionCallback::afterEvent(KineticDelaunay::Event& e)
 {
-  auto* sub = dynamic_cast<KineticDelaunay::SubdivisionEvent*>(&e);
-  if (!sub)
-  {
-    return;
-  }
-  if (!segment_builder_.visual_debug)
-  {
-    return;
-  }
-
-  auto& graph = segment_builder_.kin_del.getGraph();
-  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
-    sub->occurrence_time, "after",
-    "subdivision_strand" + std::to_string(sub->strand_id) + "_seq" + std::to_string(sub->queue_sequence_),
-    VisualDebugHighlight::forSubdivisionStrand(graph, sub->strand_id));
+  (void)e;
 }
 } // namespace kinDS
