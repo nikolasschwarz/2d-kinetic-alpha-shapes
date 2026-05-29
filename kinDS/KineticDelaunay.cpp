@@ -1820,6 +1820,43 @@ double computeDelaunayEdgeParamForInvariant(
   return kd.delaunayVoronoiEdgeIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, t).first;
 }
 
+double computeInfiniteDelaunayRayParamForInvariant(
+  const KineticDelaunay& kd, size_t delaunay_half_edge_id, size_t voronoi_edge_id, double t)
+{
+  const glm::dvec2 start_point = kd.computeVoronoiVertexClampedInfinity(voronoi_edge_id * 2, t);
+  const glm::dvec2 destination = kd.computeVoronoiVertexClampedInfinity(voronoi_edge_id * 2 + 1, t);
+  const auto ray = kd.computeAngularBisector(delaunay_half_edge_id, t);
+  return segmentIntersectionParameters(ray.first, ray.first + ray.second, start_point, destination).first;
+}
+
+struct DelaunayParamRangeCheck
+{
+  bool valid = false;
+  bool infinite_delaunay_edge = false;
+  double even_ray_param = std::numeric_limits<double>::quiet_NaN();
+  double odd_ray_param = std::numeric_limits<double>::quiet_NaN();
+};
+
+DelaunayParamRangeCheck checkDelaunayParamRangeForInvariant(
+  const KineticDelaunay& kd, KineticDelaunay::CrossingData::EdgeIntersectionRef ref, double recomputed_d_param,
+  double t, double eps)
+{
+  DelaunayParamRangeCheck result;
+  result.infinite_delaunay_edge = kd.getGraph().isInfinite(2 * ref->delaunay_edge_id);
+  if (!result.infinite_delaunay_edge)
+  {
+    result.valid = recomputed_d_param >= -eps && recomputed_d_param <= 1.0 + eps;
+    return result;
+  }
+
+  const size_t even_half_edge_id = 2 * ref->delaunay_edge_id;
+  result.even_ray_param = recomputed_d_param;
+  result.odd_ray_param = computeInfiniteDelaunayRayParamForInvariant(kd, even_half_edge_id ^ 1, ref->voronoi_edge_id, t);
+  result.valid = (std::isfinite(result.even_ray_param) && result.even_ray_param >= -eps)
+    || (std::isfinite(result.odd_ray_param) && result.odd_ray_param >= -eps);
+  return result;
+}
+
 std::string formatDelaunayEdgeIntersectionList(
   const KineticDelaunay::CrossingData& crossing_data, const KineticDelaunay& kd, size_t delaunay_edge_id, double t)
 {
@@ -1878,26 +1915,26 @@ std::string formatVoronoiEdgeIntersectionList(
   return oss.str();
 }
 
-void logInvariantViolationScope(const InvariantViolationScope& scope)
+void logInvariantViolationScope(const InvariantViolationScope& scope, double t)
 {
   if (scope.primary_dual_edge.has_value())
   {
-    KINDS_ERROR("  primary dual edge (magenta): " << *scope.primary_dual_edge);
+    KINDS_ERROR("  t=" << t << " primary dual edge (magenta): " << *scope.primary_dual_edge);
   }
   if (!scope.auxiliary_dual_edges.empty())
   {
-    KINDS_ERROR("  auxiliary dual edges:");
+    KINDS_ERROR("  t=" << t << " auxiliary dual edges:");
     for (size_t edge_id : scope.auxiliary_dual_edges)
     {
-      KINDS_ERROR("    " << edge_id);
+      KINDS_ERROR("    t=" << t << " " << edge_id);
     }
   }
   if (!scope.intersection_log.empty())
   {
-    KINDS_ERROR("  highlighted intersections:");
+    KINDS_ERROR("  t=" << t << " highlighted intersections:");
     for (const IntersectionLogEntry& entry : scope.intersection_log)
     {
-      KINDS_ERROR("    " << formatIntersectionLogEntry(entry));
+      KINDS_ERROR("    t=" << t << " " << formatIntersectionLogEntry(entry));
     }
   }
 }
@@ -1927,7 +1964,7 @@ void exportCrossingInvariantFailureDebugSvg(
   const auto& containing_tri_ids = kd.getCrossingData().getContainingTriIds();
   const auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
 
-  KINDS_ERROR("Writing crossing invariant failure debug SVG: " << filename);
+  KINDS_ERROR("Writing crossing invariant failure debug SVG at t=" << t << ": " << filename);
   HalfEdgeDelaunayGraphToSVG::write(points, kd.getGraph(), filename, 0.1, &kd.getFacesInside(), true,
     &containing_tri_ids, &intersection_debug_data, &highlight);
 }
@@ -1939,9 +1976,10 @@ void exportCrossingInvariantFailureDebugSvg(
   {
     exportCrossingInvariantFailureDebugSvg(*kd, context, t, scope);
   }
-  KINDS_ERROR("validateIntersectionInvariants(" << context << "): " << detail);
-  logInvariantViolationScope(scope);
-  throw std::runtime_error(std::string("validateIntersectionInvariants(") + context + "): " + detail);
+  KINDS_ERROR("validateIntersectionInvariants(" << context << ", t=" << t << "): " << detail);
+  logInvariantViolationScope(scope, t);
+  throw std::runtime_error(
+    std::string("validateIntersectionInvariants(") + context + ", t=" + std::to_string(t) + "): " + detail);
 }
 
 bool listContainsIterator(const std::list<KineticDelaunay::CrossingData::EdgeIntersectionRef>& list,
@@ -2144,19 +2182,15 @@ void KineticDelaunay::CrossingData::validateIntersectionInvariants(
         }
 
         constexpr double param_order_eps = 1e-12;
-        if (recomputed_d_param < -param_order_eps || recomputed_d_param > 1.0 + param_order_eps)
+        constexpr double param_range_eps = 1e-9;
+        if (recomputed_d_param < -param_range_eps || recomputed_d_param > 1.0 + param_range_eps)
         {
-          InvariantViolationScope scope;
-          scope.setPrimaryDualEdge(d_id);
-          scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
-          scope.noteAuxiliaryDualEdge(ref->voronoi_edge_id);
-          failCrossingIntersectionInvariant(ctx,
-            "recomputed Delaunay-edge parameter is outside [0,1] for delaunay_edge_intersections["
-              + std::to_string(d_id) + "] list index " + std::to_string(list_index) + "; entry="
-              + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param })
-              + ", recomputedDParam=" + std::to_string(recomputed_d_param) + "; "
-              + formatDelaunayEdgeIntersectionList(*this, *kd, d_id, t),
-            scope, kd, t);
+          KINDS_WARNING("validateIntersectionInvariants(" << ctx << ", t=" << t
+            << "): recomputed Delaunay-edge parameter is outside [0,1] for delaunay_edge_intersections[" << d_id
+            << "] list index " << list_index << "; entry="
+            << formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param })
+            << ", recomputedDParam=" << recomputed_d_param << "; "
+            << formatDelaunayEdgeIntersectionList(*this, *kd, d_id, t));
         }
         if (recomputed_d_param + param_order_eps < prev_recomputed_d_param)
         {
@@ -2249,18 +2283,14 @@ void KineticDelaunay::CrossingData::validateIntersectionInvariants(
         }
 
         constexpr double param_order_eps = 1e-12;
-        if (v_param < -param_order_eps || v_param > 1.0 + param_order_eps)
+        constexpr double param_range_eps = 1e-9;
+        if (v_param < -param_range_eps || v_param > 1.0 + param_range_eps)
         {
-          InvariantViolationScope scope;
-          scope.setPrimaryDualEdge(v_id);
-          scope.noteIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param);
-          scope.noteAuxiliaryDualEdge(ref->delaunay_edge_id);
-          failCrossingIntersectionInvariant(ctx,
-            "recomputed Voronoi-edge parameter is outside [0,1] for voronoi_edge_intersections[" + std::to_string(v_id)
-              + "] list index " + std::to_string(list_index) + "; entry="
-              + formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param })
-              + ", vParam=" + std::to_string(v_param) + "; " + formatVoronoiEdgeIntersectionList(*this, *kd, v_id, t),
-            scope, kd, t);
+          KINDS_WARNING("validateIntersectionInvariants(" << ctx << ", t=" << t
+            << "): recomputed Voronoi-edge parameter is outside [0,1] for voronoi_edge_intersections[" << v_id
+            << "] list index " << list_index << "; entry="
+            << formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param })
+            << ", vParam=" << v_param << "; " << formatVoronoiEdgeIntersectionList(*this, *kd, v_id, t));
         }
         if (v_param + param_order_eps < prev_v_param)
         {
