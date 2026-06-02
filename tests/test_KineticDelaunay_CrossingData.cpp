@@ -492,7 +492,7 @@ TEST_CASE("KineticDelaunay CrossingData consistency on demo data", "[KineticDela
 {
   enable_all_log_levels_for_test();
   KINDS_DEBUG("Debug test: Starting test");
-  KINDS_INFO("Info test: Starting test");
+  KINDS_DEBUG("Info test: Starting test");
 
   StrandTree tree = makeDemoStrandTree();
 
