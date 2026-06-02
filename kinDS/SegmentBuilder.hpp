@@ -174,7 +174,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /**
    * @brief Output of @ref closingMeshTraceCapPolygons: closed boundary loops and bookkeeping.
    *
-   * @details @p polygons are vertex id rings (into the cap mesh) ready to fan-triangulate. @p segment_used records
+   * @details @p polygons are vertex id rings (into the cap mesh) ready to triangulate. @p segment_used records
    * which ordered segments were consumed by the walk. @p mesh_vertex_ids is the id list after extraction plus any
    * vertices added along Delaunay boundary crossings during the trace.
    */
@@ -219,6 +219,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<int> half_edge_to_boundary_vertex_index;
 
   KineticDelaunay& kin_del;
+  std::function<void(size_t, std::function<void(size_t)>)> parallel_for;
   std::unique_ptr<SegmentBuilderSectionCallback> section_callback_;
   std::unique_ptr<SegmentBuilderFlipCallback> flip_callback_;
   std::unique_ptr<SegmentBuilderRadiusCallback> radius_callback_;
@@ -582,11 +583,19 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const std::vector<MeshingData*>& ordered_segments, const std::vector<bool>& segment_used);
 
   /**
-   * @brief Fan-triangulates each polygon ring into the cap mesh (in-place).
-   * @param mesh Cap mesh (triangles appended).
-   * @param polygons Vertex index rings; first vertex is the fan pivot for each polygon.
+   * @brief Triangulates one simple polygon ring into @p mesh using ear clipping.
+   * @param polygon Vertex index ring into @p mesh.
+   * @param orient_upwards If true, emits CCW XY triangles; otherwise emits CW triangles.
    */
-  void closingMeshTriangulatePolygonsFan(VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons);
+  void triangulateSimplePolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
+    const std::string& metadata = "{}", int material_id = RegularMeshletMaterialId, bool orient_upwards = true);
+
+  /**
+   * @brief Triangulates each traced closing polygon ring into the cap mesh (in-place).
+   * @param mesh Cap mesh (triangles appended).
+   * @param polygons Vertex index rings.
+   */
+  void closingMeshTriangulatePolygons(VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons);
 
   size_t createClosingMesh(size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals = nullptr);
@@ -608,9 +617,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     bool initial_left_inside, const VoronoiMesh& mesh, const std::list<MeshingData>& strips) const;
 
   SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions,
-    bool create_transformed_mesh, bool visual_debug = false);
+    bool create_transformed_mesh, bool visual_debug = false,
+    std::function<void(size_t, std::function<void(size_t)>)> parallel_for = {});
 
-  SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh, bool visual_debug = false);
+  SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh, bool visual_debug = false,
+    std::function<void(size_t, std::function<void(size_t)>)> parallel_for = {});
 
   ~SegmentBuilder() override;
 

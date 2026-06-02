@@ -274,14 +274,14 @@ void interpolateProperties(
   {
     old_tri[i] = original_mesh.getTriangles()[3 * original_face_id + i];
     old_normals[i] = original_mesh.getNormal(3 * original_face_id + i);
-    // KINDS_INFO("Old tri id " << i << ": " << old_tri[i]);
+    // KINDS_DEBUG("Old tri id " << i << ": " << old_tri[i]);
     if (original_mesh.getUVIndices()[old_tri[i]] >= original_mesh.getUVs().size())
     {
       interpolate_uv = false;
     }
   }
 
-  // KINDS_INFO("interpolate_uv: " << interpolate_uv);
+  // KINDS_DEBUG("interpolate_uv: " << interpolate_uv);
   if (interpolate_uv)
   {
     new_mesh.getUVIndices().resize(new_mesh.getTriangleCount() * 3, -1);
@@ -314,7 +314,9 @@ void interpolateProperties(
 std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(
   const VoronoiMesh& mesh, const std::vector<int>& neighbor_segments)
 {
-  std::pair<VoronoiMesh, std::vector<int>> ret_val;
+  std::pair<VoronoiMesh, std::vector<int>> ret_val {
+    VoronoiMesh(std::vector<std::string> {}, NormalMode::PerTriangleCorner), {}
+  };
   auto& [intersection_mesh, out_neighbor_segments] = ret_val;
 
   if (mesh.getTriangles().empty())

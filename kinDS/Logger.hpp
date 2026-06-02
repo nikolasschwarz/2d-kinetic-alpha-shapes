@@ -197,7 +197,7 @@ inline Logger logger;
     logger.log(LogLevel::Debug, ss.str());                                                                             \
   }
 
-#define KINDS_INFO(msg)                                                                                                \
+#define KINDS_INFO(msg)                                                                                                 \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \

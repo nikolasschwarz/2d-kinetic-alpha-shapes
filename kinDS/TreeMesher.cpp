@@ -83,8 +83,14 @@ void TreeMesher::exportCombinedMesh() const
 {
   // for now, just combine all meshes into one
   kinDS::VoronoiMesh combined_mesh;
+  bool combined_mesh_initialized = false;
   for (const auto& mesh : segment_meshlets)
   {
+    if (!combined_mesh_initialized)
+    {
+      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, mesh.getNormalMode());
+      combined_mesh_initialized = true;
+    }
     combined_mesh += mesh;
   }
 
@@ -95,7 +101,7 @@ void TreeMesher::exportCombinedMesh() const
     kinDS::ObjExporter::writeMesh(segment_meshlets[i],
       "meshlet" + std::to_string(i) + suffix + segment_meshlets[i].creationKineticTimeFilenameSuffix() + ".obj");
   }
-  KINDS_INFO("Kinetic Delaunay Voronoi Meshes exported.");
+  KINDS_DEBUG("Kinetic Delaunay Voronoi Meshes exported.");
 }
 
 void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
@@ -131,8 +137,8 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
           const std::string suffix
             = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
           kinDS::ObjExporter::writeMesh(segment_meshlets[mesh_index],
-            "meshlet" + std::to_string(mesh_index) + suffix + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix()
-              + "_raw.obj");
+            "meshlet" + std::to_string(mesh_index) + suffix
+              + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix() + "_raw.obj");
         }
         std::tie(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index])
           = boundary_intersector.Intersect(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index]);
@@ -325,7 +331,7 @@ void TreeMesher::fixFailedSegments(const MeshIntersection& boundary_intersector)
     fixed_mesh_count++;
   }
 
-  KINDS_INFO("Fixed " << fixed_mesh_count << " out of " << empty_mesh_indices.size() << " meshes.");
+  KINDS_DEBUG("Fixed " << fixed_mesh_count << " out of " << empty_mesh_indices.size() << " meshes.");
 }
 
 std::pair<std::vector<float>, std::vector<float>> TreeMesher::computeTopAndBottomBoundaryDistances(
@@ -348,7 +354,7 @@ std::pair<std::vector<float>, std::vector<float>> TreeMesher::computeTopAndBotto
 
 void TreeMesher::runKineticDelaunay(bool visual_debug)
 {
-  KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing...");
+  KINDS_DEBUG("Starting Kinetic Delaunay Voronoi Meshing...");
   // sort subdivisions into a single array
   std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
@@ -357,13 +363,29 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   bool transform_mesh_at_construction = false;
 
   mesh_builder
-    = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction, visual_debug);
+    = std::make_shared<SegmentBuilder>(
+      *kinetic_delaunay, subdivisions, transform_mesh_at_construction, visual_debug, parallel_for);
+
+  KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
+                                                                                      << ", visual_debug=" << visual_debug
+                                                                                      << ", debug_export_meshes="
+                                                                                      << settings.debug_export_meshes
+                                                                                      << ", max_meshlet_export="
+                                                                                      << settings.max_meshlet_export
+                                                                                      << ", merge_meshlets_by_segment="
+                                                                                      << settings.merge_meshlets_by_segment
+                                                                                      << ", fix_missing_meshes="
+                                                                                      << settings.fix_missing_meshes
+                                                                                      << ", radius_vertex_shift_enabled="
+                                                                                      << mesh_builder
+                                                                                           ->radius_boundary_transition_shift_enabled);
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
 
   std::tie(segment_meshlets, meshing_neighbor_indices)
     = mesh_builder->extractSegmentMeshlets(settings.merge_meshlets_by_segment);
-  segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(settings.merge_meshlets_by_segment);
+  segment_meshlet_export_suffixes
+    = mesh_builder->extractSegmentMeshletExportSuffixes(settings.merge_meshlets_by_segment);
 }
 
 void TreeMesher::mapMeshingToPhysicsSegmentIndices()
@@ -404,7 +426,7 @@ const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm(bool visu
     kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
   }
 
-  truncateToBoundary(boundary_mesh);
+  // truncateToBoundary(boundary_mesh);
 
   mapMeshingToPhysicsSegmentIndices();
 

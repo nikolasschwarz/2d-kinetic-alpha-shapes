@@ -57,18 +57,18 @@ class ObjExporter
       {
         file << " " << (indices[i + j] + 1); // 1-based index in OBJ
 
-        size_t normal_index;
+        size_t normal_index = std::numeric_limits<size_t>::max();
         if (mesh.getNormalMode() == NormalMode::PerTriangleCorner)
         {
           normal_index = i + j;
         }
-        else
+        else if (mesh.getNormalMode() == NormalMode::PerVertex)
         {
           normal_index = indices[i + j];
         }
 
         bool has_uv = uv_indices[i + j] != std::numeric_limits<size_t>::max();
-        bool has_normal = normals.size() > normal_index;
+        bool has_normal = normal_index != std::numeric_limits<size_t>::max() && normals.size() > normal_index;
 
         if (has_uv || has_normal)
         {
@@ -178,6 +178,8 @@ class ObjExporter
     double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {},
     bool include_metadata = false, bool include_vertex_colors = false)
   {
+    mesh.validateNormalCount("ObjExporter::writeMesh(" + obj_path.string() + ")");
+
     std::ofstream file(obj_path);
     if (!file.is_open())
     {

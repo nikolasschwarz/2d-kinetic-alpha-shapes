@@ -45,6 +45,24 @@ std::optional<glm::dvec3> meshVertexUv(const VoronoiMesh& mesh, size_t vertex_in
   return std::nullopt;
 }
 
+void warnIfTriangleKineticTimesNotInUnitSection(
+  size_t v1, size_t v2, size_t v3, const std::vector<glm::dvec3>& vertices, const char* mesh_kind, int material_id)
+{
+  const double t0 = vertices[v1][2];
+  const double t1 = vertices[v2][2];
+  const double t2 = vertices[v3][2];
+  const double min_t = std::min({ t0, t1, t2 });
+  const double max_t = std::max({ t0, t1, t2 });
+  const double n = std::floor(min_t);
+  constexpr double eps = 1e-9;
+  if (max_t > n + 1.0 + eps)
+  {
+    KINDS_WARNING("[" << mesh_kind << "] Triangle kinetic times not contained in any unit section [n,n+1]: vertices=("
+                      << v1 << "," << v2 << "," << v3 << ") times=(" << t0 << "," << t1 << "," << t2 << ") min="
+                      << min_t << " max=" << max_t << " floor(min)=" << n << " material_id=" << material_id);
+  }
+}
+
 void setMeshVertexUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec3& uv)
 {
   std::vector<glm::dvec3>& uvs = mesh.getUVs();
@@ -1023,8 +1041,10 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
 }
 
 SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions,
-  bool create_transformed_mesh, bool visual_debug)
+  bool create_transformed_mesh, bool visual_debug,
+  std::function<void(size_t, std::function<void(size_t)>)> parallel_for)
   : kin_del(kin_del)
+  , parallel_for(std::move(parallel_for))
   , section_callback_(std::make_unique<SegmentBuilderSectionCallback>(*this))
   , flip_callback_(std::make_unique<SegmentBuilderFlipCallback>(*this))
   , radius_callback_(std::make_unique<SegmentBuilderRadiusCallback>(*this))
@@ -1034,13 +1054,25 @@ SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<s
   , create_transformed_mesh(create_transformed_mesh)
   , boundary_mesh({ "bark", "interior" })
 {
+  if (!this->parallel_for)
+  {
+    this->parallel_for = [](size_t count, const std::function<void(size_t)>& func)
+    {
+      for (size_t i = 0; i < count; ++i)
+      {
+        func(i);
+      }
+    };
+  }
   assert(std::is_sorted(
     subdivisions.begin(), subdivisions.end(), [](const auto& a, const auto& b) { return a.second < b.second; }));
   kin_del.setSubdivisionSchedule(std::move(subdivisions));
 }
 
-SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh, bool visual_debug)
+SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed_mesh, bool visual_debug,
+  std::function<void(size_t, std::function<void(size_t)>)> parallel_for)
   : kin_del(kin_del)
+  , parallel_for(std::move(parallel_for))
   , section_callback_(std::make_unique<SegmentBuilderSectionCallback>(*this))
   , flip_callback_(std::make_unique<SegmentBuilderFlipCallback>(*this))
   , radius_callback_(std::make_unique<SegmentBuilderRadiusCallback>(*this))
@@ -1050,6 +1082,16 @@ SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed
   , create_transformed_mesh(create_transformed_mesh)
   , boundary_mesh({ "bark", "interior" })
 {
+  if (!this->parallel_for)
+  {
+    this->parallel_for = [](size_t count, const std::function<void(size_t)>& func)
+    {
+      for (size_t i = 0; i < count; ++i)
+      {
+        func(i);
+      }
+    };
+  }
   kin_del.setSubdivisionSchedule({});
 }
 
@@ -1364,7 +1406,7 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
   auto& centroid = kin_del.component_data.component_centroids[component_id];
 
   // --- Target mesh: new pair → local mesh registered at end; reuse → append to existing VoronoiMesh for this pair. ---
-  VoronoiMesh mesh_local;
+  VoronoiMesh mesh_local(MeshletExportMaterialNames);
   const bool reuse_in_place = !created_new_pair && segment_mesh_pair_index < meshes.size();
   VoronoiMesh& mesh = reuse_in_place ? meshes[segment_mesh_pair_index] : mesh_local;
   const size_t vertex_count_before = mesh.getVertexCount();
@@ -1975,7 +2017,7 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     auto& centroid = kin_del.component_data.component_centroids[component_id];
 
     const bool reuse_in_place = !created_new_pair && intersection_pair_index < intersection_meshes.size();
-    VoronoiMesh mesh_local;
+    VoronoiMesh mesh_local(MeshletExportMaterialNames);
     VoronoiMesh& mesh = reuse_in_place ? intersection_meshes[intersection_pair_index] : mesh_local;
 
     auto intersection_or_cell_position = [&](std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> ref)
@@ -2704,6 +2746,7 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w)
   /*KINDS_DEBUG("UVs after adjustment: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1]) + "), v(" +
                 std::to_string(uv_v[0]) + ", " + std::to_string(uv_v[1]) + "), w(" + std::to_string(uv_w[0]) + ", " +
                 std::to_string(uv_w[1]) + ")");*/
+  // warnIfTriangleKineticTimesNotInUnitSection(u, v, w, boundary_mesh.getVertices(), "boundary_mesh", 0);
   return boundary_mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, 0);
 }
 
@@ -2730,8 +2773,9 @@ size_t kinDS::SegmentBuilder::addMeshletTriangle(
 {
   if (mesh.getMaterialNames().empty())
   {
-    mesh.setMaterialNames({ MeshletExportMaterialNames[static_cast<size_t>(RegularMeshletMaterialId)] });
+    mesh.setMaterialNames(MeshletExportMaterialNames);
   }
+  // warnIfTriangleKineticTimesNotInUnitSection(u, v, w, mesh.getVertices(), "meshlet", material_id);
   return mesh.addTriangle(u, v, w, u, v, w, material_id, metadata);
 }
 
@@ -2741,9 +2785,9 @@ size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(
   (void)t;
   if (mesh.getMaterialNames().empty())
   {
-    mesh.setMaterialNames({ MeshletExportMaterialNames[static_cast<size_t>(BoundaryIntervalMeshletMaterialId)] });
+    mesh.setMaterialNames(MeshletExportMaterialNames);
   }
-  const int boundary_material_id = 0;
+  const int boundary_material_id = BoundaryIntervalMeshletMaterialId;
   if (inside_boundary_he_id < 0
     || static_cast<size_t>(inside_boundary_he_id) >= kin_del.getGraph().getHalfEdges().size())
   {
@@ -3125,8 +3169,12 @@ void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool
     }
 
     // as an exception, we directly add the triangle here to have access to the UV indices
-    boundary_mesh.addTriangle(index_offset + vertices[0], index_offset + vertices[1], index_offset + vertices[2],
-      uv_indices[0], uv_indices[1], uv_indices[2], 1);
+    const size_t tri_v0 = index_offset + vertices[0];
+    const size_t tri_v1 = index_offset + vertices[1];
+    const size_t tri_v2 = index_offset + vertices[2];
+    // warnIfTriangleKineticTimesNotInUnitSection(tri_v0, tri_v1, tri_v2, boundary_mesh.getVertices(), "boundary_mesh",
+    // 1);
+    boundary_mesh.addTriangle(tri_v0, tri_v1, tri_v2, uv_indices[0], uv_indices[1], uv_indices[2], 1);
   }
 }
 
@@ -4287,15 +4335,169 @@ void kinDS::SegmentBuilder::closingMeshLogUnmatchedOrderedSegments(
   }
 }
 
-void kinDS::SegmentBuilder::closingMeshTriangulatePolygonsFan(
+void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
+  const std::string& metadata, int material_id, bool orient_upwards)
+{
+  constexpr double eps = 1e-12;
+  std::vector<size_t> vertices;
+  vertices.reserve(polygon.size());
+  for (size_t vertex_id : polygon)
+  {
+    if (vertex_id >= mesh.getVertices().size())
+    {
+      throw std::runtime_error("triangulateSimplePolygon: polygon vertex index out of range.");
+    }
+    if (vertices.empty() || vertices.back() != vertex_id)
+    {
+      vertices.push_back(vertex_id);
+    }
+  }
+  if (vertices.size() > 1 && vertices.front() == vertices.back())
+  {
+    vertices.pop_back();
+  }
+  if (vertices.size() < 3)
+  {
+    return;
+  }
+
+  auto cross_at = [&](size_t prev, size_t current, size_t next)
+  {
+    const glm::dvec3& a3 = mesh.getVertices()[prev];
+    const glm::dvec3& b3 = mesh.getVertices()[current];
+    const glm::dvec3& c3 = mesh.getVertices()[next];
+    const glm::dvec2 a(a3.x, a3.y);
+    const glm::dvec2 b(b3.x, b3.y);
+    const glm::dvec2 c(c3.x, c3.y);
+    return glm::cross(b - a, c - b);
+  };
+
+  bool removed_collinear = true;
+  while (removed_collinear && vertices.size() > 3)
+  {
+    removed_collinear = false;
+    for (size_t i = 0; i < vertices.size(); ++i)
+    {
+      const size_t prev = vertices[(i + vertices.size() - 1) % vertices.size()];
+      const size_t current = vertices[i];
+      const size_t next = vertices[(i + 1) % vertices.size()];
+      if (std::abs(cross_at(prev, current, next)) <= eps)
+      {
+        vertices.erase(vertices.begin() + static_cast<std::ptrdiff_t>(i));
+        removed_collinear = true;
+        break;
+      }
+    }
+  }
+  if (vertices.size() < 3)
+  {
+    return;
+  }
+
+  auto signed_area2 = [&]()
+  {
+    double area2 = 0.0;
+    for (size_t i = 0; i < vertices.size(); ++i)
+    {
+      const glm::dvec3& p0 = mesh.getVertices()[vertices[i]];
+      const glm::dvec3& p1 = mesh.getVertices()[vertices[(i + 1) % vertices.size()]];
+      area2 += p0.x * p1.y - p1.x * p0.y;
+    }
+    return area2;
+  };
+
+  const double area2 = signed_area2();
+  if (std::abs(area2) <= eps)
+  {
+    throw std::runtime_error("triangulateSimplePolygon: polygon area is degenerate.");
+  }
+  if (area2 < 0.0)
+  {
+    std::reverse(vertices.begin(), vertices.end());
+  }
+
+  auto point_in_triangle = [&](size_t point_id, size_t a_id, size_t b_id, size_t c_id)
+  {
+    const glm::dvec3& p3 = mesh.getVertices()[point_id];
+    const glm::dvec3& a3 = mesh.getVertices()[a_id];
+    const glm::dvec3& b3 = mesh.getVertices()[b_id];
+    const glm::dvec3& c3 = mesh.getVertices()[c_id];
+    const glm::dvec2 p(p3.x, p3.y);
+    const glm::dvec2 a(a3.x, a3.y);
+    const glm::dvec2 b(b3.x, b3.y);
+    const glm::dvec2 c(c3.x, c3.y);
+    const double ab = glm::cross(b - a, p - a);
+    const double bc = glm::cross(c - b, p - b);
+    const double ca = glm::cross(a - c, p - c);
+    return ab >= -eps && bc >= -eps && ca >= -eps;
+  };
+
+  while (vertices.size() > 3)
+  {
+    bool clipped_ear = false;
+    for (size_t i = 0; i < vertices.size(); ++i)
+    {
+      const size_t prev = vertices[(i + vertices.size() - 1) % vertices.size()];
+      const size_t current = vertices[i];
+      const size_t next = vertices[(i + 1) % vertices.size()];
+      if (cross_at(prev, current, next) <= eps)
+      {
+        continue;
+      }
+
+      bool contains_other_vertex = false;
+      for (size_t candidate : vertices)
+      {
+        if (candidate == prev || candidate == current || candidate == next)
+        {
+          continue;
+        }
+        if (point_in_triangle(candidate, prev, current, next))
+        {
+          contains_other_vertex = true;
+          break;
+        }
+      }
+      if (contains_other_vertex)
+      {
+        continue;
+      }
+
+      if (orient_upwards)
+      {
+        addMeshletTriangle(mesh, prev, current, next, metadata, material_id);
+      }
+      else
+      {
+        addMeshletTriangle(mesh, prev, next, current, metadata, material_id);
+      }
+      vertices.erase(vertices.begin() + static_cast<std::ptrdiff_t>(i));
+      clipped_ear = true;
+      break;
+    }
+
+    if (!clipped_ear)
+    {
+      throw std::runtime_error("triangulateSimplePolygon: failed to find an ear; polygon may be non-simple.");
+    }
+  }
+
+  if (orient_upwards)
+  {
+    addMeshletTriangle(mesh, vertices[0], vertices[1], vertices[2], metadata, material_id);
+  }
+  else
+  {
+    addMeshletTriangle(mesh, vertices[0], vertices[2], vertices[1], metadata, material_id);
+  }
+}
+
+void kinDS::SegmentBuilder::closingMeshTriangulatePolygons(
   VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons)
 {
   for (const auto& polygon : polygons)
   {
-    for (size_t i = 2; i < polygon.size(); ++i)
-    {
-      addMeshletTriangle(mesh, polygon[0], polygon[i - 1], polygon[i]);
-    }
+    triangulateSimplePolygon(mesh, polygon);
   }
 }
 
@@ -4376,7 +4578,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   }
 
   closingMeshLogUnmatchedOrderedSegments(strand_id, t, index_data.ordered_segments, trace.segment_used);
-  closingMeshTriangulatePolygonsFan(mesh, trace.polygons);
+  closingMeshTriangulatePolygons(mesh, trace.polygons);
 
   const size_t index
     = registerMeshletWithSuffix(std::move(mesh), std::string("_strand") + std::to_string(strand_id), t);
@@ -4652,6 +4854,10 @@ void SegmentBuilder::finalize(double t)
   {
     meshlet.computeNormals(NormalMode::PerTriangleCorner);
   }
+  for (auto& meshlet : intersection_meshes)
+  {
+    meshlet.computeNormals(NormalMode::PerTriangleCorner);
+  }
 
   auto remap1 = boundary_mesh.mergeDuplicateVertices();
   boundary_mesh.removeDegenerateTriangles();
@@ -4701,6 +4907,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
   for (size_t segment_id = 0; segment_id < segment_properties.size(); ++segment_id)
   {
     VoronoiMesh segment_mesh(MeshletExportMaterialNames);
+    bool segment_mesh_initialized = false;
     std::vector<int> neighbor_segments_for_meshlet;
     const auto& properties = segment_properties[segment_id];
     double earliest_creation = std::numeric_limits<double>::quiet_NaN();
@@ -4720,6 +4927,11 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       }
       const int neighbor = (seg0 == segment_id) ? static_cast<int>(seg1) : static_cast<int>(seg0);
       neighbor_segments_for_meshlet.insert(neighbor_segments_for_meshlet.end(), mesh.getTriangleCount(), neighbor);
+      if (!segment_mesh_initialized)
+      {
+        segment_mesh = VoronoiMesh(MeshletExportMaterialNames, mesh.getNormalMode());
+        segment_mesh_initialized = true;
+      }
       segment_mesh += mesh;
     };
 
@@ -4762,6 +4974,11 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
         }
       }
       neighbor_segments_for_meshlet.insert(neighbor_segments_for_meshlet.end(), mesh.getTriangleCount(), -1);
+      if (!segment_mesh_initialized)
+      {
+        segment_mesh = VoronoiMesh(MeshletExportMaterialNames, mesh.getNormalMode());
+        segment_mesh_initialized = true;
+      }
       segment_mesh += mesh;
     }
     if (std::isfinite(earliest_creation))

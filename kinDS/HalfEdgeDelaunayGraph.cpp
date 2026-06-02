@@ -9,7 +9,7 @@ using namespace kinDS;
 
 void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 {
-  KINDS_INFO("Building half-edge mesh from triangle index buffer of size " << index_buffer.size());
+  KINDS_DEBUG("Building half-edge mesh from triangle index buffer of size " << index_buffer.size());
   assert(index_buffer.size() % 3 == 0 && "Input must be a triangle index buffer.");
   const int num_tris = index_buffer.size() / 3;
 
@@ -151,7 +151,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
       }
       else
       {
-        KINDS_INFO("Face " << (&face - &triangles[0]) << " has a missing half-edge at index " << j << ".");
+        KINDS_DEBUG("Face " << (&face - &triangles[0]) << " has a missing half-edge at index " << j << ".");
       }
     }
   }
@@ -225,7 +225,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
     }
   }
 
-  KINDS_INFO("Half-edge mesh built with " << half_edges.size() << " half-edges and " << triangles.size() << " faces.");
+  KINDS_DEBUG("Half-edge mesh built with " << half_edges.size() << " half-edges and " << triangles.size() << " faces.");
 }
 
 void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
@@ -305,7 +305,7 @@ void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
   triangles[twin.face].half_edges[1] = twin_last_id; // Update the second half-edge of the twin face
   triangles[twin.face].half_edges[2] = he_next_id; // Update the third half-edge of the twin face
 
-  // KINDS_INFO("Flipped edge " << he_id << " between vertices " << u << " and " << v << ".");
+  // KINDS_DEBUG("Flipped edge " << he_id << " between vertices " << u << " and " << v << ".");
 
   // printDebug();
 }

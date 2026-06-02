@@ -214,6 +214,7 @@ class KineticDelaunay
 
   void computeComponentData(double t);
 
+  CrossingData& getCrossingDataMutable();
   const CrossingData& getCrossingData() const;
 
   /** Per-edge intersection list consistency; intended after @ref EventCallback::afterEvent (e.g. debug SVG export). */

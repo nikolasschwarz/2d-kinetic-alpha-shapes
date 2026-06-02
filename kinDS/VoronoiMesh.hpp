@@ -12,6 +12,7 @@ namespace kinDS
 
 enum NormalMode
 {
+  NoNormals,
   PerVertex,
   PerTriangleCorner
 };
@@ -49,13 +50,13 @@ class VoronoiMesh
   };
 
  public:
-  VoronoiMesh(std::vector<std::string> material_names = {}, NormalMode normal_mode = PerTriangleCorner)
+  VoronoiMesh(std::vector<std::string> material_names = {}, NormalMode normal_mode = NoNormals)
     : material_names(std::move(material_names))
     , normal_mode(normal_mode) { };
 
   VoronoiMesh(std::vector<glm::dvec3> vertices, std::vector<size_t> triangles,
     std::vector<std::string> material_names = {}, std::vector<glm::dvec3> normals = {},
-    std::vector<glm::dvec3> uvs = {}, std::vector<size_t> uv_indices = {}, NormalMode normal_mode = PerTriangleCorner)
+    std::vector<glm::dvec3> uvs = {}, std::vector<size_t> uv_indices = {}, NormalMode normal_mode = NoNormals)
     : vertices(std::move(vertices))
     , triangles(std::move(triangles))
     , material_names(std::move(material_names))
@@ -145,6 +146,7 @@ class VoronoiMesh
   void setUV(const glm::dvec3& uv, size_t triangle_vertex_index);
 
   NormalMode getNormalMode() const;
+  void validateNormalCount(const std::string& context = {}) const;
 
   const std::vector<size_t>& getGroupOffsets() const { return group_offsets; }
 

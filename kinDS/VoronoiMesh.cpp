@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <iomanip>
+#include <stdexcept>
 #include <sstream>
 #include <unordered_map>
 #ifdef USE_CGAL
@@ -21,6 +22,24 @@ typedef CGAL::Surface_mesh<Point_3> Surface_mesh;
 #endif
 
 using namespace kinDS;
+
+namespace
+{
+std::string normalModeToString(NormalMode normal_mode)
+{
+  switch (normal_mode)
+  {
+  case NormalMode::NoNormals:
+    return "NoNormals";
+  case NormalMode::PerVertex:
+    return "PerVertex";
+  case NormalMode::PerTriangleCorner:
+    return "PerTriangleCorner";
+  default:
+    return "Unknown";
+  }
+}
+} // namespace
 
 std::string VoronoiMesh::creationKineticTimeFilenameSuffix() const
 {
@@ -119,6 +138,10 @@ size_t VoronoiMesh::addNormal(double nx, double ny, double nz) { return addNorma
 
 size_t VoronoiMesh::addNormal(const glm::dvec3& n)
 {
+  if (normal_mode == NormalMode::NoNormals)
+  {
+    throw std::runtime_error("Cannot add normals to a mesh with NormalMode::NoNormals.");
+  }
   size_t index = normals.size();
   normals.emplace_back(n);
   return index;
@@ -144,10 +167,27 @@ void VoronoiMesh::setGroupOffsets(const std::vector<size_t>& offsets) { group_of
 
 VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
 {
+  if (other.vertices.empty() && other.triangles.empty() && other.normals.empty())
+  {
+    return *this;
+  }
   if (normal_mode != other.normal_mode)
   {
     // Maybe we should implement auto-conversion at some point, but for now just throw an error
-    throw std::runtime_error("Meshes don't use the same normal mode.");
+    throw std::runtime_error("Meshes don't use the same normal mode: left=" + normalModeToString(normal_mode)
+      + ", right=" + normalModeToString(other.normal_mode) + ".");
+  }
+  validateNormalCount("left mesh before combine");
+  other.validateNormalCount("right mesh before combine");
+
+  const size_t left_triangle_count = triangles.size() / 3;
+  if (material_ids.size() < left_triangle_count)
+  {
+    material_ids.resize(left_triangle_count, -1);
+  }
+  if (triangles.empty() && material_names.empty() && !other.material_names.empty())
+  {
+    material_names = other.material_names;
   }
 
   size_t old_vertices_size = vertices.size();
@@ -236,6 +276,7 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
     material_ids.insert(material_ids.end(), other_triangle_count, -1);
   }
 
+  validateNormalCount("combined mesh after combine");
   return *this;
 }
 
@@ -465,7 +506,11 @@ void kinDS::VoronoiMesh::computeNormals(NormalMode normal_mode)
   // Ensure normals has the correct size and is zero-initialized
   this->normal_mode = normal_mode;
 
-  if (normal_mode == PerVertex)
+  if (normal_mode == NoNormals)
+  {
+    normals.clear();
+  }
+  else if (normal_mode == PerVertex)
   {
     normals = computeVertexNormals();
   }
@@ -479,6 +524,7 @@ void kinDS::VoronoiMesh::computeNormals(NormalMode normal_mode)
       normals[i] = vertex_normals[triangles[i]];
     }
   }
+  validateNormalCount("VoronoiMesh::computeNormals");
 }
 
 std::array<double, 3> kinDS::VoronoiMesh::computeBarycentricCoordinates(size_t triangle_index, glm::dvec3& point) const
@@ -507,8 +553,8 @@ const std::vector<size_t>& VoronoiMesh::getUVIndices() const { return uv_indices
 
 void VoronoiMesh::printStatistics() const
 {
-  KINDS_INFO("\nuv_indices.size(): " << uv_indices.size() << "\ntriangles.size(): " << triangles.size()
-                                     << "\nuvs.size(): " << uvs.size() << "\nvertices.size():" << vertices.size());
+  KINDS_DEBUG("\nuv_indices.size(): " << uv_indices.size() << "\ntriangles.size(): " << triangles.size()
+                                      << "\nuvs.size(): " << uvs.size() << "\nvertices.size():" << vertices.size());
 }
 
 bool kinDS::VoronoiMesh::hasValidUVIndex(size_t triangle_vertex_index) const
@@ -569,7 +615,7 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
     }
     else
     {
-      // KINDS_INFO("Found unused vertex at index: " << i);
+      // KINDS_DEBUG("Found unused vertex at index: " << i);
     }
   }
 
@@ -676,7 +722,8 @@ void VoronoiMesh::removeDegenerateTriangles()
         new_uv_indices.push_back(uv_indices[3 * t + 2]);
       }
 
-      new_material_ids.push_back(material_ids[t]);
+      const int material_id = t < material_ids.size() ? material_ids[t] : -1;
+      new_material_ids.push_back(material_id);
       if (t < face_metadata.size())
       {
         new_face_metadata.push_back(face_metadata[t]);
@@ -706,6 +753,10 @@ void VoronoiMesh::removeDegenerateTriangles()
 
 const glm::dvec3& kinDS::VoronoiMesh::getNormal(size_t triangle_vertex_index) const
 {
+  if (normal_mode == NoNormals)
+  {
+    throw std::runtime_error("Cannot access normals on a mesh with NormalMode::NoNormals.");
+  }
   if (normal_mode == PerTriangleCorner)
   {
     return normals[triangle_vertex_index];
@@ -723,6 +774,10 @@ const glm::dvec3& kinDS::VoronoiMesh::getUV(size_t triangle_vertex_index) const
 
 void kinDS::VoronoiMesh::setNormal(const glm::dvec3& normal, size_t triangle_vertex_index)
 {
+  if (normal_mode == NoNormals)
+  {
+    throw std::runtime_error("Cannot set normals on a mesh with NormalMode::NoNormals.");
+  }
   if (normal_mode == PerTriangleCorner)
   {
     if (triangle_vertex_index >= normals.size())
@@ -756,6 +811,33 @@ void kinDS::VoronoiMesh::setUV(const glm::dvec3& uv, size_t triangle_vertex_inde
 }
 
 NormalMode kinDS::VoronoiMesh::getNormalMode() const { return normal_mode; }
+
+void kinDS::VoronoiMesh::validateNormalCount(const std::string& context) const
+{
+  size_t expected_normal_count = 0;
+  if (normal_mode == NormalMode::PerVertex)
+  {
+    expected_normal_count = vertices.size();
+  }
+  else if (normal_mode == NormalMode::PerTriangleCorner)
+  {
+    expected_normal_count = triangles.size();
+  }
+  if (normals.size() == expected_normal_count)
+  {
+    return;
+  }
+
+  std::ostringstream oss;
+  if (!context.empty())
+  {
+    oss << context << ": ";
+  }
+  oss << "normal count mismatch for " << normalModeToString(normal_mode) << " mesh; normals.size()=" << normals.size()
+      << ", expected=" << expected_normal_count << ", vertices.size()=" << vertices.size()
+      << ", triangle_corner_count=" << triangles.size() << ".";
+  throw std::runtime_error(oss.str());
+}
 
 void kinDS::VoronoiMesh::checkForDegenerateTriangles() const
 {

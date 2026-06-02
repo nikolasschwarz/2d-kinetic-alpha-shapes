@@ -10,6 +10,15 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   double occurrence_time, const char* phase, const std::string& event_descriptor,
   const VisualDebugHighlight& highlight)
 {
+  (void)visual_debug;
+  (void)kin_del;
+  (void)graph;
+  (void)occurrence_time;
+  (void)phase;
+  (void)event_descriptor;
+  (void)highlight;
+  return;
+
   if (!visual_debug)
   {
     return;

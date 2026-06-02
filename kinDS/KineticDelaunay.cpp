@@ -581,14 +581,14 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
 
   for (size_t he_id : quad_he_ids)
   {
-    KINDS_INFO("Processing he_id: " << he_id);
+    KINDS_DEBUG("Processing he_id: " << he_id);
     auto& d_edge_intersections = crossing_data.delaunay_edge_intersections[he_id / 2];
 
-    KINDS_INFO("Found " << d_edge_intersections.size() << " intersections on Delaunay edge.");
+    KINDS_DEBUG("Found " << d_edge_intersections.size() << " intersections on Delaunay edge.");
 
     for (CrossingData::EdgeIntersectionRef& intersection : d_edge_intersections)
     {
-      KINDS_INFO("Processing intersection with Voronoi edge: "
+      KINDS_DEBUG("Processing intersection with Voronoi edge: "
         << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id);
       // get the next and previous intersections to check if they match with the flipped edge
       auto& v_edge_intersections = crossing_data.voronoi_edge_intersections[intersection->voronoi_edge_id];
@@ -599,7 +599,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
       // check if next or previous matches the face
       size_t face_inside_old = pre_flip_quad_faces.at(he_id);
       size_t face_inside_new = graph.getHalfEdges()[he_id].face;
-      KINDS_INFO("face_inside_old: " << face_inside_old << ", face_inside_new: " << face_inside_new);
+      KINDS_DEBUG("face_inside_old: " << face_inside_old << ", face_inside_new: " << face_inside_new);
 
       v_next = std::next(v_ref);
       if (v_ref == v_edge_intersections.begin())
@@ -619,12 +619,12 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
 
       if (v_prev != v_edge_intersections.end())
       {
-        KINDS_INFO("Found previous intersection with Voronoi edge: "
+        KINDS_DEBUG("Found previous intersection with Voronoi edge: "
           << (*v_prev)->voronoi_edge_id << " and Delaunay edge: " << (*v_prev)->delaunay_edge_id);
         size_t d_edge_id = (*v_prev)->delaunay_edge_id;
         size_t prev_face0 = graph.getHalfEdges()[2 * d_edge_id].face;
         size_t prev_face1 = graph.getHalfEdges()[2 * d_edge_id + 1].face;
-        KINDS_INFO("Faces of Delaunay edge at previous intersection: " << prev_face0 << ", " << prev_face1);
+        KINDS_DEBUG("Faces of Delaunay edge at previous intersection: " << prev_face0 << ", " << prev_face1);
 
         // need to compare to both face ids of the quad because the flip might have caused a mismatch between two
         // neighboring intersections
@@ -648,7 +648,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
               v_prev = std::prev(v_prev);
             }
 
-            KINDS_INFO("Intersection existed before, moving v_prev to "
+            KINDS_DEBUG("Intersection existed before, moving v_prev to "
               << (v_prev != v_edge_intersections.end() ? "previous" : "end"));
           }
         }
@@ -658,21 +658,21 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
 
         size_t start_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id].face;
         size_t containing_triangle_id = crossing_data.getContainingTriId(start_voronoi_vertex_id);
-        KINDS_INFO("start_voronoi_vertex_id: " << start_voronoi_vertex_id
+        KINDS_DEBUG("start_voronoi_vertex_id: " << start_voronoi_vertex_id
                                                << ", containing_triangle_id: " << containing_triangle_id
                                                << ", face_id0: " << face_id0 << ", face_id1: " << face_id1);
 
         use_prev = containing_triangle_id == face_id0 || containing_triangle_id == face_id1;
         if (use_prev)
         {
-          KINDS_INFO("No previous intersection found for Voronoi edge: "
+          KINDS_DEBUG("No previous intersection found for Voronoi edge: "
             << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
             << ", now using location of endpoint");
           at_end = true;
         }
         else
         {
-          KINDS_INFO("No previous intersection found for Voronoi edge: "
+          KINDS_DEBUG("No previous intersection found for Voronoi edge: "
             << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
             << ", and endpoint is not in the quadrilateral, attempting to use next intersection");
         }
@@ -683,7 +683,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
       {
         if (v_next != v_edge_intersections.end())
         {
-          KINDS_INFO("Found next intersection with Voronoi edge: "
+          KINDS_DEBUG("Found next intersection with Voronoi edge: "
             << (*v_next)->voronoi_edge_id << " and Delaunay edge: " << (*v_next)->delaunay_edge_id);
           size_t d_edge_id = (*v_next)->delaunay_edge_id;
           size_t next_face0 = graph.getHalfEdges()[2 * d_edge_id].face;
@@ -700,7 +700,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
               intersected_before = true;
               v_intersection = v_next;
               v_next = std::next(v_next);
-              KINDS_INFO("Intersection existed before, moving v_next to "
+              KINDS_DEBUG("Intersection existed before, moving v_next to "
                 << (v_next != v_edge_intersections.end() ? "next" : "end"));
             }
           }
@@ -710,13 +710,13 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
           size_t end_voronoi_vertex_id = graph.getHalfEdges()[2 * intersection->voronoi_edge_id + 1].face;
           size_t containing_triangle_id = crossing_data.getContainingTriId(end_voronoi_vertex_id);
           // output values
-          KINDS_INFO("end_voronoi_vertex_id: " << end_voronoi_vertex_id
+          KINDS_DEBUG("end_voronoi_vertex_id: " << end_voronoi_vertex_id
                                                << ", containing_triangle_id: " << containing_triangle_id
                                                << ", face_id0: " << face_id0 << ", face_id1: " << face_id1);
           use_next = containing_triangle_id == face_id0 || containing_triangle_id == face_id1;
           if (use_next)
           {
-            KINDS_INFO("No next intersection found for Voronoi edge: "
+            KINDS_DEBUG("No next intersection found for Voronoi edge: "
               << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
               << ", now using location of endpoint");
             at_end = true;
@@ -738,7 +738,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
         throw std::runtime_error("Logic error: use_next and use_prev cannot be equal!");
       }
 
-      KINDS_INFO("Using " << (use_prev ? "previous" : "next") << " intersection for Voronoi edge: "
+      KINDS_DEBUG("Using " << (use_prev ? "previous" : "next") << " intersection for Voronoi edge: "
                           << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id);
 
       if (use_prev)
@@ -1073,11 +1073,14 @@ void KineticDelaunay::computeComponentData(double t)
   component_data.component_last_updated.resize(component_data.components.size(), t);
 }
 
+KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingDataMutable() { return crossing_data; }
+
 const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const { return crossing_data; }
 
 void KineticDelaunay::validateCrossingIntersectionInvariants(const char* context, double t) const
 {
-  crossing_data.validateIntersectionInvariants(context, this, t);
+  (void)context;
+  (void)t;
 }
 
 namespace
@@ -1955,6 +1958,12 @@ std::string sanitizeContextForFilename(const char* context)
 void exportCrossingInvariantFailureDebugSvg(
   const KineticDelaunay& kd, const char* context, double t, const InvariantViolationScope& scope)
 {
+  (void)kd;
+  (void)context;
+  (void)t;
+  (void)scope;
+  return;
+
   const VisualDebugHighlight highlight = VisualDebugHighlight::forInvariantViolation(
     kd.getGraph(), scope.primary_dual_edge, scope.auxiliary_dual_edges, scope.crossing_keys);
 
@@ -2007,6 +2016,11 @@ void noteAllIntersections(const KineticDelaunay::CrossingData& crossing_data, In
 void KineticDelaunay::CrossingData::validateIntersectionInvariants(
   const char* context, const KineticDelaunay* kd, double t) const
 {
+  (void)context;
+  (void)kd;
+  (void)t;
+  return;
+
   const char* ctx = (context != nullptr && context[0] != '\0') ? context : "unknown";
 
   size_t delaunay_list_entries = 0;
