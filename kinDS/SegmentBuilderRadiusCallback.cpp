@@ -505,7 +505,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       segment_builder_.addBoundaryIntervalTriangleOriented(
         mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, radius_corner_meta);
       segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_endpoint, new_vid,
-        inside_boundary_he_id, std::nullopt, boundary_polygon, centroid, corner_u, t, true);
+        inside_boundary_he_id, std::nullopt, boundary_polygon, centroid, corner_u, t, true, true);
     }
   }
 }
@@ -1599,13 +1599,13 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       segment_builder_.extendIntersectionMeshAtSharedCrossing(endpoint_ref->prev_segment_mesh_pair_index, endpoint_ref, false,
         t, SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped,
-        radius_boundary_shift_arg, false);
+        radius_boundary_shift_arg, true);
     }
     if (endpoint_ref->next_segment_mesh_pair_index != static_cast<size_t>(-1))
     {
       segment_builder_.extendIntersectionMeshAtSharedCrossing(endpoint_ref->next_segment_mesh_pair_index, endpoint_ref, true, t,
         SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped,
-        radius_boundary_shift_arg, false);
+        radius_boundary_shift_arg, true);
     }
   }
 

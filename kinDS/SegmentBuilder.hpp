@@ -205,8 +205,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   // 2.0;
   double texture_diameter = 0.9;
 
-  std::vector<VoronoiMesh> boundary_meshes;
-
   // for the boundary
   VoronoiMesh boundary_mesh; // Mesh for the boundary cuts
   std::vector<std::pair<size_t, size_t>> boundary_mesh_last_left_and_right_vertex;
