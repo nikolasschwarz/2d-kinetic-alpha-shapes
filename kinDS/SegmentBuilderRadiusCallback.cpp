@@ -20,6 +20,23 @@
 
 namespace kinDS
 {
+namespace
+{
+void trySetOwnedInteriorVoronoiVertexForRadiusShift(RadiusBoundaryTransitionShiftContext& ctx,
+  const KineticDelaunay& kin_del, size_t triangle_face_id)
+{
+  const auto& containing = kin_del.getCrossingData().getContainingTriIds();
+  if (triangle_face_id >= containing.size())
+  {
+    return;
+  }
+  if (containing[triangle_face_id] == triangle_face_id)
+  {
+    ctx.interior_voronoi_vertex_id = triangle_face_id;
+  }
+}
+} // namespace
+
 void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 {
   auto* radius = dynamic_cast<KineticDelaunay::RadiusEvent*>(&e);
@@ -72,11 +89,17 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       radius_pre_finish_shift_ctx.target_delaunay_edge = face_half_edges[internal_corner_i] / 2;
       radius_pre_finish_shift_ctx.roles_valid = true;
+      trySetOwnedInteriorVoronoiVertexForRadiusShift(radius_pre_finish_shift_ctx, segment_builder_.kin_del, face_id);
       radius_finish_shift_arg = &radius_pre_finish_shift_ctx;
       KINDS_DEBUG("Radius beforeEvent: finishMeshFromIntersections shift context (pre-flip 2 boundary) sources=("
                   << radius_pre_finish_shift_ctx.source_delaunay_edges[0] << ","
                   << radius_pre_finish_shift_ctx.source_delaunay_edges[1] << ") target_internal_delaunay_edge="
-                  << radius_pre_finish_shift_ctx.target_delaunay_edge << " face=" << face_id << " t=" << t);
+                  << radius_pre_finish_shift_ctx.target_delaunay_edge
+                  << " interior_voronoi_vertex="
+                  << (radius_pre_finish_shift_ctx.interior_voronoi_vertex_id.has_value()
+                       ? std::to_string(radius_pre_finish_shift_ctx.interior_voronoi_vertex_id.value())
+                       : std::string("none"))
+                  << " face=" << face_id << " t=" << t);
     }
   }
 
@@ -1467,11 +1490,17 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       if (out == 2)
       {
         radius_boundary_shift_ctx.roles_valid = true;
+        trySetOwnedInteriorVoronoiVertexForRadiusShift(
+          radius_boundary_shift_ctx, segment_builder_.kin_del, radius_pre_face_id_);
         KINDS_DEBUG("Radius boundary transition 2->1: source_delaunay_edges=("
                     << radius_boundary_shift_ctx.source_delaunay_edges[0] << ","
                     << radius_boundary_shift_ctx.source_delaunay_edges[1] << ") target_delaunay_edge="
-                    << radius_boundary_shift_ctx.target_delaunay_edge << " pre_face=" << radius_pre_face_id_
-                    << " post_face=" << updated_face_id << " t=" << t);
+                    << radius_boundary_shift_ctx.target_delaunay_edge
+                    << " interior_voronoi_vertex="
+                    << (radius_boundary_shift_ctx.interior_voronoi_vertex_id.has_value()
+                         ? std::to_string(radius_boundary_shift_ctx.interior_voronoi_vertex_id.value())
+                         : std::string("none"))
+                    << " pre_face=" << radius_pre_face_id_ << " post_face=" << updated_face_id << " t=" << t);
       }
     }
     else if (pre_boundary_edge_count == 1 && post_boundary_edge_count == 2)
@@ -1495,11 +1524,17 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       if (out == 2)
       {
         radius_boundary_shift_ctx.roles_valid = true;
+        trySetOwnedInteriorVoronoiVertexForRadiusShift(
+          radius_boundary_shift_ctx, segment_builder_.kin_del, updated_face_id);
         KINDS_DEBUG("Radius boundary transition 1->2: source_delaunay_edges=("
                     << radius_boundary_shift_ctx.source_delaunay_edges[0] << ","
                     << radius_boundary_shift_ctx.source_delaunay_edges[1] << ") target_delaunay_edge="
-                    << radius_boundary_shift_ctx.target_delaunay_edge << " pre_face=" << radius_pre_face_id_
-                    << " post_face=" << updated_face_id << " t=" << t);
+                    << radius_boundary_shift_ctx.target_delaunay_edge
+                    << " interior_voronoi_vertex="
+                    << (radius_boundary_shift_ctx.interior_voronoi_vertex_id.has_value()
+                         ? std::to_string(radius_boundary_shift_ctx.interior_voronoi_vertex_id.value())
+                         : std::string("none"))
+                    << " pre_face=" << radius_pre_face_id_ << " post_face=" << updated_face_id << " t=" << t);
       }
     }
   }

@@ -160,7 +160,7 @@ size_t VoronoiMesh::addUV(glm::dvec3 uv)
 
 void VoronoiMesh::startNewGroup()
 {
-  group_offsets.push_back(triangles.size()); // Store the current vertex index count as a new group offset
+  group_offsets.push_back(triangles.size() / 3);
 }
 
 void VoronoiMesh::setGroupOffsets(const std::vector<size_t>& offsets) { group_offsets = offsets; }
@@ -210,6 +210,7 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   }
 
   size_t old_vertex_indices_size = triangles.size();
+  const size_t old_triangle_count = old_vertex_indices_size / 3;
   triangles.insert(triangles.end(), other.triangles.begin(), other.triangles.end());
 
   std::transform(triangles.begin() + old_vertex_indices_size, triangles.end(),
@@ -230,7 +231,7 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   group_offsets.insert(group_offsets.end(), other.group_offsets.begin(), other.group_offsets.end());
 
   std::transform(group_offsets.begin() + old_group_count, group_offsets.end(), group_offsets.begin() + old_group_count,
-    [&](size_t offset) { return offset + old_vertex_indices_size; });
+    [&](size_t offset) { return offset + old_triangle_count; });
   if (other.face_metadata.size() == other.triangles.size() / 3)
   {
     face_metadata.insert(face_metadata.end(), other.face_metadata.begin(), other.face_metadata.end());

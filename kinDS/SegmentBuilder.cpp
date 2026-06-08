@@ -13,6 +13,7 @@
 #include <cassert>
 #include <cmath>
 #include <glm/gtx/exterior_product.hpp>
+#include <glm/gtx/norm.hpp>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -1097,6 +1098,21 @@ SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed
 
 SegmentBuilder::~SegmentBuilder() = default;
 
+/// Infinite-line intersection along the first segment direction (matches @c intersect_segments_2d_closing).
+static glm::dvec2 intersectAlongFirstSegmentWithLine2D(
+  const glm::dvec2& p, const glm::dvec2& p2, const glm::dvec2& q, const glm::dvec2& q2)
+{
+  const glm::dvec2 r = p2 - p;
+  const glm::dvec2 s = q2 - q;
+  const double rxs = r.x * s.y - r.y * s.x;
+  if (std::abs(rxs) < 1e-30)
+  {
+    return glm::dvec2(std::numeric_limits<double>::quiet_NaN());
+  }
+  const double tt = ((q - p).x * s.y - (q - p).y * s.x) / rxs;
+  return p + tt * r;
+}
+
 static glm::dvec2 intersectSegments(
   const glm::dvec2& p, const glm::dvec2& p2, const glm::dvec2& q, const glm::dvec2& q2)
 {
@@ -1585,6 +1601,11 @@ SegmentBuilder::neighborIntersectionOnTargetAlongVoronoiEdge(
     return std::nullopt;
   }
 
+  if (boundary_transition_shift->interior_voronoi_vertex_id.has_value())
+  {
+    return std::nullopt;
+  }
+
   const size_t d_edge = crossing_ref->delaunay_edge_id;
   const bool on_source = (d_edge == boundary_transition_shift->source_delaunay_edges[0]
     || d_edge == boundary_transition_shift->source_delaunay_edges[1]);
@@ -1631,10 +1652,300 @@ SegmentBuilder::neighborIntersectionOnTargetAlongVoronoiEdge(
   return std::nullopt;
 }
 
+std::optional<size_t> SegmentBuilder::radiusTransitionSharedCornerSiteVertex(
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
+{
+  if (!radius_boundary_transition_shift_enabled || boundary_transition_shift == nullptr
+    || !boundary_transition_shift->roles_valid)
+  {
+    return std::nullopt;
+  }
+  const auto& graph = kin_del.getGraph();
+  const size_t s0 = boundary_transition_shift->source_delaunay_edges[0];
+  const size_t s1 = boundary_transition_shift->source_delaunay_edges[1];
+  const size_t he0 = 2 * s0;
+  const size_t he1 = 2 * s1;
+  if (he0 + 1 >= graph.getHalfEdges().size() || he1 + 1 >= graph.getHalfEdges().size())
+  {
+    return std::nullopt;
+  }
+  const int verts0[2] = { graph.getHalfEdges()[he0].origin, graph.getHalfEdges()[he0 + 1].origin };
+  const int verts1[2] = { graph.getHalfEdges()[he1].origin, graph.getHalfEdges()[he1 + 1].origin };
+  for (int v0 : verts0)
+  {
+    if (v0 < 0)
+    {
+      continue;
+    }
+    for (int v1 : verts1)
+    {
+      if (v1 == v0)
+      {
+        return static_cast<size_t>(v0);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+bool SegmentBuilder::isRadiusTransitionCornerAdjacentSourceIntersection(
+  KineticDelaunay::CrossingData::EdgeIntersectionRef ref,
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
+{
+  if (!radius_boundary_transition_shift_enabled || boundary_transition_shift == nullptr
+    || !boundary_transition_shift->roles_valid
+    || !boundary_transition_shift->interior_voronoi_vertex_id.has_value())
+  {
+    return false;
+  }
+  const size_t d_edge = ref->delaunay_edge_id;
+  const size_t s0 = boundary_transition_shift->source_delaunay_edges[0];
+  const size_t s1 = boundary_transition_shift->source_delaunay_edges[1];
+  if (d_edge != s0 && d_edge != s1)
+  {
+    return false;
+  }
+  const auto shared_opt = radiusTransitionSharedCornerSiteVertex(boundary_transition_shift);
+  if (!shared_opt.has_value())
+  {
+    return false;
+  }
+  const size_t shared_corner = shared_opt.value();
+  const auto& graph = kin_del.getGraph();
+  const size_t he_even = 2 * d_edge;
+  if (he_even + 1 >= graph.getHalfEdges().size())
+  {
+    return false;
+  }
+  const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+    = getBoundaryIntersectionsInBoundaryOrder(d_edge);
+  if (refs.empty())
+  {
+    return false;
+  }
+  const int even_origin = graph.getHalfEdges()[he_even].origin;
+  const int odd_origin = graph.getHalfEdges()[he_even + 1].origin;
+  if (even_origin >= 0 && static_cast<size_t>(even_origin) == shared_corner)
+  {
+    return ref == refs.front();
+  }
+  if (odd_origin >= 0 && static_cast<size_t>(odd_origin) == shared_corner)
+  {
+    return ref == refs.back();
+  }
+  return false;
+}
+
+bool SegmentBuilder::voronoiEdgeHasEndpointFace(size_t voronoi_edge_id, size_t voronoi_vertex_id) const
+{
+  const auto& graph = kin_del.getGraph();
+  const size_t he_even = 2 * voronoi_edge_id;
+  const size_t he_odd = he_even + 1;
+  if (he_odd >= graph.getHalfEdges().size())
+  {
+    return false;
+  }
+  return graph.getHalfEdges()[he_even].face == voronoi_vertex_id
+    || graph.getHalfEdges()[he_odd].face == voronoi_vertex_id;
+}
+
+std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>
+SegmentBuilder::findInteriorVvAnchorCrossingOnTargetEdge(
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
+{
+  if (!radius_boundary_transition_shift_enabled || boundary_transition_shift == nullptr
+    || !boundary_transition_shift->roles_valid
+    || !boundary_transition_shift->interior_voronoi_vertex_id.has_value())
+  {
+    return std::nullopt;
+  }
+  const size_t target_d_edge = boundary_transition_shift->target_delaunay_edge;
+  const size_t interior_vv = boundary_transition_shift->interior_voronoi_vertex_id.value();
+  const auto& crossing_data = kin_del.getCrossingData();
+  if (target_d_edge >= crossing_data.delaunay_edge_intersections.size())
+  {
+    return std::nullopt;
+  }
+
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> anchor;
+  for (const auto& ref : crossing_data.delaunay_edge_intersections[target_d_edge])
+  {
+    if (!voronoiEdgeHasEndpointFace(ref->voronoi_edge_id, interior_vv))
+    {
+      continue;
+    }
+    if (anchor.has_value())
+    {
+      KINDS_WARNING("findInteriorVvAnchorCrossingOnTargetEdge: multiple crossings on target delaunay_edge="
+        << target_d_edge << " with Voronoi edge incident to interior_vv=" << interior_vv << ".");
+    }
+    anchor = ref;
+  }
+  return anchor;
+}
+
+std::optional<size_t> SegmentBuilder::interiorVvFictionalCornerSiteForTargetEdgeCrossing(
+  KineticDelaunay::CrossingData::EdgeIntersectionRef ref,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef anchor_ref,
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
+{
+  if (!radius_boundary_transition_shift_enabled || boundary_transition_shift == nullptr
+    || !boundary_transition_shift->roles_valid
+    || !boundary_transition_shift->interior_voronoi_vertex_id.has_value())
+  {
+    return std::nullopt;
+  }
+  const size_t target_d_edge = boundary_transition_shift->target_delaunay_edge;
+  if (ref->delaunay_edge_id != target_d_edge || anchor_ref->delaunay_edge_id != target_d_edge || ref == anchor_ref)
+  {
+    return std::nullopt;
+  }
+
+  const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+    = getBoundaryIntersectionsInBoundaryOrder(target_d_edge);
+  size_t ref_idx = static_cast<size_t>(-1);
+  size_t anchor_idx = static_cast<size_t>(-1);
+  for (size_t i = 0; i < refs.size(); ++i)
+  {
+    if (refs[i] == ref)
+    {
+      ref_idx = i;
+    }
+    if (refs[i] == anchor_ref)
+    {
+      anchor_idx = i;
+    }
+  }
+  if (ref_idx == static_cast<size_t>(-1) || anchor_idx == static_cast<size_t>(-1))
+  {
+    return std::nullopt;
+  }
+
+  const auto& graph = kin_del.getGraph();
+  const size_t he_even = 2 * target_d_edge;
+  if (he_even + 1 >= graph.getHalfEdges().size())
+  {
+    return std::nullopt;
+  }
+  const int even_origin = graph.getHalfEdges()[he_even].origin;
+  const int odd_origin = graph.getHalfEdges()[he_even + 1].origin;
+  if (even_origin < 0 || odd_origin < 0)
+  {
+    return std::nullopt;
+  }
+
+  // Boundary order is anchored at the even-half-edge origin (see corner wedge / one-null link logic).
+  if (ref_idx < anchor_idx)
+  {
+    return static_cast<size_t>(even_origin);
+  }
+  return static_cast<size_t>(odd_origin);
+}
+
+std::optional<glm::dvec3> SegmentBuilder::interiorVvShiftAlongVoronoiEdgeToCornerLine(double t,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef ref, const glm::dvec2& vv_xy, size_t corner_site_id) const
+{
+  const glm::dvec2 corner_xy = kin_del.getPointAt(t, corner_site_id);
+  const size_t v_edge = ref->voronoi_edge_id;
+  const glm::dvec3 vor_left3 = kin_del.computeVoronoiVertexClampedInfinity(2 * v_edge, t);
+  const glm::dvec3 vor_right3 = kin_del.computeVoronoiVertexClampedInfinity(2 * v_edge + 1, t);
+  const glm::dvec2 vor_left(vor_left3.x, vor_left3.y);
+  const glm::dvec2 vor_right(vor_right3.x, vor_right3.y);
+  const glm::dvec2 out_xy = intersectAlongFirstSegmentWithLine2D(vor_left, vor_right, vv_xy, corner_xy);
+  if (std::isfinite(out_xy.x) && std::isfinite(out_xy.y))
+  {
+    return glm::dvec3(out_xy, t);
+  }
+  return std::nullopt;
+}
+
 glm::dvec3 SegmentBuilder::crossingPositionWithRadiusBoundaryTransitionShift(double t,
   KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref,
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
 {
+  if (radius_boundary_transition_shift_enabled && boundary_transition_shift != nullptr
+    && boundary_transition_shift->roles_valid
+    && boundary_transition_shift->interior_voronoi_vertex_id.has_value())
+  {
+    const size_t interior_vv = boundary_transition_shift->interior_voronoi_vertex_id.value();
+    const glm::dvec3 vv_pos = computeVoronoiVertex(kin_del.getGraph().getFaces()[interior_vv].half_edges[0], t);
+    const glm::dvec2 vv_xy(vv_pos.x, vv_pos.y);
+    const auto anchor_on_target_opt = findInteriorVvAnchorCrossingOnTargetEdge(boundary_transition_shift);
+
+    if (isRadiusTransitionCornerAdjacentSourceIntersection(orig_ref, boundary_transition_shift))
+    {
+      KINDS_DEBUG("Radius boundary transition interior-vv corner crossing: d=" << orig_ref->delaunay_edge_id
+        << " vv=" << interior_vv << " t=" << t << " out=(" << vv_pos.x << "," << vv_pos.y << ")");
+      return vv_pos;
+    }
+
+    if (anchor_on_target_opt.has_value() && orig_ref == anchor_on_target_opt.value())
+    {
+      KINDS_DEBUG("Radius boundary transition interior-vv target anchor: d=" << orig_ref->delaunay_edge_id
+        << " ve=" << orig_ref->voronoi_edge_id << " vv=" << interior_vv << " t=" << t << " out=(" << vv_pos.x << ","
+        << vv_pos.y << ")");
+      return vv_pos;
+    }
+
+    const size_t d_edge = orig_ref->delaunay_edge_id;
+    const size_t s0 = boundary_transition_shift->source_delaunay_edges[0];
+    const size_t s1 = boundary_transition_shift->source_delaunay_edges[1];
+    const size_t target_d_edge = boundary_transition_shift->target_delaunay_edge;
+
+    if (d_edge == s0 || d_edge == s1)
+    {
+      const auto shared_opt = radiusTransitionSharedCornerSiteVertex(boundary_transition_shift);
+      if (shared_opt.has_value())
+      {
+        const auto& graph = kin_del.getGraph();
+        if (auto other_opt = oppositeFiniteDelaunayVertexOnUndirectedEdge(graph, d_edge, shared_opt.value());
+          other_opt.has_value())
+        {
+          if (auto shifted_opt = interiorVvShiftAlongVoronoiEdgeToCornerLine(t, orig_ref, vv_xy, other_opt.value());
+            shifted_opt.has_value())
+          {
+            KINDS_DEBUG("Radius boundary transition interior-vv source crossing: d=" << d_edge << " vv=" << interior_vv
+              << " ve=" << orig_ref->voronoi_edge_id << " corner_site=" << other_opt.value() << " t=" << t
+              << " out=(" << shifted_opt->x << "," << shifted_opt->y << ")");
+            return shifted_opt.value();
+          }
+          const glm::dvec3 p_old
+            = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
+          const glm::dvec2 other_xy = kin_del.getPointAt(t, other_opt.value());
+          const glm::dvec2 shared_xy = kin_del.getPointAt(t, shared_opt.value());
+          const glm::dvec2 old_xy(p_old.x, p_old.y);
+          const double denom = glm::length(shared_xy - other_xy);
+          if (denom > 1e-30)
+          {
+            const double alpha = glm::length(old_xy - other_xy) / denom;
+            const glm::dvec2 fallback_xy = (1.0 - alpha) * other_xy + alpha * vv_xy;
+            KINDS_DEBUG("Radius boundary transition interior-vv source crossing (parallel fallback): d=" << d_edge
+              << " vv=" << interior_vv << " alpha=" << alpha << " t=" << t << " out=(" << fallback_xy.x << ","
+              << fallback_xy.y << ")");
+            return glm::dvec3(fallback_xy, t);
+          }
+        }
+      }
+    }
+    else if (d_edge == target_d_edge && anchor_on_target_opt.has_value())
+    {
+      if (auto corner_site_opt = interiorVvFictionalCornerSiteForTargetEdgeCrossing(
+            orig_ref, anchor_on_target_opt.value(), boundary_transition_shift);
+        corner_site_opt.has_value())
+      {
+        if (auto shifted_opt
+          = interiorVvShiftAlongVoronoiEdgeToCornerLine(t, orig_ref, vv_xy, corner_site_opt.value());
+          shifted_opt.has_value())
+        {
+          KINDS_DEBUG("Radius boundary transition interior-vv target crossing: d=" << d_edge << " vv=" << interior_vv
+            << " ve=" << orig_ref->voronoi_edge_id << " corner_site=" << corner_site_opt.value() << " t=" << t
+            << " out=(" << shifted_opt->x << "," << shifted_opt->y << ")");
+          return shifted_opt.value();
+        }
+      }
+    }
+  }
+
   KineticDelaunay::CrossingData::EdgeIntersectionRef use_ref = orig_ref;
   if (auto neighbor_opt
     = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, orig_ref->voronoi_edge_id, boundary_transition_shift);
@@ -1703,6 +2014,21 @@ std::optional<glm::dvec3> SegmentBuilder::radiusTransitionInterpolatedSitePositi
   const auto& graph = kin_del.getGraph();
   const size_t s0 = boundary_transition_shift->source_delaunay_edges[0];
   const size_t s1 = boundary_transition_shift->source_delaunay_edges[1];
+
+  if (boundary_transition_shift->interior_voronoi_vertex_id.has_value())
+  {
+    if (delaunayUndirectedEdgeHasVertex(graph, s0, site_vertex_id)
+      && delaunayUndirectedEdgeHasVertex(graph, s1, site_vertex_id))
+    {
+      const size_t interior_vv = boundary_transition_shift->interior_voronoi_vertex_id.value();
+      const glm::dvec3 vv_pos = computeVoronoiVertex(graph.getFaces()[interior_vv].half_edges[0], t);
+      KINDS_DEBUG("Radius boundary transition interior-vv corner site: cell=" << site_vertex_id << " vv=" << interior_vv
+        << " strip_d=" << strip_delaunay_edge_id << " t=" << t << " out=(" << vv_pos.x << "," << vv_pos.y << ")");
+      return vv_pos;
+    }
+    return std::nullopt;
+  }
+
   if (!delaunayUndirectedEdgeHasVertex(graph, s0, site_vertex_id)
     || !delaunayUndirectedEdgeHasVertex(graph, s1, site_vertex_id))
   {
@@ -2334,40 +2660,27 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   const std::string boundary_finish_meta = boundary_finish_meta_stream.str();
   const std::string boundary_finish_meta_left = appendBoundaryVertexPosMetadata(boundary_finish_meta, "left");
   const std::string boundary_finish_meta_right = appendBoundaryVertexPosMetadata(boundary_finish_meta, "right");
+  const std::string boundary_finish_meta_uniform = appendBoundaryVertexPosMetadata(boundary_finish_meta, "uniform");
+  const double fdx = new_start_pos.x - new_end_pos.x;
+  const double fdy = new_start_pos.y - new_end_pos.y;
+  const double fdz = new_start_pos.z - new_end_pos.z;
+  const bool collapsed_finish_endpoints = (fdx * fdx + fdy * fdy + fdz * fdz) <= 1e-20;
   const size_t new_start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, new_start_pos,
-    voronoi_cell_id, t, start_vv, boundary_finish_meta_left, glm::dvec3(1.0, 0.0, 0.0));
-  const size_t new_end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, voronoi_cell_id,
-    t, end_vv, boundary_finish_meta_right, glm::dvec3(0.0, 0.0, 1.0));
+    voronoi_cell_id, t, start_vv,
+    collapsed_finish_endpoints ? boundary_finish_meta_uniform : boundary_finish_meta_left,
+    collapsed_finish_endpoints ? std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 1.0))
+                               : std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 0.0)));
+  const size_t new_end_vertex_index = collapsed_finish_endpoints
+    ? new_start_vertex_index
+    : addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, voronoi_cell_id, t, end_vv,
+        boundary_finish_meta_right, glm::dvec3(0.0, 0.0, 1.0));
 
   size_t ordered_new_start_vertex_index = new_start_vertex_index;
   size_t ordered_new_end_vertex_index = new_end_vertex_index;
   const int old_fixed_start_id = seg.mesh_start_vertex_id;
   const int old_fixed_end_id = seg.mesh_end_vertex_id;
-  const size_t last_left = static_cast<size_t>(old_fixed_start_id);
-  const size_t last_right = static_cast<size_t>(old_fixed_end_id);
   const size_t eff_left = intersectionStripEffectiveVertexIndex(seg, true);
   const size_t eff_right = intersectionStripEffectiveVertexIndex(seg, false);
-  if (last_left < mesh.getVertices().size() && last_right < mesh.getVertices().size())
-  {
-    const glm::dvec3& prev_start = mesh.getVertices()[last_left];
-    const glm::dvec3& prev_end = mesh.getVertices()[last_right];
-    const glm::dvec3& curr_start = mesh.getVertices()[ordered_new_start_vertex_index];
-    const glm::dvec3& curr_end = mesh.getVertices()[ordered_new_end_vertex_index];
-    const auto sqd = [](const glm::dvec3& a, const glm::dvec3& b)
-    {
-      const glm::dvec3 d = a - b;
-      return d.x * d.x + d.y * d.y + d.z * d.z;
-    };
-    const double direct_cost = sqd(prev_start, curr_start) + sqd(prev_end, curr_end);
-    const double swapped_cost = sqd(prev_start, curr_end) + sqd(prev_end, curr_start);
-    if (swapped_cost + 1e-18 < direct_cost)
-    {
-      KINDS_WARNING("finishMeshFromIntersections: detected swapped endpoint continuity for pair "
-        << intersection_pair_index << " (cell=" << voronoi_cell_id << ", t=" << t
-        << "), auto-correcting start/end assignment.");
-      std::swap(ordered_new_start_vertex_index, ordered_new_end_vertex_index);
-    }
-  }
 
   // Single new anchor (collapsed interval / one mesh vertex for both ends): both flex chains meet that point.
   const bool uniform_finish_targets = (ordered_new_start_vertex_index == ordered_new_end_vertex_index);
@@ -4973,7 +5286,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
           earliest_creation = mesh_ct;
         }
       }
-      neighbor_segments_for_meshlet.insert(neighbor_segments_for_meshlet.end(), mesh.getTriangleCount(), -1);
+      neighbor_segments_for_meshlet.insert(neighbor_segments_for_meshlet.end(), mesh.getTriangleCount(), -2);
       if (!segment_mesh_initialized)
       {
         segment_mesh = VoronoiMesh(MeshletExportMaterialNames, mesh.getNormalMode());

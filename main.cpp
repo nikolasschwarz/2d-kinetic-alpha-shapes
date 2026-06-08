@@ -481,8 +481,8 @@ static void mesh_from_file(const std::string& filename)
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
 
-    // Export the combined mesh
-    mesher.exportCombinedMesh();
+    // Export meshlets (one OBJ per meshlet in the current directory).
+    mesher.exportCombinedMesh(".", true);
 
     // Export boundary mesh
     const auto& boundary_mesh = mesher.getBoundaryMesh();

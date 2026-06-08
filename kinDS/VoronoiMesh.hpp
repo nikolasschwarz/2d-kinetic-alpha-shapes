@@ -26,7 +26,7 @@ class VoronoiMesh
   std::vector<glm::dvec3> uvs; // Stores texture coordinates
   std::vector<glm::dvec3> vertex_colors; // Optional debug colors per vertex (RGB in [0,1])
   std::vector<size_t> uv_indices; // Stores indices of texture coordinates for face corners
-  std::vector<size_t> group_offsets; // Offsets for groups of triangles, if needed
+  std::vector<size_t> group_offsets; // Triangle-index offsets marking the start of each face group
   std::vector<std::string> material_names; // Stores material names - needed for exporting
   std::vector<int> material_ids; // Stores material IDs per triangle
   // Optional JSON-like metadata kept separate from raw geometry/index buffers.

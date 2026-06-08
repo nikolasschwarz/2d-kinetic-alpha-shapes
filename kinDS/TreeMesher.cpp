@@ -1,10 +1,12 @@
 #include "TreeMesher.hpp"
 #include "IndexIterator.hpp"
 #include "KineticDelaunay.hpp"
+#include "Logger.hpp"
 #include "ObjExporter.hpp"
 #include "SegmentBuilder.hpp"
 #include "TreeMesher.hpp"
 #include <execution>
+#include <filesystem>
 
 #ifdef _DEBUG
 #pragma message("kinDS: TreeMesher.cpp built in DEBUG")
@@ -79,29 +81,69 @@ TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::
 {
 }
 
-void TreeMesher::exportCombinedMesh() const
+void TreeMesher::exportCombinedMesh(const std::filesystem::path& export_path, bool separate_file_per_segment,
+  std::optional<size_t> max_exports) const
 {
-  // for now, just combine all meshes into one
-  kinDS::VoronoiMesh combined_mesh;
-  bool combined_mesh_initialized = false;
-  for (const auto& mesh : segment_meshlets)
-  {
-    if (!combined_mesh_initialized)
-    {
-      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, mesh.getNormalMode());
-      combined_mesh_initialized = true;
-    }
-    combined_mesh += mesh;
-  }
+  const size_t export_count = max_exports.has_value()
+    ? std::min(max_exports.value(), segment_meshlets.size())
+    : segment_meshlets.size();
 
-  // also export some meshlets:
-  for (size_t i = 0; i < std::min(settings.max_meshlet_export, segment_meshlets.size()); i++)
+  auto meshlet_filename = [&](size_t i) -> std::filesystem::path
   {
     const std::string suffix = (i < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[i] : "";
-    kinDS::ObjExporter::writeMesh(segment_meshlets[i],
-      "meshlet" + std::to_string(i) + suffix + segment_meshlets[i].creationKineticTimeFilenameSuffix() + ".obj");
+    return std::filesystem::path("meshlet" + std::to_string(i) + suffix
+      + segment_meshlets[i].creationKineticTimeFilenameSuffix() + ".obj");
+  };
+
+  if (separate_file_per_segment)
+  {
+    std::filesystem::create_directories(export_path);
+    for (size_t i = 0; i < export_count; ++i)
+    {
+      kinDS::ObjExporter::writeMesh(segment_meshlets[i], export_path / meshlet_filename(i));
+    }
+    KINDS_DEBUG("Exported " << export_count << " meshlet OBJ file(s) to " << export_path.string() << ".");
+    return;
   }
-  KINDS_DEBUG("Kinetic Delaunay Voronoi Meshes exported.");
+
+  std::filesystem::path obj_path = export_path;
+  if (obj_path.extension().empty())
+  {
+    obj_path.replace_extension(".obj");
+  }
+  if (obj_path.has_parent_path())
+  {
+    std::filesystem::create_directories(obj_path.parent_path());
+  }
+
+  kinDS::VoronoiMesh combined_mesh;
+  bool combined_mesh_initialized = false;
+  for (size_t i = 0; i < export_count; ++i)
+  {
+    if (segment_meshlets[i].getVertexCount() == 0 && segment_meshlets[i].getTriangleCount() == 0)
+    {
+      continue;
+    }
+    if (!combined_mesh_initialized)
+    {
+      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, segment_meshlets[i].getNormalMode());
+      combined_mesh_initialized = true;
+    }
+    else
+    {
+      combined_mesh.startNewGroup();
+    }
+    combined_mesh += segment_meshlets[i];
+  }
+
+  if (!combined_mesh_initialized)
+  {
+    KINDS_DEBUG("exportCombinedMesh: no meshlets to export.");
+    return;
+  }
+
+  kinDS::ObjExporter::writeMesh(combined_mesh, obj_path);
+  KINDS_DEBUG("Exported combined mesh (" << export_count << " meshlet group(s)) to " << obj_path.string() << ".");
 }
 
 void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)

@@ -3,6 +3,8 @@
 #include "VoronoiMesh.hpp"
 #include <fstream>
 #include <limits>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include <filesystem>
@@ -24,8 +26,162 @@ class ObjExporter
     return value;
   }
 
+  [[noreturn]] static void throwObjExportRangeError(const std::string& message)
+  {
+    KINDS_ERROR("ObjExporter: " + message);
+    throw std::runtime_error("ObjExporter: " + message);
+  }
+
+  static void validateGroupOffsets(const VoronoiMesh& mesh, const std::string& context)
+  {
+    const auto& offsets = mesh.getGroupOffsets();
+    const size_t triangle_count = mesh.getTriangleCount();
+
+    if (offsets.empty())
+    {
+      return;
+    }
+
+    for (size_t i = 0; i < offsets.size(); ++i)
+    {
+      if (offsets[i] > triangle_count)
+      {
+        std::ostringstream oss;
+        oss << context << ": group_offsets[" << i << "]=" << offsets[i] << " exceeds triangle count " << triangle_count
+            << " (group offsets must be triangle indices in [0, " << triangle_count << "])";
+        throwObjExportRangeError(oss.str());
+      }
+      if (i > 0 && offsets[i] < offsets[i - 1])
+      {
+        std::ostringstream oss;
+        oss << context << ": group_offsets[" << i << "]=" << offsets[i] << " is less than group_offsets[" << (i - 1)
+            << "]=" << offsets[i - 1];
+        throwObjExportRangeError(oss.str());
+      }
+    }
+  }
+
+  static void validateFaceWriteRange(const VoronoiMesh& mesh, size_t lb, size_t ub, const std::string& context)
+  {
+    const size_t triangle_count = mesh.getTriangleCount();
+    const auto& indices = mesh.getTriangles();
+    const auto& uv_indices = mesh.getUVIndices();
+    const auto& normals = mesh.getNormals();
+    const auto& material_ids = mesh.getMaterialIDs();
+    const auto& face_metadata = mesh.getFaceMetadata();
+    const size_t vertex_count = mesh.getVertices().size();
+    const size_t uv_count = mesh.getUVs().size();
+
+    if (lb > ub)
+    {
+      std::ostringstream oss;
+      oss << context << ": face range lb=" << lb << " exceeds ub=" << ub;
+      throwObjExportRangeError(oss.str());
+    }
+
+    if (ub > triangle_count)
+    {
+      std::ostringstream oss;
+      oss << context << ": face range ub=" << ub << " exceeds triangle count " << triangle_count << " (lb=" << lb
+          << ")";
+      throwObjExportRangeError(oss.str());
+    }
+
+    if (indices.size() < 3 * ub)
+    {
+      std::ostringstream oss;
+      oss << context << ": triangle index buffer size " << indices.size() << " is too small for face range [" << lb
+          << ", " << ub << ") (needs at least " << (3 * ub) << " corner indices)";
+      throwObjExportRangeError(oss.str());
+    }
+
+    if (!uv_indices.empty() && uv_indices.size() < 3 * ub)
+    {
+      std::ostringstream oss;
+      oss << context << ": uv_indices size " << uv_indices.size() << " is too small for face range [" << lb << ", "
+          << ub << ") (needs at least " << (3 * ub) << " entries)";
+      throwObjExportRangeError(oss.str());
+    }
+
+    if (!material_ids.empty() && material_ids.size() < ub)
+    {
+      std::ostringstream oss;
+      oss << context << ": material_ids size " << material_ids.size() << " is too small for face range [" << lb << ", "
+          << ub << ")";
+      throwObjExportRangeError(oss.str());
+    }
+
+    if (!face_metadata.empty() && face_metadata.size() < ub)
+    {
+      std::ostringstream oss;
+      oss << context << ": face_metadata size " << face_metadata.size() << " is too small for face range [" << lb
+          << ", " << ub << ")";
+      throwObjExportRangeError(oss.str());
+    }
+
+    for (size_t triangle_index = lb; triangle_index < ub; ++triangle_index)
+    {
+      const size_t corner_base = 3 * triangle_index;
+      for (size_t corner = 0; corner < 3; ++corner)
+      {
+        const size_t vertex_index = indices[corner_base + corner];
+        if (vertex_index >= vertex_count)
+        {
+          std::ostringstream oss;
+          oss << context << ": triangle " << triangle_index << " corner " << corner << " vertex index " << vertex_index
+              << " is out of range [0, " << vertex_count << ")";
+          throwObjExportRangeError(oss.str());
+        }
+
+        if (!uv_indices.empty())
+        {
+          const size_t uv_index = uv_indices[corner_base + corner];
+          if (uv_index != std::numeric_limits<size_t>::max() && uv_index >= uv_count)
+          {
+            std::ostringstream oss;
+            oss << context << ": triangle " << triangle_index << " corner " << corner << " uv index " << uv_index
+                << " is out of range [0, " << uv_count << ")";
+            throwObjExportRangeError(oss.str());
+          }
+        }
+
+        size_t normal_index = std::numeric_limits<size_t>::max();
+        if (mesh.getNormalMode() == NormalMode::PerTriangleCorner)
+        {
+          normal_index = corner_base + corner;
+        }
+        else if (mesh.getNormalMode() == NormalMode::PerVertex)
+        {
+          normal_index = vertex_index;
+        }
+
+        if (normal_index != std::numeric_limits<size_t>::max() && normal_index >= normals.size())
+        {
+          std::ostringstream oss;
+          oss << context << ": triangle " << triangle_index << " corner " << corner << " normal index " << normal_index
+              << " is out of range [0, " << normals.size() << ")";
+          throwObjExportRangeError(oss.str());
+        }
+      }
+
+      if (!material_ids.empty())
+      {
+        const int material_id = material_ids[triangle_index];
+        if (material_id >= 0 && static_cast<size_t>(material_id) >= mesh.getMaterialNames().size())
+        {
+          std::ostringstream oss;
+          oss << context << ": triangle " << triangle_index << " material id " << material_id << " is out of range [0, "
+              << mesh.getMaterialNames().size() << ")";
+          throwObjExportRangeError(oss.str());
+        }
+      }
+    }
+  }
+
   static void writeFaces(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub, bool include_metadata)
   {
+    validateFaceWriteRange(mesh, lb, ub, "writeFaces");
+
     const auto& indices = mesh.getTriangles();
     const auto& uv_indices = mesh.getUVIndices();
     const auto& normals = mesh.getNormals();
@@ -263,14 +419,18 @@ class ObjExporter
     // Write faces
     file << "# Faces\n";
     size_t group_count = mesh.getGroupOffsets().size();
+    const std::string mesh_context = "writeMesh(" + obj_path.string() + ")";
 
     if (group_count > 0)
     {
+      validateGroupOffsets(mesh, mesh_context);
+
       for (size_t group_index = 0; group_index < group_count - 1; group_index++)
       {
         file << "o group_" << group_index << "\n";
         size_t lb = mesh.getGroupOffsets()[group_index];
         size_t ub = mesh.getGroupOffsets()[group_index + 1];
+        validateFaceWriteRange(mesh, lb, ub, mesh_context + " group " + std::to_string(group_index));
         writeFaces(file, mesh, lb, ub, include_metadata);
       }
 
@@ -279,12 +439,15 @@ class ObjExporter
       file << "o group_" << (group_count - 1) << "\n";
       size_t lb = mesh.getGroupOffsets().back();
       size_t ub = mesh.getTriangles().size() / 3;
+      validateFaceWriteRange(mesh, lb, ub, mesh_context + " last group");
       writeFaces(file, mesh, lb, ub, include_metadata);
     }
     else
     {
       // No groups defined, write all faces
-      writeFaces(file, mesh, 0, mesh.getTriangles().size() / 3, include_metadata);
+      const size_t ub = mesh.getTriangles().size() / 3;
+      validateFaceWriteRange(mesh, 0, ub, mesh_context);
+      writeFaces(file, mesh, 0, ub, include_metadata);
     }
 
     file.close();

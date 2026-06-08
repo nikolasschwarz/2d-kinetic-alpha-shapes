@@ -2,8 +2,10 @@
 #include "MeshIntersection.hpp"
 #include "StrandTree.hpp"
 #include "VoronoiMesh.hpp"
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,7 +24,7 @@ class TreeMesher
 
     // for debugging purposes:
     bool debug_export_meshes = false;
-    size_t max_meshlet_export = 10; // maximum number of meshlets to export for debugging
+    size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
     bool merge_meshlets_by_segment = true; // if false, keep one output meshlet per generated mesh pair
   };
 
@@ -55,7 +57,12 @@ class TreeMesher
   const Settings& getSettings() const { return settings; }
   void setSettings(const Settings& new_settings) { settings = new_settings; }
 
-  void exportCombinedMesh() const;
+  /// Export segment meshlets under @p export_path.
+  /// @param export_path Output directory when @p separate_file_per_segment is true; output OBJ path when false.
+  /// @param separate_file_per_segment If true, write one OBJ per meshlet; otherwise one OBJ with one group per meshlet.
+  /// @param max_exports Maximum meshlets to export; default unlimited.
+  void exportCombinedMesh(const std::filesystem::path& export_path, bool separate_file_per_segment,
+    std::optional<size_t> max_exports = std::nullopt) const;
   void truncateToBoundary(const VoronoiMesh& boundary_mesh);
   void fixFailedSegments(const MeshIntersection& boundary_intersector);
   std::pair<std::vector<float>, std::vector<float>> computeTopAndBottomBoundaryDistances(

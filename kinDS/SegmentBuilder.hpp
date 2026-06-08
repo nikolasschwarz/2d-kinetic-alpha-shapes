@@ -22,6 +22,12 @@ struct RadiusBoundaryTransitionShiftContext
   bool roles_valid = false;
   std::array<size_t, 2> source_delaunay_edges {};
   size_t target_delaunay_edge = 0;
+  /// When set, the triangle's own circumcenter (vv id == containing tri id) lies inside; corner sites and
+  /// corner-adjacent source crossings shift to this Voronoi vertex; other source crossings move along their
+  /// Voronoi edge to the line from this vertex to the opposite triangle corner on that edge; the target
+  /// (internal) edge uses the vv-anchored Voronoi-edge crossing at the circumcenter and the same fictional
+  /// lines to its endpoints for all other crossings on that edge.
+  std::optional<size_t> interior_voronoi_vertex_id {};
 };
 
 class SegmentBuilderSectionCallback;
@@ -322,6 +328,27 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// (inverse-distance weights from the unshifted site in XY). Otherwise returns @c nullopt.
   std::optional<glm::dvec3> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
     size_t strip_delaunay_edge_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
+  std::optional<size_t> radiusTransitionSharedCornerSiteVertex(
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
+  /// Delaunay-edge crossing on a transition source edge at the shared-corner end (boundary-order front/back).
+  bool isRadiusTransitionCornerAdjacentSourceIntersection(
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
+  bool voronoiEdgeHasEndpointFace(size_t voronoi_edge_id, size_t voronoi_vertex_id) const;
+
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> findInteriorVvAnchorCrossingOnTargetEdge(
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
+  std::optional<size_t> interiorVvFictionalCornerSiteForTargetEdgeCrossing(
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef anchor_ref,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+
+  std::optional<glm::dvec3> interiorVvShiftAlongVoronoiEdgeToCornerLine(double t,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref, const glm::dvec2& vv_xy, size_t corner_site_id) const;
 
   /**
    * @brief Returns Delaunay-edge intersections in component-boundary traversal order.
