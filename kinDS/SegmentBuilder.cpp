@@ -545,6 +545,7 @@ bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
 void kinDS::SegmentBuilder::meshletDiagnosticLogLine(
   const char* tag, size_t half_edge_id, double t, const char* extra_note) const
 {
+  return; // disable for now
   const size_t even = half_edge_id & ~1;
   const size_t dual_edge = even / 2;
   size_t pi = static_cast<size_t>(-1);
@@ -5360,4 +5361,40 @@ const std::vector<size_t>& kinDS::SegmentBuilder::getBoundaryVertexToStrandId() 
 const std::vector<std::vector<size_t>>& kinDS::SegmentBuilder::getStrandToSegmentIndices() const
 {
   return strand_to_segment_indices;
+}
+
+size_t kinDS::SegmentBuilder::strandIdForSegment(size_t segment_id) const
+{
+  for (size_t strand_id = 0; strand_id < strand_to_segment_indices.size(); ++strand_id)
+  {
+    for (size_t seg : strand_to_segment_indices[strand_id])
+    {
+      if (seg == segment_id)
+      {
+        return strand_id;
+      }
+    }
+  }
+  throw std::runtime_error("strandIdForSegment: unknown segment_id " + std::to_string(segment_id));
+}
+
+size_t kinDS::SegmentBuilder::strandIdForRawMeshlet(size_t meshlet_index) const
+{
+  if (meshlet_index >= segment_mesh_pairs.size())
+  {
+    throw std::runtime_error("strandIdForRawMeshlet: meshlet_index out of range.");
+  }
+
+  const auto& pair = segment_mesh_pairs[meshlet_index];
+  size_t segment_id = pair.segment_index0;
+  if (segment_id == static_cast<size_t>(-1))
+  {
+    segment_id = pair.segment_index1;
+  }
+  if (segment_id == static_cast<size_t>(-1))
+  {
+    throw std::runtime_error("strandIdForRawMeshlet: meshlet " + std::to_string(meshlet_index)
+      + " has no segment endpoint.");
+  }
+  return strandIdForSegment(segment_id);
 }

@@ -14,6 +14,29 @@ namespace kinDS
 class SegmentBuilder;
 class KineticDelaunay;
 
+enum class MeshletExportMode
+{
+  Combined,   ///< One OBJ; each segment meshlet is an OBJ group.
+  PerSegment, ///< One OBJ per segment (meshlets merged per segment).
+  Raw,        ///< One OBJ per Voronoi-edge mesh pair (no segment-level merge).
+};
+
+inline bool mergeMeshletsBySegment(MeshletExportMode mode) { return mode != MeshletExportMode::Raw; }
+
+inline const char* meshletExportModeToString(MeshletExportMode mode)
+{
+  switch (mode)
+  {
+  case MeshletExportMode::Combined:
+    return "combined";
+  case MeshletExportMode::PerSegment:
+    return "per_segment";
+  case MeshletExportMode::Raw:
+    return "raw";
+  }
+  return "unknown";
+}
+
 class TreeMesher
 {
  public:
@@ -25,7 +48,6 @@ class TreeMesher
     // for debugging purposes:
     bool debug_export_meshes = false;
     size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
-    bool merge_meshlets_by_segment = true; // if false, keep one output meshlet per generated mesh pair
   };
 
  private:
@@ -57,11 +79,12 @@ class TreeMesher
   const Settings& getSettings() const { return settings; }
   void setSettings(const Settings& new_settings) { settings = new_settings; }
 
-  /// Export segment meshlets under @p export_path.
-  /// @param export_path Output directory when @p separate_file_per_segment is true; output OBJ path when false.
-  /// @param separate_file_per_segment If true, write one OBJ per meshlet; otherwise one OBJ with one group per meshlet.
+  /// Export meshlets under @p export_path.
+  /// @param export_mode How meshlets are grouped into output file(s).
+  /// @param export_path Output directory for @c PerSegment/@c Raw; output OBJ path for @c Combined.
   /// @param max_exports Maximum meshlets to export; default unlimited.
-  void exportCombinedMesh(const std::filesystem::path& export_path, bool separate_file_per_segment,
+  /// @param transformed When true (default), map meshlet vertices from profile space into world space before writing.
+  void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path, bool transformed = true,
     std::optional<size_t> max_exports = std::nullopt) const;
   void truncateToBoundary(const VoronoiMesh& boundary_mesh);
   void fixFailedSegments(const MeshIntersection& boundary_intersector);

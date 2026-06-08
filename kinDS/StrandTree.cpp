@@ -82,6 +82,15 @@ const std::vector<std::vector<glm::dvec2>>& StrandTree::getPoints() const { retu
 
 size_t StrandTree::getHeight() const { return tree_height; }
 
+size_t StrandTree::getBranchCount(size_t height) const
+{
+  if (height >= strands_by_branch_id.size())
+  {
+    return 0;
+  }
+  return strands_by_branch_id[height].size();
+}
+
 size_t StrandTree::addTrajectory(const std::vector<glm::dvec2>& traj)
 {
   size_t index = support_points.size();

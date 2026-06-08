@@ -7,8 +7,10 @@
 #include "kinDS/StrandTree.hpp"
 #include "kinDS/TreeMesher.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -448,6 +450,9 @@ static void print_usage(const char* program_name)
             << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
             << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
             << "  --log-file <path>         Write logs to file (default: no log file, console only)\n"
+            << "  --export-mode <mode>      Meshlet export mode for --mesh: combined, segments, raw (default: raw)\n"
+            << "  --export-path <path>      Output path; default: raw_meshlets/, segment_meshlets/, or combined_mesh.obj\n"
+            << "  --untransformed           Export meshlets in profile/local space (default: world space)\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -459,10 +464,46 @@ static void print_usage(const char* program_name)
             << "  " << program_name << " --mesh strandtree.txt\n"
             << "  " << program_name << " --log-file output.log --demo\n"
             << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
-            << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n";
+            << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
+            << "  " << program_name << " --export-mode combined --mesh strandtree.txt combined.obj\n";
 }
 
-static void mesh_from_file(const std::string& filename)
+static bool parse_meshlet_export_mode(const std::string& value, kinDS::MeshletExportMode& out)
+{
+  if (value == "combined")
+  {
+    out = kinDS::MeshletExportMode::Combined;
+    return true;
+  }
+  if (value == "segments" || value == "per_segment" || value == "per-segment")
+  {
+    out = kinDS::MeshletExportMode::PerSegment;
+    return true;
+  }
+  if (value == "raw")
+  {
+    out = kinDS::MeshletExportMode::Raw;
+    return true;
+  }
+  return false;
+}
+
+static std::filesystem::path default_mesh_export_path(kinDS::MeshletExportMode export_mode)
+{
+  switch (export_mode)
+  {
+  case kinDS::MeshletExportMode::Combined:
+    return "combined_mesh.obj";
+  case kinDS::MeshletExportMode::PerSegment:
+    return "segment_meshlets";
+  case kinDS::MeshletExportMode::Raw:
+    return "raw_meshlets";
+  }
+  return "raw_meshlets";
+}
+
+static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
+  const std::optional<std::filesystem::path>& export_path, bool transformed)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -470,22 +511,48 @@ static void mesh_from_file(const std::string& filename)
   {
     kinDS::StrandTree strand_tree = kinDS::StrandTree::loadFromFile(filename);
     std::cout << "StrandTree loaded successfully. Height: " << strand_tree.getHeight()
-              << ", Number of strands: " << strand_tree.getPoints().size() << std::endl;
+              << ", Number of strands: " << strand_tree.getPoints().size();
+
+    const auto& branches_by_height = strand_tree.getStrandsByBranchId();
+    if (!branches_by_height.empty())
+    {
+      size_t min_branches = branches_by_height.front().size();
+      size_t max_branches = min_branches;
+      for (const auto& at_height : branches_by_height)
+      {
+        min_branches = std::min(min_branches, at_height.size());
+        max_branches = std::max(max_branches, at_height.size());
+      }
+      std::cout << ", Number of branches: ";
+      if (min_branches == max_branches)
+      {
+        std::cout << min_branches;
+      }
+      else
+      {
+        std::cout << min_branches << "-" << max_branches << " (varies by height)";
+      }
+    }
+    std::cout << std::endl;
 
     std::cout << "Running TreeMesher..." << std::endl;
     kinDS::TreeMesher mesher(strand_tree);
-    auto mesher_settings = mesher.getSettings();
-    mesher_settings.merge_meshlets_by_segment = false; // Export raw meshlets (no segment-level merge)
-    mesher.setSettings(mesher_settings);
-    const auto& meshes = mesher.runMeshingAlgorithm();
+    const auto& meshes = mesher.runMeshingAlgorithm(true);
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
 
-    // Export meshlets (one OBJ per meshlet in the current directory).
-    mesher.exportCombinedMesh(".", true);
+    const std::filesystem::path resolved_export_path
+      = export_path.value_or(default_mesh_export_path(export_mode));
+    std::cout << "Exporting meshlets to: " << resolved_export_path.string()
+              << (transformed ? " (world space)" : " (profile space)") << std::endl;
+    mesher.exportMeshlets(export_mode, resolved_export_path, transformed);
 
     // Export boundary mesh
-    const auto& boundary_mesh = mesher.getBoundaryMesh();
+    kinDS::VoronoiMesh boundary_mesh = mesher.getBoundaryMesh();
+    if (transformed)
+    {
+      mesher.transformBoundaryMesh(boundary_mesh);
+    }
     kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, true);
     std::cout << "Boundary mesh exported to: boundary_mesh.obj" << std::endl;
 
@@ -517,6 +584,9 @@ int main(int argc, char* argv[])
   // First pass: parse all options, remember the command (order-independent)
   std::string command; // "demo", "mesh", "help"
   std::string mesh_file; // for --mesh
+  kinDS::MeshletExportMode mesh_export_mode = kinDS::MeshletExportMode::Raw;
+  std::optional<std::filesystem::path> mesh_export_path;
+  bool mesh_export_transformed = true;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -583,6 +653,39 @@ int main(int argc, char* argv[])
       kinDS::logger.setLogFile(argv[arg_idx + 1]);
       std::cout << "Log file set to: " << argv[arg_idx + 1] << std::endl;
       arg_idx += 2;
+    }
+    else if (arg == "--export-mode")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --export-mode requires a value (combined, segments, raw)." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      if (!parse_meshlet_export_mode(argv[arg_idx + 1], mesh_export_mode))
+      {
+        std::cerr << "Error: Unknown export mode: " << argv[arg_idx + 1]
+                  << " (expected combined, segments, or raw)." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--export-path")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --export-path requires a path." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      mesh_export_path = argv[arg_idx + 1];
+      arg_idx += 2;
+    }
+    else if (arg == "--untransformed")
+    {
+      mesh_export_transformed = false;
+      ++arg_idx;
     }
     else if (arg == "--help" || arg == "-h")
     {
@@ -654,7 +757,7 @@ int main(int argc, char* argv[])
   else if (command == "mesh")
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
-    mesh_from_file(mesh_file);
+    mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_transformed);
     return 0;
   }
 

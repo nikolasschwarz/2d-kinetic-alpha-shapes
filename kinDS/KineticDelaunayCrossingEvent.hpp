@@ -167,8 +167,13 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
 
   size_t containing_tri_id = kd->crossing_data.getContainingTriId(voronoi_vertex_id);
 
-  // The event is also outdated if the face has been updated in a flip event
+  // Outdated if the containing triangle or the dual triangle (same index as the Voronoi vertex) was
+  // updated by a flip after this event was scheduled.
   if (creation_time < kd->face_last_updated[containing_tri_id])
+  {
+    return;
+  }
+  if (creation_time < kd->face_last_updated[voronoi_vertex_id])
   {
     return;
   }

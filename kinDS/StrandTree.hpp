@@ -42,6 +42,9 @@ class StrandTree
 
   size_t getHeight() const;
 
+  /// Number of branches at @p height (section index).
+  size_t getBranchCount(size_t height) const;
+
   size_t addTrajectory(const std::vector<glm::dvec2>& traj);
 
   glm::dvec2 evaluate(size_t strand_id, double t) const;

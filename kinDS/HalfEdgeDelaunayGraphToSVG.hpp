@@ -4,10 +4,13 @@
 #include "Logger.hpp"
 #include "VisualDebugHighlight.hpp"
 #include "simple_svg.hpp"
+#include <algorithm>
 #include <array>
 #include <glm/glm.hpp>
+#include <limits>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -315,14 +318,91 @@ class HalfEdgeDelaunayGraphToSVG
    * @param voronoi_vertex_to_tri Optional: mapping from Voronoi vertex id (index into circumcenters)
    *        to containing triangle id. If provided, Voronoi vertices are labeled as "id/tri".
    *        If not provided, only "id" is used (no slash).
+   * @param component_strands Optional: when set, only geometry belonging to this connected component is drawn
+   *        and the view is cropped to its strand sites.
+   * @param site_runtime_branch_if_diff Optional: strand id -> runtime branch (component id) for sites whose
+   *        runtime branch differs from the data-structure branch; appended to the site label as `branch=X`.
    */
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
     const std::string& filename, double margin = 0.0, const std::vector<bool>* face_inside = nullptr,
     bool draw_voronoi_edges = false, const std::vector<size_t>* voronoi_vertex_to_tri = nullptr,
     const std::vector<IntersectionDebugInfo>* intersection_debug_info = nullptr,
-    const VisualDebugHighlight* highlight = nullptr)
+    const VisualDebugHighlight* highlight = nullptr, const std::unordered_set<size_t>* component_strands = nullptr,
+    const std::unordered_map<size_t, size_t>* site_runtime_branch_if_diff = nullptr)
   {
-    BoundingBox bb = computeBoundingBox(points, margin);
+    auto in_component = [&](size_t strand_id) -> bool
+    {
+      return component_strands == nullptr || component_strands->count(strand_id) != 0;
+    };
+
+    auto triangle_in_component = [&](size_t face_id) -> bool
+    {
+      if (component_strands == nullptr)
+      {
+        return true;
+      }
+      const auto face_vertex_indices = graph.getTriangleVertexIndices(face_id);
+      bool has_member = false;
+      for (int k = 0; k < 3; ++k)
+      {
+        if (face_vertex_indices[k] == -1)
+        {
+          continue;
+        }
+        if (!in_component(static_cast<size_t>(face_vertex_indices[k])))
+        {
+          return false;
+        }
+        has_member = true;
+      }
+      return has_member;
+    };
+
+    auto delaunay_edge_in_component = [&](size_t he_id) -> bool
+    {
+      if (component_strands == nullptr)
+      {
+        return true;
+      }
+      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
+      const HalfEdgeDelaunayGraph::HalfEdge& twin = graph.getHalfEdges()[he_id ^ 1];
+      if (he.origin == -1 || twin.origin == -1)
+      {
+        const size_t finite_origin
+          = he.origin != -1 ? static_cast<size_t>(he.origin) : static_cast<size_t>(twin.origin);
+        return in_component(finite_origin) && triangle_in_component(he.face);
+      }
+      return in_component(static_cast<size_t>(he.origin)) && in_component(static_cast<size_t>(twin.origin));
+    };
+
+    BoundingBox bb = [&]() -> BoundingBox
+    {
+      if (component_strands == nullptr || component_strands->empty())
+      {
+        return computeBoundingBox(points, margin);
+      }
+      double min_x = std::numeric_limits<double>::max();
+      double min_y = std::numeric_limits<double>::max();
+      double max_x = std::numeric_limits<double>::lowest();
+      double max_y = std::numeric_limits<double>::lowest();
+      for (size_t strand_id : *component_strands)
+      {
+        if (strand_id >= points.size())
+        {
+          continue;
+        }
+        const glm::dvec2& point = points[strand_id];
+        min_x = std::min(min_x, point[0]);
+        min_y = std::min(min_y, point[1]);
+        max_x = std::max(max_x, point[0]);
+        max_y = std::max(max_y, point[1]);
+      }
+      if (min_x > max_x || min_y > max_y)
+      {
+        return computeBoundingBox(points, margin);
+      }
+      return BoundingBox(min_x - margin, min_y - margin, max_x + margin, max_y + margin);
+    }();
     svg::Document doc = setupDocument(points, filename, bb);
 
     struct Label
@@ -426,6 +506,14 @@ class HalfEdgeDelaunayGraphToSVG
       label_text.setf(std::ios::fixed);
       label_text.precision(6);
       label_text << vertex_id << " (" << point[0] << "," << point[1] << ")";
+      if (site_runtime_branch_if_diff != nullptr)
+      {
+        const auto branch_it = site_runtime_branch_if_diff->find(vertex_id);
+        if (branch_it != site_runtime_branch_if_diff->end())
+        {
+          label_text << " branch=" << branch_it->second;
+        }
+      }
       labels.push_back(Label(point[0] - label_pad_sm, point[1] - label_pad_sm, label_text.str(), color, label_font_size));
     };
 
@@ -446,12 +534,22 @@ class HalfEdgeDelaunayGraphToSVG
       {
         return hi_edge;
       }
+      if (highlight->affectsDirectedHalfEdge(voronoi_edge_id * 2)
+        || highlight->affectsDirectedHalfEdge(voronoi_edge_id * 2 + 1))
+      {
+        return hi_edge;
+      }
       return dim_edge;
     };
 
     // Draw faces
     for (size_t face_id = 0; face_id < graph.getFaces().size(); face_id++)
     {
+      if (!triangle_in_component(face_id))
+      {
+        continue;
+      }
+
       auto face_vertex_indices = graph.getTriangleVertexIndices(face_id);
 
       // If any vertex is infinite, we still want to label the (infinite) face,
@@ -523,6 +621,11 @@ class HalfEdgeDelaunayGraphToSVG
     // Draw edges
     for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
     {
+      if (!delaunay_edge_in_component(he_id))
+      {
+        continue;
+      }
+
       const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
       if (he.origin != -1
         && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
@@ -542,6 +645,11 @@ class HalfEdgeDelaunayGraphToSVG
     // Draw vertices (filter out extreme outliers)
     for (size_t v = 0; v < points.size(); v++)
     {
+      if (!in_component(v))
+      {
+        continue;
+      }
+
       glm::dvec2 point = points[v];
       if (!isWithinBoundingBox(point, bb))
       {
@@ -560,6 +668,11 @@ class HalfEdgeDelaunayGraphToSVG
 
     for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
     {
+      if (!delaunay_edge_in_component(he_id))
+      {
+        continue;
+      }
+
       const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
       // Draw half-edge id at midpoint but slightly offset to the left in the direction of the edge normal
 
@@ -601,6 +714,11 @@ class HalfEdgeDelaunayGraphToSVG
       svg::Color purple(128, 0, 128);
       for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
       {
+        if (!delaunay_edge_in_component(he_id))
+        {
+          continue;
+        }
+
         const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
         if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1)
         {
@@ -654,6 +772,11 @@ class HalfEdgeDelaunayGraphToSVG
       constexpr size_t invalid_id = static_cast<size_t>(-1);
       for (size_t i = 0; i < circumcenters.size(); ++i)
       {
+        if (!triangle_in_component(i))
+        {
+          continue;
+        }
+
         const auto& cc = circumcenters[i];
         if (!cc.second && isWithinBoundingBox(cc.first, bb))
         {
@@ -704,6 +827,11 @@ class HalfEdgeDelaunayGraphToSVG
         const size_t v_list_index = info.voronoi_list_index;
         const size_t voronoi_edge_id = info.voronoi_edge_id;
         const size_t delaunay_edge_id = info.delaunay_edge_id;
+
+        if (!delaunay_edge_in_component(2 * delaunay_edge_id))
+        {
+          continue;
+        }
 
         glm::dvec2 p = inter.first;
         if (!std::isfinite(p.x) || !std::isfinite(p.y))

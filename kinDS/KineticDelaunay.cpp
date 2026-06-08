@@ -418,6 +418,24 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
     copy_intersections(triangle_half_edges[0], false);
     copy_intersections(triangle_half_edges[1], false);
   }
+
+  vertices0 = crossing_data.getVoronoiVerticesInTri(face0);
+  vertices1 = crossing_data.getVoronoiVerticesInTri(face1);
+  std::unordered_set<size_t> recompute_voronoi_vertices;
+  for (size_t voronoi_vertex : vertices0)
+  {
+    recompute_voronoi_vertices.insert(voronoi_vertex);
+  }
+  for (size_t voronoi_vertex : vertices1)
+  {
+    recompute_voronoi_vertices.insert(voronoi_vertex);
+  }
+  recompute_voronoi_vertices.insert(face0);
+  recompute_voronoi_vertices.insert(face1);
+  for (size_t voronoi_vertex : recompute_voronoi_vertices)
+  {
+    crossing_event_manager_->computeEvents(t, voronoi_vertex);
+  }
 }
 
 void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
@@ -870,12 +888,20 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
     }
   }
 
-  // Recompute all crossing events
+  // Recompute crossing events for Voronoi vertices in both triangles, including dual vertices
+  // (face_id0/face_id1) that may not appear in getVoronoiVerticesInTri after reassignment.
+  std::unordered_set<size_t> recompute_voronoi_vertices;
   for (size_t voronoi_vertex : vertices0)
   {
-    crossing_event_manager_->computeEvents(t, voronoi_vertex);
+    recompute_voronoi_vertices.insert(voronoi_vertex);
   }
   for (size_t voronoi_vertex : vertices1)
+  {
+    recompute_voronoi_vertices.insert(voronoi_vertex);
+  }
+  recompute_voronoi_vertices.insert(face_id0);
+  recompute_voronoi_vertices.insert(face_id1);
+  for (size_t voronoi_vertex : recompute_voronoi_vertices)
   {
     crossing_event_manager_->computeEvents(t, voronoi_vertex);
   }
@@ -2375,7 +2401,7 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
   auto half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;
 
   bool erased[3] = { false, false, false };
-  std::list<EdgeIntersectionRef>::iterator next_after_deletion;
+  std::list<EdgeIntersectionRef>::iterator next_after_deletion = d_intersections.end();
 
   // First remove any intersection entries that involved this Voronoi vertex and the crossed Delaunay edge.
   for (size_t i = 0; i < half_edges.size(); i++)

@@ -7,6 +7,7 @@
 #include "TreeMesher.hpp"
 #include <execution>
 #include <filesystem>
+#include <stdexcept>
 
 #ifdef _DEBUG
 #pragma message("kinDS: TreeMesher.cpp built in DEBUG")
@@ -81,29 +82,69 @@ TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::
 {
 }
 
-void TreeMesher::exportCombinedMesh(const std::filesystem::path& export_path, bool separate_file_per_segment,
+void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path, bool transformed,
   std::optional<size_t> max_exports) const
 {
+  if (!mesh_builder)
+  {
+    throw std::runtime_error("exportMeshlets: meshing has not been run yet.");
+  }
+
+  std::vector<VoronoiMesh> meshlets_to_export;
+  std::vector<std::string> export_suffixes;
+  if (export_mode == MeshletExportMode::Raw)
+  {
+    std::vector<std::vector<int>> neighbors_unused;
+    std::tie(meshlets_to_export, neighbors_unused) = mesh_builder->extractSegmentMeshlets(false);
+    export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(false);
+  }
+  else
+  {
+    meshlets_to_export = segment_meshlets;
+    export_suffixes = segment_meshlet_export_suffixes;
+  }
+
   const size_t export_count = max_exports.has_value()
-    ? std::min(max_exports.value(), segment_meshlets.size())
-    : segment_meshlets.size();
+    ? std::min(max_exports.value(), meshlets_to_export.size())
+    : meshlets_to_export.size();
+
+  auto meshlet_for_export = [&](size_t i) -> VoronoiMesh
+  {
+    VoronoiMesh mesh = meshlets_to_export[i];
+    if (transformed)
+    {
+      const size_t strand_id = export_mode == MeshletExportMode::Raw
+        ? mesh_builder->strandIdForRawMeshlet(i)
+        : mesh_builder->strandIdForSegment(i);
+      transformToWorldSpace(mesh, strand_id);
+    }
+    return mesh;
+  };
 
   auto meshlet_filename = [&](size_t i) -> std::filesystem::path
   {
-    const std::string suffix = (i < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[i] : "";
+    const std::string suffix = (i < export_suffixes.size()) ? export_suffixes[i] : "";
     return std::filesystem::path("meshlet" + std::to_string(i) + suffix
-      + segment_meshlets[i].creationKineticTimeFilenameSuffix() + ".obj");
+      + meshlets_to_export[i].creationKineticTimeFilenameSuffix() + ".obj");
   };
 
-  if (separate_file_per_segment)
+  switch (export_mode)
+  {
+  case MeshletExportMode::PerSegment:
+  case MeshletExportMode::Raw:
   {
     std::filesystem::create_directories(export_path);
     for (size_t i = 0; i < export_count; ++i)
     {
-      kinDS::ObjExporter::writeMesh(segment_meshlets[i], export_path / meshlet_filename(i));
+      kinDS::ObjExporter::writeMesh(meshlet_for_export(i), export_path / meshlet_filename(i));
     }
-    KINDS_DEBUG("Exported " << export_count << " meshlet OBJ file(s) to " << export_path.string() << ".");
+    KINDS_DEBUG("Exported " << export_count << " meshlet OBJ file(s) (mode=" << meshletExportModeToString(export_mode)
+                            << ", transformed=" << transformed << ") to " << export_path.string() << ".");
     return;
+  }
+
+  case MeshletExportMode::Combined:
+    break;
   }
 
   std::filesystem::path obj_path = export_path;
@@ -120,30 +161,32 @@ void TreeMesher::exportCombinedMesh(const std::filesystem::path& export_path, bo
   bool combined_mesh_initialized = false;
   for (size_t i = 0; i < export_count; ++i)
   {
-    if (segment_meshlets[i].getVertexCount() == 0 && segment_meshlets[i].getTriangleCount() == 0)
+    VoronoiMesh mesh = meshlet_for_export(i);
+    if (mesh.getVertexCount() == 0 && mesh.getTriangleCount() == 0)
     {
       continue;
     }
     if (!combined_mesh_initialized)
     {
-      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, segment_meshlets[i].getNormalMode());
+      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, mesh.getNormalMode());
       combined_mesh_initialized = true;
     }
     else
     {
       combined_mesh.startNewGroup();
     }
-    combined_mesh += segment_meshlets[i];
+    combined_mesh += mesh;
   }
 
   if (!combined_mesh_initialized)
   {
-    KINDS_DEBUG("exportCombinedMesh: no meshlets to export.");
+    KINDS_DEBUG("exportMeshlets: no meshlets to export.");
     return;
   }
 
   kinDS::ObjExporter::writeMesh(combined_mesh, obj_path);
-  KINDS_DEBUG("Exported combined mesh (" << export_count << " meshlet group(s)) to " << obj_path.string() << ".");
+  KINDS_DEBUG("Exported combined mesh (" << export_count << " meshlet group(s), mode=combined, transformed="
+                                       << transformed << ") to " << obj_path.string() << ".");
 }
 
 void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
@@ -414,8 +457,6 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << settings.debug_export_meshes
                                                                                       << ", max_meshlet_export="
                                                                                       << settings.max_meshlet_export
-                                                                                      << ", merge_meshlets_by_segment="
-                                                                                      << settings.merge_meshlets_by_segment
                                                                                       << ", fix_missing_meshes="
                                                                                       << settings.fix_missing_meshes
                                                                                       << ", radius_vertex_shift_enabled="
@@ -424,10 +465,8 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
 
-  std::tie(segment_meshlets, meshing_neighbor_indices)
-    = mesh_builder->extractSegmentMeshlets(settings.merge_meshlets_by_segment);
-  segment_meshlet_export_suffixes
-    = mesh_builder->extractSegmentMeshletExportSuffixes(settings.merge_meshlets_by_segment);
+  std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
+  segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(true);
 }
 
 void TreeMesher::mapMeshingToPhysicsSegmentIndices()

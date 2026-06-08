@@ -669,6 +669,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   const std::vector<std::vector<size_t>>& getStrandToSegmentIndices() const;
 
+  /// Strand whose profile frame maps @p segment_id mesh vertices to world space.
+  size_t strandIdForSegment(size_t segment_id) const;
+  /// Strand used to transform a raw (unmerged) meshlet at @p meshlet_index.
+  size_t strandIdForRawMeshlet(size_t meshlet_index) const;
+
   std::vector<glm::dvec3> computeClampedVoronoiVertices(
     size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);
 
