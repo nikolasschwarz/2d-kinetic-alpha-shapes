@@ -363,15 +363,14 @@ void HalfEdgeDelaunayGraph::printDebug() const
   }
 }
 
-void HalfEdgeDelaunayGraph::init(const std::vector<std::vector<glm::dvec2>>& splines)
+void HalfEdgeDelaunayGraph::init(const std::vector<glm::dvec2>& site_positions)
 {
-  vertex_count = splines.size();
+  vertex_count = site_positions.size();
   vertex_to_half_edge.assign(vertex_count, -1);
   std::vector<float> coords;
-  coords.reserve(splines.size() * 2); // Reserve space for x and y coordinates
-  for (const auto& spline : splines)
+  coords.reserve(site_positions.size() * 2);
+  for (const auto& point : site_positions)
   {
-    glm::dvec2 point = spline.front();
     coords.push_back(point[0]);
     coords.push_back(point[1]);
   }
@@ -381,21 +380,34 @@ void HalfEdgeDelaunayGraph::init(const std::vector<std::vector<glm::dvec2>>& spl
   build(delaunator.triangles);
 }
 
-void kinDS::HalfEdgeDelaunayGraph::update(
-  const std::vector<std::vector<glm::dvec2>>& splines, size_t index, std::vector<std::vector<size_t>> components)
+void HalfEdgeDelaunayGraph::init(const std::vector<std::vector<glm::dvec2>>& splines)
 {
-  vertex_count = splines.size();
+  std::vector<glm::dvec2> site_positions;
+  site_positions.reserve(splines.size());
+  for (const auto& spline : splines)
+  {
+    site_positions.push_back(spline.front());
+  }
+  init(site_positions);
+}
+
+void kinDS::HalfEdgeDelaunayGraph::update(
+  size_t vertex_count_,
+  const std::vector<std::vector<size_t>>& components,
+  const std::function<glm::dvec2(size_t)>& vertex_position)
+{
+  vertex_count = vertex_count_;
   vertex_to_half_edge.assign(vertex_count, -1);
 
   std::vector<size_t> index_buffer;
 
-  for (auto& c : components)
+  for (const auto& c : components)
   {
     std::vector<float> coords;
-    coords.reserve(c.size() * 2); // Reserve space for x and y coordinates
+    coords.reserve(c.size() * 2);
     for (const auto& v : c)
     {
-      glm::dvec2 point = splines[index][v];
+      glm::dvec2 point = vertex_position(v);
       coords.push_back(point[0]);
       coords.push_back(point[1]);
     }

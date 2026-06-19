@@ -1,6 +1,7 @@
 #pragma once
 #include "Delaunator2D.hpp"
 #include <array>
+#include <functional>
 #include <glm/glm.hpp>
 #include <vector>
 
@@ -57,10 +58,14 @@ class HalfEdgeDelaunayGraph
  public:
   HalfEdgeDelaunayGraph() = default;
 
+  void init(const std::vector<glm::dvec2>& site_positions);
+
   void init(const std::vector<std::vector<glm::dvec2>>& splines);
 
   void update(
-    const std::vector<std::vector<glm::dvec2>>& splines, size_t index, std::vector<std::vector<size_t>> components);
+    size_t vertex_count,
+    const std::vector<std::vector<size_t>>& components,
+    const std::function<glm::dvec2(size_t)>& vertex_position);
   // Flips an edge between two triangles by rotating it counter-clockwise in its quadrilateral
   void flipEdge(size_t he_id);
   // Other methods to manipulate and query the triangulation can be added here.

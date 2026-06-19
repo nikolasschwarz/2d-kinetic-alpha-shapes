@@ -4973,6 +4973,7 @@ void kinDS::SegmentBuilder::splitComponent(
   kin_del.component_data.components.resize(new_size);
   kin_del.component_data.component_boundaries.resize(new_size);
   kin_del.component_data.component_centroids.resize(new_size);
+  kin_del.component_data.component_last_updated.resize(new_size);
 
   std::vector<bool> he_visited(kin_del.getGraph().getHalfEdges().size(), false);
 

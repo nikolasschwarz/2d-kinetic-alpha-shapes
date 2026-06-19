@@ -79,7 +79,11 @@ void KineticDelaunay::SectionEvent::handleEvent()
   // Replace the old `advanceOneSection()` logic.
   if (kd->component_data.components.size() > kd->prev_component_count)
   {
-    kd->graph.update(kd->branch_trajs.getPoints(), section_index, kd->component_data.components);
+    const double section_time = static_cast<double>(section_index);
+    kd->graph.update(
+      kd->graph.getVertexCount(),
+      kd->component_data.components,
+      [kd, section_time](size_t v) { return kd->getPointAt(v, section_time); });
   }
 
   kd->precomputeStep(static_cast<double>(section_index));

@@ -20,6 +20,10 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   const size_t section = static_cast<size_t>(t);
   const float fraction = t - section;
 
+  size_t reference_branch = 0;
+  const auto piece_poly = [&](size_t strand_id)
+  { return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch); };
+
   auto& dual_triangle = graph.getFaces()[voronoi_vertex_id];
   auto& containing_triangle = graph.getFaces()[crossing_data.getContainingTriId(voronoi_vertex_id)];
 
@@ -33,6 +37,8 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   {
     return;
   }
+
+  reference_branch = kd->getReferenceBranch(v_i, t);
 
   // Check a special case: the containing triangle is infinite and adjacent to the dual triangle. In this case, we need
   // a different predicate
@@ -75,9 +81,11 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
     v_j = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index]].origin;
     v_k = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index] ^ 1].origin;
 
-    Trajectory<2> traj_i = branch_trajs.getPiecePolynomial(v_i, section);
-    Trajectory<2> traj_j = branch_trajs.getPiecePolynomial(v_j, section);
-    Trajectory<2> traj_k = branch_trajs.getPiecePolynomial(v_k, section);
+    reference_branch = kd->getReferenceBranch(v_i, t);
+
+    Trajectory<2> traj_i = piece_poly(v_i);
+    Trajectory<2> traj_j = piece_poly(v_j);
+    Trajectory<2> traj_k = piece_poly(v_k);
 
     Trajectory<2> vector_ij;
     vector_ij[0] = traj_j[0] - traj_i[0];
@@ -108,9 +116,9 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   }
   else
   {
-    Trajectory<2> traj_i = branch_trajs.getPiecePolynomial(v_i, section);
-    Trajectory<2> traj_j = branch_trajs.getPiecePolynomial(v_j, section);
-    Trajectory<2> traj_k = branch_trajs.getPiecePolynomial(v_k, section);
+    Trajectory<2> traj_i = piece_poly(v_i);
+    Trajectory<2> traj_j = piece_poly(v_j);
+    Trajectory<2> traj_k = piece_poly(v_k);
     Trajectory<3> bisector_ij;
 
     bisector_ij[0] = 2 * (traj_j[0] - traj_i[0]);
@@ -140,8 +148,8 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
       if (a != -1 && b != -1)
       {
 
-        Trajectory<2> traj_a = branch_trajs.getPiecePolynomial(a, section);
-        Trajectory<2> traj_b = branch_trajs.getPiecePolynomial(b, section);
+        Trajectory<2> traj_a = piece_poly(static_cast<size_t>(a));
+        Trajectory<2> traj_b = piece_poly(static_cast<size_t>(b));
 
         // line through a and b in homogeneous coordinates
 
@@ -166,9 +174,9 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
           size_t c = graph.getHalfEdges()[prev_he_id].origin;
           size_t c_prime = graph.getHalfEdges()[next_he_id].origin;
 
-          Trajectory<2> traj_a = branch_trajs.getPiecePolynomial(a, section);
-          Trajectory<2> traj_c = branch_trajs.getPiecePolynomial(c, section);
-          Trajectory<2> traj_c_prime = branch_trajs.getPiecePolynomial(c_prime, section);
+          Trajectory<2> traj_a = piece_poly(static_cast<size_t>(a));
+          Trajectory<2> traj_c = piece_poly(static_cast<size_t>(c));
+          Trajectory<2> traj_c_prime = piece_poly(static_cast<size_t>(c_prime));
           Trajectory<3> voronoi_homogeneous = Trajectory<3>::cross(bisector_ij, bisector_ik);
 
           event_trigger = angularBisector(traj_a, traj_c, traj_c_prime, voronoi_homogeneous);
@@ -181,9 +189,9 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
           size_t c_prime = graph.getHalfEdges()[prev_he_id].origin;
           size_t c = graph.getHalfEdges()[next_he_id].origin;
 
-          Trajectory<2> traj_b = branch_trajs.getPiecePolynomial(b, section);
-          Trajectory<2> traj_c = branch_trajs.getPiecePolynomial(c, section);
-          Trajectory<2> traj_c_prime = branch_trajs.getPiecePolynomial(c_prime, section);
+          Trajectory<2> traj_b = piece_poly(static_cast<size_t>(b));
+          Trajectory<2> traj_c = piece_poly(static_cast<size_t>(c));
+          Trajectory<2> traj_c_prime = piece_poly(static_cast<size_t>(c_prime));
           Trajectory<3> voronoi_homogeneous = Trajectory<3>::cross(bisector_ij, bisector_ik);
 
           event_trigger = angularBisector(traj_b, traj_c, traj_c_prime, voronoi_homogeneous);

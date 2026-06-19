@@ -32,11 +32,15 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     return;
   }
 
+  const size_t reference_branch = kd->getReferenceBranch(static_cast<size_t>(u), t);
+  const auto piece_poly = [&](size_t strand_id)
+  { return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch); };
+
   std::vector<Trajectory<2>> trajs;
 
-  trajs.push_back(branch_trajs.getPiecePolynomial(u, section));
-  trajs.push_back(branch_trajs.getPiecePolynomial(v, section));
-  trajs.push_back(branch_trajs.getPiecePolynomial(w, section));
+  trajs.push_back(piece_poly(static_cast<size_t>(u)));
+  trajs.push_back(piece_poly(static_cast<size_t>(v)));
+  trajs.push_back(piece_poly(static_cast<size_t>(w)));
 
   Polynomial event_trigger
     = circumradiusEquals(

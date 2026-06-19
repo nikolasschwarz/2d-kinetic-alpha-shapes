@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cmath>
+#include "Logger.hpp"
 
 using namespace kinDS;
 
@@ -95,7 +96,12 @@ glm::vec2 PlaneProjector::worldToLocalB(const glm::vec3& x) const
   float wv = glm::dot(w, m_vB);
 
   float det = uu * vv - uv * uv;
-  assert(std::abs(det) > EPS);
+  //assert(std::abs(det) > EPS);
+  if(std::abs(det) < EPS)
+  {
+    // Degenerate case, warn
+    KINDS_WARNING("Degenerate plane in PlaneProjector");
+  }
 
   float c = (wu * vv - wv * uv) / det;
   float d = (wv * uu - wu * uv) / det;

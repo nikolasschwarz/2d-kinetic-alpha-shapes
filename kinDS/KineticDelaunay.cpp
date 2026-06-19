@@ -1027,14 +1027,16 @@ bool KineticDelaunay::isDummyBoundary(size_t v)
   return false;
 }
 
+size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
+{
+  size_t component_id = component_data.component_map[strand_id];
+  size_t representative_vertex = component_data.components[component_id].front();
+  return branch_trajs.getBranchIndex(representative_vertex, static_cast<size_t>(std::ceil(t)));
+}
+
 glm::dvec2 KineticDelaunay::getPointAt(size_t v, double t) const
 {
-  // get point transformed such that all points in the same component match
-  size_t component_id = component_data.component_map[v];
-  size_t representative_vertex = component_data.components[component_id].front();
-  size_t reference_branch = branch_trajs.getBranchIndex(representative_vertex, std::ceil(t));
-
-  return branch_trajs.evaluateTransformed(v, t, reference_branch);
+  return branch_trajs.evaluateTransformed(v, t, getReferenceBranch(v, t));
 }
 
 glm::dvec2 KineticDelaunay::getPointAt(double t, size_t v) const { return getPointAt(v, t); }
@@ -1358,9 +1360,9 @@ std::pair<glm::dvec2, glm::dvec2> KineticDelaunay::computeAngularBisector(size_t
     assert(c_prime != size_t(-1));
   }
 
-  glm::dvec2 p_a = branch_trajs.evaluate(a, t);
-  glm::dvec2 p_c = branch_trajs.evaluate(c, t);
-  glm::dvec2 p_c_prime = branch_trajs.evaluate(c_prime, t);
+  glm::dvec2 p_a = getPointAt(a, t);
+  glm::dvec2 p_c = getPointAt(c, t);
+  glm::dvec2 p_c_prime = getPointAt(c_prime, t);
 
   glm::dvec2 angular_bisector_direction = glm::normalize(p_c_prime - p_a) + glm::normalize(p_c - p_a);
 
@@ -1391,8 +1393,8 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(
   }
   else
   {
-    glm::dvec2 edge_start = branch_trajs.evaluate(graph.getHalfEdges()[2 * delaunay_edge_id].origin, t);
-    glm::dvec2 edge_end = branch_trajs.evaluate(graph.destination(2 * delaunay_edge_id), t);
+    glm::dvec2 edge_start = getPointAt(static_cast<size_t>(graph.getHalfEdges()[2 * delaunay_edge_id].origin), t);
+    glm::dvec2 edge_end = getPointAt(static_cast<size_t>(graph.destination(2 * delaunay_edge_id)), t);
     return segmentIntersectionParameters(edge_start, edge_end, start_point, destination);
   }
 }
@@ -1419,8 +1421,8 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
     // << dest);
     if (origin != static_cast<size_t>(-1) && dest != static_cast<size_t>(-1))
     {
-      glm::dvec2 p0 = branch_trajs.evaluate(origin, t);
-      glm::dvec2 p1 = branch_trajs.evaluate(dest, t);
+      glm::dvec2 p0 = getPointAt(origin, t);
+      glm::dvec2 p1 = getPointAt(dest, t);
       return -((p1.x - p0.x) * (query_point.y - p0.y) - (p1.y - p0.y) * (query_point.x - p0.x));
     }
     else
@@ -1504,8 +1506,8 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
       }
       else
       {
-        glm::dvec2 edge_start = branch_trajs.evaluate(graph.getHalfEdges()[he_id].origin, t);
-        glm::dvec2 edge_end = branch_trajs.evaluate(graph.destination(he_id), t);
+        glm::dvec2 edge_start = getPointAt(static_cast<size_t>(graph.getHalfEdges()[he_id].origin), t);
+        glm::dvec2 edge_end = getPointAt(static_cast<size_t>(graph.destination(he_id)), t);
         auto [r, s] = segmentIntersectionParameters(edge_start, edge_end, start_point, destination);
         if (r >= 0.0 && r <= 1.0 && s <= 1.0)
         {
@@ -1534,7 +1536,15 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
 const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_manager)
 {
   callback_manager_ = callback_manager;
-  graph.init(branch_trajs.getPoints());
+  const size_t vertex_count = branch_trajs.getPoints().size();
+  std::vector<glm::dvec2> initial_sites;
+  initial_sites.reserve(vertex_count);
+  for (size_t v = 0; v < vertex_count; ++v)
+  {
+    const size_t reference_branch = branch_trajs.getBranchIndex(v, 0);
+    initial_sites.push_back(branch_trajs.evaluateTransformed(v, 0.0, reference_branch));
+  }
+  graph.init(initial_sites);
   sections_advanced = 0; // Reset the section counter
 
   /*section_event_manager_->setCallback(section_callback);
@@ -1554,6 +1564,9 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
   quadrilateral_last_updated.resize(graph.getHalfEdges().size() / 2, 0.0);
   face_last_updated.resize(graph.getFaces().size(), 0.0);
 
+  // Bootstrap component_map (singleton components) so getPointAt works during face initialization.
+  computeComponentData(0.0);
+
   for (size_t face_index = 0; face_index < graph.getFaces().size(); face_index++)
   {
     const HalfEdgeDelaunayGraph::Triangle& tri = graph.getFaces()[face_index];
@@ -1569,8 +1582,7 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
         outer_face = true;
         break;
       }
-      // assume that only one plane as frame of reference exists
-      points.push_back(branch_trajs.evaluate(v, 0.0));
+      points.push_back(getPointAt(static_cast<size_t>(v), 0.0));
     }
 
     if (!outer_face)

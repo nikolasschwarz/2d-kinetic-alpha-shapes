@@ -19,6 +19,9 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   Polynomial event_trigger;
 
   std::vector<Trajectory<2>> trajs;
+  size_t reference_branch = 0;
+  const auto piece_poly = [&](size_t strand_id)
+  { return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch); };
 
   if (graph.isOnConvexBoundary(he_id) || graph.isOutsideConvexBoundary(he_id))
   {
@@ -47,12 +50,14 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     int& b = filtered_indices[1]; // Second vertex
     int& c = filtered_indices[2]; // Third vertex
 
+    reference_branch = kd->getReferenceBranch(static_cast<size_t>(a), t);
+
     // print the triangle vertices:
     // std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
 
-    trajs.push_back(branch_trajs.getPiecePolynomial(a, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(b, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(c, section));
+    trajs.push_back(piece_poly(static_cast<size_t>(a)));
+    trajs.push_back(piece_poly(static_cast<size_t>(b)));
+    trajs.push_back(piece_poly(static_cast<size_t>(c)));
 
     event_trigger = ccw(trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1]);
   }
@@ -63,13 +68,15 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     int c = graph.getHalfEdges()[he_id ^ 1].origin; // Third vertex
     int d = graph.triangleOppositeVertex(he_id); // Fourth vertex
 
+    reference_branch = kd->getReferenceBranch(static_cast<size_t>(a), t);
+
     // print the quadrilateral vertices:
     // std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;
 
-    trajs.push_back(branch_trajs.getPiecePolynomial(a, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(b, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(c, section));
-    trajs.push_back(branch_trajs.getPiecePolynomial(d, section));
+    trajs.push_back(piece_poly(static_cast<size_t>(a)));
+    trajs.push_back(piece_poly(static_cast<size_t>(b)));
+    trajs.push_back(piece_poly(static_cast<size_t>(c)));
+    trajs.push_back(piece_poly(static_cast<size_t>(d)));
 
     event_trigger = inCircle(
       trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], trajs[3][0], trajs[3][1]);

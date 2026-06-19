@@ -206,6 +206,9 @@ class KineticDelaunay
 
   glm::dvec2 getPointAt(double t, size_t v) const;
 
+  /** Branch frame used by getPointAt for sites in the same component as @p strand_id. */
+  size_t getReferenceBranch(size_t strand_id, double t) const;
+
   std::vector<glm::dvec2> getPointsAt(double t) const;
 
   glm::dvec3 getPointInObjectSpace(size_t v, double t) const;

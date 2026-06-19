@@ -56,8 +56,8 @@ class StrandTree
 
   glm::dvec3 transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const;
 
-  // TODO: also adjust to different reference frame
-  Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index) const;
+  /** Linear piece on section @p index in @p reference_branch profile coordinates (matches evaluateTransformed). */
+  Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const;
 
   // getters with named indices
   const std::vector<glm::dvec2>& getSupportPoints(size_t strand_id) const { return support_points[strand_id]; }
@@ -107,5 +107,11 @@ class StrandTree
 
  private:
   void computeNormalTransforms();
+
+  glm::dvec2 getPointTransformedAtSection(
+    size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const;
+
+  /** Valid branch id at @p height; if absent, parent from a strand in @p branch_id at @p branch_lookup_height. */
+  size_t resolveBranchAtHeight(size_t height, size_t branch_id, size_t branch_lookup_height) const;
 };
 }; // namespace kinDS
