@@ -49,9 +49,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     radius->occurrence_time, "before", "radius_he" + std::to_string(radius->half_edge_id),
     VisualDebugHighlight::forRadius(graph, radius->half_edge_id));
 
-  size_t face_id = graph.getHalfEdges()[radius->half_edge_id].face;
+  size_t face_id = graph.halfEdge(radius->half_edge_id).face;
   bool is_inside = segment_builder_.kin_del.getFaceInside(face_id);
-  const auto& face_half_edges = graph.getFaces()[face_id].half_edges;
+  const auto& face_half_edges = graph.face(face_id).half_edges;
   const double t = radius->occurrence_time;
 
   std::array<bool, 3> is_boundary_edge {};
@@ -167,7 +167,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t vertices[3];
     for (size_t i = 0; i < 3; ++i)
     {
-      vertices[i] = graph.getHalfEdges()[face_half_edges[i]].origin;
+      vertices[i] = graph.halfEdge(face_half_edges[i]).origin;
 
       if (vertices[i] == size_t(-1))
       {
@@ -222,9 +222,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
 
     glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex);
-    size_t u = graph.getHalfEdges()[inner_he_id].origin;
+    size_t u = graph.halfEdge(inner_he_id).origin;
     glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u);
-    size_t v = graph.getHalfEdges()[outer_he_id].origin;
+    size_t v = graph.halfEdge(outer_he_id).origin;
     glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v);
 
     glm::dvec2 new_boundary_vertex = (opposite_point + p_u + p_v) / 3.0;
@@ -257,8 +257,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
                                     << ", v: " << v << ", opposite: " << opposite_vertex);
     }
 
-    size_t he1_id = graph.getHalfEdges()[inner_he_id].next;
-    size_t he2_id = graph.getHalfEdges()[he1_id].next;
+    size_t he1_id = graph.halfEdge(inner_he_id).next;
+    size_t he2_id = graph.halfEdge(he1_id).next;
 
     if (!is_inside)
     {
@@ -292,9 +292,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
 
     glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex);
-    size_t u = graph.getHalfEdges()[inner_he_id].origin;
+    size_t u = graph.halfEdge(inner_he_id).origin;
     glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u);
-    size_t v = graph.getHalfEdges()[outer_he_id].origin;
+    size_t v = graph.halfEdge(outer_he_id).origin;
     glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v);
     glm::dvec2 old_boundary_vertex = (opposite_point + p_u + p_v) / 3.0;
 
@@ -306,8 +306,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     segment_builder_.addBoundaryVertex(
       glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], radius->occurrence_time }, centroid, opposite_vertex, radius->occurrence_time);
 
-    size_t he1_id = graph.getHalfEdges()[inner_he_id].next;
-    size_t he2_id = graph.getHalfEdges()[he1_id].next;
+    size_t he1_id = graph.halfEdge(inner_he_id).next;
+    size_t he2_id = graph.halfEdge(he1_id).next;
     if (is_inside)
     {
       he1_id = he1_id ^ 1;
@@ -362,7 +362,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t vertices[3];
     for (size_t i = 0; i < 3; ++i)
     {
-      vertices[i] = graph.getHalfEdges()[face_half_edges[i]].origin;
+      vertices[i] = graph.halfEdge(face_half_edges[i]).origin;
     }
     glm::dvec2 p0 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[0]);
     glm::dvec2 p1 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[1]);
@@ -398,7 +398,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   std::unordered_set<size_t> processed_extra_boundary_edge_evens;
   for (size_t ti = 0; ti < 3; ++ti)
   {
-    const int corner = graph.getHalfEdges()[face_half_edges[ti]].origin;
+    const int corner = graph.halfEdge(face_half_edges[ti]).origin;
     if (corner < 0)
     {
       continue;
@@ -440,8 +440,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 
       const size_t he_even_corner = d_edge_id * 2u;
       const size_t he_odd_corner = he_even_corner | 1u;
-      const int even_origin = graph.getHalfEdges()[he_even_corner].origin;
-      const int odd_origin = graph.getHalfEdges()[he_odd_corner].origin;
+      const int even_origin = graph.halfEdge(he_even_corner).origin;
+      const int odd_origin = graph.halfEdge(he_odd_corner).origin;
 
       size_t pair_idx = static_cast<size_t>(-1);
       bool update_start_endpoint = false;
@@ -487,7 +487,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       const int inside_boundary_he_id
         = boundary_even_he_is_outside ? static_cast<int>(he_odd_corner) : static_cast<int>(he_even_corner);
 
-      std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
+      std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
       segment_builder_.updateBoundary(t, he_visited, corner_component);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[corner_component][0];
       const auto centroid = polygonCentroid(boundary_polygon);
@@ -549,7 +549,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
   if (split.empty())
   {
-    std::vector<bool> visited(segment_builder_.kin_del.getGraph().getHalfEdges().size(), false);
+    std::vector<bool> visited(segment_builder_.kin_del.getGraph().halfEdgeSlotCount(), false);
     segment_builder_.kin_del.component_data.component_boundaries[component_id] = segment_builder_.kin_del.extractComponentBoundaries(
       segment_builder_.kin_del.component_data.components[component_id], radius->occurrence_time, visited);
     segment_builder_.kin_del.component_data.component_centroids[component_id]
@@ -569,22 +569,22 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   }
 
   const auto& crossing_data = segment_builder_.kin_del.getCrossingData();
-  const size_t affected_face_id = graph.getHalfEdges()[radius->half_edge_id].face;
+  const size_t affected_face_id = graph.halfEdge(radius->half_edge_id).face;
   const double t = radius->occurrence_time;
   const bool new_inside_state = segment_builder_.kin_del.getFaceInside(affected_face_id);
   const bool orient_upwards = !new_inside_state; // inside -> outside transition should face +Z
-  const auto affected_face_he = graph.getFaces()[affected_face_id].half_edges;
+  const auto affected_face_he = graph.face(affected_face_id).half_edges;
 
   auto edge_endpoints = [&](size_t d_edge_id) -> std::array<int, 2>
   {
     const size_t he_even = 2 * d_edge_id;
-    return { graph.getHalfEdges()[he_even].origin, graph.destination(he_even) };
+    return { graph.halfEdge(he_even).origin, graph.destination(he_even) };
   };
 
   auto voronoi_vertex_on_edge = [&](size_t d_edge_id, bool even_side) -> size_t
   {
     const size_t he = 2 * d_edge_id + (even_side ? 0 : 1);
-    return static_cast<size_t>(graph.getHalfEdges()[he].face);
+    return static_cast<size_t>(graph.halfEdge(he).face);
   };
 
   auto intersection_position = [&](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> glm::dvec3
@@ -594,7 +594,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
   auto dual_triangle_edges = [&](size_t voronoi_vertex_id) -> std::array<size_t, 3>
   {
-    const auto& tri = graph.getFaces()[voronoi_vertex_id];
+    const auto& tri = graph.face(voronoi_vertex_id);
     return { tri.half_edges[0] / 2, tri.half_edges[1] / 2, tri.half_edges[2] / 2 };
   };
 
@@ -1212,7 +1212,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
           const bool traverse_even_forward = (he_id % 2 == 0) ? traverse_he_forward : !traverse_he_forward;
           const size_t he_even = 2 * d_edge_id;
-          const size_t tri_vertex_id = traverse_even_forward ? graph.destination(he_even) : graph.getHalfEdges()[he_even].origin;
+          const size_t tri_vertex_id = traverse_even_forward ? graph.destination(he_even) : graph.halfEdge(he_even).origin;
           KINDS_DEBUG("Radius trace phase2 visit site (triangle-vertex) face=" << affected_face_id << " cell=" << cell_id
                                                                                 << " site=" << tri_vertex_id << " on_he=" << he_id
                                                                                 << " on_de=" << d_edge_id
@@ -1398,8 +1398,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
   }
 
-  const size_t updated_face_id = graph.getHalfEdges()[radius->half_edge_id].face;
-  const auto& updated_face_he = graph.getFaces()[updated_face_id].half_edges;
+  const size_t updated_face_id = graph.halfEdge(radius->half_edge_id).face;
+  const auto& updated_face_he = graph.face(updated_face_id).half_edges;
 
   auto reset_boundary_mesh_state_for_delaunay_edge = [&](size_t even_half_edge_id)
   {
@@ -1554,7 +1554,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
     {
       const size_t he_even = 2 * voronoi_edge_id;
-      if (he_even >= graph.getHalfEdges().size())
+      if (he_even >= graph.halfEdgeSlotCount())
       {
         continue;
       }
@@ -1562,11 +1562,11 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         continue;
       }
-      const auto& he = graph.getHalfEdges()[he_even];
-      const auto& twin_he = graph.getHalfEdges()[he_even ^ 1];
+      const auto& he = graph.halfEdge(he_even);
+      const auto& twin_he = graph.halfEdge(he_even ^ 1);
       const size_t vertex = std::max(he.origin, twin_he.origin);
       const size_t component_id = segment_builder_.kin_del.component_data.component_map[vertex];
-      std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
+      std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
       segment_builder_.updateBoundary(t, he_visited, component_id);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
       std::vector<SegmentBuilder::MeshingData> finished_strips = segment_builder_.finishMesh(he_even, t, boundary_polygon,
@@ -1579,7 +1579,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
   {
     const size_t he_even = 2 * voronoi_edge_id;
-    if (he_even >= segment_builder_.kin_del.getGraph().getHalfEdges().size())
+    if (he_even >= segment_builder_.kin_del.getGraph().halfEdgeSlotCount())
     {
       continue;
     }

@@ -80,10 +80,23 @@ void KineticDelaunay::SectionEvent::handleEvent()
   if (kd->component_data.components.size() > kd->prev_component_count)
   {
     const double section_time = static_cast<double>(section_index);
-    kd->graph.update(
-      kd->graph.getVertexCount(),
-      kd->component_data.components,
-      [kd, section_time](size_t v) { return kd->getPointAt(v, section_time); });
+    const size_t prev_face_slots = kd->face_inside.size();
+    const size_t prev_he_slots = kd->graph.halfEdgeSlotCount();
+    if (kd->getComponentSplitPolicy() == KineticDelaunay::ComponentSplitPolicy::Retriangulate)
+    {
+      kd->graph.update(
+        kd->graph.getVertexCount(),
+        kd->component_data.components,
+        [kd, section_time](size_t v) { return kd->getPointAt(v, section_time); });
+      kd->onGraphRetriangulated(section_time, prev_face_slots, prev_he_slots);
+    }
+    else
+    {
+      kd->graph.applyComponentSplit(kd->component_data.component_map,
+        [kd, section_time](size_t v) { return kd->getPointAt(v, section_time); });
+      kd->onGraphCutApplied(section_time, prev_face_slots, prev_he_slots);
+    }
+    kd->prev_component_count = kd->component_data.components.size();
   }
 
   kd->precomputeStep(static_cast<double>(section_index));

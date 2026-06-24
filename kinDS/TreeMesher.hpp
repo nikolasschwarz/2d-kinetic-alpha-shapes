@@ -47,6 +47,8 @@ class TreeMesher
 
     // for debugging purposes:
     bool debug_export_meshes = false;
+    /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.
+    bool retriangulate_on_component_split = false;
     size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
   };
 

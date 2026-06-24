@@ -444,6 +444,9 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
   kinetic_delaunay = std::make_shared<KineticDelaunay>(strand_tree, settings.alpha_cutoff, false);
+  kinetic_delaunay->setComponentSplitPolicy(settings.retriangulate_on_component_split
+      ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
+      : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
 
   bool transform_mesh_at_construction = false;
 

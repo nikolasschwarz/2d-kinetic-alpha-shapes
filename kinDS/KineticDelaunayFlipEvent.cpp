@@ -37,9 +37,9 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     // Depending on the half-edge, the infinite vertex could be in different places, so we just collect all and filter
     // it out
     int indices[4];
-    indices[0] = graph.getHalfEdges()[he_id].origin; // First vertex
+    indices[0] = graph.halfEdge(he_id).origin; // First vertex
     indices[1] = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
-    indices[2] = graph.getHalfEdges()[he_id ^ 1].origin; // Third vertex
+    indices[2] = graph.halfEdge(he_id ^ 1).origin; // Third vertex
     indices[3] = graph.triangleOppositeVertex(he_id); // Fourth vertex
 
     std::vector<int> filtered_indices;
@@ -63,9 +63,9 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   }
   else
   {
-    int a = graph.getHalfEdges()[he_id].origin; // First vertex
+    int a = graph.halfEdge(he_id).origin; // First vertex
     int b = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
-    int c = graph.getHalfEdges()[he_id ^ 1].origin; // Third vertex
+    int c = graph.halfEdge(he_id ^ 1).origin; // Third vertex
     int d = graph.triangleOppositeVertex(he_id); // Fourth vertex
 
     reference_branch = kd->getReferenceBranch(static_cast<size_t>(a), t);

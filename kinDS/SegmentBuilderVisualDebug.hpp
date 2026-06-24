@@ -9,8 +9,9 @@ namespace kinDS
 {
 class KineticDelaunay;
 
-/// Writes one SVG per connected component (runtime branch) when @p visual_debug is true:
-/// `t{time}_branch{id}_segmentbuilder_{phase}_{event_descriptor}.svg`.
+/// Writes debug SVG snapshots when @p visual_debug is true.
+/// After a runtime component split, per-branch files (`t{time}_branch{id}_...`) are only written once the
+/// Delaunay graph has been retriangulated at the next section; until then a single unsplit snapshot is exported.
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
   double occurrence_time, const char* phase, const std::string& event_descriptor,
   const VisualDebugHighlight& highlight);

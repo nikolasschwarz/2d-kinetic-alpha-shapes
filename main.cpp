@@ -281,7 +281,7 @@ static void kinetic_delaunay_example()
 
   // Build Voronoi vertex -> containing triangle mapping from CrossingData for SVG labeling.
   const kinDS::HalfEdgeDelaunayGraph& demo_graph = kinetic_delaunay.getGraph();
-  const size_t demo_face_count = demo_graph.getFaces().size();
+  const size_t demo_face_count = demo_graph.faceSlotCount();
   std::vector<size_t> demo_voronoi_vertex_to_tri(demo_face_count);
   constexpr size_t demo_invalid_id = static_cast<size_t>(-1);
   for (size_t vid = 0; vid < demo_face_count; ++vid)

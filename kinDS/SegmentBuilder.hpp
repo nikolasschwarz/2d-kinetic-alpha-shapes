@@ -522,6 +522,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Refresh all segment strips (after flips / broad `CrossingData` updates).
   void refreshCrossingRefsForAllStrips();
 
+  void growGraphSlotArrays();
+  void clearDeadHalfEdgeState();
+  void initializeNewHalfEdgesAfterGraphUpdate(double t, size_t first_new_he_slot);
+  void refreshCrossingRefsForAllIntersectionStrips();
+
   /**
    * @brief 2D position of a Voronoi–Delaunay edge crossing at time @p t (lifted to z = t).
    * @param t Time.
@@ -651,6 +656,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   ~SegmentBuilder() override;
 
   void init() override;
+
+  void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) override;
+  void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) override;
 
   void finalize(double t) override;
 

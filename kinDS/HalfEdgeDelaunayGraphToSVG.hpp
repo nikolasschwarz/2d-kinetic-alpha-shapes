@@ -218,12 +218,12 @@ class HalfEdgeDelaunayGraphToSVG
     size_t delaunay_edge_id, glm::dvec2& p0, glm::dvec2& p1)
   {
     size_t he0 = 2 * delaunay_edge_id;
-    if (he0 + 1 >= graph.getHalfEdges().size())
+    if (he0 + 1 >= graph.halfEdgeSlotCount())
     {
       return false;
     }
-    const auto& he_a = graph.getHalfEdges()[he0];
-    const auto& he_b = graph.getHalfEdges()[he0 ^ 1];
+    const auto& he_a = graph.halfEdge(he0);
+    const auto& he_b = graph.halfEdge(he0 ^ 1);
     if (he_a.origin == static_cast<size_t>(-1) || he_b.origin == static_cast<size_t>(-1))
     {
       return false;
@@ -238,12 +238,16 @@ class HalfEdgeDelaunayGraphToSVG
     glm::dvec2& q1)
   {
     size_t he0 = 2 * voronoi_edge_id;
-    if (he0 + 1 >= graph.getHalfEdges().size())
+    if (he0 + 1 >= graph.halfEdgeSlotCount())
     {
       return false;
     }
-    size_t start_face = graph.getHalfEdges()[he0].face;
-    size_t end_face = graph.getHalfEdges()[he0 ^ 1].face;
+    const size_t start_face = static_cast<size_t>(graph.halfEdge(he0).face);
+    const size_t end_face = static_cast<size_t>(graph.halfEdge(he0 ^ 1).face);
+    if (start_face >= circumcenters.size() || end_face >= circumcenters.size())
+    {
+      return false;
+    }
     const auto& start = circumcenters[start_face];
     const auto& end = circumcenters[end_face];
 
@@ -364,8 +368,8 @@ class HalfEdgeDelaunayGraphToSVG
       {
         return true;
       }
-      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
-      const HalfEdgeDelaunayGraph::HalfEdge& twin = graph.getHalfEdges()[he_id ^ 1];
+      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.halfEdge(he_id);
+      const HalfEdgeDelaunayGraph::HalfEdge& twin = graph.halfEdge(he_id ^ 1);
       if (he.origin == -1 || twin.origin == -1)
       {
         const size_t finite_origin
@@ -442,9 +446,9 @@ class HalfEdgeDelaunayGraphToSVG
       for (size_t face_id : highlight->delaunay_faces)
       {
         delaunay_face_label_ids.insert(face_id);
-        for (size_t he : graph.getFaces()[face_id].half_edges)
+        for (size_t he : graph.face(face_id).half_edges)
         {
-          const int neighbor_face = graph.getHalfEdges()[he ^ 1].face;
+          const int neighbor_face = graph.halfEdge(he ^ 1).face;
           if (neighbor_face >= 0)
           {
             delaunay_face_label_ids.insert(static_cast<size_t>(neighbor_face));
@@ -458,19 +462,28 @@ class HalfEdgeDelaunayGraphToSVG
     const svg::Color dim_edge(170, 170, 170);
     const svg::Color site_vertex_circle(173, 216, 230);
     const svg::Color site_vertex_circle_hi(135, 206, 250);
-    const svg::Color dim_voronoi_edge(200, 160, 200);
+    const svg::Color dim_voronoi_edge(220, 0, 0);
     const svg::Color dim_voronoi_vertex(160, 120, 160);
     const svg::Color hi_inside_face(255, 210, 60);
     const svg::Color hi_outside_face(255, 90, 90);
     const svg::Color hi_edge(255, 120, 0);
     const svg::Color hi_primary_edge(220, 0, 120);
-    const svg::Color hi_voronoi_edge(200, 0, 200);
+    const svg::Color hi_voronoi_edge(255, 0, 0);
     const svg::Color hi_voronoi_vertex(120, 0, 180);
 
     auto triangle_inside = [&](size_t face_id) -> bool
     {
       return face_inside && face_id < face_inside->size() && (*face_inside)[face_id];
     };
+
+    // Delaunay edge on the convex hull: one incident face is infinite (mesh boundary).
+    auto is_convex_hull_edge = [&](size_t he_id) -> bool
+    {
+      return graph.isOnConvexBoundary(he_id);
+    };
+
+    const svg::Color convex_hull_edge_color(0, 0, 255);
+    constexpr double convex_hull_edge_stroke_w = 0.012;
 
     auto face_fill_color = [&](size_t face_id) -> svg::Color
     {
@@ -543,7 +556,7 @@ class HalfEdgeDelaunayGraphToSVG
     };
 
     // Draw faces
-    for (size_t face_id = 0; face_id < graph.getFaces().size(); face_id++)
+    for (size_t face_id : graph.liveFaces())
     {
       if (!triangle_in_component(face_id))
       {
@@ -619,25 +632,29 @@ class HalfEdgeDelaunayGraphToSVG
     }
 
     // Draw edges
-    for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+    for (size_t he_id : graph.liveDelaunayEdges())
     {
       if (!delaunay_edge_in_component(he_id))
       {
         continue;
       }
 
-      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
+      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.halfEdge(he_id);
       if (he.origin != -1
-        && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
+        && graph.halfEdge(he_id ^ 1).origin != -1) // Only draw edges with two finite endpoints
       {
-        glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
-        glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+        glm::dvec2 start = points[graph.halfEdge(he_id).origin];
+        glm::dvec2 end = points[graph.halfEdge(he_id ^ 1).origin];
         if (clipSegmentToBoundingBox(start, end, bb))
         {
           const size_t voronoi_edge_id = he_id / 2;
-          const double stroke_w = selective ? delaunay_edge_stroke_w : 0.01;
+          const bool convex_hull = is_convex_hull_edge(he_id);
+          const double stroke_w = convex_hull ? convex_hull_edge_stroke_w
+                                              : (selective ? delaunay_edge_stroke_w : 0.01);
+          const svg::Color stroke_color
+            = convex_hull ? convex_hull_edge_color : delaunay_edge_color(voronoi_edge_id);
           doc << svg::Line(svg::Point(start[0], start[1]), svg::Point(end[0], end[1]),
-            svg::Stroke(stroke_w, delaunay_edge_color(voronoi_edge_id)));
+            svg::Stroke(stroke_w, stroke_color));
         }
       }
     }
@@ -666,20 +683,20 @@ class HalfEdgeDelaunayGraphToSVG
       }
     }
 
-    for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+    for (size_t he_id : graph.liveDelaunayEdges())
     {
       if (!delaunay_edge_in_component(he_id))
       {
         continue;
       }
 
-      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
+      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.halfEdge(he_id);
       // Draw half-edge id at midpoint but slightly offset to the left in the direction of the edge normal
 
-      if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1)
+      if (he.origin != -1 && graph.halfEdge(he_id ^ 1).origin != -1)
       {
-        glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
-        glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+        glm::dvec2 start = points[graph.halfEdge(he_id).origin];
+        glm::dvec2 end = points[graph.halfEdge(he_id ^ 1).origin];
         glm::dvec2 midpoint = (start + end) / 2.0;
         glm::dvec2 edge_dir = glm::normalize(end - start);
         glm::dvec2 edge_normal(edge_dir[1], -edge_dir[0]);
@@ -688,8 +705,8 @@ class HalfEdgeDelaunayGraphToSVG
         for (size_t i = 0; i < 2; i++)
         {
           const size_t current_he_id = he_id + i;
-          const int source = graph.getHalfEdges()[current_he_id].origin;
-          const int destination = graph.getHalfEdges()[current_he_id ^ 1].origin;
+          const int source = graph.halfEdge(current_he_id).origin;
+          const int destination = graph.halfEdge(current_he_id ^ 1).origin;
           const std::string label_text = std::to_string(current_he_id) + " (" + std::to_string(source) + " --> "
             + std::to_string(destination) + ")";
           // Rotate 90 degrees to get normal
@@ -712,18 +729,25 @@ class HalfEdgeDelaunayGraphToSVG
     {
       auto circumcenters = graph.computeCircumcenters(points);
       svg::Color purple(128, 0, 128);
-      for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+      for (size_t he_id : graph.liveDelaunayEdges())
       {
         if (!delaunay_edge_in_component(he_id))
         {
           continue;
         }
 
-        const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
-        if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1)
+        const HalfEdgeDelaunayGraph::HalfEdge& he = graph.halfEdge(he_id);
+        if (he.origin != -1 && graph.halfEdge(he_id ^ 1).origin != -1)
         {
-          auto start = circumcenters[graph.getHalfEdges()[he_id].face];
-          auto end = circumcenters[graph.getHalfEdges()[he_id ^ 1].face];
+          const size_t start_face = static_cast<size_t>(graph.halfEdge(he_id).face);
+          const size_t end_face = static_cast<size_t>(graph.halfEdge(he_id ^ 1).face);
+          if (start_face >= circumcenters.size() || end_face >= circumcenters.size())
+          {
+            continue;
+          }
+
+          auto start = circumcenters[start_face];
+          auto end = circumcenters[end_face];
           glm::dvec2 p0, p1;
           if (!start.second && !end.second)
           {
@@ -754,11 +778,8 @@ class HalfEdgeDelaunayGraphToSVG
             svg::Color stroke_c = dim_voronoi_edge;
             if (selective)
             {
-              if (highlight->affectsPrimaryVoronoiEdge(voronoi_edge_id))
-              {
-                stroke_c = hi_primary_edge;
-              }
-              else if (highlight->affectsVoronoiEdge(voronoi_edge_id))
+              if (highlight->affectsPrimaryVoronoiEdge(voronoi_edge_id)
+                || highlight->affectsVoronoiEdge(voronoi_edge_id))
               {
                 stroke_c = hi_voronoi_edge;
               }
@@ -864,11 +885,11 @@ class HalfEdgeDelaunayGraphToSVG
 
         if (show_intersection_labels)
         {
-          if (voronoi_edge_id < graph.getHalfEdges().size() / 2)
+          if (voronoi_edge_id < graph.halfEdgeSlotCount() / 2)
           {
             for (size_t quad_he_id : graph.getQuadBoundaryHalfEdgeIndices(voronoi_edge_id))
             {
-              const int vertex_id = graph.getHalfEdges()[quad_he_id].origin;
+              const int vertex_id = graph.halfEdge(quad_he_id).origin;
               if (vertex_id >= 0)
               {
                 label_delaunay_vertex(static_cast<size_t>(vertex_id), svg::Color(svg::Color::Black));
@@ -889,10 +910,10 @@ class HalfEdgeDelaunayGraphToSVG
           int delaunay_face0 = -1;
           int delaunay_face1 = -1;
           const size_t d_he0 = 2 * delaunay_edge_id;
-          if (d_he0 + 1 < graph.getHalfEdges().size())
+          if (d_he0 + 1 < graph.halfEdgeSlotCount())
           {
-            delaunay_face0 = graph.getHalfEdges()[d_he0].face;
-            delaunay_face1 = graph.getHalfEdges()[d_he0 ^ 1].face;
+            delaunay_face0 = graph.halfEdge(d_he0).face;
+            delaunay_face1 = graph.halfEdge(d_he0 ^ 1).face;
           }
           const std::string faces_text
             = "faces=(" + std::to_string(delaunay_face0) + "," + std::to_string(delaunay_face1) + ")";
@@ -996,13 +1017,20 @@ class HalfEdgeDelaunayGraphToSVG
     }
 
     // Draw Voronoi edges
-    for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+    for (size_t he_id : graph.liveDelaunayEdges())
     {
-      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
-      if (he.origin != -1 && graph.getHalfEdges()[he_id ^ 1].origin != -1)
+      const HalfEdgeDelaunayGraph::HalfEdge& he = graph.halfEdge(he_id);
+      if (he.origin != -1 && graph.halfEdge(he_id ^ 1).origin != -1)
       {
-        auto start = circumcenters[graph.getHalfEdges()[he_id].face];
-        auto end = circumcenters[graph.getHalfEdges()[he_id ^ 1].face];
+        const size_t start_face = static_cast<size_t>(graph.halfEdge(he_id).face);
+        const size_t end_face = static_cast<size_t>(graph.halfEdge(he_id ^ 1).face);
+        if (start_face >= circumcenters.size() || end_face >= circumcenters.size())
+        {
+          continue;
+        }
+
+        auto start = circumcenters[start_face];
+        auto end = circumcenters[end_face];
 
         if (!start.second && !end.second)
         {
@@ -1048,14 +1076,14 @@ class HalfEdgeDelaunayGraphToSVG
     if (also_draw_delaunay)
     {
       // Draw edges
-      for (size_t he_id = 0; he_id < graph.getHalfEdges().size(); he_id += 2)
+      for (size_t he_id : graph.liveDelaunayEdges())
       {
-        const HalfEdgeDelaunayGraph::HalfEdge& he = graph.getHalfEdges()[he_id];
+        const HalfEdgeDelaunayGraph::HalfEdge& he = graph.halfEdge(he_id);
         if (he.origin != -1
-          && graph.getHalfEdges()[he_id ^ 1].origin != -1) // Only draw edges that are not boundary edges
+          && graph.halfEdge(he_id ^ 1).origin != -1) // Only draw edges that are not boundary edges
         {
-          glm::dvec2 start = points[graph.getHalfEdges()[he_id].origin];
-          glm::dvec2 end = points[graph.getHalfEdges()[he_id ^ 1].origin];
+          glm::dvec2 start = points[graph.halfEdge(he_id).origin];
+          glm::dvec2 end = points[graph.halfEdge(he_id ^ 1).origin];
           doc << svg::Line(
             svg::Point(start[0], start[1]), svg::Point(end[0], end[1]), svg::Stroke(0.01, svg::Color::Black));
         }

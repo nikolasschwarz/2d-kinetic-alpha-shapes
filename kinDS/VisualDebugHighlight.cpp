@@ -24,8 +24,8 @@ void processPendingUndirectedEdges(
     highlight.directed_half_edges.insert(even_he);
     highlight.directed_half_edges.insert(even_he ^ 1);
 
-    const auto& he = graph.getHalfEdges()[even_he];
-    const auto& twin_he = graph.getHalfEdges()[even_he ^ 1];
+    const auto& he = graph.halfEdge(even_he);
+    const auto& twin_he = graph.halfEdge(even_he ^ 1);
     if (he.face != -1)
     {
       highlight.voronoi_vertices.insert(static_cast<size_t>(he.face));
@@ -67,7 +67,7 @@ void flushPendingHighlightWork(VisualDebugHighlight& highlight, const HalfEdgeDe
           highlight.delaunay_vertices.insert(static_cast<size_t>(v));
         }
       }
-      for (size_t he : graph.getFaces()[face_id].half_edges)
+      for (size_t he : graph.face(face_id).half_edges)
       {
         edge_pending.push_back(he);
       }
@@ -82,7 +82,7 @@ size_t crossingEmphasisVoronoiEdgeId(
 {
   const size_t even_he = crossed_half_edge_id & ~static_cast<size_t>(1);
   const size_t crossed_voronoi_edge_id = even_he / 2;
-  const auto& half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;
+  const auto& half_edges = graph.face(voronoi_vertex_id).half_edges;
 
   for (size_t incident_he : half_edges)
   {
@@ -92,11 +92,11 @@ size_t crossingEmphasisVoronoiEdgeId(
     }
   }
 
-  const int old_face = graph.getHalfEdges()[crossed_half_edge_id].face;
-  const int new_face = graph.getHalfEdges()[crossed_half_edge_id ^ 1].face;
+  const int old_face = graph.halfEdge(crossed_half_edge_id).face;
+  const int new_face = graph.halfEdge(crossed_half_edge_id ^ 1).face;
   for (size_t incident_he : half_edges)
   {
-    const int opposite_face = graph.getHalfEdges()[incident_he ^ 1].face;
+    const int opposite_face = graph.halfEdge(incident_he ^ 1).face;
     if (opposite_face == old_face || opposite_face == new_face)
     {
       return incident_he / 2;
@@ -190,8 +190,8 @@ VisualDebugHighlight VisualDebugHighlight::forFlip(const HalfEdgeDelaunayGraph& 
   std::vector<size_t> edge_pending;
   edge_pending.push_back(flip_half_edge_id);
 
-  const auto& flip_he = graph.getHalfEdges()[flip_half_edge_id];
-  const auto& flip_twin_he = graph.getHalfEdges()[flip_half_edge_id ^ 1];
+  const auto& flip_he = graph.halfEdge(flip_half_edge_id);
+  const auto& flip_twin_he = graph.halfEdge(flip_half_edge_id ^ 1);
   if (flip_he.face != -1)
   {
     face_pending.push_back(static_cast<size_t>(flip_he.face));
@@ -215,7 +215,7 @@ VisualDebugHighlight VisualDebugHighlight::forFlip(const HalfEdgeDelaunayGraph& 
 VisualDebugHighlight VisualDebugHighlight::forRadius(const HalfEdgeDelaunayGraph& graph, size_t radius_half_edge_id)
 {
   VisualDebugHighlight highlight;
-  const int triangle_face = graph.getHalfEdges()[radius_half_edge_id].face;
+  const int triangle_face = graph.halfEdge(radius_half_edge_id).face;
   if (triangle_face != -1)
   {
     std::vector<size_t> face_pending;
@@ -239,8 +239,8 @@ VisualDebugHighlight VisualDebugHighlight::forCrossing(
   highlight.directed_half_edges.insert(even_he);
   highlight.directed_half_edges.insert(even_he ^ 1);
 
-  const auto& he = graph.getHalfEdges()[even_he];
-  const auto& twin_he = graph.getHalfEdges()[even_he ^ 1];
+  const auto& he = graph.halfEdge(even_he);
+  const auto& twin_he = graph.halfEdge(even_he ^ 1);
   if (he.origin != -1)
   {
     highlight.delaunay_vertices.insert(static_cast<size_t>(he.origin));
@@ -278,8 +278,8 @@ VisualDebugHighlight VisualDebugHighlight::forSectionBoundary(
 {
   VisualDebugHighlight highlight;
   std::vector<size_t> edge_pending;
-  edge_pending.reserve(graph.getHalfEdges().size() / 6);
-  for (size_t even_he = 0; even_he < graph.getHalfEdges().size(); even_he += 2)
+  edge_pending.reserve(graph.halfEdgeSlotCount() / 6);
+  for (size_t even_he : graph.liveDelaunayEdges())
   {
     if (is_boundary_edge(even_he))
     {

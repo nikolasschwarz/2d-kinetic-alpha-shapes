@@ -39,7 +39,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
   auto& graph = segment_builder_.kin_del.getGraph();
 
   // compute boundary polygon for component at time t
-  std::vector<bool> he_visited(graph.getHalfEdges().size(), false);
+  std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
   size_t component_id = segment_builder_.kin_del.component_data.component_map[strand_id];
   segment_builder_.updateBoundary(t, he_visited, component_id);
 
@@ -318,10 +318,10 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
       SegmentBuilder::BoundarySegmentAction::NewSegment);
 
     // insert vertices into adjacent meshes
-    auto& he = graph.getHalfEdges()[*it];
+    auto& he = graph.halfEdge(*it);
 
     size_t adjacent_he_id = he.next;
-    size_t voronoi_vertex_id = graph.getHalfEdges()[adjacent_he_id].face;
+    size_t voronoi_vertex_id = graph.halfEdge(adjacent_he_id).face;
     size_t containing_face_id = segment_builder_.kin_del.getCrossingDataContainingTriId(voronoi_vertex_id);
     bool voronoi_vertex_inside = segment_builder_.kin_del.getFacesInside()[containing_face_id];
 
@@ -336,8 +336,8 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     VoronoiMesh& adjacent_mesh = segment_builder_.meshes[adjacent_segment_mesh_pair_index];
 
     const size_t adj_even = adjacent_he_id & ~size_t(1);
-    const auto& adj_he = graph.getHalfEdges()[adj_even];
-    const auto& adj_twin = graph.getHalfEdges()[adj_even ^ size_t(1)];
+    const auto& adj_he = graph.halfEdge(adj_even);
+    const auto& adj_twin = graph.halfEdge(adj_even ^ size_t(1));
     const std::string adj_vertex_meta = SegmentBuilder::composeRegularStripVertexMetadata(t, adj_even / 2, adj_even,
       static_cast<int>(adj_he.origin), static_cast<int>(adj_twin.origin), SegmentBuilder::BoundaryEventType::Subdivision,
       SegmentBuilder::BoundarySegmentAction::SegmentRemapped, std::nullopt, "cross", "subdivision_adjacent_incident");

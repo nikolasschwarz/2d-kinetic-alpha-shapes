@@ -25,14 +25,13 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
 
   segment_builder_.advanceBoundaryMeshes(t);
 
-  const size_t half_edge_count = graph.getHalfEdges().size();
-  const size_t delaunay_edge_count = half_edge_count / 2;
-  segment_builder_.parallel_for(delaunay_edge_count,
-    [&](size_t edge_index)
+  const size_t live_edge_count = graph.liveDelaunayEdgeCount();
+  segment_builder_.parallel_for(live_edge_count,
+    [&](size_t live_index)
   {
-    const size_t i = 2 * edge_index;
+    const size_t i = graph.liveDelaunayEdgeId(live_index);
     // use the origin of the half edge to obtain the correct component
-    auto vertex = graph.getHalfEdges()[i].origin;
+    auto vertex = graph.halfEdge(i).origin;
 
     // fall back for infinite vertices
     if (vertex == -1)

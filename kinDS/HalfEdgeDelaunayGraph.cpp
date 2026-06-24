@@ -1,11 +1,206 @@
 #include "HalfEdgeDelaunayGraph.hpp"
 
 #include "Logger.hpp"
+#include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 using namespace kinDS;
+
+namespace
+{
+void tombstoneHalfEdge(std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+{
+  half_edges[he_id] = HalfEdgeDelaunayGraph::HalfEdge {};
+}
+
+void killFaceSlot(HalfEdgeDelaunayGraph::Triangle& tri, size_t invalid_he)
+{
+  tri.half_edges[0] = invalid_he;
+  tri.half_edges[1] = invalid_he;
+  tri.half_edges[2] = invalid_he;
+}
+
+double ccwAngle(const glm::dvec2& from, const glm::dvec2& to)
+{
+  return std::atan2(to.y - from.y, to.x - from.x);
+}
+
+size_t nextBoundaryHalfEdgeLeaving(size_t vertex, size_t arrived_from, const std::vector<size_t>& boundary_edges,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
+  const std::function<glm::dvec2(size_t)>& vertex_at, size_t component_id, const std::vector<size_t>& component_map)
+{
+  const glm::dvec2 pos_v = vertex_at(vertex);
+  const double arrive_angle = ccwAngle(pos_v, vertex_at(arrived_from));
+  double best_delta = std::numeric_limits<double>::infinity();
+  size_t best_he = static_cast<size_t>(-1);
+
+  for (size_t he_id : boundary_edges)
+  {
+    const int origin = half_edges[he_id].origin;
+    const int dest = half_edges[he_id ^ 1].origin;
+    if (origin < 0 || dest < 0 || static_cast<size_t>(origin) != vertex)
+    {
+      continue;
+    }
+    if (component_map[static_cast<size_t>(origin)] != component_id)
+    {
+      continue;
+    }
+
+    const double out_angle = ccwAngle(pos_v, vertex_at(static_cast<size_t>(dest)));
+    double delta = out_angle - arrive_angle;
+    while (delta <= 0.0)
+    {
+      delta += 2.0 * std::acos(-1.0);
+    }
+    if (delta < best_delta)
+    {
+      best_delta = delta;
+      best_he = he_id;
+    }
+  }
+
+  return best_he;
+}
+
+std::vector<size_t> traceBoundaryCycle(size_t start_he, const std::vector<size_t>& boundary_edges,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
+  const std::function<glm::dvec2(size_t)>& vertex_at, size_t component_id, const std::vector<size_t>& component_map,
+  std::unordered_set<size_t>& visited)
+{
+  std::vector<size_t> cycle;
+  cycle.reserve(boundary_edges.size());
+  size_t current = start_he;
+  const size_t start_tail = static_cast<size_t>(half_edges[start_he ^ 1].origin);
+  for (size_t guard = 0; guard <= boundary_edges.size(); ++guard)
+  {
+    if (!visited.insert(current).second)
+    {
+      break;
+    }
+    cycle.push_back(current);
+    const size_t tail = static_cast<size_t>(half_edges[current ^ 1].origin);
+    const size_t tip = static_cast<size_t>(half_edges[current].origin);
+    current = nextBoundaryHalfEdgeLeaving(tail, tip, boundary_edges, half_edges, vertex_at, component_id, component_map);
+    if (current == static_cast<size_t>(-1))
+    {
+      break;
+    }
+    if (current == start_he && static_cast<size_t>(half_edges[current ^ 1].origin) == start_tail)
+    {
+      break;
+    }
+  }
+
+  return cycle;
+}
+
+void createInfiniteFacesAlongBoundaryCycle(const std::vector<size_t>& cycle,
+  std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles,
+  std::vector<int>& incoming_edge_map, size_t invalid_he)
+{
+  if (cycle.empty())
+  {
+    return;
+  }
+
+  struct PendingEdge
+  {
+    size_t interior_he;
+    size_t next_boundary_he;
+    size_t he_at_v;
+    size_t he_at_inf;
+  };
+  std::vector<PendingEdge> pending;
+  pending.reserve(cycle.size());
+
+  for (size_t i = 0; i < cycle.size(); ++i)
+  {
+    const size_t interior_he = cycle[i];
+    const size_t next_boundary_he = cycle[(i + 1) % cycle.size()];
+    const size_t u = static_cast<size_t>(half_edges[interior_he ^ 1].origin);
+    const size_t v = static_cast<size_t>(half_edges[interior_he].origin);
+
+    const size_t exterior_he = interior_he ^ 1;
+    HalfEdgeDelaunayGraph::HalfEdge& exterior = half_edges[exterior_he];
+    const int old_exterior_face = exterior.face;
+    if (old_exterior_face >= 0 && static_cast<size_t>(old_exterior_face) < triangles.size())
+    {
+      killFaceSlot(triangles[static_cast<size_t>(old_exterior_face)], invalid_he);
+    }
+    exterior.origin = static_cast<int>(u);
+    exterior.face = -1;
+    exterior.next = -1;
+
+    const size_t he_at_v = half_edges.size();
+    half_edges.push_back(HalfEdgeDelaunayGraph::HalfEdge {});
+    const size_t he_at_inf = half_edges.size();
+    half_edges.push_back(HalfEdgeDelaunayGraph::HalfEdge {});
+
+    half_edges[he_at_v].origin = static_cast<int>(v);
+    half_edges[he_at_v].face = -1;
+    half_edges[he_at_inf].origin = -1;
+    half_edges[he_at_inf].face = -1;
+    half_edges[he_at_inf].next = static_cast<int>(next_boundary_he);
+
+    exterior.next = static_cast<int>(he_at_v);
+    if (incoming_edge_map[v] == -1)
+    {
+      incoming_edge_map[v] = static_cast<int>(he_at_inf);
+    }
+
+    pending.push_back(PendingEdge { interior_he, next_boundary_he, he_at_v, he_at_inf });
+  }
+
+  for (size_t pi = 0; pi < pending.size(); ++pi)
+  {
+    const PendingEdge& edge = pending[pi];
+    const size_t u = static_cast<size_t>(half_edges[edge.interior_he ^ 1].origin);
+    int incoming_at_u = incoming_edge_map[u];
+    if (incoming_at_u < 0 && pi > 0)
+    {
+      const size_t prev_v = static_cast<size_t>(half_edges[pending[pi - 1].interior_he].origin);
+      if (prev_v == u)
+      {
+        incoming_at_u = static_cast<int>(pending[pi - 1].he_at_inf);
+      }
+    }
+    if (incoming_at_u < 0 && pending.size() > 1)
+    {
+      const size_t first_u = static_cast<size_t>(half_edges[pending[0].interior_he ^ 1].origin);
+      if (first_u == u)
+      {
+        incoming_at_u = static_cast<int>(pending[0].he_at_inf);
+      }
+    }
+    if (incoming_at_u < 0)
+    {
+      continue;
+    }
+
+    HalfEdgeDelaunayGraph::HalfEdge& outgoing = half_edges[edge.he_at_v];
+    outgoing.next = incoming_at_u;
+
+    const size_t exterior_he = edge.interior_he ^ 1;
+    const size_t new_face = triangles.size();
+    triangles.emplace_back();
+    triangles[new_face].half_edges[0] = static_cast<size_t>(incoming_at_u);
+    triangles[new_face].half_edges[1] = exterior_he;
+    triangles[new_face].half_edges[2] = edge.he_at_v;
+
+    half_edges[incoming_at_u].face = static_cast<int>(new_face);
+    half_edges[exterior_he].face = static_cast<int>(new_face);
+    half_edges[edge.he_at_v].face = static_cast<int>(new_face);
+  }
+}
+} // namespace
 
 void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 {
@@ -226,7 +421,206 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
   }
 
   KINDS_DEBUG("Half-edge mesh built with " << half_edges.size() << " half-edges and " << triangles.size() << " faces.");
+  rebuildLiveIndices();
 }
+
+void HalfEdgeDelaunayGraph::rebuildLiveIndices()
+{
+  half_edge_live_.assign(half_edges.size(), 0);
+  live_even_half_edges_.clear();
+  live_even_half_edges_.reserve(half_edges.size() / 2);
+  for (size_t he_id = 0; he_id < half_edges.size(); he_id += 2)
+  {
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    half_edge_live_[he_id] = 1;
+    half_edge_live_[he_id ^ 1] = 1;
+    live_even_half_edges_.push_back(he_id);
+  }
+
+  live_faces_.clear();
+  live_faces_.reserve(triangles.size());
+  for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
+  {
+    if (isLiveFace(face_id))
+    {
+      live_faces_.push_back(face_id);
+    }
+  }
+}
+
+bool HalfEdgeDelaunayGraph::isLiveHalfEdge(size_t he_id) const
+{
+  if (he_id >= half_edges.size())
+  {
+    return false;
+  }
+  const HalfEdge& he = half_edges[he_id];
+  if (isTombstone(he))
+  {
+    return false;
+  }
+  // Every connected half-edge in a built mesh has its face cycle linked.
+  return he.next >= 0;
+}
+
+bool HalfEdgeDelaunayGraph::isLiveFace(size_t face_id) const
+{
+  if (face_id >= triangles.size())
+  {
+    return false;
+  }
+
+  const Triangle& tri = triangles[face_id];
+  if (tri.half_edges[0] >= half_edges.size())
+  {
+    return false;
+  }
+
+  for (int i = 0; i < 3; ++i)
+  {
+    const size_t he_id = tri.half_edges[i];
+    if (he_id >= half_edges.size())
+    {
+      return false;
+    }
+    if (half_edges[he_id].face != static_cast<int>(face_id))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool HalfEdgeDelaunayGraph::halfEdgeInFaceCycle(size_t he_id, size_t face_id) const
+{
+  if (!isLiveFace(face_id))
+  {
+    return false;
+  }
+
+  const size_t start = triangles[face_id].half_edges[0];
+  size_t cur = start;
+  for (int i = 0; i < 3; ++i)
+  {
+    if (cur == he_id)
+    {
+      return true;
+    }
+    cur = static_cast<size_t>(half_edges[cur].next);
+  }
+  return false;
+}
+
+bool HalfEdgeDelaunayGraph::faceHasInfiniteVertex(size_t face_id) const
+{
+  const auto verts = getTriangleVertexIndices(face_id);
+  return verts[0] == -1 || verts[1] == -1 || verts[2] == -1;
+}
+
+void HalfEdgeDelaunayGraph::validateLiveHalfEdgeFaceReferences() const
+{
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+
+    const HalfEdge& he = half_edges[he_id];
+    const int face_id = he.face;
+    if (face_id < 0 || static_cast<size_t>(face_id) >= triangles.size() || !isLiveFace(static_cast<size_t>(face_id)))
+    {
+      std::ostringstream message;
+      message << "Live half-edge " << he_id << " (origin=" << he.origin << ", destination=" << destination(he_id)
+              << ") references ";
+      if (face_id < 0)
+      {
+        message << "invalid face index " << face_id;
+      }
+      else
+      {
+        message << "dead face slot " << face_id;
+      }
+      throw std::runtime_error(message.str());
+    }
+  }
+}
+
+void HalfEdgeDelaunayGraph::applyFreshHalfEdgeFaceReferences(
+  const std::vector<HalfEdge>& fresh_half_edges, const std::vector<int>& tri_remap)
+{
+  auto remap_face = [&](int fresh_face) -> int
+  {
+    if (fresh_face < 0)
+    {
+      return -1;
+    }
+    const size_t f = static_cast<size_t>(fresh_face);
+    if (f >= tri_remap.size())
+    {
+      return -1;
+    }
+    return tri_remap[f];
+  };
+
+  auto directed_key = [](int origin, int dest) -> uint64_t
+  {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(origin)) << 32)
+      | static_cast<uint64_t>(static_cast<uint32_t>(dest));
+  };
+
+  // Keyed by directed site edge; authoritative face incidence from per-branch retriangulation.
+  std::unordered_map<uint64_t, int> fresh_face_by_directed;
+  fresh_face_by_directed.reserve(fresh_half_edges.size());
+  for (size_t fresh_hi = 0; fresh_hi < fresh_half_edges.size(); ++fresh_hi)
+  {
+    const int origin = fresh_half_edges[fresh_hi].origin;
+    const int dest = fresh_half_edges[fresh_hi ^ 1].origin;
+    if (origin < 0 || dest < 0)
+    {
+      continue;
+    }
+    fresh_face_by_directed[directed_key(origin, dest)] = remap_face(fresh_half_edges[fresh_hi].face);
+  }
+
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    const int origin = half_edges[he_id].origin;
+    const int dest = half_edges[he_id ^ 1].origin;
+    if (origin < 0 || dest < 0)
+    {
+      continue;
+    }
+    const auto it = fresh_face_by_directed.find(directed_key(origin, dest));
+    if (it != fresh_face_by_directed.end())
+    {
+      half_edges[he_id].face = it->second;
+    }
+  }
+}
+
+const HalfEdgeDelaunayGraph::HalfEdge& HalfEdgeDelaunayGraph::halfEdge(size_t he_id) const
+{
+  assert(he_id < half_edges.size());
+  return half_edges[he_id];
+}
+
+const HalfEdgeDelaunayGraph::Triangle& HalfEdgeDelaunayGraph::face(size_t face_id) const
+{
+  assert(face_id < triangles.size());
+  return triangles[face_id];
+}
+
+size_t HalfEdgeDelaunayGraph::halfEdgeSlotCount() const { return half_edges.size(); }
+
+size_t HalfEdgeDelaunayGraph::faceSlotCount() const { return triangles.size(); }
 
 void kinDS::HalfEdgeDelaunayGraph::flipEdge(size_t he_id)
 {
@@ -391,6 +785,220 @@ void HalfEdgeDelaunayGraph::init(const std::vector<std::vector<glm::dvec2>>& spl
   init(site_positions);
 }
 
+void HalfEdgeDelaunayGraph::applyComponentSplit(
+  const std::vector<size_t>& component_map, const std::function<glm::dvec2(size_t)>& vertex_at)
+{
+  if (component_map.size() < vertex_count)
+  {
+    throw std::runtime_error("applyComponentSplit: component_map size mismatch");
+  }
+
+  const size_t invalid_he = half_edges.size();
+  half_edges.emplace_back();
+  half_edges.emplace_back();
+
+  const size_t original_half_edge_count = invalid_he;
+  std::vector<bool> kill_he(original_half_edge_count, false);
+
+  for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
+  {
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    const int u = half_edges[he_id].origin;
+    const int v = half_edges[he_id ^ 1].origin;
+    if (u >= 0 && v >= 0 && component_map[static_cast<size_t>(u)] != component_map[static_cast<size_t>(v)])
+    {
+      kill_he[he_id] = true;
+      kill_he[he_id ^ 1] = true;
+    }
+  }
+
+  std::vector<bool> kill_face(triangles.size(), false);
+  for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
+  {
+    if (!isLiveFace(face_id))
+    {
+      continue;
+    }
+
+    const auto verts = getTriangleVertexIndices(face_id);
+    std::unordered_set<size_t> comps;
+    for (int v : verts)
+    {
+      if (v >= 0)
+      {
+        comps.insert(component_map[static_cast<size_t>(v)]);
+      }
+    }
+    if (comps.size() > 1)
+    {
+      kill_face[face_id] = true;
+    }
+  }
+
+  for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
+  {
+    if (kill_face[face_id])
+    {
+      killFaceSlot(triangles[face_id], invalid_he);
+    }
+  }
+
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    const int face_id = half_edges[he_id].face;
+    if (face_id >= 0 && isLiveFace(static_cast<size_t>(face_id)))
+    {
+      continue;
+    }
+
+    const size_t twin_he = he_id ^ 1;
+    if (isLiveHalfEdge(twin_he) && half_edges[twin_he].face >= 0
+      && isLiveFace(static_cast<size_t>(half_edges[twin_he].face)))
+    {
+      continue;
+    }
+
+    tombstoneHalfEdge(half_edges, he_id);
+  }
+
+  rebuildLiveIndices();
+
+  std::vector<size_t> boundary_interior;
+  boundary_interior.reserve(half_edges.size() / 6);
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    const int face_id = half_edges[he_id].face;
+    if (face_id < 0 || !isLiveFace(static_cast<size_t>(face_id)))
+    {
+      continue;
+    }
+
+    const size_t twin_he = he_id ^ 1;
+    if (isLiveHalfEdge(twin_he) && half_edges[twin_he].face >= 0
+      && isLiveFace(static_cast<size_t>(half_edges[twin_he].face)))
+    {
+      continue;
+    }
+
+    boundary_interior.push_back(he_id);
+  }
+
+  std::vector<int> incoming_edge_map(vertex_count, -1);
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (half_edges[he_id].origin != -1)
+    {
+      continue;
+    }
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    const int next_he = half_edges[he_id].next;
+    if (next_he < 0)
+    {
+      continue;
+    }
+    const int dest = half_edges[static_cast<size_t>(next_he)].origin;
+    if (dest >= 0 && incoming_edge_map[static_cast<size_t>(dest)] == -1)
+    {
+      incoming_edge_map[static_cast<size_t>(dest)] = static_cast<int>(he_id);
+    }
+  }
+  std::unordered_set<size_t> visited_boundary;
+  std::unordered_map<size_t, std::vector<size_t>> boundary_by_component;
+  for (size_t he_id : boundary_interior)
+  {
+    const size_t component_id = component_map[static_cast<size_t>(half_edges[he_id].origin)];
+    boundary_by_component[component_id].push_back(he_id);
+  }
+
+  for (auto& [component_id, edges] : boundary_by_component)
+  {
+    (void)component_id;
+    for (size_t he_id : edges)
+    {
+      if (visited_boundary.count(he_id) != 0)
+      {
+        continue;
+      }
+      const std::vector<size_t> cycle
+        = traceBoundaryCycle(he_id, edges, half_edges, vertex_at, component_id, component_map, visited_boundary);
+      createInfiniteFacesAlongBoundaryCycle(cycle, half_edges, triangles, incoming_edge_map, invalid_he);
+    }
+  }
+
+  for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
+  {
+    if (!kill_he[he_id])
+    {
+      continue;
+    }
+    if (isLiveHalfEdge(he_id))
+    {
+      tombstoneHalfEdge(half_edges, he_id);
+    }
+    if (isLiveHalfEdge(he_id ^ 1))
+    {
+      tombstoneHalfEdge(half_edges, he_id ^ 1);
+    }
+  }
+
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    const int face_id = half_edges[he_id].face;
+    if (face_id >= 0 && isLiveFace(static_cast<size_t>(face_id)))
+    {
+      continue;
+    }
+    for (size_t live_face = 0; live_face < triangles.size(); ++live_face)
+    {
+      if (!isLiveFace(live_face))
+      {
+        continue;
+      }
+      if (halfEdgeInFaceCycle(he_id, live_face))
+      {
+        half_edges[he_id].face = static_cast<int>(live_face);
+        break;
+      }
+    }
+  }
+
+  vertex_to_half_edge.assign(vertex_count, static_cast<size_t>(-1));
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    const int origin = half_edges[he_id].origin;
+    if (origin < 0)
+    {
+      continue;
+    }
+    const size_t v = static_cast<size_t>(origin);
+    if (vertex_to_half_edge[v] == static_cast<size_t>(-1))
+    {
+      vertex_to_half_edge[v] = he_id;
+    }
+  }
+
+  rebuildLiveIndices();
+  validateLiveHalfEdgeFaceReferences();
+}
+
 void kinDS::HalfEdgeDelaunayGraph::update(
   size_t vertex_count_,
   const std::vector<std::vector<size_t>>& components,
@@ -428,6 +1036,8 @@ void kinDS::HalfEdgeDelaunayGraph::update(
 
   // reorder to match old triangulation
   reorder_from_old(old_triangles, old_half_edges);
+
+  validateLiveHalfEdgeFaceReferences();
 }
 
 glm::dvec2 HalfEdgeDelaunayGraph::circumcenter(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
@@ -449,6 +1059,51 @@ glm::dvec2 HalfEdgeDelaunayGraph::circumcenter(const glm::dvec2& a, const glm::d
   return { Ux, Uy };
 }
 
+std::optional<glm::dvec2> HalfEdgeDelaunayGraph::infiniteVoronoiRayDirection(
+  size_t face_id, const std::function<glm::dvec2(int vertex_index)>& vertex_at) const
+{
+  if (!isLiveFace(face_id))
+  {
+    return std::nullopt;
+  }
+  for (size_t he_id : face(face_id).half_edges)
+  {
+    if (!isOnConvexBoundaryOutside(he_id))
+    {
+      continue;
+    }
+
+    const int origin = half_edges[he_id].origin;
+    const int dest = destination(he_id);
+    if (origin < 0 || dest < 0)
+    {
+      continue;
+    }
+
+    const int interior_vertex = triangleOppositeVertex(he_id ^ 1);
+    if (interior_vertex < 0)
+    {
+      continue;
+    }
+
+    const glm::dvec2 u = vertex_at(origin);
+    const glm::dvec2 v = vertex_at(dest);
+    const glm::dvec2 w = vertex_at(interior_vertex);
+    const glm::dvec2 edge = v - u;
+    const glm::dvec2 midpoint = 0.5 * (u + v);
+    const glm::dvec2 outward_hint = midpoint - w;
+
+    glm::dvec2 dir(edge.y, -edge.x);
+    if (glm::dot(dir, outward_hint) < 0.0)
+    {
+      dir = -dir;
+    }
+    return dir;
+  }
+
+  return std::nullopt;
+}
+
 std::vector<std::pair<glm::dvec2, bool>> HalfEdgeDelaunayGraph::computeCircumcenters(
   const std::vector<glm::dvec2>& vertices) const
 {
@@ -456,45 +1111,26 @@ std::vector<std::pair<glm::dvec2, bool>> HalfEdgeDelaunayGraph::computeCircumcen
   // indicates if the circumcenter is infinite
   std::vector<std::pair<glm::dvec2, bool>> circumcenters(triangles.size());
 
+  const auto vertex_at = [&vertices](int vertex_index) { return vertices[static_cast<size_t>(vertex_index)]; };
+
   for (size_t triangle_id = 0; triangle_id < triangles.size(); triangle_id++)
   {
+    if (!isLiveFace(triangle_id))
+    {
+      continue;
+    }
+
+    if (const std::optional<glm::dvec2> infinite_dir = infiniteVoronoiRayDirection(triangle_id, vertex_at))
+    {
+      circumcenters[triangle_id] = { *infinite_dir, true };
+      continue;
+    }
+
     const Triangle& triangle = triangles[triangle_id];
-    const HalfEdge& he0 = half_edges[triangle.half_edges[0]];
-    const HalfEdge& he1 = half_edges[triangle.half_edges[1]];
-    const HalfEdge& he2 = half_edges[triangle.half_edges[2]];
-
-    // Filter for infinity vertices
-    if (he0.origin == -1)
-    {
-      const glm::dvec2& v1 = vertices[he1.origin];
-      const glm::dvec2& v2 = vertices[he2.origin];
-      const glm::dvec2 dir = v2 - v1;
-      circumcenters[triangle_id] = { glm::dvec2(dir[1], -dir[0]), true };
-      continue;
-    }
-
-    if (he1.origin == -1)
-    {
-      const glm::dvec2& v0 = vertices[he0.origin];
-      const glm::dvec2& v2 = vertices[he2.origin];
-      const glm::dvec2 dir = v0 - v2;
-      circumcenters[triangle_id] = { glm::dvec2 { dir[1], -dir[0] }, true };
-      continue;
-    }
-
-    if (he2.origin == -1)
-    {
-      const glm::dvec2& v0 = vertices[he0.origin];
-      const glm::dvec2& v1 = vertices[he1.origin];
-      const glm::dvec2 dir = v1 - v0;
-      circumcenters[triangle_id] = { glm::dvec2 { dir[1], -dir[0] }, true };
-      continue;
-    }
-
-    // Get the vertices of the triangle
-    const glm::dvec2& v0 = vertices[he0.origin];
-    const glm::dvec2& v1 = vertices[he1.origin];
-    const glm::dvec2& v2 = vertices[he2.origin];
+    const std::array<int, 3> cycle_vertices = adjacentTriangleVertices(triangle.half_edges[0]);
+    const glm::dvec2& v0 = vertices[static_cast<size_t>(cycle_vertices[0])];
+    const glm::dvec2& v1 = vertices[static_cast<size_t>(cycle_vertices[1])];
+    const glm::dvec2& v2 = vertices[static_cast<size_t>(cycle_vertices[2])];
     // Compute a finite circumcenter if the triangle is well-conditioned.
     // If the triangle is nearly colinear, the circumcenter becomes numerically unstable and can explode.
     //
@@ -720,104 +1356,218 @@ std::array<size_t, 4> kinDS::HalfEdgeDelaunayGraph::getQuadBoundaryHalfEdgeIndic
 }
 
 // getters
-const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& HalfEdgeDelaunayGraph::getHalfEdges() const { return half_edges; }
-
-const std::vector<HalfEdgeDelaunayGraph::Triangle>& HalfEdgeDelaunayGraph::getFaces() const { return triangles; }
-
 size_t HalfEdgeDelaunayGraph::getVertexCount() const { return vertex_count; }
 
-static std::array<size_t, 3> canonical_triangle_key(const std::array<size_t, 3>& v)
+static std::array<int, 3> triangle_vertex_key(
+  size_t tri_idx, const std::vector<HalfEdgeDelaunayGraph::Triangle>& tris,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& hes)
 {
-  std::array<size_t, 3> k = v;
-  std::sort(k.begin(), k.end());
-  return k;
+  std::array<int, 3> key;
+  for (int i = 0; i < 3; ++i)
+  {
+    key[i] = hes[tris[tri_idx].half_edges[i]].origin;
+  }
+  std::sort(key.begin(), key.end());
+  return key;
+}
+
+struct TriangleVertexKeyHash
+{
+  size_t operator()(const std::array<int, 3>& k) const noexcept
+  {
+    size_t h = 1469598103934665603ull;
+    for (int v : k)
+    {
+      h ^= static_cast<size_t>(v) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+    }
+    return h;
+  }
+};
+
+static bool is_live_face_slot(
+  size_t face_id, const std::vector<HalfEdgeDelaunayGraph::Triangle>& tris,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& hes)
+{
+  if (face_id >= tris.size())
+  {
+    return false;
+  }
+
+  const HalfEdgeDelaunayGraph::Triangle& tri = tris[face_id];
+  if (tri.half_edges[0] >= hes.size())
+  {
+    return false;
+  }
+
+  for (int i = 0; i < 3; ++i)
+  {
+    const size_t he_id = tri.half_edges[i];
+    if (he_id >= hes.size())
+    {
+      return false;
+    }
+    if (hes[he_id].face != static_cast<int>(face_id))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void map_triangle_half_edges_by_directed_edge(
+  size_t new_tri_idx, size_t old_tri_idx, const std::vector<HalfEdgeDelaunayGraph::Triangle>& new_tris,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& new_hes,
+  const std::vector<HalfEdgeDelaunayGraph::Triangle>& old_tris,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& old_hes, std::vector<int>& he_remap)
+{
+  std::array<bool, 3> old_slot_used = { false, false, false };
+
+  for (int i = 0; i < 3; ++i)
+  {
+    const size_t new_he = new_tris[new_tri_idx].half_edges[i];
+    if (he_remap[new_he] != -1)
+    {
+      continue;
+    }
+
+    const int new_origin = new_hes[new_he].origin;
+    const int new_destination = new_hes[new_he ^ 1].origin;
+
+    for (int j = 0; j < 3; ++j)
+    {
+      if (old_slot_used[j])
+      {
+        continue;
+      }
+
+      const size_t old_he = old_tris[old_tri_idx].half_edges[j];
+      if (old_hes[old_he].origin == new_origin && old_hes[old_he ^ 1].origin == new_destination)
+      {
+        he_remap[new_he] = static_cast<int>(old_he);
+        old_slot_used[j] = true;
+        break;
+      }
+    }
+  }
 }
 
 void HalfEdgeDelaunayGraph::reorder_from_old(
   const std::vector<Triangle>& old_triangles, const std::vector<HalfEdge>& old_half_edges)
 {
-  // --- Step 1: build map from triangle key -> old triangle index
-  std::unordered_map<std::array<size_t, 3>, size_t, TriangleKeyHash> old_tri_map;
+  // Fresh per-branch retriangulation is authoritative for convex-hull / infinite-face incidence.
+  const std::vector<HalfEdge> fresh_half_edges = half_edges;
+
+  // Map sorted triangle vertex triple -> old triangle index (each old triangle used at most once).
+  std::unordered_map<std::array<int, 3>, size_t, TriangleVertexKeyHash> old_tri_map;
 
   for (size_t ti = 0; ti < old_triangles.size(); ++ti)
   {
-    std::array<size_t, 3> verts;
-    for (int i = 0; i < 3; ++i)
+    if (!is_live_face_slot(ti, old_triangles, old_half_edges))
     {
-      verts[i] = old_half_edges[old_triangles[ti].half_edges[i]].origin;
+      continue;
     }
-    old_tri_map[canonical_triangle_key(verts)] = ti;
+    old_tri_map[triangle_vertex_key(ti, old_triangles, old_half_edges)] = ti;
   }
 
-  // --- New containers
-  std::vector<Triangle> new_triangles(triangles.size());
-  std::vector<HalfEdge> new_half_edges(half_edges.size());
+  const size_t old_tri_count = old_triangles.size();
+  const size_t old_he_count = old_half_edges.size();
 
   std::vector<int> tri_remap(triangles.size(), -1);
   std::vector<int> he_remap(half_edges.size(), -1);
 
-  size_t next_tri = 0;
-  size_t next_he = 0;
+  size_t next_new_tri = old_tri_count;
+  size_t next_new_he = old_he_count;
 
-  // --- Step 2: match unchanged triangles
+  // Match unchanged triangles and preserve their old face / half-edge indices.
   for (size_t ti = 0; ti < triangles.size(); ++ti)
   {
-    std::array<size_t, 3> verts;
-    for (int i = 0; i < 3; ++i)
-    {
-      verts[i] = half_edges[triangles[ti].half_edges[i]].origin;
-    }
-
-    auto key = canonical_triangle_key(verts);
-    auto it = old_tri_map.find(key);
+    const auto key = triangle_vertex_key(ti, triangles, half_edges);
+    const auto it = old_tri_map.find(key);
     if (it == old_tri_map.end())
-      continue;
-
-    size_t old_ti = it->second;
-    tri_remap[ti] = static_cast<int>(old_ti);
-
-    // Map half-edges one-to-one
-    for (int i = 0; i < 3; ++i)
     {
-      size_t new_he = triangles[ti].half_edges[i];
-      size_t old_he = old_triangles[old_ti].half_edges[i];
-      he_remap[new_he] = static_cast<int>(old_he);
+      continue;
     }
+
+    const size_t old_ti = it->second;
+    old_tri_map.erase(it);
+
+    tri_remap[ti] = static_cast<int>(old_ti);
+    map_triangle_half_edges_by_directed_edge(ti, old_ti, triangles, half_edges, old_triangles, old_half_edges, he_remap);
   }
 
-  // --- Step 3: assign new indices for unmatched triangles
   for (size_t ti = 0; ti < triangles.size(); ++ti)
   {
     if (tri_remap[ti] != -1)
+    {
       continue;
+    }
 
-    tri_remap[ti] = static_cast<int>(next_tri);
-    next_tri++;
+    tri_remap[ti] = static_cast<int>(next_new_tri);
+    ++next_new_tri;
+  }
+
+  for (size_t ti = 0; ti < triangles.size(); ++ti)
+  {
     for (int i = 0; i < 3; ++i)
     {
-      he_remap[triangles[ti].half_edges[i]] = static_cast<int>(next_he);
-      next_he++;
+      const size_t new_he = triangles[ti].half_edges[i];
+      if (he_remap[new_he] != -1)
+      {
+        continue;
+      }
+
+      const size_t twin_he = new_he ^ 1;
+      if (he_remap[twin_he] != -1)
+      {
+        he_remap[new_he] = he_remap[twin_he] ^ 1;
+        continue;
+      }
+
+      he_remap[new_he] = static_cast<int>(next_new_he);
+      he_remap[twin_he] = static_cast<int>(next_new_he ^ 1);
+      next_new_he += 2;
     }
   }
 
-  // --- Step 4: rewrite triangles
+  std::vector<Triangle> new_triangles(next_new_tri);
+  std::vector<HalfEdge> new_half_edges(next_new_he);
+
   for (size_t ti = 0; ti < triangles.size(); ++ti)
   {
+    const int dst_tri = tri_remap[ti];
+    assert(dst_tri >= 0 && static_cast<size_t>(dst_tri) < new_triangles.size());
+
     Triangle t;
     for (int i = 0; i < 3; ++i)
     {
-      t.half_edges[i] = static_cast<size_t>(he_remap[triangles[ti].half_edges[i]]);
+      const int remapped_he = he_remap[triangles[ti].half_edges[i]];
+      assert(remapped_he >= 0 && static_cast<size_t>(remapped_he) < new_half_edges.size());
+      t.half_edges[i] = static_cast<size_t>(remapped_he);
     }
-    new_triangles[tri_remap[ti]] = t;
+    new_triangles[static_cast<size_t>(dst_tri)] = t;
   }
 
-  // --- Step 5: rewrite half-edges
   for (size_t hi = 0; hi < half_edges.size(); ++hi)
   {
+    const int dst_he = he_remap[hi];
+    if (dst_he < 0)
+    {
+      continue;
+    }
+    assert(static_cast<size_t>(dst_he) < new_half_edges.size());
+
     HalfEdge he = half_edges[hi];
-    he.next = he_remap[he.next];
-    he.face = tri_remap[he.face];
-    new_half_edges[he_remap[hi]] = he;
+    if (he.next >= 0)
+    {
+      const int remapped_next = he_remap[static_cast<size_t>(he.next)];
+      assert(remapped_next >= 0);
+      he.next = remapped_next;
+    }
+    if (he.face >= 0)
+    {
+      he.face = tri_remap[static_cast<size_t>(he.face)];
+    }
+    new_half_edges[static_cast<size_t>(dst_he)] = he;
   }
 
   triangles.swap(new_triangles);
@@ -827,11 +1577,46 @@ void HalfEdgeDelaunayGraph::reorder_from_old(
 
   for (size_t he = 0; he < half_edges.size(); ++he)
   {
-    size_t v = half_edges[he].origin;
-    // First outgoing half-edge wins
+    const int origin = half_edges[he].origin;
+    if (origin < 0)
+    {
+      continue;
+    }
+    const size_t v = static_cast<size_t>(origin);
     if (vertex_to_half_edge[v] == size_t(-1))
     {
       vertex_to_half_edge[v] = he;
     }
   }
+
+  // Remapping preserves ids but can leave .face inconsistent with the fresh retriangulation.
+  // Re-apply face indices from the per-branch build through tri_remap, matching directed site edges.
+  applyFreshHalfEdgeFaceReferences(fresh_half_edges, tri_remap);
+
+  auto remap_face = [&](int fresh_face) -> int
+  {
+    if (fresh_face < 0)
+    {
+      return -1;
+    }
+    const size_t f = static_cast<size_t>(fresh_face);
+    return (f < tri_remap.size()) ? tri_remap[f] : -1;
+  };
+
+  // Half-edges incident to the vertex at infinity have no finite directed site edge key.
+  for (size_t fresh_hi = 0; fresh_hi < fresh_half_edges.size(); ++fresh_hi)
+  {
+    if (fresh_half_edges[fresh_hi].origin != -1)
+    {
+      continue;
+    }
+    const int dst_he = he_remap[fresh_hi];
+    if (dst_he < 0 || static_cast<size_t>(dst_he) >= half_edges.size())
+    {
+      continue;
+    }
+    half_edges[static_cast<size_t>(dst_he)].face = remap_face(fresh_half_edges[fresh_hi].face);
+  }
+
+  rebuildLiveIndices();
 }

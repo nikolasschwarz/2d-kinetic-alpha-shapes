@@ -54,9 +54,18 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
   auto& graph = kd->graph;
 
   // Check if the event is still valid
-  size_t face_id = graph.getHalfEdges()[half_edge_id].face;
+  size_t face_id = graph.halfEdge(half_edge_id).face;
   if (creation_time < kd->face_last_updated[face_id])
   {
+    return;
+  }
+
+  if (kd->mustRemainInside(face_id, occurrence_time))
+  {
+    if (!kd->face_inside[face_id])
+    {
+      kd->setFaceInside(face_id, true, occurrence_time);
+    }
     return;
   }
 
@@ -66,7 +75,7 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
     event_handler->beforeEvent(*this);
   }
 
-  kd->setFaceInside(face_id, !kd->face_inside[face_id]);
+  kd->setFaceInside(face_id, !kd->face_inside[face_id], occurrence_time);
 
   if (event_handler)
   {

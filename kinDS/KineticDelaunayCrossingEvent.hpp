@@ -38,6 +38,30 @@ struct KineticDelaunay::CrossingData
     size_t next_segment_mesh_pair_index = static_cast<size_t>(-1);
   };
 
+  void growTo(size_t face_count)
+  {
+    if (face_count <= voronoi_vertex_to_containing_tri_id.size())
+    {
+      return;
+    }
+
+    voronoi_vertex_to_containing_tri_id.resize(face_count, static_cast<size_t>(-1));
+    tri_id_to_voronoi_vertices.resize(face_count);
+    voronoi_vertex_to_iterator.resize(face_count);
+    last_crossing.resize(face_count, 0.0);
+  }
+
+  void growEdgeSlotsTo(size_t delaunay_edge_count)
+  {
+    if (delaunay_edge_count <= voronoi_edge_intersections.size())
+    {
+      return;
+    }
+
+    voronoi_edge_intersections.resize(delaunay_edge_count);
+    delaunay_edge_intersections.resize(delaunay_edge_count);
+  }
+
   void init(size_t face_count)
   {
     voronoi_vertex_to_containing_tri_id.clear();
@@ -101,6 +125,9 @@ struct KineticDelaunay::CrossingData
   // Remove a single intersection from all three data structures (global list,
   // per-Voronoi-edge list, and per-Delaunay-edge list).
   void removeIntersection(EdgeIntersectionRef intersection_ref);
+
+  // Remove all intersections whose Delaunay edge no longer exists in the current graph.
+  void removeIntersectionsOnDeadDelaunayEdges(const HalfEdgeDelaunayGraph& graph);
 
   /**
    * Throws if per-edge lists, cached refs, or Delaunay-edge param ordering are inconsistent.
@@ -191,8 +218,8 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
 
   // move to neighboring triangle
   KINDS_DEBUG("Moving Voronoi vertex " << voronoi_vertex_id << " from triangle " << containing_tri_id << " to triangle "
-                                       << graph.getHalfEdges()[half_edge_id ^ 1].face);
-  kd->crossing_data.moveVertex(voronoi_vertex_id, graph.getHalfEdges()[half_edge_id ^ 1].face, occurrence_time);
+                                       << graph.halfEdge(half_edge_id ^ 1).face);
+  kd->crossing_data.moveVertex(voronoi_vertex_id, graph.halfEdge(half_edge_id ^ 1).face, occurrence_time);
 
   // Update Voronoi–Delaunay edge intersections stored in crossing_data in response to this crossing.
   kd->crossing_data.updateAfterCrossingEvent(*kd, *this);

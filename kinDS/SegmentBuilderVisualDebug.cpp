@@ -71,6 +71,17 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const std::unordered_map<size_t, size_t> site_runtime_branch_if_diff
     = buildSiteRuntimeBranchLabelsIfDiff(kin_del, graph, occurrence_time);
 
+  const bool per_branch_svgs = kin_del.isGraphRetriangulatedForComponents() && components.size() > 1;
+
+  if (!per_branch_svgs)
+  {
+    const std::string filename = "t" + std::to_string(occurrence_time) + "_segmentbuilder_" + phase + "_"
+      + event_descriptor + ".svg";
+    HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, &kin_del.getFacesInside(), true,
+      &containing_tri_ids, &intersection_debug_data, &highlight, nullptr, &site_runtime_branch_if_diff);
+    return;
+  }
+
   for (size_t component_id = 0; component_id < components.size(); ++component_id)
   {
     std::unordered_set<size_t> component_strands(components[component_id].begin(), components[component_id].end());

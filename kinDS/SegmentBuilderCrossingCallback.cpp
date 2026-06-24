@@ -30,8 +30,8 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
   }
 
   auto& graph = segment_builder_.kin_del.getGraph();
-  const size_t old_tri = graph.getHalfEdges()[crossing->half_edge_id].face;
-  const size_t new_tri = graph.getHalfEdges()[crossing->half_edge_id ^ 1].face;
+  const size_t old_tri = graph.halfEdge(crossing->half_edge_id).face;
+  const size_t new_tri = graph.halfEdge(crossing->half_edge_id ^ 1).face;
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     crossing->occurrence_time, "before",
     "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_"
@@ -79,8 +79,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
   // Defer SVG until after SegmentBuilder updates crossing `prev`/`next` mesh-pair links (boundary merge/split) and
   // strip meshing so debug output matches runtime linkage.
   const auto write_crossing_visual_debug_svg = [&]() {
-    const size_t post_old_tri = graph.getHalfEdges()[crossing->half_edge_id].face;
-    const size_t post_new_tri = graph.getHalfEdges()[crossing->half_edge_id ^ 1].face;
+    const size_t post_old_tri = graph.halfEdge(crossing->half_edge_id).face;
+    const size_t post_new_tri = graph.halfEdge(crossing->half_edge_id ^ 1).face;
     writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
       crossing->occurrence_time, "after",
       "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(post_old_tri) + "_to_"
@@ -90,7 +90,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
   const size_t voronoi_vertex_id = crossing->voronoi_vertex_id;
   const glm::dvec3 voronoi_vertex_position = glm::dvec3(crossing->position, crossing->occurrence_time);
-  const auto half_edges = graph.getFaces()[voronoi_vertex_id].half_edges;
+  const auto half_edges = graph.face(voronoi_vertex_id).half_edges;
   if (!segment_builder_.kin_del.isOnComponentBoundary(crossing->half_edge_id))
   {
     write_crossing_visual_debug_svg();
@@ -194,11 +194,11 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       // correspond to "prev" (update end), while odd-origin side corresponds to "next" (update start).
       const size_t he_even = 2 * crossed_d_edge;
       const size_t he_odd = he_even + 1;
-      if (pair_idx < segment_builder_.intersection_mesh_pair_metadata.size() && he_odd < graph.getHalfEdges().size())
+      if (pair_idx < segment_builder_.intersection_mesh_pair_metadata.size() && he_odd < graph.halfEdgeSlotCount())
       {
         const auto& pair_meta = segment_builder_.intersection_mesh_pair_metadata[pair_idx];
-        const int even_origin = graph.getHalfEdges()[he_even].origin;
-        const int odd_origin = graph.getHalfEdges()[he_odd].origin;
+        const int even_origin = graph.halfEdge(he_even).origin;
+        const int odd_origin = graph.halfEdge(he_odd).origin;
         if (even_origin >= 0 && odd_origin >= 0)
         {
           const size_t even_origin_cell = static_cast<size_t>(even_origin);
@@ -390,8 +390,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     const size_t strip_voronoi_edge_id = (voronoi_he_id & ~1) / 2;
     const size_t even_id = voronoi_he_id & ~static_cast<size_t>(1);
     const size_t odd_id = even_id + 1;
-    const auto& he_even = graph.getHalfEdges()[even_id];
-    const auto& he_odd = graph.getHalfEdges()[odd_id];
+    const auto& he_even = graph.halfEdge(even_id);
+    const auto& he_odd = graph.halfEdge(odd_id);
     const int strand_even_origin_i = static_cast<int>(he_even.origin);
     const int strand_odd_origin_i = static_cast<int>(he_odd.origin);
 
@@ -489,7 +489,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     }
     else
     {
-      const size_t end_voronoi_vertex_id = graph.getHalfEdges()[odd_id].face;
+      const size_t end_voronoi_vertex_id = graph.halfEdge(odd_id).face;
 
       if (end_voronoi_vertex_id == voronoi_vertex_id)
       {

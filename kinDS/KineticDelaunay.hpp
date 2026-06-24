@@ -80,6 +80,12 @@ class KineticDelaunay
   using EventCallback = KineticAlgorithm::EventCallback;
   using EventManager = KineticAlgorithm::EventManager;
 
+  enum class ComponentSplitPolicy
+  {
+    Retriangulate,
+    InPlaceCut,
+  };
+
   class FlipEvent;
   class RadiusEvent;
   class CrossingEvent;
@@ -91,6 +97,8 @@ class KineticDelaunay
 
     virtual void init() { }
     virtual void finalize(double t) { }
+    virtual void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
+    virtual void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
   };
 
   class FlipEvent;
@@ -161,6 +169,10 @@ class KineticDelaunay
   std::vector<glm::dvec2> dummy_boundary;
   bool add_dummy_boundary;
   size_t prev_component_count = 1;
+  static constexpr size_t no_pending_split_reference_vertex = static_cast<size_t>(-1);
+  /// While a component split awaits section retriangulation, affected strands keep the parent component frame.
+  std::vector<size_t> pending_split_reference_vertex_;
+  ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
   bool on_the_fly_boundary = true;
@@ -180,6 +192,13 @@ class KineticDelaunay
 
   void precomputeStep(double t);
 
+  void growGraphSlotArrays();
+  void initializeFaceState(size_t face_index, double t);
+  void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
+  void clearPendingSplitReference();
+  void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots);
+  void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots);
+
   void handleEvents();
 
   /// Enqueues one @ref SubdivisionEvent per entry in @ref subdivision_schedule_ (called once from @ref compute).
@@ -198,7 +217,7 @@ class KineticDelaunay
   KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);
   ~KineticDelaunay();
 
-  bool isDummyBoundary(size_t v);
+  bool isDummyBoundary(size_t v) const;
 
   bool computeBoundaryOnTheFly() const;
 
@@ -216,6 +235,17 @@ class KineticDelaunay
   const StrandTree& getStrandTree() const;
 
   void computeComponentData(double t);
+
+  /// True once @ref component_data reflects the current @ref HalfEdgeDelaunayGraph after the latest section
+  /// retriangulation. While false, connected components may already be split in component data but the mesh
+  /// is still the pre-split triangulation (see @ref prev_component_count).
+  bool isGraphRetriangulatedForComponents() const;
+
+  void setComponentSplitPolicy(ComponentSplitPolicy policy) { component_split_policy_ = policy; }
+  ComponentSplitPolicy getComponentSplitPolicy() const { return component_split_policy_; }
+
+  /// Record parent-component frame for strands in @p new_components until the next section retriangulation.
+  void notePendingSplitReference(size_t parent_component_id, const std::vector<std::vector<size_t>>& new_components);
 
   CrossingData& getCrossingDataMutable();
   const CrossingData& getCrossingData() const;
@@ -262,7 +292,12 @@ class KineticDelaunay
 
   bool getFaceInside(size_t face_index) const;
 
-  void setFaceInside(size_t face_index, bool value);
+  void setFaceInside(size_t face_index, bool value, double t);
+
+  /** All three vertices share one input branch with exactly three strands at @p t. */
+  bool isMinimalInputBranchTriangle(const std::array<int, 3>& vertices, double t) const;
+
+  bool mustRemainInside(size_t face_index, double t) const;
 
   bool isOnComponentBoundary(size_t he_id) const;
 

@@ -61,23 +61,23 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
   std::map<size_t, size_t> pre_flip_quad_faces;
   {
     size_t he0 = half_edge_id;
-    size_t he1 = graph.getHalfEdges()[he0].next;
-    size_t he2 = graph.getHalfEdges()[he1].next;
+    size_t he1 = graph.halfEdge(he0).next;
+    size_t he2 = graph.halfEdge(he1).next;
     size_t he3 = he0 ^ 1;
-    size_t he4 = graph.getHalfEdges()[he3].next;
-    size_t he5 = graph.getHalfEdges()[he4].next;
+    size_t he4 = graph.halfEdge(he3).next;
+    size_t he5 = graph.halfEdge(he4).next;
 
-    pre_flip_quad_faces[he0] = graph.getHalfEdges()[he0].face;
-    pre_flip_quad_faces[he1] = graph.getHalfEdges()[he1].face;
-    pre_flip_quad_faces[he2] = graph.getHalfEdges()[he2].face;
-    pre_flip_quad_faces[he3] = graph.getHalfEdges()[he3].face;
-    pre_flip_quad_faces[he4] = graph.getHalfEdges()[he4].face;
-    pre_flip_quad_faces[he5] = graph.getHalfEdges()[he5].face;
+    pre_flip_quad_faces[he0] = graph.halfEdge(he0).face;
+    pre_flip_quad_faces[he1] = graph.halfEdge(he1).face;
+    pre_flip_quad_faces[he2] = graph.halfEdge(he2).face;
+    pre_flip_quad_faces[he3] = graph.halfEdge(he3).face;
+    pre_flip_quad_faces[he4] = graph.halfEdge(he4).face;
+    pre_flip_quad_faces[he5] = graph.halfEdge(he5).face;
   }
 
   // Process the event at the given time
-  size_t face_id = graph.getHalfEdges()[half_edge_id].face;
-  size_t twin_face_id = graph.getHalfEdges()[half_edge_id ^ 1].face;
+  size_t face_id = graph.halfEdge(half_edge_id).face;
+  size_t twin_face_id = graph.halfEdge(half_edge_id ^ 1).face;
   KINDS_DEBUG("Processing flip event at time " << occurrence_time << " for half-edge ID " << half_edge_id
                                                << ". Faces inside " << kd->face_inside[face_id] << " | "
                                                << kd->face_inside[twin_face_id]);
@@ -89,12 +89,12 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
   }
 
   // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
-  if (graph.getHalfEdges()[half_edge_id].origin == -1)
+  if (graph.halfEdge(half_edge_id).origin == -1)
   {
     kd->face_inside[twin_face_id] = (kd->cutoff == std::numeric_limits<double>::infinity());
   }
 
-  if (graph.getHalfEdges()[half_edge_id ^ 1].origin == -1)
+  if (graph.halfEdge(half_edge_id ^ 1).origin == -1)
   {
     kd->face_inside[face_id] = (kd->cutoff == std::numeric_limits<double>::infinity());
   }
@@ -107,8 +107,8 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
   {
     if (v == -1)
     {
-      size_t swapped_face_id = graph.getHalfEdges()[half_edge_id].face;
-      kd->setFaceInside(swapped_face_id, false);
+      size_t swapped_face_id = graph.halfEdge(half_edge_id).face;
+      kd->setFaceInside(swapped_face_id, false, occurrence_time);
     }
   }
 
@@ -117,17 +117,17 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
   {
     if (v == -1)
     {
-      size_t swapped_face_id = graph.getHalfEdges()[half_edge_id ^ 1].face;
-      kd->setFaceInside(swapped_face_id, false);
+      size_t swapped_face_id = graph.halfEdge(half_edge_id ^ 1).face;
+      kd->setFaceInside(swapped_face_id, false, occurrence_time);
     }
   }
 
   // After flipping the edge, we need to recompute the events for all surrounding half-edges
-  size_t next1 = graph.getHalfEdges()[half_edge_id].next;
-  size_t next2 = graph.getHalfEdges()[next1].next;
+  size_t next1 = graph.halfEdge(half_edge_id).next;
+  size_t next2 = graph.halfEdge(next1).next;
 
-  size_t twin_next1 = graph.getHalfEdges()[half_edge_id ^ 1].next;
-  size_t twin_next2 = graph.getHalfEdges()[twin_next1].next;
+  size_t twin_next1 = graph.halfEdge(half_edge_id ^ 1).next;
+  size_t twin_next2 = graph.halfEdge(twin_next1).next;
 
   kd->flip_event_manager_->computeEvents(occurrence_time, next1 / 2);
   kd->quadrilateral_last_updated[next1 / 2] = occurrence_time;

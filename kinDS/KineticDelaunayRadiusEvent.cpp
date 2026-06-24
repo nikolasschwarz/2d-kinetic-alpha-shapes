@@ -21,14 +21,19 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
   const size_t section = static_cast<size_t>(t);
   const float fraction = t - section;
 
-  size_t face_id = graph.getHalfEdges()[he_id].face;
-  size_t u = graph.getHalfEdges()[he_id].origin;
+  size_t face_id = graph.halfEdge(he_id).face;
+  size_t u = graph.halfEdge(he_id).origin;
   size_t v = graph.destination(he_id);
   size_t w = graph.triangleOppositeVertex(he_id);
 
   if (u == -1 || v == -1 || w == -1)
   {
     // one of the vertices is at infinity, no event possible
+    return;
+  }
+
+  if (kd->mustRemainInside(face_id, t))
+  {
     return;
   }
 

@@ -24,13 +24,13 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   const auto piece_poly = [&](size_t strand_id)
   { return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch); };
 
-  auto& dual_triangle = graph.getFaces()[voronoi_vertex_id];
-  auto& containing_triangle = graph.getFaces()[crossing_data.getContainingTriId(voronoi_vertex_id)];
+  auto& dual_triangle = graph.face(voronoi_vertex_id);
+  auto& containing_triangle = graph.face(crossing_data.getContainingTriId(voronoi_vertex_id));
 
   // compute polynomials of two bisectors in homogeneous coordinates
-  size_t v_i = graph.getHalfEdges()[dual_triangle.half_edges[0]].origin;
-  size_t v_j = graph.getHalfEdges()[dual_triangle.half_edges[1]].origin;
-  size_t v_k = graph.getHalfEdges()[dual_triangle.half_edges[2]].origin;
+  size_t v_i = graph.halfEdge(dual_triangle.half_edges[0]).origin;
+  size_t v_j = graph.halfEdge(dual_triangle.half_edges[1]).origin;
+  size_t v_k = graph.halfEdge(dual_triangle.half_edges[2]).origin;
 
   // If a vertex is infinite, so is the Voronoi vertex and it cannot cross any edge, so we can skip this event.
   if (v_i == -1 || v_j == -1 || v_k == -1)
@@ -78,8 +78,8 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
 
     // re-assign vertices
     v_i = graph.triangleOppositeVertex(dual_triangle.half_edges[adjacent_edge_index]);
-    v_j = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index]].origin;
-    v_k = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index] ^ 1].origin;
+    v_j = graph.halfEdge(dual_triangle.half_edges[adjacent_edge_index]).origin;
+    v_k = graph.halfEdge(dual_triangle.half_edges[adjacent_edge_index] ^ 1).origin;
 
     reference_branch = kd->getReferenceBranch(v_i, t);
 
@@ -141,8 +141,8 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
     for (size_t edge_index = 0; edge_index < 3; edge_index++)
     {
       size_t he_id = containing_triangle.half_edges[edge_index];
-      size_t a = graph.getHalfEdges()[he_id].origin;
-      size_t b = graph.getHalfEdges()[he_id ^ 1].origin;
+      size_t a = graph.halfEdge(he_id).origin;
+      size_t b = graph.halfEdge(he_id ^ 1).origin;
 
       Trajectory<3> line_ab;
       if (a != -1 && b != -1)
@@ -169,10 +169,10 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
         if (a == finite_vertex)
         {
           size_t prev_he_id = graph.prev(he_id);
-          size_t next_he_id = graph.getHalfEdges()[he_id ^ 1].next;
+          size_t next_he_id = graph.halfEdge(he_id ^ 1).next;
 
-          size_t c = graph.getHalfEdges()[prev_he_id].origin;
-          size_t c_prime = graph.getHalfEdges()[next_he_id].origin;
+          size_t c = graph.halfEdge(prev_he_id).origin;
+          size_t c_prime = graph.halfEdge(next_he_id).origin;
 
           Trajectory<2> traj_a = piece_poly(static_cast<size_t>(a));
           Trajectory<2> traj_c = piece_poly(static_cast<size_t>(c));
@@ -184,10 +184,10 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
         else
         {
           size_t prev_he_id = graph.prev(he_id ^ 1);
-          size_t next_he_id = graph.getHalfEdges()[he_id].next;
+          size_t next_he_id = graph.halfEdge(he_id).next;
 
-          size_t c_prime = graph.getHalfEdges()[prev_he_id].origin;
-          size_t c = graph.getHalfEdges()[next_he_id].origin;
+          size_t c_prime = graph.halfEdge(prev_he_id).origin;
+          size_t c = graph.halfEdge(next_he_id).origin;
 
           Trajectory<2> traj_b = piece_poly(static_cast<size_t>(b));
           Trajectory<2> traj_c = piece_poly(static_cast<size_t>(c));
