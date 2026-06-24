@@ -1,0 +1,12 @@
+{
+  "version": 5,
+  "configurePresets": [
+    {
+      "name": "vcpkg-x64",
+      "inherits": "vcpkg-x64",
+      "cacheVariables": {
+        "VCPKG_ROOT": "D:/path/to/your/vcpkg"
+      }
+    }
+  ]
+}

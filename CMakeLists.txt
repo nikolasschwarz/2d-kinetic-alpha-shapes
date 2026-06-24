@@ -230,7 +230,6 @@ if(KINDS_BUILD_DEMO)
     add_executable(kinDS-demo main.cpp)
     target_link_libraries(kinDS-demo PRIVATE kinDS)
     
-    # Set output directory for demo
     set_target_properties(kinDS-demo PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )

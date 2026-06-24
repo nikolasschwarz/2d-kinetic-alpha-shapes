@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "kinDS: cmake build (Release)",
+      "type": "shell",
+      "command": "${workspaceFolder}/cmake/build-with-msvc.cmd",
+      "args": ["vcpkg-x64", "build", "kinDS-demo"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "focus": false,
+        "clear": false
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "kinDS: cmake build (Debug)",
+      "type": "shell",
+      "command": "${workspaceFolder}/cmake/build-with-msvc.cmd",
+      "args": ["vcpkg-x64-debug", "build-debug", "kinDS-demo"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "focus": false,
+        "clear": false
+      },
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}

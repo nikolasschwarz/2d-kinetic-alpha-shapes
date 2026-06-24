@@ -503,7 +503,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
           corner_pos = site_shifted.value();
         }
       }
-      const std::string radius_corner_meta = SegmentBuilder::composeBoundaryMetadata(
+      const std::string radius_corner_meta = segment_builder_.composeBoundaryMetadata(
         SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
       auto with_pos = [&radius_corner_meta](const char* pos) -> std::string
       {
@@ -1327,19 +1327,25 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         return;
       }
-      std::ostringstream radius_meta_stream;
-      radius_meta_stream << std::setprecision(17);
-      radius_meta_stream << "{\"mesh_type\":\"regular\",\"event_type\":\"radius_event\",\"segment_action\":\"new_segment\",\"time\":"
-        << t << ",\"delaunay_face_id\":" << affected_face_id << ",\"strand_cell_id\":" << cell_id
-        << ",\"failed_meshlet\":" << (failed ? "true" : "false") << "}";
-      const std::string radius_vertex_meta = radius_meta_stream.str();
-      std::ostringstream radius_triangulation_stream;
-      radius_triangulation_stream << std::setprecision(17);
-      radius_triangulation_stream << "{\"mesh_type\":\"regular\",\"event_type\":\"radius_event\",\"segment_action\":\"new_segment\",\"time\":"
-        << t << ",\"delaunay_face_id\":" << affected_face_id << ",\"strand_cell_id\":" << cell_id
-        << ",\"op\":\"radius_strand_cell_triangulation\",\"failed_meshlet\":" << (failed ? "true" : "false") << "}";
-      const std::string radius_triangulation_meta = radius_triangulation_stream.str();
+      std::string radius_vertex_meta;
+      std::string radius_triangulation_meta;
+      if (segment_builder_.store_mesh_metadata)
+      {
+        std::ostringstream radius_meta_stream;
+        radius_meta_stream << std::setprecision(17);
+        radius_meta_stream << "{\"mesh_type\":\"regular\",\"event_type\":\"radius_event\",\"segment_action\":\"new_segment\",\"time\":"
+          << t << ",\"delaunay_face_id\":" << affected_face_id << ",\"strand_cell_id\":" << cell_id
+          << ",\"failed_meshlet\":" << (failed ? "true" : "false") << "}";
+        radius_vertex_meta = radius_meta_stream.str();
+        std::ostringstream radius_triangulation_stream;
+        radius_triangulation_stream << std::setprecision(17);
+        radius_triangulation_stream << "{\"mesh_type\":\"regular\",\"event_type\":\"radius_event\",\"segment_action\":\"new_segment\",\"time\":"
+          << t << ",\"delaunay_face_id\":" << affected_face_id << ",\"strand_cell_id\":" << cell_id
+          << ",\"op\":\"radius_strand_cell_triangulation\",\"failed_meshlet\":" << (failed ? "true" : "false") << "}";
+        radius_triangulation_meta = radius_triangulation_stream.str();
+      }
       VoronoiMesh mesh;
+      segment_builder_.configureMeshletStorage(mesh);
       std::vector<size_t> ids;
       ids.reserve(poly.size());
       for (const auto& p : poly)

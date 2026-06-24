@@ -453,6 +453,8 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   mesh_builder
     = std::make_shared<SegmentBuilder>(
       *kinetic_delaunay, subdivisions, transform_mesh_at_construction, visual_debug, parallel_for);
+  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata;
+  mesh_builder->diagnostics = settings.diagnostics;
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
                                                                                       << ", visual_debug=" << visual_debug
@@ -462,6 +464,10 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << settings.max_meshlet_export
                                                                                       << ", fix_missing_meshes="
                                                                                       << settings.fix_missing_meshes
+                                                                                      << ", store_mesh_metadata="
+                                                                                      << settings.store_mesh_metadata
+                                                                                      << ", diagnostics="
+                                                                                      << settings.diagnostics
                                                                                       << ", radius_vertex_shift_enabled="
                                                                                       << mesh_builder
                                                                                            ->radius_boundary_transition_shift_enabled);

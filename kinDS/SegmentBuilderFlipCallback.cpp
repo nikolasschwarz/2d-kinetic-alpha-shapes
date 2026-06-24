@@ -58,9 +58,13 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
       {
         const size_t tris_before = mesh.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index);
-        std::ostringstream note;
-        note << "extend_flip_before d_tris=" << (mesh.getTriangleCount() - tris_before);
-        segment_builder_.meshletDiagnosticLogLine("extend_mesh", flip->half_edge_id, flip->occurrence_time, note.str().c_str());
+        if (segment_builder_.diagnostics)
+        {
+          std::ostringstream note;
+          note << "extend_flip_before d_tris=" << (mesh.getTriangleCount() - tris_before);
+          segment_builder_.meshletDiagnosticLogLine(
+            "extend_mesh", flip->half_edge_id, flip->occurrence_time, note.str().c_str());
+        }
       }
     }
     else // TODO: I think this should't occur, but it does
@@ -203,9 +207,13 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
-        std::ostringstream note;
-        note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);
-        segment_builder_.meshletDiagnosticLogLine("extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
+        if (segment_builder_.diagnostics)
+        {
+          std::ostringstream note;
+          note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);
+          segment_builder_.meshletDiagnosticLogLine(
+            "extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
+        }
       }
       segments.front().mesh_start_vertex_id = static_cast<int>(new_vertex_index);
     }
@@ -216,9 +224,13 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
-        std::ostringstream note;
-        note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);
-        segment_builder_.meshletDiagnosticLogLine("extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
+        if (segment_builder_.diagnostics)
+        {
+          std::ostringstream note;
+          note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);
+          segment_builder_.meshletDiagnosticLogLine(
+            "extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
+        }
       }
       segments.back().mesh_end_vertex_id = static_cast<int>(new_vertex_index);
     }

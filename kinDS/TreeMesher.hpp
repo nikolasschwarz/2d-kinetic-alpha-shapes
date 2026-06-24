@@ -44,6 +44,10 @@ class TreeMesher
   {
     double alpha_cutoff = 10.0; // default value, can be adjusted as needed
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
+    /// When false, skip JSON vertex/face metadata on meshlets (material_ids still stored for OBJ export).
+    bool store_mesh_metadata = true;
+    /// When false, skip meshlet diagnostic logging and related string assembly (@ref meshletDiagnosticLogLine).
+    bool diagnostics = false;
 
     // for debugging purposes:
     bool debug_export_meshes = false;

@@ -16,6 +16,10 @@ namespace
 void logCrossingMeshExtend(
   SegmentBuilder& sb, size_t voronoi_he_id, double t, VoronoiMesh& mesh, const char* branch, size_t tris_before)
 {
+  if (!sb.diagnostics)
+  {
+    return;
+  }
   std::ostringstream o;
   o << "extend_crossing_" << branch << " d_tris=" << (mesh.getTriangleCount() - tris_before);
   sb.meshletDiagnosticLogLine("extend_mesh", voronoi_he_id, t, o.str().c_str());
@@ -151,9 +155,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     const bool boundary_even_he_is_outside = segment_builder_.kin_del.isOnComponentBoundaryOutside(2 * crossed_d_edge);
     const int inside_boundary_he_id
       = boundary_even_he_is_outside ? static_cast<int>(2 * crossed_d_edge + 1) : static_cast<int>(2 * crossed_d_edge);
-    const std::string crossing_remove_meta = SegmentBuilder::composeBoundaryMetadata(
+    const std::string crossing_remove_meta = segment_builder_.composeBoundaryMetadata(
       SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::SegmentRemoved);
-    const std::string crossing_update_meta = SegmentBuilder::composeBoundaryMetadata(
+    const std::string crossing_update_meta = segment_builder_.composeBoundaryMetadata(
       SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
     auto with_crossing_case = [](const std::string& base_meta, const char* case_tag) -> std::string
     {
@@ -400,14 +404,14 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
                                       const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing_ref)
       -> std::string
     {
-      return SegmentBuilder::composeRegularStripVertexMetadata(crossing->occurrence_time, strip_voronoi_edge_id, even_id,
+      return segment_builder_.composeRegularStripVertexMetadata(crossing->occurrence_time, strip_voronoi_edge_id, even_id,
         strand_even_origin_i, strand_odd_origin_i, SegmentBuilder::BoundaryEventType::Crossing, segment_action,
         crossing_ref, pos, op);
     };
 
     const auto strip_face_meta = [&](const char* op, SegmentBuilder::BoundarySegmentAction segment_action) -> std::string
     {
-      return SegmentBuilder::composeRegularStripFaceMetadata(crossing->occurrence_time, strip_voronoi_edge_id, even_id,
+      return segment_builder_.composeRegularStripFaceMetadata(crossing->occurrence_time, strip_voronoi_edge_id, even_id,
         strand_even_origin_i, strand_odd_origin_i, SegmentBuilder::BoundaryEventType::Crossing, segment_action, op);
     };
 

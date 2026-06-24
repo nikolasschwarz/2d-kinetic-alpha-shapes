@@ -37,6 +37,7 @@ class VoronoiMesh
 
   /// Kinetic time when this meshlet was first registered / last rebuilt in @ref SegmentBuilder (NaN if unset).
   double creation_kinetic_time_ = std::numeric_limits<double>::quiet_NaN();
+  bool store_metadata_ = true;
 
   struct Vec3iHash
   {
@@ -156,6 +157,9 @@ class VoronoiMesh
 
   void setCreationKineticTime(double t) { creation_kinetic_time_ = t; }
   double getCreationKineticTime() const { return creation_kinetic_time_; }
+
+  void setStoreMetadata(bool enabled) { store_metadata_ = enabled; }
+  bool storeMetadata() const { return store_metadata_; }
 
   /// Empty string if unset; otherwise a stable fragment for filenames, e.g. `_t0.000000` or `_t3.500000`.
   std::string creationKineticTimeFilenameSuffix() const;

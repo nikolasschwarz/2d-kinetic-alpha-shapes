@@ -88,7 +88,10 @@ size_t VoronoiMesh::addVertex(double x, double y, double z, const std::string& m
 {
   size_t index = vertices.size();
   vertices.emplace_back(glm::dvec3 { x, y, z });
-  vertex_metadata.push_back(metadata);
+  if (store_metadata_)
+  {
+    vertex_metadata.push_back(metadata);
+  }
   vertex_colors.push_back(color);
   return index;
 }
@@ -97,7 +100,10 @@ size_t VoronoiMesh::addVertex(const glm::dvec3& p, const std::string& metadata, 
 {
   size_t index = vertices.size();
   vertices.emplace_back(p);
-  vertex_metadata.push_back(metadata);
+  if (store_metadata_)
+  {
+    vertex_metadata.push_back(metadata);
+  }
   vertex_colors.push_back(color);
   return index;
 }
@@ -129,7 +135,10 @@ size_t VoronoiMesh::addTriangle(
   uv_indices.push_back(uv3);
 
   material_ids.push_back(material_id);
-  face_metadata.push_back(metadata);
+  if (store_metadata_)
+  {
+    face_metadata.push_back(metadata);
+  }
 
   return index;
 }
@@ -192,13 +201,16 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
 
   size_t old_vertices_size = vertices.size();
   vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
-  if (other.vertex_metadata.size() == other.vertices.size())
+  if (store_metadata_)
   {
-    vertex_metadata.insert(vertex_metadata.end(), other.vertex_metadata.begin(), other.vertex_metadata.end());
-  }
-  else
-  {
-    vertex_metadata.insert(vertex_metadata.end(), other.vertices.size(), "{}");
+    if (other.vertex_metadata.size() == other.vertices.size())
+    {
+      vertex_metadata.insert(vertex_metadata.end(), other.vertex_metadata.begin(), other.vertex_metadata.end());
+    }
+    else
+    {
+      vertex_metadata.insert(vertex_metadata.end(), other.vertices.size(), "{}");
+    }
   }
   if (other.vertex_colors.size() == other.vertices.size())
   {
@@ -232,13 +244,16 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
 
   std::transform(group_offsets.begin() + old_group_count, group_offsets.end(), group_offsets.begin() + old_group_count,
     [&](size_t offset) { return offset + old_triangle_count; });
-  if (other.face_metadata.size() == other.triangles.size() / 3)
+  if (store_metadata_)
   {
-    face_metadata.insert(face_metadata.end(), other.face_metadata.begin(), other.face_metadata.end());
-  }
-  else
-  {
-    face_metadata.insert(face_metadata.end(), other.triangles.size() / 3, "{}");
+    if (other.face_metadata.size() == other.triangles.size() / 3)
+    {
+      face_metadata.insert(face_metadata.end(), other.face_metadata.begin(), other.face_metadata.end());
+    }
+    else
+    {
+      face_metadata.insert(face_metadata.end(), other.triangles.size() / 3, "{}");
+    }
   }
 
   std::vector<int> other_material_id_remap(other.material_names.size(), -1);
@@ -368,6 +383,10 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   vertices.swap(newVerts);
   vertex_metadata.swap(new_vertex_metadata);
   vertex_colors.swap(new_vertex_colors);
+  if (!store_metadata_)
+  {
+    vertex_metadata.clear();
+  }
 
   return remap;
 }
@@ -660,6 +679,10 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
   vertices.swap(new_vertices);
   vertex_metadata.swap(new_vertex_metadata);
   vertex_colors.swap(new_vertex_colors);
+  if (!store_metadata_)
+  {
+    vertex_metadata.clear();
+  }
 
   // 4. Compact per-vertex normals if needed
   if (normal_mode == PerVertex)
@@ -743,6 +766,10 @@ void VoronoiMesh::removeDegenerateTriangles()
   }
   material_ids.swap(new_material_ids);
   face_metadata.swap(new_face_metadata);
+  if (!store_metadata_)
+  {
+    face_metadata.clear();
+  }
 
   // Optionally: warn if triangles were removed
   size_t removed = n_triangles - (triangles.size() / 3);

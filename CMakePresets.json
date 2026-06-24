@@ -2,21 +2,72 @@
   "version": 5,
   "configurePresets": [
     {
+      "name": "vcpkg-x64-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "external"
+      },
+      "toolchainFile": "${sourceDir}/cmake/vcpkg-ninja-msvc.toolchain.cmake",
+      "cacheVariables": {
+        "VCPKG_ROOT": "C:/src/vcpkg",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_CXX_COMPILER": "cl.exe"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": [ "Windows" ],
+          "intelliSenseMode": "windows-msvc-x64"
+        }
+      }
+    },
+    {
       "name": "vcpkg-x64",
-      "displayName": "vcpkg (x64) - MSVC",
+      "displayName": "vcpkg (x64) - Ninja (default)",
+      "inherits": "vcpkg-x64-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "vcpkg-x64-debug",
+      "displayName": "vcpkg (x64) - Ninja Debug",
+      "inherits": "vcpkg-x64-base",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "vcpkg-x64-vs",
+      "displayName": "vcpkg (x64) - Visual Studio 2022",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build-vs",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "C:/src/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        "CMAKE_TOOLCHAIN_FILE": {
+          "type": "FILEPATH",
+          "value": "C:/src/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        }
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": [ "Windows" ]
+        }
       }
     }
   ],
   "buildPresets": [
     {
       "name": "vcpkg-x64-debug",
-      "configurePreset": "vcpkg-x64",
-      "configuration": "Debug",
+      "displayName": "Debug",
+      "configurePreset": "vcpkg-x64-debug",
       "vendor": {
         "microsoft.com/VisualStudioSettings/CMake/1.0": {
           "debuggerCommandArguments": "--demo",
@@ -26,7 +77,23 @@
     },
     {
       "name": "vcpkg-x64-release",
-      "configurePreset": "vcpkg-x64",
+      "displayName": "Release",
+      "configurePreset": "vcpkg-x64"
+    },
+    {
+      "name": "vcpkg-x64-vs-debug",
+      "configurePreset": "vcpkg-x64-vs",
+      "configuration": "Debug",
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "debuggerCommandArguments": "--demo",
+          "debuggerWorkingDirectory": "${sourceDir}"
+        }
+      }
+    },
+    {
+      "name": "vcpkg-x64-vs-release",
+      "configurePreset": "vcpkg-x64-vs",
       "configuration": "Release"
     }
   ]

@@ -1,12 +1,57 @@
 ﻿################################################################################
-# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+# Build & configure output
 ################################################################################
 
-/.vs
-/.vscode
-/build
-/out
-/enc_temp_folder
-*.mtl
+# CMake preset trees (build, build-vs, build-bench-ninja, build-test-*, ...)
+/build/
+/build-*/
+
+# Visual Studio CMakeSettings.json default layout
+/out/
+
+# Accidental in-source CMake configure (running cmake from repo root)
+/CMakeFiles/
+/Testing/
+/CMakeCache.txt
+/cmake_install.cmake
+/CTestTestfile.cmake
+/DartConfiguration.tcl
+/Makefile
+
+################################################################################
+# IDE / editor (local machine)
+################################################################################
+
+/.vs/
+/enc_temp_folder/
+/.cursor/
+
+# Track shared VS Code/Cursor project config; ignore editor-local state
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+
+################################################################################
+# User-local CMake overrides
+################################################################################
+
+/CMakeUserPresets.json
+
+################################################################################
+# Demo / tool runtime output (default cwd is repo root)
+################################################################################
+
 *.obj
+*.mtl
 *.svg
+*.log
+
+/raw_meshlets/
+/segment_meshlets/
+
+# Binaries if emitted outside build trees
+*.exe
+*.pdb
+*.ilk

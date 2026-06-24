@@ -56,23 +56,29 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     SegmentRemapped
   };
 
-  static std::string composeBoundaryMetadata(BoundaryEventType event_type, BoundarySegmentAction segment_action);
+  std::string composeBoundaryMetadata(BoundaryEventType event_type, BoundarySegmentAction segment_action) const;
 
   /// JSON for Voronoi-edge strip meshlet vertices (OBJ inline comments when exporting with metadata).
-  static std::string composeRegularStripVertexMetadata(double kinetic_time, size_t voronoi_edge_id,
+  std::string composeRegularStripVertexMetadata(double kinetic_time, size_t voronoi_edge_id,
     size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
     BoundarySegmentAction segment_action,
     const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing, const char* pos,
-    const char* op = nullptr);
+    const char* op = nullptr) const;
 
   /// JSON for Voronoi-edge strip meshlet faces (quads emitted as two triangles in @ref finishMesh, etc.).
-  static std::string composeRegularStripFaceMetadata(double kinetic_time, size_t voronoi_edge_id,
-    size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
-    BoundarySegmentAction segment_action, const char* op);
+  std::string composeRegularStripFaceMetadata(double kinetic_time, size_t voronoi_edge_id, size_t even_half_edge_id,
+    int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type, BoundarySegmentAction segment_action,
+    const char* op) const;
+
+  void configureMeshletStorage(VoronoiMesh& mesh) const;
 
   /// When true, radius 2↔1 transitions snap intersection-mesh crossing vertices along the internal Voronoi edge (XY
   /// only).
   bool radius_boundary_transition_shift_enabled = true;
+  /// When false, skip building/storing per-vertex and per-face JSON metadata on meshlets.
+  bool store_mesh_metadata = true;
+  /// When false, skip meshlet diagnostic logging and related string assembly.
+  bool diagnostics = false;
 
   /// Material table for meshlet OBJ export (`material_ids` index into this list).
   static constexpr int RegularMeshletMaterialId = 0;
