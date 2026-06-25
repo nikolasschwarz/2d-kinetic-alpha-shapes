@@ -3,7 +3,7 @@
   "cmake.configurePreset": "vcpkg-x64",
   "cmake.buildPreset": "vcpkg-x64-release",
   "cmake.configureOnOpen": true,
-  "cmake.useVsDeveloperEnvironment": true,
+  "cmake.useVsDeveloperEnvironment": "always",
   "cmake.buildBeforeRun": true,
   "cmake.debugConfig": {
     "cwd": "${workspaceFolder}",

@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#include <iosfwd>
 #include <glm/glm.hpp>
 #include <optional>
 #include <vector>
@@ -87,12 +88,12 @@ class HalfEdgeDelaunayGraph
    */
   void applyComponentSplit(
     const std::vector<size_t>& component_map,
-    const std::function<glm::dvec2(size_t)>& vertex_at);
+    const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time = std::nullopt);
 
   // Flips an edge between two triangles by rotating it counter-clockwise in its quadrilateral
   void flipEdge(size_t he_id);
   // Other methods to manipulate and query the triangulation can be added here.
-  void printDebug() const;
+  void printDebug(std::ostream* out = nullptr) const;
 
   static glm::dvec2 circumcenter(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c);
 

@@ -17,6 +17,11 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   {
     return;
   }
+  if (voronoi_vertex_id >= graph.faceSlotCount() || !graph.isLiveFace(voronoi_vertex_id)
+    || !crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
+  {
+    return;
+  }
   const size_t section = static_cast<size_t>(t);
   const float fraction = t - section;
 

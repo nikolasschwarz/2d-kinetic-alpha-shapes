@@ -193,6 +193,7 @@ class KineticDelaunay
   void precomputeStep(double t);
 
   void growGraphSlotArrays();
+  size_t findContainingTriForVoronoiVertex(size_t voronoi_vertex_id, double t) const;
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingSplitReference();
@@ -253,6 +254,9 @@ class KineticDelaunay
   /** Per-edge intersection list consistency; intended after @ref EventCallback::afterEvent (e.g. debug SVG export). */
   void validateCrossingIntersectionInvariants(const char* context, double t) const;
 
+  /** Cached Voronoi-vertex list iterators must reference their own id in the containing triangle list. */
+  void validateVoronoiVertexIteratorInvariants(const char* context, double t) const;
+
   std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> getCrossingIntersectionDebugData() const;
 
   const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
@@ -305,7 +309,10 @@ class KineticDelaunay
 
   size_t nextOnComponentBoundaryId(size_t he_id) const;
 
-  // Getters for CrossingData (for testing/validation)
+  // CrossingData accessors. Parameter `voronoi_vertex_id` is a Delaunay face index (dual circumcenter),
+  // NOT a Voronoi cell / site id (Delaunay vertex index).
+  bool isCrossingDataVoronoiVertexRegistered(size_t voronoi_vertex_id) const;
+  void requireLiveRegisteredVoronoiVertex(size_t voronoi_vertex_id, const char* context) const;
   size_t getCrossingDataContainingTriId(size_t voronoi_vertex_id) const;
   std::vector<size_t> getCrossingDataVoronoiVerticesInTri(size_t tri_id) const;
   glm::dvec3 getVoronoiVertexHomogeneous(size_t voronoi_vertex_id, double t) const;

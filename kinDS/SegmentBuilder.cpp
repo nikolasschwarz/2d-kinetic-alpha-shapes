@@ -2220,7 +2220,11 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     // Verify that this is indeed the last intersection in the delaunay edge
     size_t delaunay_edge_id = start_intersection.value()->delaunay_edge_id;
     auto d_ref = start_intersection.value()->delaunay_ref;
-    auto next_ref = std::next(d_ref);
+    if (!d_ref.has_value())
+    {
+      throw std::runtime_error("resolveIntersectionMeshPairIndex: start_intersection has unset delaunay_ref");
+    }
+    auto next_ref = std::next(*d_ref);
     if (next_ref != kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].end())
     {
       std::ostringstream oss;
@@ -2253,7 +2257,11 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     // Verify that this is indeed the first intersection in the delaunay edge
     size_t delaunay_edge_id = end_intersection.value()->delaunay_edge_id;
     auto d_ref = end_intersection.value()->delaunay_ref;
-    if (d_ref != kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].begin())
+    if (!d_ref.has_value())
+    {
+      throw std::runtime_error("resolveIntersectionMeshPairIndex: end_intersection has unset delaunay_ref");
+    }
+    if (*d_ref != kin_del.getCrossingData().delaunay_edge_intersections[delaunay_edge_id].begin())
     {
       std::ostringstream oss;
       oss << "resolveIntersectionMeshPairIndex: end_intersection is not the first one on its Delaunay edge "
@@ -2567,6 +2575,19 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, BoundaryEventType event_type,
   BoundarySegmentAction segment_action, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
+  // voronoi_cell_id is the strand site (Delaunay vertex), not a Voronoi vertex (Delaunay face).
+  // Validate circumcenters only via the intersection Voronoi-edge endpoints below.
+  if (start_intersection.has_value())
+  {
+    requireLiveRegisteredVoronoiEdgeEndpoints(
+      start_intersection.value()->voronoi_edge_id, "finishMeshFromIntersections(start_intersection)");
+  }
+  if (end_intersection.has_value())
+  {
+    requireLiveRegisteredVoronoiEdgeEndpoints(
+      end_intersection.value()->voronoi_edge_id, "finishMeshFromIntersections(end_intersection)");
+  }
+
   if (!start_intersection.has_value() && !end_intersection.has_value())
   {
     throw std::runtime_error("finishMeshFromIntersections requires at least one intersection reference.");
@@ -3180,6 +3201,22 @@ size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(
     std::swap(v, w);
   }
   return addMeshletTriangle(mesh, u, v, w, metadata, boundary_material_id);
+}
+
+void kinDS::SegmentBuilder::requireLiveRegisteredVoronoiEdgeEndpoints(size_t voronoi_edge_id, const char* context) const
+{
+  const size_t voronoi_he0 = 2 * voronoi_edge_id;
+  const size_t voronoi_he1 = voronoi_he0 + 1;
+  const int left_face = kin_del.getGraph().halfEdge(voronoi_he0).face;
+  const int right_face = kin_del.getGraph().halfEdge(voronoi_he1).face;
+  if (left_face >= 0)
+  {
+    kin_del.requireLiveRegisteredVoronoiVertex(static_cast<size_t>(left_face), context);
+  }
+  if (right_face >= 0)
+  {
+    kin_del.requireLiveRegisteredVoronoiVertex(static_cast<size_t>(right_face), context);
+  }
 }
 
 void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(

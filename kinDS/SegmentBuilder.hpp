@@ -473,6 +473,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void warnIfVoronoiVertexOutsideAlphaShape(
     const char* context, size_t voronoi_vertex_id, const glm::dvec3& position) const;
 
+  /// Validates both circumcenters (Delaunay face ids) incident to a Voronoi edge.
+  void requireLiveRegisteredVoronoiEdgeEndpoints(size_t voronoi_edge_id, const char* context) const;
+
   void addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset);
 
   std::vector<BoundaryPoint> traceConvexHull(double t) const;

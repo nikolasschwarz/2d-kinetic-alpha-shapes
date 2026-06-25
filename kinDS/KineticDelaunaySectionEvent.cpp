@@ -93,7 +93,7 @@ void KineticDelaunay::SectionEvent::handleEvent()
     else
     {
       kd->graph.applyComponentSplit(kd->component_data.component_map,
-        [kd, section_time](size_t v) { return kd->getPointAt(v, section_time); });
+        [kd, section_time](size_t v) { return kd->getPointAt(v, section_time); }, section_time);
       kd->onGraphCutApplied(section_time, prev_face_slots, prev_he_slots);
     }
     kd->prev_component_count = kd->component_data.components.size();

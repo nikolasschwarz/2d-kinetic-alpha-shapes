@@ -25,12 +25,11 @@ namespace
 void trySetOwnedInteriorVoronoiVertexForRadiusShift(RadiusBoundaryTransitionShiftContext& ctx,
   const KineticDelaunay& kin_del, size_t triangle_face_id)
 {
-  const auto& containing = kin_del.getCrossingData().getContainingTriIds();
-  if (triangle_face_id >= containing.size())
+  if (!kin_del.isCrossingDataVoronoiVertexRegistered(triangle_face_id))
   {
     return;
   }
-  if (containing[triangle_face_id] == triangle_face_id)
+  if (kin_del.getCrossingDataContainingTriId(triangle_face_id) == triangle_face_id)
   {
     ctx.interior_voronoi_vertex_id = triangle_face_id;
   }
@@ -448,7 +447,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 
       if (corner == even_origin && refs.front()->prev_segment_mesh_pair_index != static_cast<size_t>(-1))
       {
-        if (refs.front()->delaunay_ref == d_inters.begin())
+        if (refs.front()->delaunay_ref.has_value() && *refs.front()->delaunay_ref == d_inters.begin())
         {
           pair_idx = refs.front()->prev_segment_mesh_pair_index;
           // `[null, first]` — open site is interval start (left / mesh_start).
@@ -458,7 +457,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       else if (corner == odd_origin && refs.back()->next_segment_mesh_pair_index != static_cast<size_t>(-1))
       {
         const auto d_last_ref = refs.back()->delaunay_ref;
-        if (d_last_ref != d_inters.end() && std::next(d_last_ref) == d_inters.end())
+        if (d_last_ref.has_value() && *d_last_ref != d_inters.end() && std::next(*d_last_ref) == d_inters.end())
         {
           pair_idx = refs.back()->next_segment_mesh_pair_index;
           // `[last, null]` — open site is interval end (right / mesh_end).
@@ -602,8 +601,13 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   {
     const size_t vv0 = voronoi_vertex_on_edge(d_edge_id, true);
     const size_t vv1 = voronoi_vertex_on_edge(d_edge_id, false);
-    const bool vv0_inside = crossing_data.getContainingTriId(vv0) == affected_face_id;
-    const bool vv1_inside = crossing_data.getContainingTriId(vv1) == affected_face_id;
+    const auto vv_inside = [&](size_t vv) -> bool
+    {
+      return crossing_data.isVoronoiVertexRegistered(vv)
+        && crossing_data.getContainingTriId(vv) == affected_face_id;
+    };
+    const bool vv0_inside = vv_inside(vv0);
+    const bool vv1_inside = vv_inside(vv1);
     if (!vv0_inside && !vv1_inside)
     {
       return std::nullopt;
