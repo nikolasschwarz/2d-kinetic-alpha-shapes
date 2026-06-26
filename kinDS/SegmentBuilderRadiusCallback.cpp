@@ -44,9 +44,11 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     return;
   }
   auto& graph = segment_builder_.kin_del.getGraph();
+  const auto radius_vertices = graph.adjacentTriangleVertices(radius->half_edge_id);
+  const size_t branch_id = segment_builder_.kin_del.component_data.component_map[radius_vertices[0]];
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     radius->occurrence_time, "before", "radius_he" + std::to_string(radius->half_edge_id),
-    VisualDebugHighlight::forRadius(graph, radius->half_edge_id));
+    VisualDebugHighlight::forRadius(graph, radius->half_edge_id), branch_id);
 
   size_t face_id = graph.halfEdge(radius->half_edge_id).face;
   bool is_inside = segment_builder_.kin_del.getFaceInside(face_id);
@@ -558,7 +560,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     radius->occurrence_time, "after", "radius_he" + std::to_string(radius->half_edge_id),
-    VisualDebugHighlight::forRadius(graph, radius->half_edge_id));
+    VisualDebugHighlight::forRadius(graph, radius->half_edge_id), component_id);
 
   auto triangle_he_ids = graph.getTriangleHalfEdgeIndices(radius->half_edge_id);
   std::unordered_set<size_t> affected_delaunay_edges;

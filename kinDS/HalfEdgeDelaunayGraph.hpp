@@ -159,6 +159,9 @@ class HalfEdgeDelaunayGraph
   std::vector<size_t> neighbors(size_t v);
   std::vector<size_t> inducedNeighbors(size_t v, const std::vector<bool>& face_inside) const;
 
+  /** Neighbors connected by a live half-edge with at least one live incident face. */
+  std::vector<size_t> inducedNeighborsFromLiveGraph(size_t v) const;
+
   /**
    * Returns the half-edge ID of the twin half-edge. The twin half-edge is the half-edge that shares the same edge but has opposite orientation and belongs to the adjacent face.
    */

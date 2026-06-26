@@ -36,11 +36,17 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
   auto& graph = segment_builder_.kin_del.getGraph();
   const size_t old_tri = graph.halfEdge(crossing->half_edge_id).face;
   const size_t new_tri = graph.halfEdge(crossing->half_edge_id ^ 1).face;
+  int branch_vertex = graph.halfEdge(crossing->half_edge_id).origin;
+  if (branch_vertex < 0)
+  {
+    branch_vertex = graph.destination(crossing->half_edge_id);
+  }
+  const size_t branch_id = segment_builder_.kin_del.component_data.component_map[static_cast<size_t>(branch_vertex)];
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     crossing->occurrence_time, "before",
     "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_"
       + std::to_string(new_tri),
-    VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id));
+    VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), branch_id);
 
   // Snapshot crossed-edge boundary interval links before CrossingData mutates them.
   crossing_edge_snapshot_.clear();
@@ -82,22 +88,29 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
   // Defer SVG until after SegmentBuilder updates crossing `prev`/`next` mesh-pair links (boundary merge/split) and
   // strip meshing so debug output matches runtime linkage.
-  const auto write_crossing_visual_debug_svg = [&]() {
+  const auto write_crossing_visual_debug_svg = [&](size_t branch_id) {
     const size_t post_old_tri = graph.halfEdge(crossing->half_edge_id).face;
     const size_t post_new_tri = graph.halfEdge(crossing->half_edge_id ^ 1).face;
     writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
       crossing->occurrence_time, "after",
       "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(post_old_tri) + "_to_"
         + std::to_string(post_new_tri),
-      VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id));
+      VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), branch_id);
   };
+
+  int branch_vertex = graph.halfEdge(crossing->half_edge_id).origin;
+  if (branch_vertex < 0)
+  {
+    branch_vertex = graph.destination(crossing->half_edge_id);
+  }
+  const size_t branch_id = segment_builder_.kin_del.component_data.component_map[static_cast<size_t>(branch_vertex)];
 
   const size_t voronoi_vertex_id = crossing->voronoi_vertex_id;
   const glm::dvec3 voronoi_vertex_position = glm::dvec3(crossing->position, crossing->occurrence_time);
   const auto half_edges = graph.face(voronoi_vertex_id).half_edges;
   if (!segment_builder_.kin_del.isOnComponentBoundary(crossing->half_edge_id))
   {
-    write_crossing_visual_debug_svg();
+    write_crossing_visual_debug_svg(branch_id);
     return;
   }
 
@@ -585,7 +598,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     }
   }
 
-  write_crossing_visual_debug_svg();
+  write_crossing_visual_debug_svg(branch_id);
 }
 } // namespace kinDS
 

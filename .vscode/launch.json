@@ -16,7 +16,7 @@
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build-debug/bin/kinDS-demo.exe",
-      "args": ["--mesh", "input_examples/test_oak.txt", "--export-mode", "combined"],
+      "args": ["--mesh", "input_examples/test_oak.txt", "--export-mode", "combined", "--log-add", "debug"],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
       "preLaunchTask": "kinDS: cmake build (Debug)"

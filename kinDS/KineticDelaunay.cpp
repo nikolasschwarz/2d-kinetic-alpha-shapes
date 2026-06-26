@@ -14,7 +14,9 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -1057,6 +1059,7 @@ void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, si
   clearPendingSplitReference();
   growGraphSlotArrays();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
+  updateRuntimeBranchMapFromLiveGraph(t);
   crossing_data.computeEdgeIntersections(*this, t);
   validateVoronoiVertexIteratorInvariants("onGraphRetriangulated", t);
   if (callback_manager_)
@@ -1102,6 +1105,7 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
   }
 
   crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
+  updateRuntimeBranchMapFromLiveGraph(t);
   validateVoronoiVertexIteratorInvariants("onGraphCutApplied", t);
   validateCrossingIntersectionInvariants("onGraphCutApplied", t);
   if (callback_manager_)
@@ -1340,6 +1344,76 @@ void KineticDelaunay::clearPendingSplitReference()
 {
   std::fill(
     pending_split_reference_vertex_.begin(), pending_split_reference_vertex_.end(), no_pending_split_reference_vertex);
+}
+
+namespace
+{
+size_t runtimeBranchSectionIndex(const KineticDelaunay& kd, double t)
+{
+  const size_t height = kd.getStrandTree().getHeight();
+  if (height == 0)
+  {
+    return 0;
+  }
+
+  size_t section_index = static_cast<size_t>(std::ceil(t));
+  if (section_index >= height)
+  {
+    section_index = height - 1;
+  }
+  return section_index;
+}
+} // namespace
+
+void KineticDelaunay::updateRuntimeBranchMapFromInputBranches(double t)
+{
+  const size_t vertex_count = graph.getVertexCount();
+  runtime_branch_map_.resize(vertex_count);
+
+  const size_t section_index = runtimeBranchSectionIndex(*this, t);
+  for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
+  {
+    if (isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+    runtime_branch_map_[strand_id] = branch_trajs.getBranchIndex(strand_id, section_index);
+  }
+}
+
+void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t)
+{
+  const size_t vertex_count = graph.getVertexCount();
+  runtime_branch_map_.resize(vertex_count);
+
+  const size_t section_index = runtimeBranchSectionIndex(*this, t);
+  const std::vector<std::vector<size_t>> graph_components = extractGraphConnectedComponents();
+  std::unordered_map<size_t, size_t> input_branch_to_runtime;
+  size_t next_runtime_branch = 0;
+
+  for (const auto& component : graph_components)
+  {
+    if (component.empty())
+    {
+      continue;
+    }
+
+    const size_t input_branch = branch_trajs.getBranchIndex(component.front(), section_index);
+    const auto [it, inserted] = input_branch_to_runtime.try_emplace(input_branch, next_runtime_branch);
+    const size_t runtime_branch = it->second;
+    if (inserted)
+    {
+      ++next_runtime_branch;
+    }
+
+    for (size_t strand_id : component)
+    {
+      if (!isDummyBoundary(strand_id))
+      {
+        runtime_branch_map_[strand_id] = runtime_branch;
+      }
+    }
+  }
 }
 
 KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingDataMutable() { return crossing_data; }
@@ -1823,6 +1897,7 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
 
   // initialize components
   computeComponentData(0.0);
+  updateRuntimeBranchMapFromInputBranches(0.0);
 
   // Precompute Voronoi–Delaunay edge intersections at t = 0 and store them in crossing_data.
   crossing_data.computeEdgeIntersections(*this, 0.0);
@@ -2851,6 +2926,39 @@ std::vector<size_t> KineticDelaunay::extractConnectedComponent(size_t u, std::ve
   return component;
 }
 
+std::vector<size_t> KineticDelaunay::extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const
+{
+  std::vector<size_t> component;
+  std::vector<size_t> stack;
+  stack.push_back(u);
+
+  while (!stack.empty())
+  {
+    const size_t v = stack.back();
+    stack.pop_back();
+
+    if (visited[v])
+    {
+      continue;
+    }
+
+    visited[v] = true;
+    component.push_back(v);
+
+    const auto nbrs = graph.inducedNeighborsFromLiveGraph(v);
+    for (auto it = nbrs.rbegin(); it != nbrs.rend(); ++it)
+    {
+      const size_t w = *it;
+      if (!visited[w])
+      {
+        stack.push_back(w);
+      }
+    }
+  }
+
+  return component;
+}
+
 const std::vector<glm::dvec2>& KineticDelaunay::getDummyBoundary() const { return dummy_boundary; }
 
 std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(const std::array<int, 3>& tri_vertices) const
@@ -2922,6 +3030,27 @@ std::vector<std::vector<size_t>> KineticDelaunay::extractConnectedComponents() c
 
     auto component = extractConnectedComponent(u, visited);
     components.push_back(component);
+  }
+
+  return components;
+}
+
+std::vector<std::vector<size_t>> KineticDelaunay::extractGraphConnectedComponents() const
+{
+  std::vector<std::vector<size_t>> components;
+  std::vector<bool> visited(graph.getVertexCount(), false);
+  for (size_t u = 0; u < graph.getVertexCount(); ++u)
+  {
+    if (visited[u])
+    {
+      continue;
+    }
+
+    auto component = extractGraphConnectedComponent(u, visited);
+    if (!component.empty())
+    {
+      components.push_back(std::move(component));
+    }
   }
 
   return components;
@@ -3046,6 +3175,110 @@ std::vector<BoundaryPoint> KineticDelaunay::extractComponentBoundary(
 const std::vector<bool>& KineticDelaunay::getFacesInside() const { return face_inside; }
 
 bool KineticDelaunay::getFaceInside(size_t face_index) const { return face_inside[face_index]; }
+
+size_t KineticDelaunay::getRuntimeBranchIdForStrand(size_t strand_id) const
+{
+  if (strand_id >= runtime_branch_map_.size())
+  {
+    throw std::runtime_error(
+      "getRuntimeBranchIdForStrand: strand " + std::to_string(strand_id) + " has no runtime branch entry");
+  }
+  return runtime_branch_map_[strand_id];
+}
+
+size_t KineticDelaunay::getRuntimeBranchIdForFace(size_t face_id) const
+{
+  constexpr size_t kDefaultRuntimeBranch = 0;
+
+  const HalfEdgeDelaunayGraph& delaunay_graph = getGraph();
+  if (!delaunay_graph.isLiveFace(face_id))
+  {
+    return kDefaultRuntimeBranch;
+  }
+
+  const std::array<int, 3> vertices = delaunay_graph.getTriangleVertexIndices(face_id);
+  std::optional<size_t> runtime_branch;
+  for (int vertex : vertices)
+  {
+    if (vertex < 0)
+    {
+      continue;
+    }
+    if (isDummyBoundary(static_cast<size_t>(vertex)))
+    {
+      return kDefaultRuntimeBranch;
+    }
+    if (static_cast<size_t>(vertex) >= runtime_branch_map_.size())
+    {
+      return kDefaultRuntimeBranch;
+    }
+
+    const size_t vertex_runtime_branch = runtime_branch_map_[static_cast<size_t>(vertex)];
+    if (!runtime_branch.has_value())
+    {
+      runtime_branch = vertex_runtime_branch;
+    }
+    else if (runtime_branch.value() != vertex_runtime_branch)
+    {
+      return kDefaultRuntimeBranch;
+    }
+  }
+
+  return runtime_branch.value_or(kDefaultRuntimeBranch);
+}
+
+size_t KineticDelaunay::getRuntimeBranchIdForHalfEdge(size_t half_edge_id) const
+{
+  constexpr size_t kDefaultRuntimeBranch = 0;
+
+  const HalfEdgeDelaunayGraph& delaunay_graph = getGraph();
+  if (!delaunay_graph.isLiveHalfEdge(half_edge_id))
+  {
+    return kDefaultRuntimeBranch;
+  }
+
+  const size_t from_face
+    = getRuntimeBranchIdForFace(static_cast<size_t>(delaunay_graph.halfEdge(half_edge_id).face));
+  const size_t from_twin
+    = getRuntimeBranchIdForFace(static_cast<size_t>(delaunay_graph.halfEdge(half_edge_id ^ 1).face));
+
+  if (from_face == from_twin)
+  {
+    return from_face;
+  }
+  if (from_face != kDefaultRuntimeBranch)
+  {
+    return from_face;
+  }
+  return from_twin;
+}
+
+bool KineticDelaunay::runtimeBranchHasSingleFiniteTriangle(size_t runtime_branch_id) const
+{
+  const HalfEdgeDelaunayGraph& delaunay_graph = getGraph();
+  size_t finite_triangle_count = 0;
+
+  for (size_t live_face_id : delaunay_graph.liveFaces())
+  {
+    const std::array<int, 3> tri_vertices = delaunay_graph.getTriangleVertexIndices(live_face_id);
+    if (tri_vertices[0] == -1 || tri_vertices[1] == -1 || tri_vertices[2] == -1)
+    {
+      continue;
+    }
+
+    if (getRuntimeBranchIdForFace(live_face_id) != runtime_branch_id)
+    {
+      continue;
+    }
+
+    if (++finite_triangle_count > 1)
+    {
+      return false;
+    }
+  }
+
+  return finite_triangle_count == 1;
+}
 
 bool KineticDelaunay::isMinimalInputBranchTriangle(const std::array<int, 3>& vertices, double t) const
 {

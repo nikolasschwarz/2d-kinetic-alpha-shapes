@@ -11,6 +11,7 @@
 #include <glm/gtx/string_cast.hpp>
 #include <map>
 #include <memory>
+#include <optional>
 #include <queue>
 #include <string>
 #include <utility>
@@ -172,6 +173,10 @@ class KineticDelaunay
   static constexpr size_t no_pending_split_reference_vertex = static_cast<size_t>(-1);
   /// While a component split awaits section retriangulation, affected strands keep the parent component frame.
   std::vector<size_t> pending_split_reference_vertex_;
+  /// Per-strand runtime branch id (see @ref getRuntimeBranchIdForStrand). Differs from @ref ComponentData::component_map
+  /// (inside-face connectivity) and from @ref StrandTree::getBranchIndex (input branch). Updated only when Delaunay
+  /// graph connectivity is severed (@ref onGraphCutApplied / @ref onGraphRetriangulated), using live-face adjacency.
+  std::vector<size_t> runtime_branch_map_;
   ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
@@ -197,6 +202,11 @@ class KineticDelaunay
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingSplitReference();
+  void updateRuntimeBranchMapFromInputBranches(double t);
+  void updateRuntimeBranchMapFromLiveGraph(double t);
+  std::vector<std::vector<size_t>> extractGraphConnectedComponents() const;
+  std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
+  size_t getRuntimeBranchIdForFace(size_t face_id) const;
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots);
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots);
 
@@ -300,6 +310,23 @@ class KineticDelaunay
 
   /** All three vertices share one input branch with exactly three strands at @p t. */
   bool isMinimalInputBranchTriangle(const std::array<int, 3>& vertices, double t) const;
+
+  /**
+   * Runtime branch of @p strand_id (see @ref runtime_branch_map_).
+   * Not the inside-face component id and not the input @ref StrandTree branch index.
+   */
+  size_t getRuntimeBranchIdForStrand(size_t strand_id) const;
+
+  /**
+   * Runtime branch of a live half-edge, resolved from its incident face(s).
+   * Returns 0 when the half-edge is dead or the branch cannot be resolved.
+   */
+  size_t getRuntimeBranchIdForHalfEdge(size_t half_edge_id) const;
+
+  /** True iff the live Delaunay graph contains exactly one finite triangle in @p runtime_branch_id. */
+  bool runtimeBranchHasSingleFiniteTriangle(size_t runtime_branch_id) const;
+
+  const std::vector<size_t>& getRuntimeBranchMap() const { return runtime_branch_map_; }
 
   bool mustRemainInside(size_t face_index, double t) const;
 

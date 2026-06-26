@@ -99,6 +99,72 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
     kd->face_inside[face_id] = (kd->cutoff == std::numeric_limits<double>::infinity());
   }
 
+  // Special case if there is only one triangle
+  const size_t branch = kd->getRuntimeBranchIdForHalfEdge(half_edge_id);
+
+  bool is_single_triangle = kd->runtimeBranchHasSingleFiniteTriangle(branch);
+  
+  if(is_single_triangle){
+    // First determine which edge is inside the triangle and which is outside.
+    size_t inside_edge_id;
+
+    if(kd->isOnComponentBoundaryOutside(half_edge_id)){
+      inside_edge_id = half_edge_id ^ 1;
+    } else if(kd->isOnComponentBoundaryOutside(half_edge_id ^ 1)){
+      inside_edge_id = half_edge_id;
+    } else {
+      throw std::runtime_error("Single triangle flip event: neither edge is on the component boundary!");
+    }
+
+    size_t opposite_vertex_id = graph.triangleOppositeVertex(inside_edge_id);
+    if(opposite_vertex_id == -1){
+      throw std::runtime_error("Single triangle flip event: opposite vertex is infinite!"); 
+    }
+
+    // Now find an infinite outgoing half-edge from the opposite vertex
+    size_t other_flip_edge_id = -1;
+    for(auto incident_he_id = graph.incidentEdgesBegin(opposite_vertex_id); incident_he_id != graph.incidentEdgesEnd(opposite_vertex_id); ++incident_he_id){
+      if(graph.destination(*incident_he_id) == -1){
+        other_flip_edge_id = *incident_he_id;
+        break;
+      }
+    }
+
+    if (other_flip_edge_id == static_cast<size_t>(-1))
+    {
+      throw std::runtime_error("Single triangle flip event: no infinite outgoing half-edge at opposite vertex");
+    }
+
+    // order shouldn't matter, so we do this edge flip first, then the other one
+    graph.flipEdge(other_flip_edge_id);
+
+    const auto is_finite_live_face = [&](size_t flipped_face_id) -> bool
+    {
+      if (!graph.isLiveFace(flipped_face_id))
+      {
+        return false;
+      }
+      const auto vertices = graph.getTriangleVertexIndices(flipped_face_id);
+      return vertices[0] != -1 && vertices[1] != -1 && vertices[2] != -1;
+    };
+
+    const size_t flipped_face0 = static_cast<size_t>(graph.halfEdge(other_flip_edge_id).face);
+    const size_t flipped_face1 = static_cast<size_t>(graph.halfEdge(other_flip_edge_id ^ 1).face);
+
+    if (is_finite_live_face(flipped_face0))
+    {
+      kd->setFaceInside(flipped_face0, true, occurrence_time);
+    }
+    else if (is_finite_live_face(flipped_face1))
+    {
+      kd->setFaceInside(flipped_face1, true, occurrence_time);
+    }
+    else
+    {
+      throw std::runtime_error("Single triangle flip event: auxiliary flip did not produce a finite triangle");
+    }
+  }
+
   graph.flipEdge(half_edge_id);
 
   // one of the triangles might have been swapped outside

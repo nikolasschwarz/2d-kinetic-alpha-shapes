@@ -1287,6 +1287,35 @@ std::vector<size_t> kinDS::HalfEdgeDelaunayGraph::inducedNeighbors(size_t v, con
   return nbrs;
 }
 
+std::vector<size_t> kinDS::HalfEdgeDelaunayGraph::inducedNeighborsFromLiveGraph(size_t v) const
+{
+  std::vector<size_t> nbrs;
+
+  for (IncidentEdgeIterator it = incidentEdgesBegin(v); it != incidentEdgesEnd(v); ++it)
+  {
+    const size_t he_id = *it;
+    if (!isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+
+    const size_t face0 = static_cast<size_t>(half_edges[he_id].face);
+    const size_t face1 = static_cast<size_t>(half_edges[he_id ^ 1].face);
+    if (!isLiveFace(face0) && !isLiveFace(face1))
+    {
+      continue;
+    }
+
+    const int dest = destination(he_id);
+    if (dest >= 0)
+    {
+      nbrs.push_back(static_cast<size_t>(dest));
+    }
+  }
+
+  return nbrs;
+}
+
 std::array<int, 3> HalfEdgeDelaunayGraph::adjacentTriangleVertices(size_t he_id) const
 {
   // Returns the vertices of the triangle that the half-edge belongs to

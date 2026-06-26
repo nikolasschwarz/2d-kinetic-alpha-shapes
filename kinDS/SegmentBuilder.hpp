@@ -142,6 +142,17 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     int end_crossed_inside_half_edge_id = -1;
   };
 
+  /// One oriented boundary crossing along a Voronoi edge from `CrossingData::voronoi_edge_intersections`.
+  struct DirectedVoronoiEdgeCrossing
+  {
+    size_t crossed_half_edge_id;
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref;
+  };
+
+  std::vector<DirectedVoronoiEdgeCrossing> orientCrossingsAlongVoronoiEdge(
+    size_t voronoi_edge_id, size_t start_containing_tri_id, bool reverse_traversal,
+    size_t even_half_edge_id_for_diagnostics = static_cast<size_t>(-1)) const;
+
   /**
    * @brief Lookup structures built from complete raw segments for closing-cap polygon tracing.
    *
