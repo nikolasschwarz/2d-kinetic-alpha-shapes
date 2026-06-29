@@ -3652,8 +3652,49 @@ void kinDS::SegmentBuilder::advanceBoundaryMesh(
   }
 }
 
+bool kinDS::SegmentBuilder::isComponentLive(size_t component_index) const
+{
+  if (component_index >= kin_del.component_data.components.size())
+  {
+    return false;
+  }
+
+  const auto& component = kin_del.component_data.components[component_index];
+  const HalfEdgeDelaunayGraph& graph = kin_del.getGraph();
+  for (size_t vertex : component)
+  {
+    if (graph.incidentEdgesBegin(vertex) != graph.incidentEdgesEnd(vertex))
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+std::vector<size_t> kinDS::SegmentBuilder::collectLiveComponentIndices() const
+{
+  std::vector<size_t> live_component_indices;
+  live_component_indices.reserve(kin_del.component_data.components.size());
+
+  for (size_t component_index = 0; component_index < kin_del.component_data.components.size(); ++component_index)
+  {
+    if (isComponentLive(component_index))
+    {
+      live_component_indices.push_back(component_index);
+    }
+  }
+
+  return live_component_indices;
+}
+
 void kinDS::SegmentBuilder::updateBoundary(double t, std::vector<bool>& visited, size_t component_index)
 {
+  if (!isComponentLive(component_index))
+  {
+    return;
+  }
+
   if (kin_del.component_data.component_last_updated[component_index] != t)
   {
     kin_del.component_data.component_boundaries[component_index]
@@ -3664,11 +3705,11 @@ void kinDS::SegmentBuilder::updateBoundary(double t, std::vector<bool>& visited,
   }
 }
 
-void kinDS::SegmentBuilder::updateBoundaries(double t)
+void kinDS::SegmentBuilder::updateBoundaries(double t, const std::vector<size_t>& component_indices)
 {
   std::vector<bool> visited(kin_del.getGraph().halfEdgeSlotCount(), false);
 
-  for (size_t component_index = 0; component_index < kin_del.component_data.components.size(); component_index++)
+  for (size_t component_index : component_indices)
   {
     updateBoundary(t, visited, component_index);
   }
@@ -3676,9 +3717,10 @@ void kinDS::SegmentBuilder::updateBoundaries(double t)
 
 void kinDS::SegmentBuilder::advanceBoundaryMeshes(double t)
 {
-  updateBoundaries(t);
+  const std::vector<size_t> live_component_indices = collectLiveComponentIndices();
+  updateBoundaries(t, live_component_indices);
 
-  for (size_t component_index = 0; component_index < kin_del.component_data.components.size(); component_index++)
+  for (size_t component_index : live_component_indices)
   {
     auto& boundaries = kin_del.component_data.component_boundaries[component_index];
     auto& centroid = kin_del.component_data.component_centroids[component_index];
@@ -5359,7 +5401,7 @@ void SegmentBuilder::init()
 
 void SegmentBuilder::finalize(double t)
 {
-  updateBoundaries(t);
+  updateBoundaries(t, collectLiveComponentIndices());
 
   // Finalize the segments by finishing all meshes
   auto& graph = kin_del.getGraph();

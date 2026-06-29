@@ -95,8 +95,8 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     center[0] /= trajs.size();
     center[1] /= trajs.size();
 
-    // KINDS_DEBUG("Event at time " << event_time + section << " for half-edge ID " << he_id << " at center position "
-    //                                   << glm::to_string(center));
+    KINDS_DEBUG("Scheduled flip event at time " << event_time + section << " for half-edge ID " << he_id << " at center position "
+                                      << glm::to_string(center));
 
     kd->kinetic_algorithm_->enqueueEvent(std::make_shared<FlipEvent>(kd, event_time + section, he_id, t, center));
   }

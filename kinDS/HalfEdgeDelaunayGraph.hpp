@@ -90,6 +90,9 @@ class HalfEdgeDelaunayGraph
     const std::vector<size_t>& component_map,
     const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time = std::nullopt);
 
+  /** Tombstone every face/edge incident to a vertex flagged in @p dead_vertex_mask. */
+  void killVertices(const std::vector<bool>& dead_vertex_mask);
+
   // Flips an edge between two triangles by rotating it counter-clockwise in its quadrilateral
   void flipEdge(size_t he_id);
   // Other methods to manipulate and query the triangulation can be added here.

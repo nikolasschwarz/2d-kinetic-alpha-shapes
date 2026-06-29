@@ -147,11 +147,72 @@ std::string visualDebugSvgRelativePath(
   return "branch" + std::to_string(branch_id.value()) + "/" + basename;
 }
 
+std::unordered_set<size_t> collectLiveStrandIds(const HalfEdgeDelaunayGraph& graph)
+{
+  std::unordered_set<size_t> strand_ids;
+  auto add_vertex = [&](int vertex)
+  {
+    if (vertex >= 0)
+    {
+      strand_ids.insert(static_cast<size_t>(vertex));
+    }
+  };
+
+  for (size_t he_id : graph.liveDelaunayEdges())
+  {
+    add_vertex(graph.halfEdge(he_id).origin);
+    add_vertex(graph.destination(he_id));
+  }
+
+  return strand_ids;
+}
+
+std::unordered_set<size_t> filterStrandIdsForComponent(
+  const std::unordered_set<size_t>& strand_ids, const std::unordered_set<size_t>* component_strands)
+{
+  if (component_strands == nullptr)
+  {
+    return strand_ids;
+  }
+
+  std::unordered_set<size_t> filtered;
+  for (size_t strand_id : strand_ids)
+  {
+    if (component_strands->count(strand_id) != 0)
+    {
+      filtered.insert(strand_id);
+    }
+  }
+  return filtered;
+}
+
+std::pair<std::vector<glm::dvec2>, std::unordered_set<size_t>> buildVisualDebugStrandPositions(
+  KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph, double occurrence_time,
+  const std::unordered_set<size_t>& strand_ids)
+{
+  std::vector<glm::dvec2> points(graph.getVertexCount(), glm::dvec2(0.0));
+  std::unordered_set<size_t> positioned_strands;
+  positioned_strands.reserve(strand_ids.size());
+
+  for (size_t strand_id : strand_ids)
+  {
+    if (kin_del.isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+    points[strand_id] = kin_del.getPointAt(strand_id, occurrence_time);
+    positioned_strands.insert(strand_id);
+  }
+
+  return { std::move(points), std::move(positioned_strands) };
+}
+
 void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector<glm::dvec2>& points,
   const HalfEdgeDelaunayGraph& graph, KineticDelaunay& kin_del,
   const std::vector<size_t>& containing_tri_ids,
   const std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo>& intersection_debug_data,
   const VisualDebugHighlight& highlight, const std::unordered_set<size_t>* component_strands,
+  const std::unordered_set<size_t>& positioned_strands,
   const std::unordered_map<size_t, size_t>& site_runtime_branch_if_diff)
 {
   const std::filesystem::path filepath(relative_path);
@@ -160,7 +221,8 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
     std::filesystem::create_directories(filepath.parent_path());
   }
   HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &kin_del.getFacesInside(), true,
-    &containing_tri_ids, &intersection_debug_data, &highlight, component_strands, &site_runtime_branch_if_diff);
+    &containing_tri_ids, &intersection_debug_data, &highlight, component_strands, &site_runtime_branch_if_diff,
+    &positioned_strands);
 }
 } // namespace
 
@@ -173,20 +235,23 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     return;
   }
 
-  const std::vector<glm::dvec2> points = kin_del.getPointsAt(occurrence_time);
   const auto& containing_tri_ids = kin_del.getCrossingData().getContainingTriIds();
   const auto intersection_debug_data = kin_del.getCrossingIntersectionDebugData();
   const auto& components = kin_del.component_data.components;
   const std::unordered_map<size_t, size_t> site_runtime_branch_if_diff
     = buildSiteRuntimeBranchLabelsIfDiff(kin_del, graph, occurrence_time);
+  const std::unordered_set<size_t> live_strand_ids = collectLiveStrandIds(graph);
 
   const bool per_branch_svgs = kin_del.isGraphRetriangulatedForComponents() && components.size() > 1;
 
   if (!per_branch_svgs)
   {
+    const std::unordered_set<size_t> strand_ids = filterStrandIdsForComponent(live_strand_ids, nullptr);
+    const auto [points, positioned_strands]
+      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, strand_ids);
     const std::string filename = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      nullptr, site_runtime_branch_if_diff);
+      nullptr, positioned_strands, site_runtime_branch_if_diff);
     return;
   }
 
@@ -203,20 +268,26 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       return;
     }
     std::unordered_set<size_t> component_strands(components[branch_id.value()].begin(), components[branch_id.value()].end());
+    const std::unordered_set<size_t> strand_ids = filterStrandIdsForComponent(live_strand_ids, &component_strands);
+    const auto [points, positioned_strands]
+      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, strand_ids);
     const std::string filename
       = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, branch_id);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      &component_strands, site_runtime_branch_if_diff);
+      &component_strands, positioned_strands, site_runtime_branch_if_diff);
     return;
   }
 
   for (size_t component_id = 0; component_id < components.size(); ++component_id)
   {
     std::unordered_set<size_t> component_strands(components[component_id].begin(), components[component_id].end());
+    const std::unordered_set<size_t> strand_ids = filterStrandIdsForComponent(live_strand_ids, &component_strands);
+    const auto [points, positioned_strands]
+      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, strand_ids);
     const std::string filename
       = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, component_id);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      &component_strands, site_runtime_branch_if_diff);
+      &component_strands, positioned_strands, site_runtime_branch_if_diff);
   }
 }
 

@@ -1015,6 +1015,92 @@ void HalfEdgeDelaunayGraph::applyComponentSplit(const std::vector<size_t>& compo
   }
 }
 
+void HalfEdgeDelaunayGraph::killVertices(const std::vector<bool>& dead_vertex_mask)
+{
+  if (dead_vertex_mask.size() < vertex_count)
+  {
+    throw std::runtime_error("killVertices: dead_vertex_mask size mismatch");
+  }
+
+  const size_t invalid_he = half_edges.size();
+  half_edges.emplace_back();
+  half_edges.emplace_back();
+
+  const size_t original_half_edge_count = invalid_he;
+
+  for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
+  {
+    if (!isLiveFace(face_id))
+    {
+      continue;
+    }
+
+    const std::array<int, 3> tri_vertices = getTriangleVertexIndices(face_id);
+    bool touches_dead_vertex = false;
+    for (int vertex : tri_vertices)
+    {
+      if (vertex >= 0 && dead_vertex_mask[static_cast<size_t>(vertex)])
+      {
+        touches_dead_vertex = true;
+        break;
+      }
+    }
+
+    if (touches_dead_vertex)
+    {
+      killFaceSlot(triangles[face_id], invalid_he);
+    }
+  }
+
+  for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
+  {
+    const int origin0 = half_edges[he_id].origin;
+    const int origin1 = half_edges[he_id ^ 1].origin;
+    const bool touches_dead_vertex
+      = (origin0 >= 0 && dead_vertex_mask[static_cast<size_t>(origin0)])
+      || (origin1 >= 0 && dead_vertex_mask[static_cast<size_t>(origin1)]);
+
+    const int face0 = half_edges[he_id].face;
+    const int face1 = half_edges[he_id ^ 1].face;
+    const bool face0_live = face0 >= 0 && static_cast<size_t>(face0) < triangles.size()
+      && isLiveFace(static_cast<size_t>(face0));
+    const bool face1_live = face1 >= 0 && static_cast<size_t>(face1) < triangles.size()
+      && isLiveFace(static_cast<size_t>(face1));
+
+    if (!touches_dead_vertex && (face0_live || face1_live))
+    {
+      continue;
+    }
+
+    tombstoneHalfEdge(half_edges, he_id);
+    tombstoneHalfEdge(half_edges, he_id ^ 1);
+  }
+
+  vertex_to_half_edge.assign(vertex_count, static_cast<size_t>(-1));
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    const int origin = half_edges[he_id].origin;
+    if (origin < 0)
+    {
+      continue;
+    }
+
+    const size_t vertex = static_cast<size_t>(origin);
+    if (dead_vertex_mask[vertex])
+    {
+      continue;
+    }
+
+    if (vertex_to_half_edge[vertex] == static_cast<size_t>(-1))
+    {
+      vertex_to_half_edge[vertex] = he_id;
+    }
+  }
+
+  rebuildLiveIndices();
+  validateLiveHalfEdgeFaceReferences();
+}
+
 void kinDS::HalfEdgeDelaunayGraph::update(
   size_t vertex_count_,
   const std::vector<std::vector<size_t>>& components,

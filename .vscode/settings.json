@@ -4,12 +4,13 @@
   "cmake.buildPreset": "vcpkg-x64-release",
   "cmake.configureOnOpen": true,
   "cmake.useVsDeveloperEnvironment": "always",
-  "cmake.buildBeforeRun": true,
+  "cmake.buildBeforeRun": false,
   "cmake.debugConfig": {
     "cwd": "${workspaceFolder}",
     "program": "${workspaceFolder}/build-debug/bin/kinDS-demo.exe",
-    "args": ["--mesh", "input_examples/test_oak.txt", "--export-mode", "combined"],
-    "console": "internalConsole"
+    "args": ["--mesh", "input_examples/test_oak_2.txt", "--export-mode", "combined"],
+    "console": "internalConsole",
+    "preLaunchTask": "Build kinDS-demo if needed"
   },
   "debug.openDebug": "openOnSessionStart"
 }

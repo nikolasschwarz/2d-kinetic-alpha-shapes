@@ -123,8 +123,16 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   {
     return;
   }
-  segment_builder_.updateBoundaries(flip->occurrence_time);
   auto& graph = segment_builder_.kin_del.getGraph();
+
+  int vertex = graph.halfEdge(flip->half_edge_id).origin;
+  if (vertex == -1)
+  {
+    vertex = graph.destination(flip->half_edge_id);
+  }
+  const size_t component_id = segment_builder_.kin_del.component_data.component_map[static_cast<size_t>(vertex)];
+  segment_builder_.updateBoundaries(flip->occurrence_time, { component_id });
+
   const auto& he = graph.halfEdge(flip->half_edge_id);
   const auto& twin_he = graph.halfEdge(flip->half_edge_id ^ 1);
   // Create a new segment mesh pair for the two new edges created by the flip
@@ -139,13 +147,6 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
 
   segment_builder_.segment_mesh_pairs.push_back(segment_mesh_pair);
 
-  auto vertex = graph.halfEdge(flip->half_edge_id).origin;
-  if (vertex == -1)
-  {
-    vertex = graph.destination(flip->half_edge_id);
-  }
-
-  size_t component_id = segment_builder_.kin_del.component_data.component_map[vertex];
   const size_t branch_id = component_id;
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
@@ -292,14 +293,6 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id] = std::make_pair(-1, -1);
     segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id] = std::make_pair(-1, -1);
   }
-
-  std::vector<bool> visited(segment_builder_.kin_del.getGraph().halfEdgeSlotCount(), false);
-  segment_builder_.kin_del.component_data.component_boundaries[component_id]
-    = segment_builder_.kin_del.extractComponentBoundaries(
-      segment_builder_.kin_del.component_data.components[component_id], flip->occurrence_time, visited);
-  segment_builder_.kin_del.component_data.component_centroids[component_id]
-    = polygonCentroid(segment_builder_.kin_del.component_data.component_boundaries[component_id][0]);
-  segment_builder_.kin_del.component_data.component_last_updated[component_id] = flip->occurrence_time;
 
   segment_builder_.refreshCrossingRefsForAllStrips();
 }

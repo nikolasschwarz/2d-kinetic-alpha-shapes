@@ -215,7 +215,8 @@ class HalfEdgeDelaunayGraphToSVG
   }
 
   static bool getDelaunayEdgeEndpoints(const std::vector<glm::dvec2>& points, const HalfEdgeDelaunayGraph& graph,
-    size_t delaunay_edge_id, glm::dvec2& p0, glm::dvec2& p1)
+    size_t delaunay_edge_id, glm::dvec2& p0, glm::dvec2& p1,
+    const std::unordered_set<size_t>* positioned_strands = nullptr)
   {
     size_t he0 = 2 * delaunay_edge_id;
     if (he0 + 1 >= graph.halfEdgeSlotCount())
@@ -228,8 +229,19 @@ class HalfEdgeDelaunayGraphToSVG
     {
       return false;
     }
-    p0 = points[he_a.origin];
-    p1 = points[he_b.origin];
+    const size_t origin_a = static_cast<size_t>(he_a.origin);
+    const size_t origin_b = static_cast<size_t>(he_b.origin);
+    if (positioned_strands != nullptr
+      && (positioned_strands->count(origin_a) == 0 || positioned_strands->count(origin_b) == 0))
+    {
+      return false;
+    }
+    if (origin_a >= points.size() || origin_b >= points.size())
+    {
+      return false;
+    }
+    p0 = points[origin_a];
+    p1 = points[origin_b];
     return true;
   }
 
@@ -273,7 +285,8 @@ class HalfEdgeDelaunayGraphToSVG
   }
 
   static std::vector<IntersectionMarker> computeIntersectionMarkerData(const std::vector<glm::dvec2>& points,
-    const HalfEdgeDelaunayGraph& graph, const std::vector<IntersectionDebugInfo>& intersection_debug_info)
+    const HalfEdgeDelaunayGraph& graph, const std::vector<IntersectionDebugInfo>& intersection_debug_info,
+    const std::unordered_set<size_t>* positioned_strands = nullptr)
   {
     std::vector<IntersectionMarker> markers;
     auto circumcenters = graph.computeCircumcenters(points);
@@ -282,7 +295,7 @@ class HalfEdgeDelaunayGraphToSVG
     for (const IntersectionDebugInfo& item : intersection_debug_info)
     {
       glm::dvec2 p0, p1, q0, q1;
-      if (!getDelaunayEdgeEndpoints(points, graph, item.delaunay_edge_id, p0, p1))
+      if (!getDelaunayEdgeEndpoints(points, graph, item.delaunay_edge_id, p0, p1, positioned_strands))
       {
         KINDS_DEBUG("Intersection marker skip: invalid Delaunay endpoints for (d,v)=("
           << item.delaunay_edge_id << "," << item.voronoi_edge_id << ") listIdx(d,v)=(" << item.delaunay_list_index
@@ -326,17 +339,33 @@ class HalfEdgeDelaunayGraphToSVG
    *        and the view is cropped to its strand sites.
    * @param site_runtime_branch_if_diff Optional: strand id -> runtime branch (component id) for sites whose
    *        runtime branch differs from the data-structure branch; appended to the site label as `branch=X`.
+   * @param positioned_strands Optional: strand ids for which @p points contains valid coordinates. When set,
+   *        geometry that needs an unpositioned strand is skipped instead of indexing outside the live set.
    */
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
     const std::string& filename, double margin = 0.0, const std::vector<bool>* face_inside = nullptr,
     bool draw_voronoi_edges = false, const std::vector<size_t>* voronoi_vertex_to_tri = nullptr,
     const std::vector<IntersectionDebugInfo>* intersection_debug_info = nullptr,
     const VisualDebugHighlight* highlight = nullptr, const std::unordered_set<size_t>* component_strands = nullptr,
-    const std::unordered_map<size_t, size_t>* site_runtime_branch_if_diff = nullptr)
+    const std::unordered_map<size_t, size_t>* site_runtime_branch_if_diff = nullptr,
+    const std::unordered_set<size_t>* positioned_strands = nullptr)
   {
     auto in_component = [&](size_t strand_id) -> bool
     {
       return component_strands == nullptr || component_strands->count(strand_id) != 0;
+    };
+
+    auto try_point = [&](size_t strand_id) -> const glm::dvec2*
+    {
+      if (strand_id >= points.size())
+      {
+        return nullptr;
+      }
+      if (positioned_strands != nullptr && positioned_strands->count(strand_id) == 0)
+      {
+        return nullptr;
+      }
+      return &points[strand_id];
     };
 
     auto triangle_in_component = [&](size_t face_id) -> bool
@@ -381,31 +410,55 @@ class HalfEdgeDelaunayGraphToSVG
 
     BoundingBox bb = [&]() -> BoundingBox
     {
-      if (component_strands == nullptr || component_strands->empty())
+      if (component_strands != nullptr && !component_strands->empty())
       {
-        return computeBoundingBox(points, margin);
-      }
-      double min_x = std::numeric_limits<double>::max();
-      double min_y = std::numeric_limits<double>::max();
-      double max_x = std::numeric_limits<double>::lowest();
-      double max_y = std::numeric_limits<double>::lowest();
-      for (size_t strand_id : *component_strands)
-      {
-        if (strand_id >= points.size())
+        double min_x = std::numeric_limits<double>::max();
+        double min_y = std::numeric_limits<double>::max();
+        double max_x = std::numeric_limits<double>::lowest();
+        double max_y = std::numeric_limits<double>::lowest();
+        for (size_t strand_id : *component_strands)
         {
-          continue;
+          const glm::dvec2* point = try_point(strand_id);
+          if (point == nullptr)
+          {
+            continue;
+          }
+          min_x = std::min(min_x, (*point)[0]);
+          min_y = std::min(min_y, (*point)[1]);
+          max_x = std::max(max_x, (*point)[0]);
+          max_y = std::max(max_y, (*point)[1]);
         }
-        const glm::dvec2& point = points[strand_id];
-        min_x = std::min(min_x, point[0]);
-        min_y = std::min(min_y, point[1]);
-        max_x = std::max(max_x, point[0]);
-        max_y = std::max(max_y, point[1]);
+        if (min_x > max_x || min_y > max_y)
+        {
+          return computeBoundingBox(points, margin);
+        }
+        return BoundingBox(min_x - margin, min_y - margin, max_x + margin, max_y + margin);
       }
-      if (min_x > max_x || min_y > max_y)
+      if (positioned_strands != nullptr && !positioned_strands->empty())
       {
-        return computeBoundingBox(points, margin);
+        double min_x = std::numeric_limits<double>::max();
+        double min_y = std::numeric_limits<double>::max();
+        double max_x = std::numeric_limits<double>::lowest();
+        double max_y = std::numeric_limits<double>::lowest();
+        for (size_t strand_id : *positioned_strands)
+        {
+          const glm::dvec2* point = try_point(strand_id);
+          if (point == nullptr)
+          {
+            continue;
+          }
+          min_x = std::min(min_x, (*point)[0]);
+          min_y = std::min(min_y, (*point)[1]);
+          max_x = std::max(max_x, (*point)[0]);
+          max_y = std::max(max_y, (*point)[1]);
+        }
+        if (min_x > max_x || min_y > max_y)
+        {
+          return computeBoundingBox(points, margin);
+        }
+        return BoundingBox(min_x - margin, min_y - margin, max_x + margin, max_y + margin);
       }
-      return BoundingBox(min_x - margin, min_y - margin, max_x + margin, max_y + margin);
+      return computeBoundingBox(points, margin);
     }();
     svg::Document doc = setupDocument(points, filename, bb);
 
@@ -510,15 +563,19 @@ class HalfEdgeDelaunayGraphToSVG
 
     auto label_delaunay_vertex = [&](size_t vertex_id, const svg::Color& color)
     {
-      if (vertex_id >= points.size() || !labeled_delaunay_vertices.insert(vertex_id).second)
+      if (!labeled_delaunay_vertices.insert(vertex_id).second)
       {
         return;
       }
-      const glm::dvec2 point = points[vertex_id];
+      const glm::dvec2* point = try_point(vertex_id);
+      if (point == nullptr)
+      {
+        return;
+      }
       std::ostringstream label_text;
       label_text.setf(std::ios::fixed);
       label_text.precision(6);
-      label_text << vertex_id << " (" << point[0] << "," << point[1] << ")";
+      label_text << vertex_id << " (" << (*point)[0] << "," << (*point)[1] << ")";
       if (site_runtime_branch_if_diff != nullptr)
       {
         const auto branch_it = site_runtime_branch_if_diff->find(vertex_id);
@@ -527,7 +584,7 @@ class HalfEdgeDelaunayGraphToSVG
           label_text << " branch=" << branch_it->second;
         }
       }
-      labels.push_back(Label(point[0] - label_pad_sm, point[1] - label_pad_sm, label_text.str(), color, label_font_size));
+      labels.push_back(Label((*point)[0] - label_pad_sm, (*point)[1] - label_pad_sm, label_text.str(), color, label_font_size));
     };
 
     constexpr double delaunay_edge_stroke_w = 0.006;
@@ -592,12 +649,16 @@ class HalfEdgeDelaunayGraphToSVG
           {
             std::swap(finite_indices[0], finite_indices[1]);
           }
-          glm::dvec2 a = points[finite_indices[0]];
-          glm::dvec2 b = points[finite_indices[1]];
-          glm::dvec2 midpoint = 0.5 * (a + b);
+          const glm::dvec2* a = try_point(static_cast<size_t>(finite_indices[0]));
+          const glm::dvec2* b = try_point(static_cast<size_t>(finite_indices[1]));
+          if (a == nullptr || b == nullptr)
+          {
+            continue;
+          }
+          glm::dvec2 midpoint = 0.5 * ((*a) + (*b));
 
           // Offset the label along a vector orthogonal to the edge (consistent side).
-          glm::dvec2 edge_dir = b - a;
+          glm::dvec2 edge_dir = (*b) - (*a);
           double len2 = glm::dot(edge_dir, edge_dir);
           if (len2 == 0.0)
           {
@@ -618,8 +679,15 @@ class HalfEdgeDelaunayGraphToSVG
 
       const svg::Color face_color = face_fill_color(face_id);
 
-      std::array<glm::dvec2, 3> face_vertices
-        = { points[face_vertex_indices[0]], points[face_vertex_indices[1]], points[face_vertex_indices[2]] };
+      const glm::dvec2* v0 = try_point(static_cast<size_t>(face_vertex_indices[0]));
+      const glm::dvec2* v1 = try_point(static_cast<size_t>(face_vertex_indices[1]));
+      const glm::dvec2* v2 = try_point(static_cast<size_t>(face_vertex_indices[2]));
+      if (v0 == nullptr || v1 == nullptr || v2 == nullptr)
+      {
+        continue;
+      }
+
+      std::array<glm::dvec2, 3> face_vertices = { *v0, *v1, *v2 };
 
       svg::Polygon face { svg::Fill(face_color) };
       face << svg::Point(face_vertices[0][0], face_vertices[0][1])
@@ -643,9 +711,15 @@ class HalfEdgeDelaunayGraphToSVG
       if (he.origin != -1
         && graph.halfEdge(he_id ^ 1).origin != -1) // Only draw edges with two finite endpoints
       {
-        glm::dvec2 start = points[graph.halfEdge(he_id).origin];
-        glm::dvec2 end = points[graph.halfEdge(he_id ^ 1).origin];
-        if (clipSegmentToBoundingBox(start, end, bb))
+        const glm::dvec2* start = try_point(static_cast<size_t>(graph.halfEdge(he_id).origin));
+        const glm::dvec2* end = try_point(static_cast<size_t>(graph.halfEdge(he_id ^ 1).origin));
+        if (start == nullptr || end == nullptr)
+        {
+          continue;
+        }
+        glm::dvec2 clipped_start = *start;
+        glm::dvec2 clipped_end = *end;
+        if (clipSegmentToBoundingBox(clipped_start, clipped_end, bb))
         {
           const size_t voronoi_edge_id = he_id / 2;
           const bool convex_hull = is_convex_hull_edge(he_id);
@@ -653,33 +727,48 @@ class HalfEdgeDelaunayGraphToSVG
                                               : (selective ? delaunay_edge_stroke_w : 0.01);
           const svg::Color stroke_color
             = convex_hull ? convex_hull_edge_color : delaunay_edge_color(voronoi_edge_id);
-          doc << svg::Line(svg::Point(start[0], start[1]), svg::Point(end[0], end[1]),
+          doc << svg::Line(svg::Point(clipped_start[0], clipped_start[1]), svg::Point(clipped_end[0], clipped_end[1]),
             svg::Stroke(stroke_w, stroke_color));
         }
       }
     }
 
     // Draw vertices (filter out extreme outliers)
-    for (size_t v = 0; v < points.size(); v++)
+    const auto draw_site_vertex = [&](size_t v)
     {
       if (!in_component(v))
       {
-        continue;
+        return;
       }
 
-      glm::dvec2 point = points[v];
-      if (!isWithinBoundingBox(point, bb))
+      const glm::dvec2* point = try_point(v);
+      if (point == nullptr || !isWithinBoundingBox(*point, bb))
       {
-        continue;
+        return;
       }
       const bool affected = !selective || highlight->affectsDelaunayVertex(v);
       const double radius = affected ? 0.028 : 0.012;
       const svg::Color fill_c = affected ? site_vertex_circle_hi : site_vertex_circle;
-      doc << svg::Circle(svg::Point(point[0], point[1]), radius, svg::Fill(fill_c), svg::Stroke(0.0, svg::Color::Black));
+      doc << svg::Circle(svg::Point((*point)[0], (*point)[1]), radius, svg::Fill(fill_c), svg::Stroke(0.0, svg::Color::Black));
 
       if (!selective || highlight->affectsDelaunayVertex(v))
       {
         label_delaunay_vertex(v, svg::Color(svg::Color::Black));
+      }
+    };
+
+    if (positioned_strands != nullptr)
+    {
+      for (size_t v : *positioned_strands)
+      {
+        draw_site_vertex(v);
+      }
+    }
+    else
+    {
+      for (size_t v = 0; v < points.size(); v++)
+      {
+        draw_site_vertex(v);
       }
     }
 
@@ -695,10 +784,14 @@ class HalfEdgeDelaunayGraphToSVG
 
       if (he.origin != -1 && graph.halfEdge(he_id ^ 1).origin != -1)
       {
-        glm::dvec2 start = points[graph.halfEdge(he_id).origin];
-        glm::dvec2 end = points[graph.halfEdge(he_id ^ 1).origin];
-        glm::dvec2 midpoint = (start + end) / 2.0;
-        glm::dvec2 edge_dir = glm::normalize(end - start);
+        const glm::dvec2* start = try_point(static_cast<size_t>(graph.halfEdge(he_id).origin));
+        const glm::dvec2* end = try_point(static_cast<size_t>(graph.halfEdge(he_id ^ 1).origin));
+        if (start == nullptr || end == nullptr)
+        {
+          continue;
+        }
+        glm::dvec2 midpoint = (*start + *end) / 2.0;
+        glm::dvec2 edge_dir = glm::normalize((*end) - (*start));
         glm::dvec2 edge_normal(edge_dir[1], -edge_dir[0]);
 
         // Do this for both half-edges
@@ -963,7 +1056,7 @@ class HalfEdgeDelaunayGraphToSVG
 
     if (intersection_debug_info)
     {
-      auto marker_data = computeIntersectionMarkerData(points, graph, *intersection_debug_info);
+      auto marker_data = computeIntersectionMarkerData(points, graph, *intersection_debug_info, positioned_strands);
       drawIntersections(marker_data);
     }
 

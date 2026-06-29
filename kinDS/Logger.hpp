@@ -124,8 +124,10 @@ class Logger
     ostringstream logEntry;
     logEntry << "[kinDS] [" << timestamp << "] " << levelToString(level) << ": " << message << endl;
 
-    // Output to console
+    // Output to console (flush so lines appear before a subsequent throw)
     cout << logEntry.str();
+    cout.flush();
+    fflush(stdout);
 
     // Output to log file
     if (log_file.is_open())

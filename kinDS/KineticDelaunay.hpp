@@ -204,6 +204,8 @@ class KineticDelaunay
   void clearPendingSplitReference();
   void updateRuntimeBranchMapFromInputBranches(double t);
   void updateRuntimeBranchMapFromLiveGraph(double t);
+  void retireFinishedInputBranches(double t);
+  void validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const;
   std::vector<std::vector<size_t>> extractGraphConnectedComponents() const;
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
   size_t getRuntimeBranchIdForFace(size_t face_id) const;

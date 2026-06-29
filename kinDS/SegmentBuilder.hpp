@@ -495,7 +495,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void updateBoundary(double t, std::vector<bool>& visited, size_t component_index);
 
-  void updateBoundaries(double t);
+  void updateBoundaries(double t, const std::vector<size_t>& component_indices);
+
+  bool isComponentLive(size_t component_index) const;
+
+  std::vector<size_t> collectLiveComponentIndices() const;
 
   void advanceBoundaryMeshes(double t);
 

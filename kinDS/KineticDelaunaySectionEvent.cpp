@@ -99,6 +99,7 @@ void KineticDelaunay::SectionEvent::handleEvent()
     kd->prev_component_count = kd->component_data.components.size();
   }
 
+  kd->retireFinishedInputBranches(static_cast<double>(section_index));
   kd->precomputeStep(static_cast<double>(section_index));
 
   kd->section_event_manager_->updateProgress(section_index);

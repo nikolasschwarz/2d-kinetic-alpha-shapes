@@ -1416,6 +1416,181 @@ void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t)
   }
 }
 
+void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const
+{
+  const auto& branch_strands = branch_trajs.getStrandsByBranch(section, input_branch_id);
+
+  std::optional<size_t> runtime_branch_id;
+  for (size_t strand_id : branch_strands)
+  {
+    if (isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+
+    if (strand_id >= runtime_branch_map_.size())
+    {
+      throw std::runtime_error("Finished input branch validation: runtime branch map is out of date");
+    }
+
+    if (!runtime_branch_id.has_value())
+    {
+      runtime_branch_id = runtime_branch_map_[strand_id];
+    }
+    else if (runtime_branch_id.value() != runtime_branch_map_[strand_id])
+    {
+      throw std::runtime_error("Finished input branch " + std::to_string(input_branch_id)
+        + " spans multiple runtime branches at section " + std::to_string(section));
+    }
+  }
+
+  if (!runtime_branch_id.has_value())
+  {
+    return;
+  }
+
+  for (size_t face_id : graph.liveFaces())
+  {
+    const std::array<int, 3> tri_vertices = graph.getTriangleVertexIndices(face_id);
+    bool touches_finished_branch = false;
+
+    for (int vertex : tri_vertices)
+    {
+      if (vertex < 0 || isDummyBoundary(static_cast<size_t>(vertex)))
+      {
+        continue;
+      }
+      if (branch_trajs.getBranchIndex(static_cast<size_t>(vertex), section) == input_branch_id)
+      {
+        touches_finished_branch = true;
+        break;
+      }
+    }
+
+    if (!touches_finished_branch)
+    {
+      continue;
+    }
+
+    if (getRuntimeBranchIdForFace(face_id) != runtime_branch_id.value())
+    {
+      throw std::runtime_error("Finished input branch " + std::to_string(input_branch_id)
+        + " does not match a single runtime branch at section " + std::to_string(section));
+    }
+
+    for (int vertex : tri_vertices)
+    {
+      if (vertex < 0 || isDummyBoundary(static_cast<size_t>(vertex)))
+      {
+        continue;
+      }
+      if (branch_trajs.getBranchIndex(static_cast<size_t>(vertex), section) != input_branch_id)
+      {
+        throw std::runtime_error("Finished input branch " + std::to_string(input_branch_id)
+          + " still shares a live triangle with input branch "
+          + std::to_string(branch_trajs.getBranchIndex(static_cast<size_t>(vertex), section)) + " at section "
+          + std::to_string(section));
+      }
+    }
+  }
+
+  for (size_t vertex = 0; vertex < graph.getVertexCount(); ++vertex)
+  {
+    if (isDummyBoundary(vertex) || vertex >= runtime_branch_map_.size())
+    {
+      continue;
+    }
+
+    if (runtime_branch_map_[vertex] != runtime_branch_id.value())
+    {
+      continue;
+    }
+
+    if (graph.incidentEdgesBegin(vertex) == graph.incidentEdgesEnd(vertex))
+    {
+      continue;
+    }
+
+    if (branch_trajs.getBranchIndex(vertex, section) != input_branch_id)
+    {
+      throw std::runtime_error("Finished input branch " + std::to_string(input_branch_id)
+        + " does not match runtime branch " + std::to_string(runtime_branch_id.value()) + " at section "
+        + std::to_string(section));
+    }
+  }
+}
+
+void KineticDelaunay::retireFinishedInputBranches(double t)
+{
+  const size_t section = static_cast<size_t>(t);
+  if (section >= branch_trajs.getStrandsByBranchId().size())
+  {
+    return;
+  }
+
+  std::vector<bool> dead_vertex_mask(graph.getVertexCount(), false);
+  bool has_finished_branch = false;
+
+  const auto& branches_at_section = branch_trajs.getStrandBranchesByHeight(section);
+  for (size_t input_branch_id = 0; input_branch_id < branches_at_section.size(); ++input_branch_id)
+  {
+    const auto& branch_strands = branches_at_section[input_branch_id];
+    if (branch_strands.empty())
+    {
+      continue;
+    }
+
+    bool any_real_strand = false;
+    bool all_have_next_piece = true;
+    bool none_have_next_piece = true;
+
+    for (size_t strand_id : branch_strands)
+    {
+      if (isDummyBoundary(strand_id))
+      {
+        continue;
+      }
+
+      any_real_strand = true;
+      const bool has_next_piece = branch_trajs.getSupportPoints(strand_id).size() > section + 1;
+      all_have_next_piece = all_have_next_piece && has_next_piece;
+      none_have_next_piece = none_have_next_piece && !has_next_piece;
+    }
+
+    if (!any_real_strand || all_have_next_piece)
+    {
+      continue;
+    }
+
+    if (!none_have_next_piece)
+    {
+      throw std::runtime_error("Input branch " + std::to_string(input_branch_id)
+        + " has inconsistent strand heights at section " + std::to_string(section));
+    }
+
+    validateFinishedInputBranchMatchesRuntime(section, input_branch_id);
+    has_finished_branch = true;
+
+    for (size_t strand_id : branch_strands)
+    {
+      if (!isDummyBoundary(strand_id))
+      {
+        dead_vertex_mask[strand_id] = true;
+      }
+    }
+  }
+
+  if (!has_finished_branch)
+  {
+    return;
+  }
+
+  const size_t prev_face_slots = face_inside.size();
+  const size_t prev_he_slots = graph.halfEdgeSlotCount();
+  graph.killVertices(dead_vertex_mask);
+  onGraphCutApplied(t, prev_face_slots, prev_he_slots);
+}
+
 KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingDataMutable() { return crossing_data; }
 
 const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const { return crossing_data; }

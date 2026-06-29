@@ -2,24 +2,19 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "kinDS-demo (Release)",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/build/bin/kinDS-demo.exe",
-      "args": ["--mesh", "input_examples/test_oak.txt", "--export-mode", "combined"],
-      "cwd": "${workspaceFolder}",
-      "console": "internalConsole",
-      "preLaunchTask": "kinDS: cmake build (Release)"
-    },
-    {
-      "name": "kinDS-demo (Debug)",
+      "name": "Debug kinDS-demo (mesh)",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build-debug/bin/kinDS-demo.exe",
-      "args": ["--mesh", "input_examples/test_oak.txt", "--export-mode", "combined", "--log-add", "debug"],
+      "args": [
+        "--mesh",
+        "input_examples/test_oak_2.txt",
+        "--export-mode",
+        "combined"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
-      "preLaunchTask": "kinDS: cmake build (Debug)"
+      "preLaunchTask": "Build kinDS-demo if needed"
     }
   ]
 }
