@@ -56,7 +56,10 @@ class StrandTree
 
   glm::dvec3 transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const;
 
-  /** Linear piece on section @p index in @p reference_branch profile coordinates (matches evaluateTransformed). */
+  /**
+   * Linear motion on [@p index, @p index + 1]: support points at those heights are each transformed into the
+   * @p reference_branch frame at the same height, then connected by a linear segment in the section parameter.
+   */
   Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const;
 
   // getters with named indices
@@ -71,7 +74,8 @@ class StrandTree
     return transforms_by_height_and_branch[height][branch_id];
   }
   const std::vector<size_t>& getBranchIndices(size_t strand_id) const { return branch_indices[strand_id]; }
-  size_t getBranchIndex(size_t strand_id, size_t height) const { return branch_indices[strand_id][height]; }
+  /** Input branch id at @p height; clamps @p height to the last entry when the strand ended earlier. */
+  size_t getBranchIndex(size_t strand_id, size_t height) const;
   const std::vector<std::vector<size_t>>& getStrandBranchesByHeight(size_t height) const
   {
     return strands_by_branch_id[height];

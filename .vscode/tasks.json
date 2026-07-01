@@ -21,6 +21,30 @@
         "panel": "shared",
         "close": true
       }
+    },
+    {
+      "label": "Run test_oak_2 (headless)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/.vscode/scripts/run-mesh-unattended.ps1",
+        "-WorkspaceFolder",
+        "${workspaceFolder}"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false
+      }
     }
   ]
 }

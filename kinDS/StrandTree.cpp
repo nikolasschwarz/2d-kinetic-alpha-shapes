@@ -6,6 +6,7 @@
 #include <cctype>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -139,6 +140,23 @@ size_t StrandTree::resolveBranchAtHeight(size_t height, size_t branch_id, size_t
   return branch_indices[representative_strand][height];
 }
 
+size_t StrandTree::getBranchIndex(size_t strand_id, size_t height) const
+{
+  if (strand_id >= branch_indices.size())
+  {
+    return 0;
+  }
+
+  const std::vector<size_t>& per_strand = branch_indices[strand_id];
+  if (per_strand.empty())
+  {
+    return 0;
+  }
+
+  const size_t clamped_height = std::min(height, per_strand.size() - 1);
+  return per_strand[clamped_height];
+}
+
 size_t StrandTree::addTrajectory(const std::vector<glm::dvec2>& traj)
 {
   size_t index = support_points.size();
@@ -157,10 +175,14 @@ glm::dvec2 StrandTree::evaluate(size_t strand_id, double t) const
   size_t upper_index = lower_index + 1;
   double frac = t - lower_index;
 
-  if (upper_index >= support_points[strand_id].size() && lower_index < support_points[strand_id].size()
-    && frac < std::numeric_limits<double>::epsilon())
+  if (lower_index >= support_points[strand_id].size())
   {
-    return support_points[strand_id].back();
+    throw std::runtime_error("Parameter t out of bounds");
+  }
+
+  if (frac < std::numeric_limits<double>::epsilon())
+  {
+    return support_points[strand_id][lower_index];
   }
 
   if (upper_index >= support_points[strand_id].size())
@@ -176,9 +198,7 @@ glm::dvec2 StrandTree::evaluate(size_t strand_id, double t) const
 
 glm::dvec2 StrandTree::getPointTransformed(size_t strand_id, size_t index, size_t reference_branch) const
 {
-  const size_t branch_lookup_height
-    = (index + 1 < support_points[strand_id].size()) ? index + 1 : index;
-  return getPointTransformedAtSection(strand_id, index, reference_branch, branch_lookup_height);
+  return getPointTransformedAtSection(strand_id, index, reference_branch, index);
 }
 
 glm::dvec2 StrandTree::getPointTransformedAtSection(
@@ -192,7 +212,7 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
   }
   else
   {
-    actual_branch = branch_indices[strand_id][index];
+    actual_branch = getBranchIndex(strand_id, index);
   }
 
   actual_branch = resolveBranchAtHeight(index, actual_branch, branch_lookup_height);
@@ -219,26 +239,20 @@ glm::dvec2 StrandTree::evaluateTransformed(size_t strand_id, double t, size_t re
   }
 
   size_t lower_index = std::floor(t);
-  size_t upper_index = lower_index + 1;
   double frac = t - lower_index;
 
-  if (upper_index >= support_points[strand_id].size() && lower_index < support_points[strand_id].size()
-    && frac < std::numeric_limits<double>::epsilon())
-  {
-    return getPointTransformed(strand_id, support_points[strand_id].size() - 1, reference_branch);
-  }
-
-  if (upper_index >= support_points[strand_id].size())
+  if (lower_index >= support_points[strand_id].size())
   {
     throw std::runtime_error("Parameter t out of bounds");
   }
 
-  const glm::dvec2 lower
-    = getPointTransformedAtSection(strand_id, lower_index, reference_branch, upper_index);
-  const glm::dvec2 upper
-    = getPointTransformedAtSection(strand_id, upper_index, reference_branch, upper_index);
+  if (frac < std::numeric_limits<double>::epsilon())
+  {
+    return getPointTransformedAtSection(strand_id, lower_index, reference_branch, lower_index);
+  }
 
-  return lower * (1.0 - frac) + upper * frac;
+  const Trajectory<2> piece = getPiecePolynomial(strand_id, lower_index, reference_branch);
+  return glm::dvec2(piece[0](frac), piece[1](frac));
 }
 
 glm::dvec3 StrandTree::getPointInObjectSpace(size_t strand_id, double t) const
@@ -266,7 +280,7 @@ Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, siz
     throw std::out_of_range("Index " + std::to_string(index) + " out of range for piece polynomial.");
   }
 
-  const glm::dvec2 P0 = getPointTransformedAtSection(strand_id, index, reference_branch, index + 1);
+  const glm::dvec2 P0 = getPointTransformedAtSection(strand_id, index, reference_branch, index);
   const glm::dvec2 P1 = getPointTransformedAtSection(strand_id, index + 1, reference_branch, index + 1);
 
   Trajectory<2> result;

@@ -19,9 +19,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   Polynomial event_trigger;
 
   std::vector<Trajectory<2>> trajs;
-  size_t reference_branch = 0;
-  const auto piece_poly = [&](size_t strand_id)
-  { return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch); };
+  const auto piece_poly = [&](size_t strand_id) { return kd->getSitePiecePolynomial(strand_id, section, t); };
 
   if (graph.isOnConvexBoundary(he_id) || graph.isOutsideConvexBoundary(he_id))
   {
@@ -50,8 +48,6 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     int& b = filtered_indices[1]; // Second vertex
     int& c = filtered_indices[2]; // Third vertex
 
-    reference_branch = kd->getReferenceBranch(static_cast<size_t>(a), t);
-
     // print the triangle vertices:
     // std::cout << "Triangle vertices: " << a << ", " << b << ", " << c << std::endl;
 
@@ -67,8 +63,6 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     int b = graph.triangleOppositeVertex(he_id ^ 1); // Second vertex
     int c = graph.halfEdge(he_id ^ 1).origin; // Third vertex
     int d = graph.triangleOppositeVertex(he_id); // Fourth vertex
-
-    reference_branch = kd->getReferenceBranch(static_cast<size_t>(a), t);
 
     // print the quadrilateral vertices:
     // std::cout << "Quadrilateral vertices: " << a << ", " << b << ", " << c << ", " << d << std::endl;

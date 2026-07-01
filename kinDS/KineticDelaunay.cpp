@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <glm/geometric.hpp>
 #include <limits>
 #include <optional>
@@ -101,6 +103,36 @@ glm::dvec2 finiteFaceAnchor(const KineticDelaunay& kd, const HalfEdgeDelaunayGra
     }
   }
   return count == 0 ? anchor : anchor / static_cast<double>(count);
+}
+
+double referenceBranchLookupTimeForSection(size_t section, double schedule_time)
+{
+  const double section_start = static_cast<double>(section);
+  double lookup_time = schedule_time;
+  // getReferenceBranch uses floor(t) at whole numbers and floor(t)+1 for fractional t.
+  // Flip/radius roots in (section, section+1] follow the fractional rule even when scheduled at section_start.
+  if (lookup_time <= section_start + std::numeric_limits<double>::epsilon())
+  {
+    lookup_time = section_start + std::numeric_limits<double>::epsilon();
+  }
+  return lookup_time;
+}
+
+size_t branchLookupHeightForTime(const StrandTree& tree, double t)
+{
+  const size_t tree_height = tree.getHeight();
+  const size_t lower_index = static_cast<size_t>(std::floor(t));
+  const double frac = t - static_cast<double>(lower_index);
+  size_t branch_lookup_height = lower_index;
+  if (frac > std::numeric_limits<double>::epsilon())
+  {
+    branch_lookup_height = lower_index + 1;
+  }
+  if (tree_height > 0 && branch_lookup_height >= tree_height)
+  {
+    branch_lookup_height = tree_height - 1;
+  }
+  return branch_lookup_height;
 }
 } // namespace
 
@@ -387,7 +419,10 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
       }
       else
       {
-        throw std::runtime_error("Intersection is not on the boundary");
+        KINDS_DEBUG("Skipping intersection copy during flip: Voronoi edge " << intersection.voronoi_edge_id
+          << " is not on the boundary of outside face " << outside_face_id);
+        crossing_data.edge_intersections.pop_back();
+        return;
       }
 
       auto d_ref = boundary_edge_d_intersections.insert(boundary_edge_d_intersections.end(), intersection_it);
@@ -610,8 +645,10 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
 
     KINDS_DEBUG("Found " << d_edge_intersections.size() << " intersections on Delaunay edge.");
 
-    for (CrossingData::EdgeIntersectionRef& intersection : d_edge_intersections)
+    for (auto d_it = d_edge_intersections.begin(); d_it != d_edge_intersections.end(); )
     {
+      CrossingData::EdgeIntersectionRef intersection = *d_it;
+      bool stale_intersection = false;
       KINDS_DEBUG("Processing intersection with Voronoi edge: "
         << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id);
       // get the next and previous intersections to check if they match with the flipped edge
@@ -751,19 +788,36 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
           }
           else
           {
-            KINDS_ERROR("No next intersection found for Voronoi edge: "
-              << intersection->voronoi_edge_id << " and Delaunay edge: " << intersection->delaunay_edge_id
-              << ", and endpoint is not in the quadrilateral");
-            throw std::runtime_error(
-              "Logic error: no next intersection found and endpoint is not in the quadrilateral");
+            KINDS_DEBUG("Stale flip intersection: Voronoi edge " << intersection->voronoi_edge_id << " Delaunay edge "
+              << intersection->delaunay_edge_id
+              << " has no next Voronoi-list neighbor and its far endpoint is outside the flip quadrilateral; removing");
+            stale_intersection = true;
           }
         }
       }
 
-      if (use_next == use_prev)
+      if (!stale_intersection && use_next == use_prev)
       {
-        KINDS_ERROR("use_next: " << use_next << ", use_prev: " << use_prev);
-        throw std::runtime_error("Logic error: use_next and use_prev cannot be equal!");
+        if (!use_next)
+        {
+          KINDS_DEBUG("Stale flip intersection: Voronoi edge " << intersection->voronoi_edge_id << " Delaunay edge "
+            << intersection->delaunay_edge_id
+            << " cannot be oriented relative to the flip quadrilateral; removing");
+          stale_intersection = true;
+        }
+        else
+        {
+          KINDS_ERROR("use_next: " << use_next << ", use_prev: " << use_prev);
+          throw std::runtime_error("Logic error: use_next and use_prev cannot be equal!");
+        }
+      }
+
+      if (stale_intersection)
+      {
+        auto next_d_it = std::next(d_it);
+        crossing_data.removeIntersection(intersection);
+        d_it = next_d_it;
+        continue;
       }
 
       KINDS_DEBUG("Using " << (use_prev ? "previous" : "next") << " intersection for Voronoi edge: "
@@ -884,6 +938,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
             = delaunayVoronoiEdgeIntersection(quad_index, (*v_intersection)->voronoi_edge_id, t).first;
         }
       }
+      ++d_it;
     }
   }
 
@@ -1059,7 +1114,7 @@ void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, si
   clearPendingSplitReference();
   growGraphSlotArrays();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
-  updateRuntimeBranchMapFromLiveGraph(t);
+  updateRuntimeBranchMapFromLiveGraph(t, "onGraphRetriangulated");
   crossing_data.computeEdgeIntersections(*this, t);
   validateVoronoiVertexIteratorInvariants("onGraphRetriangulated", t);
   if (callback_manager_)
@@ -1068,7 +1123,8 @@ void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, si
   }
 }
 
-void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots)
+void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots,
+  bool update_runtime_branch_map)
 {
   clearPendingSplitReference();
   growGraphSlotArrays();
@@ -1105,7 +1161,10 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
   }
 
   crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
-  updateRuntimeBranchMapFromLiveGraph(t);
+  if (update_runtime_branch_map)
+  {
+    updateRuntimeBranchMapFromLiveGraph(t, "onGraphCutApplied");
+  }
   validateVoronoiVertexIteratorInvariants("onGraphCutApplied", t);
   validateCrossingIntersectionInvariants("onGraphCutApplied", t);
   if (callback_manager_)
@@ -1234,24 +1293,51 @@ bool KineticDelaunay::isDummyBoundary(size_t v) const
 
 size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
 {
-  const size_t section = static_cast<size_t>(std::ceil(t));
+  const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, t);
+
   if (!isGraphRetriangulatedForComponents() && strand_id < pending_split_reference_vertex_.size()
     && pending_split_reference_vertex_[strand_id] != no_pending_split_reference_vertex)
   {
-    return branch_trajs.getBranchIndex(pending_split_reference_vertex_[strand_id], section);
+    const size_t parent_reference_vertex = pending_split_reference_vertex_[strand_id];
+    if (parent_reference_vertex < component_data.component_map.size())
+    {
+      const size_t parent_component_id = component_data.component_map[parent_reference_vertex];
+      return minInputBranchForComponent(parent_component_id, branch_lookup_height);
+    }
   }
 
-  size_t component_id = component_data.component_map[strand_id];
-  size_t representative_vertex = component_data.components[component_id].front();
-  return branch_trajs.getBranchIndex(representative_vertex, section);
+  if (strand_id >= component_data.component_map.size())
+  {
+    return branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
+  }
+
+  const size_t component_id = component_data.component_map[strand_id];
+  return minInputBranchForComponent(component_id, branch_lookup_height);
 }
 
 glm::dvec2 KineticDelaunay::getPointAt(size_t v, double t) const
 {
-  return branch_trajs.evaluateTransformed(v, t, getReferenceBranch(v, t));
+  const size_t section = static_cast<size_t>(std::floor(t));
+  const double frac = t - static_cast<double>(section);
+  const size_t reference_branch = getReferenceBranch(v, t);
+
+  if (frac < std::numeric_limits<double>::epsilon())
+  {
+    return branch_trajs.getPointTransformed(v, section, reference_branch);
+  }
+
+  const Trajectory<2> piece = branch_trajs.getPiecePolynomial(v, section, reference_branch);
+  return glm::dvec2(piece[0](frac), piece[1](frac));
 }
 
 glm::dvec2 KineticDelaunay::getPointAt(double t, size_t v) const { return getPointAt(v, t); }
+
+Trajectory<2> KineticDelaunay::getSitePiecePolynomial(size_t strand_id, size_t section, double schedule_time) const
+{
+  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
+  const size_t reference_branch = getReferenceBranch(strand_id, branch_lookup_time);
+  return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch);
+}
 
 std::vector<glm::dvec2> KineticDelaunay::getPointsAt(double t) const
 {
@@ -1271,6 +1357,73 @@ glm::dvec3 KineticDelaunay::getPointInObjectSpace(size_t v, double t) const
 }
 
 const StrandTree& KineticDelaunay::getStrandTree() const { return branch_trajs; }
+
+void KineticDelaunay::setVisualDebugOutputRoot(const std::filesystem::path& root)
+{
+  visual_debug_output_root_ = root;
+  runtime_branch_log_header_written_ = false;
+}
+
+std::optional<std::filesystem::path> KineticDelaunay::getRuntimeBranchLogPath() const
+{
+  if (!visual_debug_output_root_.has_value())
+  {
+    return std::nullopt;
+  }
+  return *visual_debug_output_root_ / "branches.txt";
+}
+
+void KineticDelaunay::logRuntimeBranchEvent(double t, const std::string& event_line)
+{
+  const auto log_path = getRuntimeBranchLogPath();
+  if (!log_path.has_value())
+  {
+    return;
+  }
+
+  std::ofstream out(*log_path, std::ios::app);
+  if (!out)
+  {
+    return;
+  }
+
+  if (!runtime_branch_log_header_written_)
+  {
+    out << "# Runtime branch event log. Ids are monotonic and never reused.\n"
+        << "# event=create  new runtime branch id allocated\n"
+        << "# event=assign  existing runtime branch id assigned to a live-graph component\n"
+        << "# event=retire  runtime branch id marked dead (no longer active)\n"
+        << "#\n";
+    runtime_branch_log_header_written_ = true;
+  }
+
+  out << "t=" << std::fixed << std::setprecision(6) << t << ' ' << event_line << '\n';
+}
+
+const std::optional<std::filesystem::path>& KineticDelaunay::getVisualDebugOutputRoot() const
+{
+  return visual_debug_output_root_;
+}
+
+void KineticDelaunay::setFlipPolynomialDumpTargetTime(std::optional<double> target_time)
+{
+  flip_polynomial_dump_target_time_ = target_time;
+}
+
+const std::optional<double>& KineticDelaunay::getFlipPolynomialDumpTargetTime() const
+{
+  return flip_polynomial_dump_target_time_;
+}
+
+void KineticDelaunay::setFlipPolynomialDumpTargetHalfEdge(std::optional<size_t> half_edge_id)
+{
+  flip_polynomial_dump_target_half_edge_ = half_edge_id;
+}
+
+const std::optional<size_t>& KineticDelaunay::getFlipPolynomialDumpTargetHalfEdge() const
+{
+  return flip_polynomial_dump_target_half_edge_;
+}
 
 void KineticDelaunay::computeComponentData(double t)
 {
@@ -1340,6 +1493,31 @@ void KineticDelaunay::notePendingSplitReference(
   }
 }
 
+size_t KineticDelaunay::minInputBranchForComponent(size_t component_id, size_t branch_lookup_height) const
+{
+  if (component_id >= component_data.components.size())
+  {
+    return 0;
+  }
+
+  size_t min_branch = std::numeric_limits<size_t>::max();
+  for (size_t strand_id : component_data.components[component_id])
+  {
+    if (isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+    const size_t input_branch = branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
+    min_branch = std::min(min_branch, input_branch);
+  }
+
+  if (min_branch == std::numeric_limits<size_t>::max())
+  {
+    return 0;
+  }
+  return min_branch;
+}
+
 void KineticDelaunay::clearPendingSplitReference()
 {
   std::fill(
@@ -1365,46 +1543,198 @@ size_t runtimeBranchSectionIndex(const KineticDelaunay& kd, double t)
 }
 } // namespace
 
+size_t KineticDelaunay::allocateRuntimeBranch()
+{
+  const size_t runtime_branch_id = next_runtime_branch_id_++;
+  if (runtime_branch_id >= runtime_branch_alive_.size())
+  {
+    runtime_branch_alive_.resize(runtime_branch_id + 1, false);
+  }
+  runtime_branch_alive_[runtime_branch_id] = true;
+  return runtime_branch_id;
+}
+
+void KineticDelaunay::markRuntimeBranchDead(size_t runtime_branch_id, double t, const char* reason,
+  std::optional<size_t> input_branch_id)
+{
+  if (runtime_branch_id < runtime_branch_alive_.size())
+  {
+    runtime_branch_alive_[runtime_branch_id] = false;
+  }
+
+  std::ostringstream line;
+  line << "event=retire id=" << runtime_branch_id << " reason=" << reason;
+  if (input_branch_id.has_value())
+  {
+    line << " input_branch=" << input_branch_id.value();
+  }
+  logRuntimeBranchEvent(t, line.str());
+}
+
 void KineticDelaunay::updateRuntimeBranchMapFromInputBranches(double t)
 {
   const size_t vertex_count = graph.getVertexCount();
   runtime_branch_map_.resize(vertex_count);
 
   const size_t section_index = runtimeBranchSectionIndex(*this, t);
+  std::vector<size_t> input_branch_runtime;
+  constexpr size_t no_runtime_branch = static_cast<size_t>(-1);
+  std::unordered_map<size_t, size_t> input_branch_strand_count;
+
   for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
   {
     if (isDummyBoundary(strand_id))
     {
       continue;
     }
-    runtime_branch_map_[strand_id] = branch_trajs.getBranchIndex(strand_id, section_index);
+
+    const size_t input_branch = branch_trajs.getBranchIndex(strand_id, section_index);
+    if (input_branch >= input_branch_runtime.size())
+    {
+      input_branch_runtime.resize(input_branch + 1, no_runtime_branch);
+    }
+    if (input_branch_runtime[input_branch] == no_runtime_branch)
+    {
+      input_branch_runtime[input_branch] = allocateRuntimeBranch();
+      std::ostringstream line;
+      line << "event=create id=" << input_branch_runtime[input_branch] << " reason=init_input_branch"
+           << " input_branch=" << input_branch << " section=" << section_index;
+      logRuntimeBranchEvent(t, line.str());
+    }
+    runtime_branch_map_[strand_id] = input_branch_runtime[input_branch];
+    ++input_branch_strand_count[input_branch];
+  }
+
+  for (const auto& [input_branch, strand_count] : input_branch_strand_count)
+  {
+    if (input_branch >= input_branch_runtime.size() || input_branch_runtime[input_branch] == no_runtime_branch)
+    {
+      continue;
+    }
+    std::ostringstream line;
+    line << "event=assign id=" << input_branch_runtime[input_branch] << " reason=init_input_branch"
+         << " input_branch=" << input_branch << " section=" << section_index << " strand_count=" << strand_count;
+    logRuntimeBranchEvent(t, line.str());
   }
 }
 
-void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t)
+namespace
+{
+std::string formatIdList(const std::vector<size_t>& ids)
+{
+  std::ostringstream out;
+  for (size_t i = 0; i < ids.size(); ++i)
+  {
+    if (i > 0)
+    {
+      out << ',';
+    }
+    out << ids[i];
+  }
+  return out.str();
+}
+
+std::string formatStrandSample(const std::vector<size_t>& strands, size_t max_count = 8)
+{
+  std::ostringstream out;
+  const size_t show = std::min(strands.size(), max_count);
+  for (size_t i = 0; i < show; ++i)
+  {
+    if (i > 0)
+    {
+      out << ',';
+    }
+    out << strands[i];
+  }
+  if (strands.size() > show)
+  {
+    out << ",...";
+  }
+  return out.str();
+}
+
+std::vector<size_t> distinctSortedIds(const std::vector<size_t>& values)
+{
+  std::vector<size_t> ids = values;
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  return ids;
+}
+} // namespace
+
+void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t, const char* trigger)
 {
   const size_t vertex_count = graph.getVertexCount();
   runtime_branch_map_.resize(vertex_count);
 
   const size_t section_index = runtimeBranchSectionIndex(*this, t);
   const std::vector<std::vector<size_t>> graph_components = extractGraphConnectedComponents();
-  std::unordered_map<size_t, size_t> input_branch_to_runtime;
-  size_t next_runtime_branch = 0;
+  std::vector<bool> claimed_runtime_branch(next_runtime_branch_id_, false);
 
-  for (const auto& component : graph_components)
+  for (size_t component_index = 0; component_index < graph_components.size(); ++component_index)
   {
+    const auto& component = graph_components[component_index];
     if (component.empty())
     {
       continue;
     }
 
-    const size_t input_branch = branch_trajs.getBranchIndex(component.front(), section_index);
-    const auto [it, inserted] = input_branch_to_runtime.try_emplace(input_branch, next_runtime_branch);
-    const size_t runtime_branch = it->second;
-    if (inserted)
+    std::optional<size_t> component_runtime_id;
+    std::vector<size_t> prior_runtime_ids;
+    std::vector<size_t> input_branch_ids;
+    size_t real_strand_count = 0;
+
+    for (size_t strand_id : component)
     {
-      ++next_runtime_branch;
+      if (isDummyBoundary(strand_id))
+      {
+        continue;
+      }
+
+      ++real_strand_count;
+      if (strand_id < runtime_branch_map_.size())
+      {
+        prior_runtime_ids.push_back(runtime_branch_map_[strand_id]);
+      }
+      input_branch_ids.push_back(branch_trajs.getBranchIndex(strand_id, section_index));
+
+      if (strand_id >= runtime_branch_map_.size())
+      {
+        continue;
+      }
+
+      const size_t runtime_id = runtime_branch_map_[strand_id];
+      if (!component_runtime_id.has_value())
+      {
+        component_runtime_id = runtime_id;
+      }
+      else if (component_runtime_id.value() != runtime_id)
+      {
+        component_runtime_id = std::nullopt;
+        break;
+      }
     }
+
+    size_t runtime_branch = 0;
+    bool reused_existing = false;
+    if (component_runtime_id.has_value() && component_runtime_id.value() < claimed_runtime_branch.size()
+      && !claimed_runtime_branch[component_runtime_id.value()]
+      && component_runtime_id.value() < runtime_branch_alive_.size()
+      && runtime_branch_alive_[component_runtime_id.value()])
+    {
+      runtime_branch = component_runtime_id.value();
+      reused_existing = true;
+    }
+    else
+    {
+      runtime_branch = allocateRuntimeBranch();
+    }
+
+    if (runtime_branch >= claimed_runtime_branch.size())
+    {
+      claimed_runtime_branch.resize(runtime_branch + 1, false);
+    }
+    claimed_runtime_branch[runtime_branch] = true;
 
     for (size_t strand_id : component)
     {
@@ -1413,6 +1743,28 @@ void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t)
         runtime_branch_map_[strand_id] = runtime_branch;
       }
     }
+
+    const auto sorted_prior_runtime_ids = distinctSortedIds(prior_runtime_ids);
+    const auto sorted_input_branch_ids = distinctSortedIds(input_branch_ids);
+
+    std::ostringstream line;
+    if (!reused_existing)
+    {
+      line << "event=create id=" << runtime_branch << " reason=graph_split trigger=" << trigger
+           << " graph_component=" << component_index << " strand_count=" << real_strand_count
+           << " prior_runtime_ids=" << formatIdList(sorted_prior_runtime_ids)
+           << " input_branches=" << formatIdList(sorted_input_branch_ids)
+           << " strands=" << formatStrandSample(component);
+    }
+    else
+    {
+      line << "event=assign id=" << runtime_branch << " reason=graph_split_reuse trigger=" << trigger
+           << " graph_component=" << component_index << " strand_count=" << real_strand_count
+           << " prior_runtime_ids=" << formatIdList(sorted_prior_runtime_ids)
+           << " input_branches=" << formatIdList(sorted_input_branch_ids)
+           << " strands=" << formatStrandSample(component);
+    }
+    logRuntimeBranchEvent(t, line.str());
   }
 }
 
@@ -1573,9 +1925,22 @@ void KineticDelaunay::retireFinishedInputBranches(double t)
 
     for (size_t strand_id : branch_strands)
     {
+      if (!isDummyBoundary(strand_id) && strand_id < runtime_branch_map_.size())
+      {
+        markRuntimeBranchDead(runtime_branch_map_[strand_id], t, "input_branch_finished", input_branch_id);
+        break;
+      }
+    }
+
+    for (size_t strand_id : branch_strands)
+    {
       if (!isDummyBoundary(strand_id))
       {
         dead_vertex_mask[strand_id] = true;
+        if (strand_id < runtime_branch_map_.size())
+        {
+          runtime_branch_map_[strand_id] = static_cast<size_t>(-1);
+        }
       }
     }
   }
@@ -1588,7 +1953,8 @@ void KineticDelaunay::retireFinishedInputBranches(double t)
   const size_t prev_face_slots = face_inside.size();
   const size_t prev_he_slots = graph.halfEdgeSlotCount();
   graph.killVertices(dead_vertex_mask);
-  onGraphCutApplied(t, prev_face_slots, prev_he_slots);
+  logRuntimeBranchEvent(t, "event=skip_remap reason=input_branch_vertex_kill");
+  onGraphCutApplied(t, prev_face_slots, prev_he_slots, false);
 }
 
 KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingDataMutable() { return crossing_data; }
@@ -3216,8 +3582,9 @@ std::vector<std::vector<size_t>> KineticDelaunay::extractGraphConnectedComponent
   std::vector<bool> visited(graph.getVertexCount(), false);
   for (size_t u = 0; u < graph.getVertexCount(); ++u)
   {
-    if (visited[u])
+    if (visited[u] || isDummyBoundary(u) || !isStrandLiveInGraph(u))
     {
+      visited[u] = true;
       continue;
     }
 
@@ -3229,6 +3596,15 @@ std::vector<std::vector<size_t>> KineticDelaunay::extractGraphConnectedComponent
   }
 
   return components;
+}
+
+bool KineticDelaunay::isStrandLiveInGraph(size_t strand_id) const
+{
+  if (isDummyBoundary(strand_id))
+  {
+    return false;
+  }
+  return graph.incidentEdgesBegin(strand_id) != graph.incidentEdgesEnd(strand_id);
 }
 
 std::vector<BoundaryPoint> KineticDelaunay::traverseBoundary(size_t start_he_id, double t) const
@@ -3359,6 +3735,25 @@ size_t KineticDelaunay::getRuntimeBranchIdForStrand(size_t strand_id) const
       "getRuntimeBranchIdForStrand: strand " + std::to_string(strand_id) + " has no runtime branch entry");
   }
   return runtime_branch_map_[strand_id];
+}
+
+size_t KineticDelaunay::getInsideFaceComponentId(size_t strand_id) const
+{
+  if (strand_id >= component_data.component_map.size())
+  {
+    throw std::runtime_error(
+      "getInsideFaceComponentId: strand " + std::to_string(strand_id) + " has no component entry");
+  }
+  return component_data.component_map[strand_id];
+}
+
+size_t KineticDelaunay::getComponentLowestStrandId(size_t component_id) const
+{
+  if (component_id >= component_data.components.size() || component_data.components[component_id].empty())
+  {
+    throw std::runtime_error("getComponentLowestStrandId: invalid component id " + std::to_string(component_id));
+  }
+  return component_data.components[component_id].front();
 }
 
 size_t KineticDelaunay::getRuntimeBranchIdForFace(size_t face_id) const

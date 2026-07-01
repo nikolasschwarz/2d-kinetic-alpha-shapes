@@ -37,9 +37,7 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     return;
   }
 
-  const size_t reference_branch = kd->getReferenceBranch(static_cast<size_t>(u), t);
-  const auto piece_poly = [&](size_t strand_id)
-  { return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch); };
+  const auto piece_poly = [&](size_t strand_id) { return kd->getSitePiecePolynomial(strand_id, section, t); };
 
   std::vector<Trajectory<2>> trajs;
 

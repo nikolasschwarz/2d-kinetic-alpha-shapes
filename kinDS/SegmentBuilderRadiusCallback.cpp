@@ -45,10 +45,11 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   }
   auto& graph = segment_builder_.kin_del.getGraph();
   const auto radius_vertices = graph.adjacentTriangleVertices(radius->half_edge_id);
-  const size_t branch_id = segment_builder_.kin_del.component_data.component_map[radius_vertices[0]];
+  const size_t runtime_branch_id
+    = segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(radius->half_edge_id);
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     radius->occurrence_time, "before", "radius_he" + std::to_string(radius->half_edge_id),
-    VisualDebugHighlight::forRadius(graph, radius->half_edge_id), branch_id);
+    VisualDebugHighlight::forRadius(graph, radius->half_edge_id), runtime_branch_id);
 
   size_t face_id = graph.halfEdge(radius->half_edge_id).face;
   bool is_inside = segment_builder_.kin_del.getFaceInside(face_id);
@@ -140,6 +141,10 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      if (mid_cell == static_cast<size_t>(-1))
+      {
+        continue;
+      }
       segment_builder_.finishMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_finish_shift_arg);
@@ -560,7 +565,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     radius->occurrence_time, "after", "radius_he" + std::to_string(radius->half_edge_id),
-    VisualDebugHighlight::forRadius(graph, radius->half_edge_id), component_id);
+    VisualDebugHighlight::forRadius(graph, radius->half_edge_id),
+    segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(radius->half_edge_id));
 
   auto triangle_he_ids = graph.getTriangleHalfEdgeIndices(radius->half_edge_id);
   std::unordered_set<size_t> affected_delaunay_edges;
@@ -1556,6 +1562,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     ? &radius_boundary_shift_ctx
     : nullptr;
 
+  // only_adjacent_segment filters strips by crossing topology; requires shift context for neighbor remap.
+  const bool radius_only_adjacent_strips = (radius_boundary_shift_arg != nullptr);
+
   std::vector<SegmentBuilder::MeshingData> radius_operated_finished_strips;
   std::vector<SegmentBuilder::MeshingData> radius_operated_started_strips;
 
@@ -1583,7 +1592,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
       std::vector<SegmentBuilder::MeshingData> finished_strips = segment_builder_.finishMesh(he_even, t, boundary_polygon,
         SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentCompleted,
-        radius_boundary_shift_arg, true);
+        radius_boundary_shift_arg, radius_only_adjacent_strips);
       radius_operated_finished_strips.insert(radius_operated_finished_strips.end(), finished_strips.begin(), finished_strips.end());
     }
   }
@@ -1597,7 +1606,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     }
     std::vector<SegmentBuilder::MeshingData> started_strips = segment_builder_.startNewMesh(he_even, t, true,
       SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::NewSegment, radius_boundary_shift_arg,
-      true);
+      radius_only_adjacent_strips);
     radius_operated_started_strips.insert(radius_operated_started_strips.end(), started_strips.begin(), started_strips.end());
   }
 
@@ -1705,6 +1714,10 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      if (mid_cell == static_cast<size_t>(-1))
+      {
+        continue;
+      }
       KINDS_DEBUG("Radius: passing extracted segment interval [crossing,crossing] to startNewMeshFromIntersections k=" << k
                    << " voronoi_cell=" << mid_cell << " t=" << t << " start={" << format_crossing(refs[k]) << "} end={"
                    << format_crossing(refs[k + 1]) << "}");

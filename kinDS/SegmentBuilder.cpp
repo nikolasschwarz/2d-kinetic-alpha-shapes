@@ -1204,14 +1204,12 @@ std::vector<SegmentBuilder::DirectedVoronoiEdgeCrossing> SegmentBuilder::orientC
       const size_t voronoi_he_even = 2 * voronoi_edge_id;
       const size_t left_voronoi_vertex_id = graph.halfEdge(voronoi_he_even).face;
       const size_t right_voronoi_vertex_id = graph.halfEdge(voronoi_he_even + 1).face;
-      std::ostringstream oss;
-      oss << "orientCrossingsAlongVoronoiEdge: cannot orient crossing at step " << step_index
-          << " (voronoi_edge_id=" << voronoi_edge_id << ", delaunay_edge_id=" << d
-          << ", current_face_id=" << current_face_id << ", he0=" << he0 << ", he1=" << he1
-          << ", face(he0)=" << graph.halfEdge(he0).face << ", face(he1)=" << graph.halfEdge(he1).face
-          << ", start_containing_tri_id=" << start_containing_tri_id << ", reverse_traversal=" << reverse_traversal
-          << ", voronoi_vertices=[" << left_voronoi_vertex_id << "," << right_voronoi_vertex_id << "])";
-      throw std::runtime_error(oss.str());
+      KINDS_WARNING("orientCrossingsAlongVoronoiEdge: skipping disconnected crossing at step " << step_index
+        << " (voronoi_edge_id=" << voronoi_edge_id << ", delaunay_edge_id=" << d
+        << ", current_face_id=" << current_face_id << ", face(he0)=" << graph.halfEdge(he0).face
+        << ", face(he1)=" << graph.halfEdge(he1).face << ", voronoi_vertices=[" << left_voronoi_vertex_id << ","
+        << right_voronoi_vertex_id << "])");
+      return;
     }
     oriented.push_back(DirectedVoronoiEdgeCrossing { crossed_he_id, iref });
     current_face_id = graph.halfEdge(crossed_he_id ^ 1).face;
@@ -2234,6 +2232,24 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
       return start_value->prev_segment_mesh_pair_index;
     }
 
+    // One-sided link after radius boundary reset or stale crossing cleanup: trust the populated side.
+    if (start_value->next_segment_mesh_pair_index != static_cast<size_t>(-1)
+      && end_value->prev_segment_mesh_pair_index == static_cast<size_t>(-1))
+    {
+      KINDS_WARNING("resolveIntersectionMeshPairIndex: end prev unset; recovering from start next (start_next="
+        << start_value->next_segment_mesh_pair_index << ", voronoi_cell_id=" << voronoi_cell_id
+        << ", event_time=" << event_time << ").");
+      return start_value->next_segment_mesh_pair_index;
+    }
+    if (end_value->prev_segment_mesh_pair_index != static_cast<size_t>(-1)
+      && start_value->next_segment_mesh_pair_index == static_cast<size_t>(-1))
+    {
+      KINDS_WARNING("resolveIntersectionMeshPairIndex: start next unset; recovering from end prev (end_prev="
+        << end_value->prev_segment_mesh_pair_index << ", voronoi_cell_id=" << voronoi_cell_id
+        << ", event_time=" << event_time << ").");
+      return end_value->prev_segment_mesh_pair_index;
+    }
+
     std::ostringstream oss;
     oss << "resolveIntersectionMeshPairIndex: start/end intersection mesh pair index mismatch (start_next="
         << start_value->next_segment_mesh_pair_index << ", end_prev=" << end_value->prev_segment_mesh_pair_index
@@ -2267,15 +2283,12 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     // check if value is valid
     if (start_intersection.value()->next_segment_mesh_pair_index == static_cast<size_t>(-1))
     {
-      // print the other value for debugging
       size_t prev_index = start_intersection.value()->prev_segment_mesh_pair_index;
-      std::ostringstream oss;
-      oss << "resolveIntersectionMeshPairIndex: start_intersection has invalid next_segment_mesh_pair_index "
-             "(voronoi_cell_id="
-          << voronoi_cell_id << ", event_time=" << event_time << ", prev_segment_mesh_pair_index=" << prev_index
-          << ").";
-      KINDS_ERROR(oss.str());
-      throw std::runtime_error(oss.str());
+      KINDS_WARNING("resolveIntersectionMeshPairIndex: start_intersection has no linked mesh pair "
+                    "(voronoi_cell_id="
+        << voronoi_cell_id << ", event_time=" << event_time << ", prev_segment_mesh_pair_index=" << prev_index
+        << "); skipping interval.");
+      return static_cast<size_t>(-1);
     }
 
     return start_intersection.value()->next_segment_mesh_pair_index;
@@ -2302,15 +2315,12 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     // check if value is valid
     if (end_intersection.value()->prev_segment_mesh_pair_index == static_cast<size_t>(-1))
     {
-      // print the other value for debugging
       size_t next_index = end_intersection.value()->next_segment_mesh_pair_index;
-      std::ostringstream oss;
-      oss << "resolveIntersectionMeshPairIndex: end_intersection has invalid prev_segment_mesh_pair_index "
-             "(voronoi_cell_id="
-          << voronoi_cell_id << ", event_time=" << event_time << ", next_segment_mesh_pair_index=" << next_index
-          << ").";
-      KINDS_ERROR(oss.str());
-      throw std::runtime_error(oss.str());
+      KINDS_WARNING("resolveIntersectionMeshPairIndex: end_intersection has no linked mesh pair "
+                    "(voronoi_cell_id="
+        << voronoi_cell_id << ", event_time=" << event_time << ", next_segment_mesh_pair_index=" << next_index
+        << "); skipping interval.");
+      return static_cast<size_t>(-1);
     }
 
     return end_intersection.value()->prev_segment_mesh_pair_index;
@@ -2646,8 +2656,7 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
       oss << "null";
     }
     oss << ").";
-    KINDS_ERROR(oss.str());
-    // throw std::runtime_error(oss.str());
+    KINDS_WARNING(oss.str());
     return;
   }
 
@@ -3054,7 +3063,8 @@ size_t SegmentBuilder::determineVoronoiCellForBoundaryIntersectionInterval(size_
   oss
     << "determineVoronoiCellForBoundaryIntersectionInterval: no shared Voronoi cell between intersection Voronoi edges "
     << ve0 << " and " << ve1 << " on Delaunay edge " << delaunay_edge_id << ".";
-  throw std::runtime_error(oss.str());
+  KINDS_WARNING(oss.str());
+  return static_cast<size_t>(-1);
 }
 
 size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(
@@ -4029,6 +4039,10 @@ void kinDS::SegmentBuilder::initializeNewHalfEdgesAfterGraphUpdate(double t, siz
     {
       const size_t mid_cell
         = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      if (mid_cell == static_cast<size_t>(-1))
+      {
+        continue;
+      }
       startNewMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], false, BoundaryEventType::Section, BoundarySegmentAction::NewSegment);
     }
@@ -5381,6 +5395,10 @@ void SegmentBuilder::init()
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
       const size_t mid_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      if (mid_cell == static_cast<size_t>(-1))
+      {
+        continue;
+      }
       startNewMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], false, BoundaryEventType::Init, BoundarySegmentAction::NewSegment);
     }
@@ -5449,6 +5467,10 @@ void SegmentBuilder::finalize(double t)
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
       const size_t mid_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      if (mid_cell == static_cast<size_t>(-1))
+      {
+        continue;
+      }
       finishMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
     }

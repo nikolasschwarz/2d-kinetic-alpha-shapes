@@ -444,6 +444,18 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
   kinetic_delaunay = std::make_shared<KineticDelaunay>(strand_tree, settings.alpha_cutoff, false);
+  if (settings.visual_debug_output_root.has_value())
+  {
+    kinetic_delaunay->setVisualDebugOutputRoot(*settings.visual_debug_output_root);
+  }
+  if (settings.flip_polynomial_dump_target_time.has_value())
+  {
+    kinetic_delaunay->setFlipPolynomialDumpTargetTime(settings.flip_polynomial_dump_target_time);
+  }
+  if (settings.flip_polynomial_dump_target_half_edge.has_value())
+  {
+    kinetic_delaunay->setFlipPolynomialDumpTargetHalfEdge(settings.flip_polynomial_dump_target_half_edge);
+  }
   kinetic_delaunay->setComponentSplitPolicy(settings.retriangulate_on_component_split
       ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
       : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);

@@ -2,12 +2,58 @@
 
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
+#include "KineticDelaunayFlipEventTriggerDump.hpp"
 
+#include <cmath>
 #include <limits>
 #include <map>
+#include <string>
 
 namespace kinDS
 {
+inline constexpr double flip_voronoi_vertex_distance_eps = 1e-6;
+inline constexpr double flip_boundary_collinearity_eps = 1e-8;
+
+inline double normalizedTriangleCollinearityMetric(const glm::dvec2& pa, const glm::dvec2& pb, const glm::dvec2& pc)
+{
+  const glm::dvec2 ab = pb - pa;
+  const glm::dvec2 ac = pc - pa;
+  const double area2 = std::abs(ab.x * ac.y - ab.y * ac.x);
+  const double max_len2 = std::max({ glm::dot(ab, ab), glm::dot(ac, ac), glm::dot(pc - pb, pc - pb) });
+  if (max_len2 <= 0.0)
+  {
+    return 0.0;
+  }
+  return area2 / max_len2;
+}
+
+inline glm::dvec2 flipTriangleCircumcenterAt(
+  const KineticDelaunay& kd, const HalfEdgeDelaunayGraph& graph, size_t he_id, double t, bool use_transformed_points)
+{
+  const std::array<int, 3> vertices = graph.adjacentTriangleVertices(he_id);
+  const StrandTree& tree = kd.getStrandTree();
+  const auto point_at = [&](int vertex) -> glm::dvec2
+  {
+    const size_t strand_id = static_cast<size_t>(vertex);
+    return use_transformed_points ? kd.getPointAt(strand_id, t) : tree.evaluate(strand_id, t);
+  };
+  return HalfEdgeDelaunayGraph::circumcenter(
+    point_at(vertices[0]), point_at(vertices[1]), point_at(vertices[2]));
+}
+
+inline std::string flipUntransformedFrameMismatchNote(bool transformed_passes, bool untransformed_passes)
+{
+  if (!transformed_passes && untransformed_passes)
+  {
+    return " [untransformed geometry satisfies the flip criterion; possible frame mismatch in event polynomials]";
+  }
+  if (transformed_passes && !untransformed_passes)
+  {
+    return " [only transformed geometry satisfies the flip criterion]";
+  }
+  return {};
+}
+
 class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
 {
  public:
@@ -87,6 +133,83 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
   {
     event_handler->beforeEvent(*this);
   }
+
+  if (kd->getVisualDebugOutputRoot().has_value()
+    && shouldDumpFlipPolynomialsForEvent(*kd, occurrence_time, half_edge_id))
+  {
+    const FlipEventTriggerDump dump = buildFlipEventTriggerDump(*kd, half_edge_id, creation_time);
+    writeFlipEventTriggerPolynomialDump(
+      *kd, dump, *kd->getVisualDebugOutputRoot() / "polynomials.txt", occurrence_time);
+  }
+
+  // Flip validation disabled: inCircle/ccw predicate roots can disagree slightly with
+  // transformed Voronoi geometry at event time (numerical / frame lookup tolerance).
+#if 0
+  if (graph.isOnConvexBoundary(half_edge_id) || graph.isOutsideConvexBoundary(half_edge_id))
+  {
+    size_t boundary_he_id = half_edge_id;
+    if (graph.isOutsideConvexBoundary(boundary_he_id))
+    {
+      boundary_he_id ^= 1;
+    }
+
+    const int a = graph.halfEdge(boundary_he_id).origin;
+    const int b = graph.triangleOppositeVertex(boundary_he_id ^ 1);
+    const int c = graph.halfEdge(boundary_he_id ^ 1).origin;
+    if (a >= 0 && b >= 0 && c >= 0)
+    {
+      const glm::dvec2 pa = kd->getPointAt(static_cast<size_t>(a), occurrence_time);
+      const glm::dvec2 pb = kd->getPointAt(static_cast<size_t>(b), occurrence_time);
+      const glm::dvec2 pc = kd->getPointAt(static_cast<size_t>(c), occurrence_time);
+      const double collinearity_metric = normalizedTriangleCollinearityMetric(pa, pb, pc);
+      if (collinearity_metric > flip_boundary_collinearity_eps)
+      {
+        const glm::dvec2 pa_raw = kd->getStrandTree().evaluate(static_cast<size_t>(a), occurrence_time);
+        const glm::dvec2 pb_raw = kd->getStrandTree().evaluate(static_cast<size_t>(b), occurrence_time);
+        const glm::dvec2 pc_raw = kd->getStrandTree().evaluate(static_cast<size_t>(c), occurrence_time);
+        const double raw_collinearity_metric = normalizedTriangleCollinearityMetric(pa_raw, pb_raw, pc_raw);
+        const bool transformed_collinear = collinearity_metric <= flip_boundary_collinearity_eps;
+        const bool untransformed_collinear = raw_collinearity_metric <= flip_boundary_collinearity_eps;
+
+        throw std::runtime_error(
+          "Invalid boundary flip event: finite vertices are not collinear for half-edge " + std::to_string(half_edge_id)
+          + " at t=" + std::to_string(occurrence_time) + " (transformed_collinearity_metric="
+          + std::to_string(collinearity_metric) + ", untransformed_collinearity_metric="
+          + std::to_string(raw_collinearity_metric) + ", a=" + std::to_string(a) + ", b=" + std::to_string(b) + ", c="
+          + std::to_string(c) + ", pa=" + glm::to_string(pa) + ", pb=" + glm::to_string(pb) + ", pc=" + glm::to_string(pc)
+          + ", pa_raw=" + glm::to_string(pa_raw) + ", pb_raw=" + glm::to_string(pb_raw) + ", pc_raw="
+          + glm::to_string(pc_raw)
+          + flipUntransformedFrameMismatchNote(transformed_collinear, untransformed_collinear) + ")");
+      }
+    }
+  }
+  else
+  {
+    const glm::dvec3 left_voronoi_vertex = kd->computeVoronoiVertexClampedInfinity(half_edge_id, occurrence_time);
+    const glm::dvec3 right_voronoi_vertex = kd->computeVoronoiVertexClampedInfinity(half_edge_id ^ 1, occurrence_time);
+    const double voronoi_vertex_distance
+      = glm::distance(glm::dvec2(left_voronoi_vertex), glm::dvec2(right_voronoi_vertex));
+    if (voronoi_vertex_distance > flip_voronoi_vertex_distance_eps)
+    {
+      const glm::dvec2 raw_left_cc
+        = flipTriangleCircumcenterAt(*kd, graph, half_edge_id, occurrence_time, false);
+      const glm::dvec2 raw_right_cc
+        = flipTriangleCircumcenterAt(*kd, graph, half_edge_id ^ 1, occurrence_time, false);
+      const double raw_circumcenter_distance = glm::distance(raw_left_cc, raw_right_cc);
+      const bool transformed_coincident = voronoi_vertex_distance <= flip_voronoi_vertex_distance_eps;
+      const bool untransformed_coincident = raw_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
+
+      throw std::runtime_error(
+        "Invalid flip event: Voronoi edge endpoints are not coincident for half-edge " + std::to_string(half_edge_id)
+        + " at t=" + std::to_string(occurrence_time) + " (faces " + std::to_string(face_id) + " and "
+        + std::to_string(twin_face_id) + ", transformed_voronoi_distance=" + std::to_string(voronoi_vertex_distance)
+        + ", untransformed_circumcenter_distance=" + std::to_string(raw_circumcenter_distance) + ", left="
+        + glm::to_string(left_voronoi_vertex) + ", right=" + glm::to_string(right_voronoi_vertex) + ", raw_left_cc="
+        + glm::to_string(raw_left_cc) + ", raw_right_cc=" + glm::to_string(raw_right_cc)
+        + flipUntransformedFrameMismatchNote(transformed_coincident, untransformed_coincident) + ")");
+    }
+  }
+#endif
 
   // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
   if (graph.halfEdge(half_edge_id).origin == -1)

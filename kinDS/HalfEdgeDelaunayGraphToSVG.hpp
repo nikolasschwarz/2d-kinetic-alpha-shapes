@@ -337,8 +337,9 @@ class HalfEdgeDelaunayGraphToSVG
    *        If not provided, only "id" is used (no slash).
    * @param component_strands Optional: when set, only geometry belonging to this connected component is drawn
    *        and the view is cropped to its strand sites.
-   * @param site_runtime_branch_if_diff Optional: strand id -> runtime branch (component id) for sites whose
-   *        runtime branch differs from the data-structure branch; appended to the site label as `branch=X`.
+   * @param site_input_branch_labels Optional: strand id -> input branch id (from @ref StrandTree::getBranchIndex at
+   *        the debug time). Appended to the site label as `branch=X`. Whole-number @p occurrence_time uses that
+   *        section index; fractional times use the next section (ceil).
    * @param positioned_strands Optional: strand ids for which @p points contains valid coordinates. When set,
    *        geometry that needs an unpositioned strand is skipped instead of indexing outside the live set.
    */
@@ -347,7 +348,7 @@ class HalfEdgeDelaunayGraphToSVG
     bool draw_voronoi_edges = false, const std::vector<size_t>* voronoi_vertex_to_tri = nullptr,
     const std::vector<IntersectionDebugInfo>* intersection_debug_info = nullptr,
     const VisualDebugHighlight* highlight = nullptr, const std::unordered_set<size_t>* component_strands = nullptr,
-    const std::unordered_map<size_t, size_t>* site_runtime_branch_if_diff = nullptr,
+    const std::unordered_map<size_t, size_t>* site_input_branch_labels = nullptr,
     const std::unordered_set<size_t>* positioned_strands = nullptr)
   {
     auto in_component = [&](size_t strand_id) -> bool
@@ -576,10 +577,10 @@ class HalfEdgeDelaunayGraphToSVG
       label_text.setf(std::ios::fixed);
       label_text.precision(6);
       label_text << vertex_id << " (" << (*point)[0] << "," << (*point)[1] << ")";
-      if (site_runtime_branch_if_diff != nullptr)
+      if (site_input_branch_labels != nullptr)
       {
-        const auto branch_it = site_runtime_branch_if_diff->find(vertex_id);
-        if (branch_it != site_runtime_branch_if_diff->end())
+        const auto branch_it = site_input_branch_labels->find(vertex_id);
+        if (branch_it != site_input_branch_labels->end())
         {
           label_text << " branch=" << branch_it->second;
         }

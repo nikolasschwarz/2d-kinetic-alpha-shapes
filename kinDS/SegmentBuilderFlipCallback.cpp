@@ -25,12 +25,13 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     vertex = graph.destination(flip->half_edge_id);
   }
-  const size_t branch_id = segment_builder_.kin_del.component_data.component_map[static_cast<size_t>(vertex)];
+  const size_t component_id = segment_builder_.kin_del.component_data.component_map[static_cast<size_t>(vertex)];
+  const size_t runtime_branch_id = segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(flip->half_edge_id);
 
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     flip->occurrence_time, "before", "flip_he" + std::to_string(flip->half_edge_id),
-    VisualDebugHighlight::forFlip(graph, flip->half_edge_id), branch_id);
-  auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[branch_id][0];
+    VisualDebugHighlight::forFlip(graph, flip->half_edge_id), runtime_branch_id);
+  auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
 
   // Finish the segment mesh pair of the edge being flipped
@@ -147,7 +148,6 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
 
   segment_builder_.segment_mesh_pairs.push_back(segment_mesh_pair);
 
-  const size_t branch_id = component_id;
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
 
@@ -239,7 +239,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
 
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     flip->occurrence_time, "after", "flip_he" + std::to_string(flip->half_edge_id),
-    VisualDebugHighlight::forFlip(graph, flip->half_edge_id), branch_id);
+    VisualDebugHighlight::forFlip(graph, flip->half_edge_id),
+    segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(flip->half_edge_id));
 
   if (segment_builder_.kin_del.isOnComponentBoundary(flip->half_edge_id))
   {

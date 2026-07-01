@@ -71,6 +71,10 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       const size_t mid_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+      if (mid_cell == static_cast<size_t>(-1))
+      {
+        continue;
+      }
       segment_builder_.finishMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Section,
         SegmentBuilder::BoundarySegmentAction::SegmentCompleted);

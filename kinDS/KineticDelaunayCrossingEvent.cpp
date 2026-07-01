@@ -25,9 +25,7 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   const size_t section = static_cast<size_t>(t);
   const float fraction = t - section;
 
-  size_t reference_branch = 0;
-  const auto piece_poly = [&](size_t strand_id)
-  { return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch); };
+  const auto piece_poly = [&](size_t strand_id) { return kd->getSitePiecePolynomial(strand_id, section, t); };
 
   auto& dual_triangle = graph.face(voronoi_vertex_id);
   auto& containing_triangle = graph.face(crossing_data.getContainingTriId(voronoi_vertex_id));
@@ -42,8 +40,6 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   {
     return;
   }
-
-  reference_branch = kd->getReferenceBranch(v_i, t);
 
   // Check a special case: the containing triangle is infinite and adjacent to the dual triangle. In this case, we need
   // a different predicate
@@ -85,8 +81,6 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
     v_i = graph.triangleOppositeVertex(dual_triangle.half_edges[adjacent_edge_index]);
     v_j = graph.halfEdge(dual_triangle.half_edges[adjacent_edge_index]).origin;
     v_k = graph.halfEdge(dual_triangle.half_edges[adjacent_edge_index] ^ 1).origin;
-
-    reference_branch = kd->getReferenceBranch(v_i, t);
 
     Trajectory<2> traj_i = piece_poly(v_i);
     Trajectory<2> traj_j = piece_poly(v_j);

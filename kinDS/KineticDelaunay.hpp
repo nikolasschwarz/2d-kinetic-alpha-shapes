@@ -6,6 +6,7 @@
 #include "Polynomial.hpp"
 #include "ProgressBar.hpp"
 #include "StrandTree.hpp"
+#include <filesystem>
 #include <format>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
@@ -177,10 +178,17 @@ class KineticDelaunay
   /// (inside-face connectivity) and from @ref StrandTree::getBranchIndex (input branch). Updated only when Delaunay
   /// graph connectivity is severed (@ref onGraphCutApplied / @ref onGraphRetriangulated), using live-face adjacency.
   std::vector<size_t> runtime_branch_map_;
+  /// Monotonic runtime-branch id allocator; ids are never reused.
+  size_t next_runtime_branch_id_ = 0;
+  /// Liveness per runtime branch id (index = id).
+  std::vector<bool> runtime_branch_alive_;
   ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
   bool on_the_fly_boundary = true;
+  std::optional<std::filesystem::path> visual_debug_output_root_;
+  std::optional<double> flip_polynomial_dump_target_time_;
+  std::optional<size_t> flip_polynomial_dump_target_half_edge_;
 
   // crossing-related data (see public `CrossingData` forward declaration above).
 
@@ -197,20 +205,32 @@ class KineticDelaunay
 
   void precomputeStep(double t);
 
+  /**
+   * Piecewise-linear site motion on [@p section, @p section + 1] using @ref StrandTree::getPiecePolynomial with the
+   * same per-strand reference branch as @ref getPointAt for times in that interval.
+   */
+  Trajectory<2> getSitePiecePolynomial(size_t strand_id, size_t section, double schedule_time) const;
+
   void growGraphSlotArrays();
   size_t findContainingTriForVoronoiVertex(size_t voronoi_vertex_id, double t) const;
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingSplitReference();
   void updateRuntimeBranchMapFromInputBranches(double t);
-  void updateRuntimeBranchMapFromLiveGraph(double t);
+  void updateRuntimeBranchMapFromLiveGraph(double t, const char* trigger);
+  size_t allocateRuntimeBranch();
+  void markRuntimeBranchDead(size_t runtime_branch_id, double t, const char* reason,
+    std::optional<size_t> input_branch_id = std::nullopt);
+  void logRuntimeBranchEvent(double t, const std::string& event_line);
+  bool runtime_branch_log_header_written_ = false;
   void retireFinishedInputBranches(double t);
   void validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const;
   std::vector<std::vector<size_t>> extractGraphConnectedComponents() const;
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
   size_t getRuntimeBranchIdForFace(size_t face_id) const;
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots);
-  void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots);
+  void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots, bool update_runtime_branch_map = true);
+  bool isStrandLiveInGraph(size_t strand_id) const;
 
   void handleEvents();
 
@@ -247,6 +267,17 @@ class KineticDelaunay
 
   const StrandTree& getStrandTree() const;
 
+  void setVisualDebugOutputRoot(const std::filesystem::path& root);
+  const std::optional<std::filesystem::path>& getVisualDebugOutputRoot() const;
+  /// Path to @c branches.txt under @ref getVisualDebugOutputRoot when visual debug is enabled.
+  std::optional<std::filesystem::path> getRuntimeBranchLogPath() const;
+
+  void setFlipPolynomialDumpTargetTime(std::optional<double> target_time);
+  const std::optional<double>& getFlipPolynomialDumpTargetTime() const;
+
+  void setFlipPolynomialDumpTargetHalfEdge(std::optional<size_t> half_edge_id);
+  const std::optional<size_t>& getFlipPolynomialDumpTargetHalfEdge() const;
+
   void computeComponentData(double t);
 
   /// True once @ref component_data reflects the current @ref HalfEdgeDelaunayGraph after the latest section
@@ -259,6 +290,9 @@ class KineticDelaunay
 
   /// Record parent-component frame for strands in @p new_components until the next section retriangulation.
   void notePendingSplitReference(size_t parent_component_id, const std::vector<std::vector<size_t>>& new_components);
+
+  /// Smallest @ref StrandTree::getBranchIndex among live strands in @p component_id at @p branch_lookup_height.
+  size_t minInputBranchForComponent(size_t component_id, size_t branch_lookup_height) const;
 
   CrossingData& getCrossingDataMutable();
   const CrossingData& getCrossingData() const;
@@ -318,6 +352,12 @@ class KineticDelaunay
    * Not the inside-face component id and not the input @ref StrandTree branch index.
    */
   size_t getRuntimeBranchIdForStrand(size_t strand_id) const;
+
+  /** Inside-face connected component id for @p strand_id. */
+  size_t getInsideFaceComponentId(size_t strand_id) const;
+
+  /** Lowest strand id in inside-face component @p component_id (BFS seed order). */
+  size_t getComponentLowestStrandId(size_t component_id) const;
 
   /**
    * Runtime branch of a live half-edge, resolved from its incident face(s).

@@ -61,6 +61,22 @@
           "hostOS": [ "Windows" ]
         }
       }
+    },
+    {
+      "name": "msys2-ucrt64-debug",
+      "displayName": "MSYS2 UCRT64 GCC Debug (headless)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-gcc-debug",
+      "toolchainFile": "${sourceDir}/cmake/msys2-ucrt64.toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": [ "Windows" ],
+          "intelliSenseMode": "windows-gcc-x64"
+        }
+      }
     }
   ],
   "buildPresets": [
@@ -95,6 +111,11 @@
       "name": "vcpkg-x64-vs-release",
       "configurePreset": "vcpkg-x64-vs",
       "configuration": "Release"
+    },
+    {
+      "name": "msys2-ucrt64-debug",
+      "displayName": "MSYS2 GCC Debug",
+      "configurePreset": "msys2-ucrt64-debug"
     }
   ]
 }

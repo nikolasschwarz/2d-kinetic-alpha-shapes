@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -13,20 +14,28 @@ namespace kinDS
 {
 namespace
 {
-std::unordered_map<size_t, size_t> buildSiteRuntimeBranchLabelsIfDiff(
+size_t inputBranchSectionIndex(double t, size_t tree_height)
+{
+  const size_t lower_index = static_cast<size_t>(std::floor(t));
+  const double frac = t - static_cast<double>(lower_index);
+  size_t section_index = lower_index;
+  if (frac > std::numeric_limits<double>::epsilon())
+  {
+    section_index = lower_index + 1;
+  }
+  if (tree_height > 0 && section_index >= tree_height)
+  {
+    section_index = tree_height - 1;
+  }
+  return section_index;
+}
+
+std::unordered_map<size_t, size_t> buildSiteInputBranchLabels(
   KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph, double occurrence_time)
 {
   std::unordered_map<size_t, size_t> labels;
-  const auto& branch_indices = kin_del.getStrandTree().getBranchIndices();
-  const auto& component_map = kin_del.component_data.component_map;
   const size_t vertex_count = graph.getVertexCount();
-
-  size_t section_index = static_cast<size_t>(std::ceil(occurrence_time));
-  const size_t height = kin_del.getStrandTree().getHeight();
-  if (height > 0 && section_index >= height)
-  {
-    section_index = height - 1;
-  }
+  const size_t section_index = inputBranchSectionIndex(occurrence_time, kin_del.getStrandTree().getHeight());
 
   for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
   {
@@ -34,33 +43,28 @@ std::unordered_map<size_t, size_t> buildSiteRuntimeBranchLabelsIfDiff(
     {
       continue;
     }
-    if (strand_id >= component_map.size())
-    {
-      continue;
-    }
 
-    const size_t runtime_branch = component_map[strand_id];
-    size_t data_structure_branch = runtime_branch;
-    if (strand_id < branch_indices.size() && section_index < branch_indices[strand_id].size())
-    {
-      data_structure_branch = branch_indices[strand_id][section_index];
-    }
-
-    if (data_structure_branch != runtime_branch)
-    {
-      labels[strand_id] = runtime_branch;
-    }
+    labels[strand_id] = kin_del.getStrandTree().getBranchIndex(strand_id, section_index);
   }
 
   return labels;
 }
 
-void noteBranchForSite(std::unordered_set<size_t>& branches, const std::vector<size_t>& component_map, size_t strand_id)
+void noteRuntimeBranchForStrand(
+  std::unordered_set<size_t>& runtime_branches, const KineticDelaunay& kin_del, size_t strand_id)
 {
-  if (strand_id < component_map.size())
+  if (kin_del.isDummyBoundary(strand_id))
   {
-    branches.insert(component_map[strand_id]);
+    return;
   }
+
+  const auto& runtime_branch_map = kin_del.getRuntimeBranchMap();
+  if (strand_id >= runtime_branch_map.size())
+  {
+    return;
+  }
+
+  runtime_branches.insert(runtime_branch_map[strand_id]);
 }
 
 std::optional<size_t> uniqueBranchOrNull(const std::unordered_set<size_t>& branches)
@@ -72,15 +76,14 @@ std::optional<size_t> uniqueBranchOrNull(const std::unordered_set<size_t>& branc
   return std::nullopt;
 }
 
-std::optional<size_t> inferEventBranchFromHighlight(
+std::optional<size_t> inferEventRuntimeBranchFromHighlight(
   const HalfEdgeDelaunayGraph& graph, const KineticDelaunay& kin_del, const VisualDebugHighlight& highlight)
 {
-  const auto& component_map = kin_del.component_data.component_map;
-  std::unordered_set<size_t> branches;
+  std::unordered_set<size_t> runtime_branches;
 
   for (size_t strand_id : highlight.delaunay_vertices)
   {
-    noteBranchForSite(branches, component_map, strand_id);
+    noteRuntimeBranchForStrand(runtime_branches, kin_del, strand_id);
   }
 
   for (size_t he_id : highlight.directed_half_edges)
@@ -88,12 +91,12 @@ std::optional<size_t> inferEventBranchFromHighlight(
     const int origin = graph.halfEdge(he_id).origin;
     if (origin >= 0)
     {
-      noteBranchForSite(branches, component_map, static_cast<size_t>(origin));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin));
     }
     const int dest = graph.destination(he_id);
     if (dest >= 0)
     {
-      noteBranchForSite(branches, component_map, static_cast<size_t>(dest));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(dest));
     }
   }
 
@@ -108,7 +111,7 @@ std::optional<size_t> inferEventBranchFromHighlight(
     {
       if (v >= 0)
       {
-        noteBranchForSite(branches, component_map, static_cast<size_t>(v));
+        noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(v));
       }
     }
   }
@@ -124,27 +127,30 @@ std::optional<size_t> inferEventBranchFromHighlight(
     const int origin_odd = graph.halfEdge(he_even + 1).origin;
     if (origin_even >= 0)
     {
-      noteBranchForSite(branches, component_map, static_cast<size_t>(origin_even));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin_even));
     }
     if (origin_odd >= 0)
     {
-      noteBranchForSite(branches, component_map, static_cast<size_t>(origin_odd));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin_odd));
     }
   }
 
-  return uniqueBranchOrNull(branches);
+  return uniqueBranchOrNull(runtime_branches);
 }
 
-std::string visualDebugSvgRelativePath(
-  double occurrence_time, const char* phase, const std::string& event_descriptor, std::optional<size_t> branch_id)
+std::string visualDebugSvgRelativePath(double occurrence_time, const char* phase, const std::string& event_descriptor,
+  std::optional<size_t> runtime_branch_id, const std::optional<std::filesystem::path>& output_root)
 {
   const std::string basename = "t" + std::to_string(occurrence_time) + "_segmentbuilder_" + phase + "_"
     + event_descriptor + ".svg";
-  if (!branch_id.has_value())
+  const std::string relative = runtime_branch_id.has_value()
+    ? ("branch" + std::to_string(runtime_branch_id.value()) + "/" + basename)
+    : ("branch0/" + basename);
+  if (!output_root.has_value())
   {
-    return basename;
+    return relative;
   }
-  return "branch" + std::to_string(branch_id.value()) + "/" + basename;
+  return (*output_root / relative).generic_string();
 }
 
 std::unordered_set<size_t> collectLiveStrandIds(const HalfEdgeDelaunayGraph& graph)
@@ -167,23 +173,34 @@ std::unordered_set<size_t> collectLiveStrandIds(const HalfEdgeDelaunayGraph& gra
   return strand_ids;
 }
 
-std::unordered_set<size_t> filterStrandIdsForComponent(
-  const std::unordered_set<size_t>& strand_ids, const std::unordered_set<size_t>* component_strands)
+std::unordered_set<size_t> collectActiveRuntimeBranches(
+  const KineticDelaunay& kin_del, const std::unordered_set<size_t>& live_strand_ids)
 {
-  if (component_strands == nullptr)
+  std::unordered_set<size_t> runtime_branches;
+  const auto& runtime_branch_map = kin_del.getRuntimeBranchMap();
+  for (size_t strand_id : live_strand_ids)
   {
-    return strand_ids;
-  }
-
-  std::unordered_set<size_t> filtered;
-  for (size_t strand_id : strand_ids)
-  {
-    if (component_strands->count(strand_id) != 0)
+    if (strand_id < runtime_branch_map.size())
     {
-      filtered.insert(strand_id);
+      runtime_branches.insert(runtime_branch_map[strand_id]);
     }
   }
-  return filtered;
+  return runtime_branches;
+}
+
+std::unordered_set<size_t> collectStrandIdsForRuntimeBranch(
+  const KineticDelaunay& kin_del, const std::unordered_set<size_t>& live_strand_ids, size_t runtime_branch_id)
+{
+  std::unordered_set<size_t> strand_ids;
+  const auto& runtime_branch_map = kin_del.getRuntimeBranchMap();
+  for (size_t strand_id : live_strand_ids)
+  {
+    if (strand_id < runtime_branch_map.size() && runtime_branch_map[strand_id] == runtime_branch_id)
+    {
+      strand_ids.insert(strand_id);
+    }
+  }
+  return strand_ids;
 }
 
 std::pair<std::vector<glm::dvec2>, std::unordered_set<size_t>> buildVisualDebugStrandPositions(
@@ -211,9 +228,9 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   const HalfEdgeDelaunayGraph& graph, KineticDelaunay& kin_del,
   const std::vector<size_t>& containing_tri_ids,
   const std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo>& intersection_debug_data,
-  const VisualDebugHighlight& highlight, const std::unordered_set<size_t>* component_strands,
+  const VisualDebugHighlight& highlight, const std::unordered_set<size_t>* highlighted_strands,
   const std::unordered_set<size_t>& positioned_strands,
-  const std::unordered_map<size_t, size_t>& site_runtime_branch_if_diff)
+  const std::unordered_map<size_t, size_t>& site_input_branch_labels)
 {
   const std::filesystem::path filepath(relative_path);
   if (filepath.has_parent_path())
@@ -221,14 +238,14 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
     std::filesystem::create_directories(filepath.parent_path());
   }
   HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &kin_del.getFacesInside(), true,
-    &containing_tri_ids, &intersection_debug_data, &highlight, component_strands, &site_runtime_branch_if_diff,
+    &containing_tri_ids, &intersection_debug_data, &highlight, highlighted_strands, &site_input_branch_labels,
     &positioned_strands);
 }
 } // namespace
 
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
   double occurrence_time, const char* phase, const std::string& event_descriptor,
-  const VisualDebugHighlight& highlight, std::optional<size_t> event_branch_id)
+  const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id)
 {
   if (!visual_debug)
   {
@@ -237,57 +254,77 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
 
   const auto& containing_tri_ids = kin_del.getCrossingData().getContainingTriIds();
   const auto intersection_debug_data = kin_del.getCrossingIntersectionDebugData();
-  const auto& components = kin_del.component_data.components;
-  const std::unordered_map<size_t, size_t> site_runtime_branch_if_diff
-    = buildSiteRuntimeBranchLabelsIfDiff(kin_del, graph, occurrence_time);
+  const std::unordered_map<size_t, size_t> site_input_branch_labels
+    = buildSiteInputBranchLabels(kin_del, graph, occurrence_time);
   const std::unordered_set<size_t> live_strand_ids = collectLiveStrandIds(graph);
+  const std::optional<std::filesystem::path>& output_root = kin_del.getVisualDebugOutputRoot();
+  const std::unordered_set<size_t> active_runtime_branches
+    = collectActiveRuntimeBranches(kin_del, live_strand_ids);
 
-  const bool per_branch_svgs = kin_del.isGraphRetriangulatedForComponents() && components.size() > 1;
+  const bool per_branch_svgs = active_runtime_branches.size() > 1;
 
-  if (!per_branch_svgs)
+  auto write_for_runtime_branch = [&](size_t runtime_branch_id)
   {
-    const std::unordered_set<size_t> strand_ids = filterStrandIdsForComponent(live_strand_ids, nullptr);
+    const std::unordered_set<size_t> branch_strands
+      = collectStrandIdsForRuntimeBranch(kin_del, live_strand_ids, runtime_branch_id);
     const auto [points, positioned_strands]
-      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, strand_ids);
-    const std::string filename = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt);
-    writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      nullptr, positioned_strands, site_runtime_branch_if_diff);
-    return;
-  }
-
-  std::optional<size_t> branch_id = event_branch_id;
-  if (!branch_id.has_value())
-  {
-    branch_id = inferEventBranchFromHighlight(graph, kin_del, highlight);
-  }
-
-  if (branch_id.has_value())
-  {
-    if (branch_id.value() >= components.size())
+      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, branch_strands);
+    if (positioned_strands.empty())
     {
       return;
     }
-    std::unordered_set<size_t> component_strands(components[branch_id.value()].begin(), components[branch_id.value()].end());
-    const std::unordered_set<size_t> strand_ids = filterStrandIdsForComponent(live_strand_ids, &component_strands);
-    const auto [points, positioned_strands]
-      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, strand_ids);
-    const std::string filename
-      = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, branch_id);
+    const std::string filename = visualDebugSvgRelativePath(
+      occurrence_time, phase, event_descriptor, runtime_branch_id, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      &component_strands, positioned_strands, site_runtime_branch_if_diff);
+      &branch_strands, positioned_strands, site_input_branch_labels);
+  };
+
+  if (!per_branch_svgs)
+  {
+    std::optional<size_t> runtime_branch_id = event_runtime_branch_id;
+    if (!runtime_branch_id.has_value())
+    {
+      runtime_branch_id = inferEventRuntimeBranchFromHighlight(graph, kin_del, highlight);
+    }
+    if (!runtime_branch_id.has_value() && active_runtime_branches.size() == 1)
+    {
+      runtime_branch_id = *active_runtime_branches.begin();
+    }
+
+    if (runtime_branch_id.has_value())
+    {
+      write_for_runtime_branch(runtime_branch_id.value());
+      return;
+    }
+
+    const auto [points, positioned_strands]
+      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, live_strand_ids);
+    if (positioned_strands.empty())
+    {
+      return;
+    }
+    const std::string filename
+      = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt, output_root);
+    writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
+      nullptr, positioned_strands, site_input_branch_labels);
     return;
   }
 
-  for (size_t component_id = 0; component_id < components.size(); ++component_id)
+  std::optional<size_t> runtime_branch_id = event_runtime_branch_id;
+  if (!runtime_branch_id.has_value())
   {
-    std::unordered_set<size_t> component_strands(components[component_id].begin(), components[component_id].end());
-    const std::unordered_set<size_t> strand_ids = filterStrandIdsForComponent(live_strand_ids, &component_strands);
-    const auto [points, positioned_strands]
-      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, strand_ids);
-    const std::string filename
-      = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, component_id);
-    writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      &component_strands, positioned_strands, site_runtime_branch_if_diff);
+    runtime_branch_id = inferEventRuntimeBranchFromHighlight(graph, kin_del, highlight);
+  }
+
+  if (runtime_branch_id.has_value())
+  {
+    write_for_runtime_branch(runtime_branch_id.value());
+    return;
+  }
+
+  for (size_t branch_id : active_runtime_branches)
+  {
+    write_for_runtime_branch(branch_id);
   }
 }
 

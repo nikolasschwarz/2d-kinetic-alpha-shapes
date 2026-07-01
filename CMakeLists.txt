@@ -65,6 +65,7 @@ set(KINDS_SOURCES
     "kinDS/KineticAlgorithm.cpp"
     "kinDS/KineticDelaunay.cpp"
     "kinDS/KineticDelaunayFlipEvent.cpp"
+    "kinDS/KineticDelaunayFlipEventTriggerDump.cpp"
     "kinDS/KineticDelaunayRadiusEvent.cpp"
     "kinDS/KineticDelaunayCrossingEvent.cpp"
     "kinDS/KineticDelaunaySectionEvent.cpp"
@@ -188,12 +189,17 @@ endif()
 
 target_include_directories(kinDS
     PUBLIC
-        $<BUILD_INTERFACE:${KINDS_INCLUDE_DIRS}>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         # For internal includes within the library
         ${CMAKE_CURRENT_SOURCE_DIR}/kinDS
 )
+
+# Apply each public include directory separately. A single BUILD_INTERFACE entry with a
+# CMake list breaks on MSVC (semicolons are dropped and paths get concatenated).
+foreach(_kinds_public_include IN LISTS KINDS_INCLUDE_DIRS)
+    target_include_directories(kinDS PUBLIC $<BUILD_INTERFACE:${_kinds_public_include}>)
+endforeach()
 
 # Find and link dependencies
 # glm: allow parent project to provide glm::glm target if it already uses glm

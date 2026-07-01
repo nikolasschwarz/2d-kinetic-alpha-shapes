@@ -54,6 +54,9 @@ class TreeMesher
     /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.
     bool retriangulate_on_component_split = false;
     size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
+    std::optional<std::filesystem::path> visual_debug_output_root;
+    std::optional<double> flip_polynomial_dump_target_time;
+    std::optional<size_t> flip_polynomial_dump_target_half_edge;
   };
 
  private:

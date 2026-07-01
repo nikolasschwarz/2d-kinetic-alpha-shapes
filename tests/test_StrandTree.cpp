@@ -5,6 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -293,6 +294,95 @@ TEST_CASE("StrandTree evaluateTransformed before branch exists", "[StrandTree]")
   const glm::dvec2 interpolated = tree.evaluateTransformed(0, 1.5, 1);
   REQUIRE(interpolated.x == Catch::Approx(1.5));
   REQUIRE(interpolated.y == Catch::Approx(0.0));
+
+  const Trajectory<2> piece = tree.getPiecePolynomial(0, 1, 1);
+  REQUIRE(interpolated.x == Catch::Approx(piece[0](0.5)));
+  REQUIRE(interpolated.y == Catch::Approx(piece[1](0.5)));
+}
+
+TEST_CASE("StrandTree getPiecePolynomial matches evaluateTransformed", "[StrandTree]")
+{
+  enable_all_log_levels_for_test();
+
+  glm::dmat4 branch0 = glm::dmat4(1.0);
+  glm::dmat4 branch1 = glm::translate(glm::dmat4(1.0), glm::dvec3(10.0, 0.0, 0.0));
+
+  std::vector<std::vector<glm::dvec2>> support_points = {
+    { { 0.0, 0.0 }, { 1.0, 0.0 }, { 2.0, 0.0 } },
+    { { 0.0, 1.0 }, { 0.0, 2.0 }, { 0.0, 3.0 } },
+  };
+  std::vector<std::vector<double>> subdivisions = { { 0.0, 1.0, 2.0 }, { 0.0, 1.0, 2.0 } };
+  std::vector<std::vector<int>> physics = { { 0 }, { 0 } };
+  std::vector<std::vector<glm::dmat4>> transforms = {
+    { branch0, branch1 },
+    { branch0, branch1 },
+    { branch0, branch1 },
+  };
+  std::vector<std::vector<size_t>> branch_indices = {
+    { 0, 0, 1 },
+    { 1, 1, 1 },
+  };
+  std::vector<std::vector<std::vector<size_t>>> strands_by_branch = {
+    { { 0 }, { 1 } },
+    { { 0 }, { 0, 1 } },
+    { { 0 }, { 0, 1 } },
+  };
+
+  StrandTree tree(support_points, subdivisions, physics, transforms, branch_indices, strands_by_branch);
+  const size_t reference_branch = 1;
+
+  for (double t : { 1.0, 1.25, 1.5, 1.75, 2.0 })
+  {
+    const glm::dvec2 evaluated = tree.evaluateTransformed(1, t, reference_branch);
+    const size_t section = static_cast<size_t>(std::floor(t));
+    const double frac = t - static_cast<double>(section);
+    if (frac < std::numeric_limits<double>::epsilon())
+    {
+      const glm::dvec2 knot = tree.getPointTransformed(1, section, reference_branch);
+      REQUIRE(evaluated.x == Catch::Approx(knot.x));
+      REQUIRE(evaluated.y == Catch::Approx(knot.y));
+      continue;
+    }
+
+    const Trajectory<2> piece = tree.getPiecePolynomial(1, section, reference_branch);
+    REQUIRE(evaluated.x == Catch::Approx(piece[0](frac)));
+    REQUIRE(evaluated.y == Catch::Approx(piece[1](frac)));
+  }
+}
+
+TEST_CASE("StrandTree getBranchIndex clamps height for short strands", "[StrandTree]")
+{
+  enable_all_log_levels_for_test();
+
+  // Global tree height is 3, but strand 1 only has branch entries through height 1.
+  std::vector<std::vector<glm::dvec2>> support_points = {
+    { { 0.0, 0.0 }, { 1.0, 0.0 }, { 2.0, 0.0 }, { 3.0, 0.0 } },
+    { { 0.0, 1.0 }, { 1.0, 1.0 } },
+  };
+  std::vector<std::vector<double>> subdivisions = { { 0.0, 1.0, 2.0, 3.0 }, { 0.0, 1.0 } };
+  std::vector<std::vector<int>> physics = { { 0 }, { 0 } };
+  std::vector<std::vector<glm::dmat4>> transforms = {
+    { glm::dmat4(1.0) },
+    { glm::dmat4(1.0) },
+    { glm::dmat4(1.0) },
+    { glm::dmat4(1.0) },
+  };
+  std::vector<std::vector<size_t>> branch_indices = {
+    { 0, 1, 2, 2 },
+    { 0, 1 },
+  };
+  std::vector<std::vector<std::vector<size_t>>> strands_by_branch = {
+    { { 0, 1 } },
+    { { 0 }, { 1 } },
+    { { 0 }, { 1 } },
+    { { 0 }, { 1 } },
+  };
+
+  StrandTree tree(support_points, subdivisions, physics, transforms, branch_indices, strands_by_branch);
+
+  REQUIRE(tree.getBranchIndex(1, 1) == 1);
+  REQUIRE(tree.getBranchIndex(1, 2) == 1);
+  REQUIRE(tree.getBranchIndex(1, 99) == 1);
 }
 
 TEST_CASE("StrandTree empty tree", "[StrandTree]")
