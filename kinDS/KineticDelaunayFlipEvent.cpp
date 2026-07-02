@@ -1,10 +1,25 @@
 #include "KineticDelaunayFlipEvent.hpp"
 
 #include <algorithm>
+#include <limits>
 
 using namespace kinDS;
 
 #include "KineticDelaunayEventPredicates.hpp"
+
+namespace
+{
+double referenceBranchLookupTimeForSection(size_t section, double schedule_time)
+{
+  const double section_start = static_cast<double>(section);
+  double lookup_time = schedule_time;
+  if (lookup_time <= section_start + std::numeric_limits<double>::epsilon())
+  {
+    lookup_time = section_start + std::numeric_limits<double>::epsilon();
+  }
+  return lookup_time;
+}
+} // namespace
 
 void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
 {
@@ -18,8 +33,14 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   size_t he_id = quad_id * 2;
   Polynomial event_trigger;
 
+  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, t);
+  const std::vector<size_t> quad_strand_ids = collectFlipQuadrilateralStrandIds(graph, he_id);
+  const size_t shared_reference_branch = kd->getSharedReferenceBranchForStrands(quad_strand_ids, branch_lookup_time);
+
   std::vector<Trajectory<2>> trajs;
-  const auto piece_poly = [&](size_t strand_id) { return kd->getSitePiecePolynomial(strand_id, section, t); };
+  const auto piece_poly = [&](size_t strand_id) {
+    return kd->getSitePiecePolynomialWithReferenceBranch(strand_id, section, shared_reference_branch);
+  };
 
   if (graph.isOnConvexBoundary(he_id) || graph.isOutsideConvexBoundary(he_id))
   {

@@ -12,6 +12,7 @@
 #include <glm/gtx/string_cast.hpp>
 #include <map>
 #include <memory>
+#include <unordered_map>
 #include <optional>
 #include <queue>
 #include <string>
@@ -174,6 +175,8 @@ class KineticDelaunay
   static constexpr size_t no_pending_split_reference_vertex = static_cast<size_t>(-1);
   /// While a component split awaits section retriangulation, affected strands keep the parent component frame.
   std::vector<size_t> pending_split_reference_vertex_;
+  /// Full parent-component strand lists captured at the first pending split per component id (before subdivision).
+  std::unordered_map<size_t, std::vector<size_t>> pending_split_frozen_parent_strands_;
   /// Per-strand runtime branch id (see @ref getRuntimeBranchIdForStrand). Differs from @ref ComponentData::component_map
   /// (inside-face connectivity) and from @ref StrandTree::getBranchIndex (input branch). Updated only when Delaunay
   /// graph connectivity is severed (@ref onGraphCutApplied / @ref onGraphRetriangulated), using live-face adjacency.
@@ -216,6 +219,8 @@ class KineticDelaunay
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingSplitReference();
+  /// Strand ids whose min input branch defines the motion frame for @p strand_id.
+  void collectReferenceBranchStrandPool(size_t strand_id, std::vector<size_t>& pool) const;
   void updateRuntimeBranchMapFromInputBranches(double t);
   void updateRuntimeBranchMapFromLiveGraph(double t, const char* trigger);
   size_t allocateRuntimeBranch();
@@ -261,6 +266,14 @@ class KineticDelaunay
   /** Branch frame used by getPointAt for sites in the same component as @p strand_id. */
   size_t getReferenceBranch(size_t strand_id, double t) const;
 
+  /// One shared reference branch for all @p strand_ids (e.g. flip quadrilateral vertices).
+  size_t getSharedReferenceBranchForStrands(const std::vector<size_t>& strand_ids, double branch_lookup_time) const;
+
+  glm::dvec2 getPointAtWithReferenceBranch(size_t v, double t, size_t reference_branch) const;
+
+  Trajectory<2> getSitePiecePolynomialWithReferenceBranch(
+    size_t strand_id, size_t section, size_t reference_branch) const;
+
   std::vector<glm::dvec2> getPointsAt(double t) const;
 
   glm::dvec3 getPointInObjectSpace(size_t v, double t) const;
@@ -288,11 +301,15 @@ class KineticDelaunay
   void setComponentSplitPolicy(ComponentSplitPolicy policy) { component_split_policy_ = policy; }
   ComponentSplitPolicy getComponentSplitPolicy() const { return component_split_policy_; }
 
-  /// Record parent-component frame for strands in @p new_components until the next section retriangulation.
+  /// Record parent-component frame for strands in @p new_components until the next graph cut/retriangulation.
+  /// Captures the full pre-split strand list for @p parent_component_id on first use.
   void notePendingSplitReference(size_t parent_component_id, const std::vector<std::vector<size_t>>& new_components);
 
   /// Smallest @ref StrandTree::getBranchIndex among live strands in @p component_id at @p branch_lookup_height.
   size_t minInputBranchForComponent(size_t component_id, size_t branch_lookup_height) const;
+
+  /// Smallest @ref StrandTree::getBranchIndex among @p strand_ids at @p branch_lookup_height.
+  size_t minInputBranchForStrands(const std::vector<size_t>& strand_ids, size_t branch_lookup_height) const;
 
   CrossingData& getCrossingDataMutable();
   const CrossingData& getCrossingData() const;
@@ -394,5 +411,7 @@ class KineticDelaunay
    * intersection computations.
    */
   glm::dvec3 computeVoronoiVertexClampedInfinity(size_t half_edge_id, double t) const;
+  glm::dvec3 computeVoronoiVertexClampedInfinityWithReferenceBranch(
+    size_t half_edge_id, double t, size_t reference_branch) const;
 };
 } // namespace kinDS

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <algorithm>
+#include <optional>
 #include <string>
 
 namespace kinDS
@@ -27,15 +29,70 @@ inline double normalizedTriangleCollinearityMetric(const glm::dvec2& pa, const g
   return area2 / max_len2;
 }
 
-inline glm::dvec2 flipTriangleCircumcenterAt(
-  const KineticDelaunay& kd, const HalfEdgeDelaunayGraph& graph, size_t he_id, double t, bool use_transformed_points)
+inline std::vector<size_t> collectFlipQuadrilateralStrandIds(const HalfEdgeDelaunayGraph& graph, size_t he_id)
+{
+  std::vector<size_t> strand_ids;
+  strand_ids.reserve(4);
+
+  const auto append_strand = [&](int vertex)
+  {
+    if (vertex >= 0)
+    {
+      const size_t strand_id = static_cast<size_t>(vertex);
+      if (std::find(strand_ids.begin(), strand_ids.end(), strand_id) == strand_ids.end())
+      {
+        strand_ids.push_back(strand_id);
+      }
+    }
+  };
+
+  if (graph.isOnConvexBoundary(he_id) || graph.isOutsideConvexBoundary(he_id))
+  {
+    size_t boundary_he_id = he_id;
+    if (graph.isOutsideConvexBoundary(boundary_he_id))
+    {
+      boundary_he_id ^= 1;
+    }
+
+    const int indices[4] = {
+      graph.halfEdge(boundary_he_id).origin,
+      graph.triangleOppositeVertex(boundary_he_id ^ 1),
+      graph.halfEdge(boundary_he_id ^ 1).origin,
+      graph.triangleOppositeVertex(boundary_he_id),
+    };
+    for (int vertex : indices)
+    {
+      append_strand(vertex);
+    }
+  }
+  else
+  {
+    append_strand(graph.halfEdge(he_id).origin);
+    append_strand(graph.triangleOppositeVertex(he_id ^ 1));
+    append_strand(graph.halfEdge(he_id ^ 1).origin);
+    append_strand(graph.triangleOppositeVertex(he_id));
+  }
+
+  return strand_ids;
+}
+
+inline glm::dvec2 flipTriangleCircumcenterAt(const KineticDelaunay& kd, const HalfEdgeDelaunayGraph& graph, size_t he_id,
+  double t, bool use_transformed_points, std::optional<size_t> shared_reference_branch = std::nullopt)
 {
   const std::array<int, 3> vertices = graph.adjacentTriangleVertices(he_id);
   const StrandTree& tree = kd.getStrandTree();
   const auto point_at = [&](int vertex) -> glm::dvec2
   {
     const size_t strand_id = static_cast<size_t>(vertex);
-    return use_transformed_points ? kd.getPointAt(strand_id, t) : tree.evaluate(strand_id, t);
+    if (!use_transformed_points)
+    {
+      return tree.evaluate(strand_id, t);
+    }
+    if (shared_reference_branch.has_value())
+    {
+      return kd.getPointAtWithReferenceBranch(strand_id, t, shared_reference_branch.value());
+    }
+    return kd.getPointAt(strand_id, t);
   };
   return HalfEdgeDelaunayGraph::circumcenter(
     point_at(vertices[0]), point_at(vertices[1]), point_at(vertices[2]));
@@ -185,8 +242,13 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
   }
   else
   {
-    const glm::dvec3 left_voronoi_vertex = kd->computeVoronoiVertexClampedInfinity(half_edge_id, occurrence_time);
-    const glm::dvec3 right_voronoi_vertex = kd->computeVoronoiVertexClampedInfinity(half_edge_id ^ 1, occurrence_time);
+    const std::vector<size_t> quad_strand_ids = collectFlipQuadrilateralStrandIds(graph, half_edge_id);
+    const size_t shared_reference_branch
+      = kd->getSharedReferenceBranchForStrands(quad_strand_ids, occurrence_time);
+    const glm::dvec3 left_voronoi_vertex
+      = kd->computeVoronoiVertexClampedInfinityWithReferenceBranch(half_edge_id, occurrence_time, shared_reference_branch);
+    const glm::dvec3 right_voronoi_vertex = kd->computeVoronoiVertexClampedInfinityWithReferenceBranch(
+      half_edge_id ^ 1, occurrence_time, shared_reference_branch);
     const double voronoi_vertex_distance
       = glm::distance(glm::dvec2(left_voronoi_vertex), glm::dvec2(right_voronoi_vertex));
     if (voronoi_vertex_distance > flip_voronoi_vertex_distance_eps)
@@ -195,18 +257,31 @@ inline void KineticDelaunay::FlipEvent::handleEvent()
         = flipTriangleCircumcenterAt(*kd, graph, half_edge_id, occurrence_time, false);
       const glm::dvec2 raw_right_cc
         = flipTriangleCircumcenterAt(*kd, graph, half_edge_id ^ 1, occurrence_time, false);
+      const glm::dvec2 transformed_left_cc
+        = flipTriangleCircumcenterAt(*kd, graph, half_edge_id, occurrence_time, true, shared_reference_branch);
+      const glm::dvec2 transformed_right_cc = flipTriangleCircumcenterAt(
+        *kd, graph, half_edge_id ^ 1, occurrence_time, true, shared_reference_branch);
       const double raw_circumcenter_distance = glm::distance(raw_left_cc, raw_right_cc);
+      const double shared_frame_circumcenter_distance
+        = glm::distance(transformed_left_cc, transformed_right_cc);
       const bool transformed_coincident = voronoi_vertex_distance <= flip_voronoi_vertex_distance_eps;
       const bool untransformed_coincident = raw_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
+      const bool shared_frame_coincident = shared_frame_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
 
       throw std::runtime_error(
         "Invalid flip event: Voronoi edge endpoints are not coincident for half-edge " + std::to_string(half_edge_id)
         + " at t=" + std::to_string(occurrence_time) + " (faces " + std::to_string(face_id) + " and "
         + std::to_string(twin_face_id) + ", transformed_voronoi_distance=" + std::to_string(voronoi_vertex_distance)
-        + ", untransformed_circumcenter_distance=" + std::to_string(raw_circumcenter_distance) + ", left="
+        + ", untransformed_circumcenter_distance=" + std::to_string(raw_circumcenter_distance)
+        + ", shared_frame_circumcenter_distance=" + std::to_string(shared_frame_circumcenter_distance)
+        + ", shared_reference_branch=" + std::to_string(shared_reference_branch) + ", left="
         + glm::to_string(left_voronoi_vertex) + ", right=" + glm::to_string(right_voronoi_vertex) + ", raw_left_cc="
         + glm::to_string(raw_left_cc) + ", raw_right_cc=" + glm::to_string(raw_right_cc)
-        + flipUntransformedFrameMismatchNote(transformed_coincident, untransformed_coincident) + ")");
+        + flipUntransformedFrameMismatchNote(transformed_coincident, untransformed_coincident)
+        + (shared_frame_coincident && !transformed_coincident
+            ? " [shared-frame circumcenters coincide; per-vertex getPointAt frame mismatch]"
+            : "")
+        + ")");
     }
   }
 #endif

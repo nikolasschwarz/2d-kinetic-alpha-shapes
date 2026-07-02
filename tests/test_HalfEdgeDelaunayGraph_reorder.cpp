@@ -229,7 +229,7 @@ TEST_CASE("HalfEdgeDelaunayGraph applyComponentSplit cuts cross-component topolo
     component_map[v] = 1;
   }
 
-  graph.applyComponentSplit(component_map, [&sites](size_t v) { return sites[v]; });
+  graph.applyRuntimeBranchSplit(component_map, [&sites](size_t v) { return sites[v]; });
 
   check_remap_invariants(graph);
 

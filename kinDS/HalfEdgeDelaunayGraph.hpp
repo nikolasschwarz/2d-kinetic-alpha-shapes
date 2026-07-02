@@ -83,10 +83,10 @@ class HalfEdgeDelaunayGraph
     const std::function<glm::dvec2(size_t)>& vertex_position);
 
   /**
-   * Apply a pending runtime component split without retriangulating: tombstone cross-component
+   * Apply a pending runtime-branch split without retriangulating: tombstone cross-component
    * triangles/edges and add infinite faces along new component boundaries (see @ref build).
    */
-  void applyComponentSplit(
+  void applyRuntimeBranchSplit(
     const std::vector<size_t>& component_map,
     const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time = std::nullopt);
 

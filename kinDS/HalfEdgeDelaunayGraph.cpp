@@ -107,11 +107,16 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
   std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles,
   size_t vertex_count)
 {
+  // `boundary_interior` contains the finite half-edges whose twin lies on the outside of the triangulation.
+  // This routine rebuilds the "outside" as explicit infinite faces, one face per boundary edge / boundary vertex corner.
   if (boundary_interior.empty())
   {
     return;
   }
 
+  // Phase 1: index each exterior boundary half-edge by its finite origin vertex.
+  // After this pass, `boundary_edge_map[u]` tells us which exterior half-edge leaves finite vertex `u`.
+  // Each boundary vertex is expected to contribute exactly one outgoing exterior boundary half-edge.
   std::vector<int> boundary_edge_map(vertex_count, -1);
   for (size_t interior_he : boundary_interior)
   {
@@ -132,6 +137,16 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
     boundary_edge_map[static_cast<size_t>(u)] = static_cast<int>(exterior_he);
   }
 
+  // Phase 2: for every boundary exterior half-edge u->v, create a new pair of half-edges that connects
+  // the finite vertex `v` to the implicit vertex at infinity.
+  //
+  // The intended cycle around one infinite face is:
+  //   incoming infinity edge -> boundary exterior edge leaving v -> outgoing infinity edge
+  //
+  // To prepare that cycle:
+  // - `boundary.next` is set to the newly created finite-origin half-edge at `v`
+  // - the twin half-edge at infinity stores `next = next_boundary_he`, i.e. the next boundary edge in the outer walk
+  // - `incoming_edge_map[v]` remembers that the face corner at vertex `v` should later be closed
   std::vector<int> incoming_edge_map(vertex_count, -1);
   for (size_t u = 0; u < vertex_count; ++u)
   {
@@ -169,6 +184,14 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
     incoming_edge_map[static_cast<size_t>(v)] = static_cast<int>(he_at_inf);
   }
 
+  // Phase 3: close each infinite face around a boundary vertex.
+  //
+  // For vertex `u`, `incoming_edge_map[u]` is the infinity-origin half-edge that arrives at the boundary edge
+  // leaving `u`. Its `next` field already points to that boundary edge. That boundary edge's `next` field
+  // should already point to the newly created finite-origin half-edge that heads back toward infinity.
+  //
+  // We then wire the last edge back to the incoming one and assign all three half-edges to a new triangle slot
+  // representing the infinite face adjacent to that boundary corner.
   for (size_t u = 0; u < vertex_count; ++u)
   {
     const int incoming_edge_index = incoming_edge_map[u];
@@ -194,6 +217,8 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
     outgoing.face = static_cast<int>(new_face);
   }
 
+  // Phase 4: sanity-check that every original exterior boundary half-edge now participates in some infinite face
+  // and has a valid `next` pointer. If not, the outer boundary walk was broken somewhere earlier.
   for (size_t interior_he : boundary_interior)
   {
     const size_t exterior_he = interior_he ^ 1;
@@ -792,7 +817,7 @@ void HalfEdgeDelaunayGraph::init(const std::vector<std::vector<glm::dvec2>>& spl
   init(site_positions);
 }
 
-void HalfEdgeDelaunayGraph::applyComponentSplit(const std::vector<size_t>& component_map,
+void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& component_map,
   const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time)
 {
   // In-place component split (no retriangulation). Given component_map[v] = component id for each site vertex,
@@ -804,7 +829,7 @@ void HalfEdgeDelaunayGraph::applyComponentSplit(const std::vector<size_t>& compo
 
   if (component_map.size() < vertex_count)
   {
-    throw std::runtime_error("applyComponentSplit: component_map size mismatch");
+    throw std::runtime_error("applyRuntimeBranchSplit: component_map size mismatch");
   }
 
   static size_t split_debug_dump_counter = 0;
@@ -825,7 +850,7 @@ void HalfEdgeDelaunayGraph::applyComponentSplit(const std::vector<size_t>& compo
     debug_tag += time_suffix;
   }
   {
-    std::ofstream before_dump("applyComponentSplit_before_" + debug_tag + ".txt");
+    std::ofstream before_dump("applyRuntimeBranchSplit_before_" + debug_tag + ".txt");
     if (before_dump.is_open())
     {
       printDebug(&before_dump);
@@ -1007,7 +1032,7 @@ void HalfEdgeDelaunayGraph::applyComponentSplit(const std::vector<size_t>& compo
   validateLiveHalfEdgeFaceReferences();
 
   {
-    std::ofstream after_dump("applyComponentSplit_after_" + debug_tag + ".txt");
+    std::ofstream after_dump("applyRuntimeBranchSplit_after_" + debug_tag + ".txt");
     if (after_dump.is_open())
     {
       printDebug(&after_dump);

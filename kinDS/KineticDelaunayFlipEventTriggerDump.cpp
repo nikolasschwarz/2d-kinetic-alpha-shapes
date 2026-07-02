@@ -94,12 +94,10 @@ double referenceBranchLookupTimeForSection(size_t section, double schedule_time)
   return lookup_time;
 }
 
-Trajectory<2> sitePiecePolynomialAtScheduleTime(
-  const KineticDelaunay& kd, size_t strand_id, size_t section, double schedule_time)
+Trajectory<2> sitePiecePolynomialAtScheduleTime(const KineticDelaunay& kd, size_t strand_id, size_t section,
+  double schedule_time, size_t shared_reference_branch)
 {
-  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
-  const size_t reference_branch = kd.getReferenceBranch(strand_id, branch_lookup_time);
-  return kd.getStrandTree().getPiecePolynomial(strand_id, section, reference_branch);
+  return kd.getSitePiecePolynomialWithReferenceBranch(strand_id, section, shared_reference_branch);
 }
 
 size_t branchLookupHeightForTime(const StrandTree& tree, double t)
@@ -120,7 +118,7 @@ size_t branchLookupHeightForTime(const StrandTree& tree, double t)
 }
 
 void appendSiteTrajectorySection(std::ostringstream& oss, const KineticDelaunay& kd, int vertex_id, size_t section,
-  double schedule_time, const Trajectory<2>& trajectory, char label)
+  double schedule_time, const Trajectory<2>& trajectory, char label, size_t shared_reference_branch)
 {
   if (vertex_id < 0)
   {
@@ -130,7 +128,7 @@ void appendSiteTrajectorySection(std::ostringstream& oss, const KineticDelaunay&
   const size_t strand_id = static_cast<size_t>(vertex_id);
   const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
   const size_t branch_lookup_height = branchLookupHeightForTime(kd.getStrandTree(), branch_lookup_time);
-  const size_t reference_branch = kd.getReferenceBranch(strand_id, branch_lookup_time);
+  const size_t per_vertex_reference_branch = kd.getReferenceBranch(strand_id, branch_lookup_time);
   const size_t input_branch = kd.getStrandTree().getBranchIndex(strand_id, section);
   const size_t runtime_branch = kd.getRuntimeBranchIdForStrand(strand_id);
   const size_t component_id = kd.getInsideFaceComponentId(strand_id);
@@ -144,7 +142,8 @@ void appendSiteTrajectorySection(std::ostringstream& oss, const KineticDelaunay&
   oss << "  input_branch_at_section=" << input_branch << '\n';
   oss << "  input_branch_at_lookup_height=" << kd.getStrandTree().getBranchIndex(strand_id, branch_lookup_height)
       << '\n';
-  oss << "  reference_branch_for_motion=" << reference_branch << '\n';
+  oss << "  reference_branch_for_motion=" << per_vertex_reference_branch << '\n';
+  oss << "  shared_reference_branch_for_predicate=" << shared_reference_branch << '\n';
   oss << "  reference_from_lowest_strand_id=" << reference_from_lowest_strand << " (strand "
       << lowest_strand_in_component << ")\n";
   oss << "  branch_lookup_time=" << std::setprecision(17) << branch_lookup_time << '\n';
@@ -177,6 +176,10 @@ FlipEventTriggerDump buildFlipEventTriggerDump(const KineticDelaunay& kd, size_t
   const auto& graph = kd.getGraph();
   const size_t section = static_cast<size_t>(schedule_time);
   const double section_fraction = schedule_time - static_cast<double>(section);
+  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
+  const std::vector<size_t> quad_strand_ids = collectFlipQuadrilateralStrandIds(graph, half_edge_id);
+  const size_t shared_reference_branch
+    = kd.getSharedReferenceBranchForStrands(quad_strand_ids, branch_lookup_time);
 
   FlipEventTriggerDump dump;
   dump.section = section;
@@ -208,7 +211,8 @@ FlipEventTriggerDump buildFlipEventTriggerDump(const KineticDelaunay& kd, size_t
     {
       dump.vertex_ids[i] = filtered_indices[i];
       dump.site_trajectories.push_back(
-        sitePiecePolynomialAtScheduleTime(kd, static_cast<size_t>(filtered_indices[i]), section, schedule_time));
+        sitePiecePolynomialAtScheduleTime(kd, static_cast<size_t>(filtered_indices[i]), section, schedule_time,
+          shared_reference_branch));
     }
 
     if (filtered_indices.size() >= 3)
@@ -235,7 +239,8 @@ FlipEventTriggerDump buildFlipEventTriggerDump(const KineticDelaunay& kd, size_t
     for (size_t i = 0; i < dump.vertex_count; ++i)
     {
       dump.site_trajectories.push_back(
-        sitePiecePolynomialAtScheduleTime(kd, static_cast<size_t>(dump.vertex_ids[i]), section, schedule_time));
+        sitePiecePolynomialAtScheduleTime(kd, static_cast<size_t>(dump.vertex_ids[i]), section, schedule_time,
+          shared_reference_branch));
     }
 
     dump.event_trigger = inCircle(dump.site_trajectories[0][0], dump.site_trajectories[0][1], dump.site_trajectories[1][0],
@@ -258,6 +263,12 @@ void writeFlipEventTriggerPolynomialDump(
   oss << "half_edge_id: " << dump.half_edge_id << '\n';
   oss << "occurrence_time: " << occurrence_time << '\n';
   oss << "schedule_time_used_for_polynomials: " << dump.schedule_time << '\n';
+  const double branch_lookup_time = referenceBranchLookupTimeForSection(dump.section, dump.schedule_time);
+  const std::vector<size_t> quad_strand_ids
+    = collectFlipQuadrilateralStrandIds(kd.getGraph(), dump.half_edge_id);
+  const size_t shared_reference_branch
+    = kd.getSharedReferenceBranchForStrands(quad_strand_ids, branch_lookup_time);
+  oss << "shared_reference_branch_for_predicate: " << shared_reference_branch << '\n';
   oss << "section: " << dump.section << '\n';
   oss << "section_fraction_at_schedule_time: " << dump.section_fraction << '\n';
   oss << "section_fraction_at_occurrence_time: " << event_fraction << '\n';
@@ -280,7 +291,8 @@ void writeFlipEventTriggerPolynomialDump(
     for (size_t i = 0; i < dump.site_trajectories.size() && i < 3; ++i)
     {
       appendSiteTrajectorySection(
-        oss, kd, dump.vertex_ids[i], dump.section, dump.schedule_time, dump.site_trajectories[i], labels[i]);
+        oss, kd, dump.vertex_ids[i], dump.section, dump.schedule_time, dump.site_trajectories[i], labels[i],
+        shared_reference_branch);
     }
   }
   else
@@ -292,7 +304,8 @@ void writeFlipEventTriggerPolynomialDump(
     for (size_t i = 0; i < dump.site_trajectories.size() && i < 4; ++i)
     {
       appendSiteTrajectorySection(
-        oss, kd, dump.vertex_ids[i], dump.section, dump.schedule_time, dump.site_trajectories[i], labels[i]);
+        oss, kd, dump.vertex_ids[i], dump.section, dump.schedule_time, dump.site_trajectories[i], labels[i],
+        shared_reference_branch);
     }
   }
 

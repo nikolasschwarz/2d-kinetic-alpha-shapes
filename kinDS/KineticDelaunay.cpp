@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <glm/geometric.hpp>
 #include <limits>
@@ -45,11 +46,21 @@ glm::dvec2 normalizeOrFallback(const glm::dvec2& v)
   return v / std::sqrt(len2);
 }
 
+VoronoiVertexPosition2D computeVoronoiVertexPosition2D(const KineticDelaunay& kd,
+  const HalfEdgeDelaunayGraph& graph, size_t face_id, double t,
+  const std::function<glm::dvec2(int)>& vertex_at);
+
 VoronoiVertexPosition2D computeVoronoiVertexPosition2D(
   const KineticDelaunay& kd, const HalfEdgeDelaunayGraph& graph, size_t face_id, double t)
 {
   const auto vertex_at = [&](int vertex_index) { return kd.getPointAt(static_cast<size_t>(vertex_index), t); };
+  return computeVoronoiVertexPosition2D(kd, graph, face_id, t, vertex_at);
+}
 
+VoronoiVertexPosition2D computeVoronoiVertexPosition2D(const KineticDelaunay& kd,
+  const HalfEdgeDelaunayGraph& graph, size_t face_id, double t,
+  const std::function<glm::dvec2(int)>& vertex_at)
+{
   if (const std::optional<glm::dvec2> infinite_dir = graph.infiniteVoronoiRayDirection(face_id, vertex_at))
   {
     return { normalizeOrFallback(*infinite_dir), true };
@@ -163,21 +174,63 @@ glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinity(size_t half_edge
     return glm::dvec3(0.0, 0.0, t);
   }
 
+  size_t reference_strand = 0;
+  for (size_t he_id : graph.face(static_cast<size_t>(face_id)).half_edges)
+  {
+    const int origin = graph.halfEdge(he_id).origin;
+    if (origin >= 0)
+    {
+      reference_strand = static_cast<size_t>(origin);
+      break;
+    }
+  }
+
+  return computeVoronoiVertexClampedInfinityWithReferenceBranch(half_edge_id, t, getReferenceBranch(reference_strand, t));
+}
+
+glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinityWithReferenceBranch(
+  size_t half_edge_id, double t, size_t reference_branch) const
+{
+  const auto& graph = getGraph();
+  const int face_id = graph.halfEdge(half_edge_id).face;
+  if (face_id < 0)
+  {
+    return glm::dvec3(0.0, 0.0, t);
+  }
+
   requireLiveRegisteredVoronoiVertex(static_cast<size_t>(face_id), "computeVoronoiVertexClampedInfinity");
 
+  const auto vertex_at = [&](int vertex_index)
+  { return getPointAtWithReferenceBranch(static_cast<size_t>(vertex_index), t, reference_branch); };
+
   const VoronoiVertexPosition2D endpoint
-    = computeVoronoiVertexPosition2D(*this, graph, static_cast<size_t>(face_id), t);
+    = computeVoronoiVertexPosition2D(*this, graph, static_cast<size_t>(face_id), t, vertex_at);
   if (!endpoint.infinite)
   {
     return glm::dvec3(endpoint.position_or_direction, t);
   }
 
   const int twin_face_id = graph.halfEdge(half_edge_id ^ 1).face;
-  glm::dvec2 anchor = finiteFaceAnchor(*this, graph, static_cast<size_t>(face_id), t);
+  glm::dvec2 anchor(0.0);
+  size_t anchor_count = 0;
+  for (size_t he_id : graph.face(static_cast<size_t>(face_id)).half_edges)
+  {
+    const int origin = graph.halfEdge(he_id).origin;
+    if (origin >= 0)
+    {
+      anchor += vertex_at(origin);
+      ++anchor_count;
+    }
+  }
+  if (anchor_count > 0)
+  {
+    anchor /= static_cast<double>(anchor_count);
+  }
+
   if (twin_face_id >= 0)
   {
     const VoronoiVertexPosition2D twin_endpoint
-      = computeVoronoiVertexPosition2D(*this, graph, static_cast<size_t>(twin_face_id), t);
+      = computeVoronoiVertexPosition2D(*this, graph, static_cast<size_t>(twin_face_id), t, vertex_at);
     if (!twin_endpoint.infinite)
     {
       anchor = twin_endpoint.position_or_direction;
@@ -1291,35 +1344,98 @@ bool KineticDelaunay::isDummyBoundary(size_t v) const
   return false;
 }
 
-size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
+void KineticDelaunay::collectReferenceBranchStrandPool(size_t strand_id, std::vector<size_t>& pool) const
 {
-  const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, t);
+  pool.clear();
 
-  if (!isGraphRetriangulatedForComponents() && strand_id < pending_split_reference_vertex_.size()
-    && pending_split_reference_vertex_[strand_id] != no_pending_split_reference_vertex)
+  if (!isGraphRetriangulatedForComponents())
   {
-    const size_t parent_reference_vertex = pending_split_reference_vertex_[strand_id];
-    if (parent_reference_vertex < component_data.component_map.size())
+    if (strand_id < pending_split_reference_vertex_.size()
+      && pending_split_reference_vertex_[strand_id] != no_pending_split_reference_vertex)
     {
-      const size_t parent_component_id = component_data.component_map[parent_reference_vertex];
-      return minInputBranchForComponent(parent_component_id, branch_lookup_height);
+      const size_t parent_reference_vertex = pending_split_reference_vertex_[strand_id];
+      if (parent_reference_vertex < component_data.component_map.size())
+      {
+        const size_t parent_component_id = component_data.component_map[parent_reference_vertex];
+        const auto frozen_it = pending_split_frozen_parent_strands_.find(parent_component_id);
+        if (frozen_it != pending_split_frozen_parent_strands_.end())
+        {
+          pool = frozen_it->second;
+          return;
+        }
+      }
+    }
+
+    for (const auto& frozen_entry : pending_split_frozen_parent_strands_)
+    {
+      const std::vector<size_t>& frozen_strands = frozen_entry.second;
+      if (std::find(frozen_strands.begin(), frozen_strands.end(), strand_id) != frozen_strands.end())
+      {
+        pool = frozen_strands;
+        return;
+      }
     }
   }
 
-  if (strand_id >= component_data.component_map.size())
+  if (strand_id < component_data.component_map.size())
+  {
+    const size_t component_id = component_data.component_map[strand_id];
+    if (component_id < component_data.components.size())
+    {
+      pool = component_data.components[component_id];
+    }
+  }
+}
+
+size_t KineticDelaunay::getSharedReferenceBranchForStrands(
+  const std::vector<size_t>& strand_ids, double branch_lookup_time) const
+{
+  const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, branch_lookup_time);
+
+  std::vector<size_t> pool;
+  pool.reserve(strand_ids.size() * 4);
+  for (size_t strand_id : strand_ids)
+  {
+    std::vector<size_t> per_strand_pool;
+    collectReferenceBranchStrandPool(strand_id, per_strand_pool);
+    for (size_t pooled_strand_id : per_strand_pool)
+    {
+      if (std::find(pool.begin(), pool.end(), pooled_strand_id) == pool.end())
+      {
+        pool.push_back(pooled_strand_id);
+      }
+    }
+  }
+
+  if (pool.empty())
+  {
+    if (strand_ids.empty())
+    {
+      return 0;
+    }
+    return branch_trajs.getBranchIndex(strand_ids.front(), branch_lookup_height);
+  }
+
+  return minInputBranchForStrands(pool, branch_lookup_height);
+}
+
+size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
+{
+  std::vector<size_t> pool;
+  collectReferenceBranchStrandPool(strand_id, pool);
+  const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, t);
+  if (pool.empty())
   {
     return branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
   }
 
-  const size_t component_id = component_data.component_map[strand_id];
-  return minInputBranchForComponent(component_id, branch_lookup_height);
+  return minInputBranchForStrands(pool, branch_lookup_height);
 }
 
-glm::dvec2 KineticDelaunay::getPointAt(size_t v, double t) const
+glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, size_t reference_branch) const
 {
   const size_t section = static_cast<size_t>(std::floor(t));
   const double frac = t - static_cast<double>(section);
-  const size_t reference_branch = getReferenceBranch(v, t);
 
   if (frac < std::numeric_limits<double>::epsilon())
   {
@@ -1330,13 +1446,24 @@ glm::dvec2 KineticDelaunay::getPointAt(size_t v, double t) const
   return glm::dvec2(piece[0](frac), piece[1](frac));
 }
 
+glm::dvec2 KineticDelaunay::getPointAt(size_t v, double t) const
+{
+  return getPointAtWithReferenceBranch(v, t, getReferenceBranch(v, t));
+}
+
 glm::dvec2 KineticDelaunay::getPointAt(double t, size_t v) const { return getPointAt(v, t); }
+
+Trajectory<2> KineticDelaunay::getSitePiecePolynomialWithReferenceBranch(
+  size_t strand_id, size_t section, size_t reference_branch) const
+{
+  return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch);
+}
 
 Trajectory<2> KineticDelaunay::getSitePiecePolynomial(size_t strand_id, size_t section, double schedule_time) const
 {
   const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
   const size_t reference_branch = getReferenceBranch(strand_id, branch_lookup_time);
-  return branch_trajs.getPiecePolynomial(strand_id, section, reference_branch);
+  return getSitePiecePolynomialWithReferenceBranch(strand_id, section, reference_branch);
 }
 
 std::vector<glm::dvec2> KineticDelaunay::getPointsAt(double t) const
@@ -1479,6 +1606,12 @@ void KineticDelaunay::notePendingSplitReference(
     return;
   }
 
+  if (pending_split_frozen_parent_strands_.find(parent_component_id) == pending_split_frozen_parent_strands_.end())
+  {
+    pending_split_frozen_parent_strands_.emplace(
+      parent_component_id, component_data.components[parent_component_id]);
+  }
+
   const size_t reference_vertex = component_data.components[parent_component_id].front();
   for (const auto& component : new_components)
   {
@@ -1500,8 +1633,14 @@ size_t KineticDelaunay::minInputBranchForComponent(size_t component_id, size_t b
     return 0;
   }
 
+  return minInputBranchForStrands(component_data.components[component_id], branch_lookup_height);
+}
+
+size_t KineticDelaunay::minInputBranchForStrands(
+  const std::vector<size_t>& strand_ids, size_t branch_lookup_height) const
+{
   size_t min_branch = std::numeric_limits<size_t>::max();
-  for (size_t strand_id : component_data.components[component_id])
+  for (size_t strand_id : strand_ids)
   {
     if (isDummyBoundary(strand_id))
     {
@@ -1522,6 +1661,7 @@ void KineticDelaunay::clearPendingSplitReference()
 {
   std::fill(
     pending_split_reference_vertex_.begin(), pending_split_reference_vertex_.end(), no_pending_split_reference_vertex);
+  pending_split_frozen_parent_strands_.clear();
 }
 
 namespace
@@ -2408,6 +2548,7 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
   graph.init(initial_sites);
   sections_advanced = 0; // Reset the section counter
   pending_split_reference_vertex_.assign(vertex_count, no_pending_split_reference_vertex);
+  pending_split_frozen_parent_strands_.clear();
 
   /*section_event_manager_->setCallback(section_callback);
   flip_event_manager_->setCallback(flip_callback);
