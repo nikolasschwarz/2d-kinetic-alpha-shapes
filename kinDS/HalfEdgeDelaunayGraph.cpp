@@ -1,11 +1,16 @@
 #include "HalfEdgeDelaunayGraph.hpp"
 
+#include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "Logger.hpp"
+#include "simple_svg.hpp"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <fstream>
+#include <glm/geometric.hpp>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -103,9 +108,510 @@ std::vector<size_t> traceBoundaryCycle(size_t start_he, const std::vector<size_t
   return cycle;
 }
 
+bool isDeadFaceSlot(const HalfEdgeDelaunayGraph::Triangle& tri)
+{
+  return tri.half_edges[0] == tri.half_edges[1] && tri.half_edges[1] == tri.half_edges[2];
+}
+
+std::string formatVertexId(int vertex_id)
+{
+  return vertex_id < 0 ? "inf" : std::to_string(vertex_id);
+}
+
+std::string formatHalfEdgeTopologyLabel(
+  size_t he_id, const HalfEdgeDelaunayGraph::HalfEdge& he, const HalfEdgeDelaunayGraph::HalfEdge& twin)
+{
+  std::ostringstream oss;
+  oss << he_id << " (" << formatVertexId(he.origin) << "->" << formatVertexId(twin.origin) << ") next=" << he.next
+      << " face=" << he.face;
+  return oss.str();
+}
+
+int halfEdgeDestination(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+{
+  return half_edges[he_id ^ 1].origin;
+}
+
+size_t rawPrevAroundFace(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+{
+  if (half_edges[he_id].next < 0)
+  {
+    return he_id;
+  }
+
+  const size_t start = he_id;
+  size_t next_he_id = static_cast<size_t>(half_edges[he_id].next);
+  size_t prev_he_id = he_id;
+  while (next_he_id != start)
+  {
+    prev_he_id = next_he_id;
+    if (half_edges[next_he_id].next < 0)
+    {
+      break;
+    }
+    next_he_id = static_cast<size_t>(half_edges[next_he_id].next);
+  }
+  return prev_he_id;
+}
+
+size_t rawNextOnConvexBoundary(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+{
+  if (half_edges[he_id].next < 0)
+  {
+    return he_id;
+  }
+
+  size_t next_he_id = static_cast<size_t>(half_edges[he_id].next);
+  next_he_id ^= 1;
+  if (half_edges[next_he_id].next < 0)
+  {
+    return next_he_id;
+  }
+  return static_cast<size_t>(half_edges[next_he_id].next);
+}
+
+size_t rawPrevOnConvexBoundary(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+{
+  size_t prev_he_id = rawPrevAroundFace(half_edges, he_id);
+  prev_he_id ^= 1;
+  return rawPrevAroundFace(half_edges, prev_he_id);
+}
+
+glm::dvec2 normalizeOrUnit(const glm::dvec2& v)
+{
+  const double len2 = glm::dot(v, v);
+  if (len2 <= 1e-24)
+  {
+    return glm::dvec2(1.0, 0.0);
+  }
+  return v / std::sqrt(len2);
+}
+
+struct AngularBisectorRay
+{
+  int apex = -1;
+  glm::dvec2 origin {};
+  glm::dvec2 direction {};
+};
+
+std::optional<AngularBisectorRay> computeAngularBisectorRayFromMesh(size_t he_id,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
+  const std::function<const glm::dvec2*(int)>& try_point)
+{
+  if (he_id >= half_edges.size() || HalfEdgeDelaunayGraph::isTombstone(half_edges[he_id]))
+  {
+    return std::nullopt;
+  }
+
+  int apex = half_edges[he_id].origin;
+  const int dest = halfEdgeDestination(half_edges, he_id);
+  if (half_edges[he_id].next < 0)
+  {
+    return std::nullopt;
+  }
+
+  size_t finite_he_id = static_cast<size_t>(half_edges[he_id].next);
+  int c = -1;
+  int c_prime = -1;
+
+  if (apex < 0)
+  {
+    apex = dest;
+    if (apex < 0)
+    {
+      return std::nullopt;
+    }
+
+    c = halfEdgeDestination(half_edges, finite_he_id);
+    if (c < 0)
+    {
+      return std::nullopt;
+    }
+
+    const size_t prev_he_id = rawPrevOnConvexBoundary(half_edges, finite_he_id);
+    c_prime = half_edges[prev_he_id].origin;
+  }
+  else if (dest < 0)
+  {
+    if (half_edges[finite_he_id].next < 0)
+    {
+      return std::nullopt;
+    }
+
+    finite_he_id = static_cast<size_t>(half_edges[finite_he_id].next);
+    c = half_edges[finite_he_id].origin;
+    if (c < 0)
+    {
+      return std::nullopt;
+    }
+
+    const size_t next_he_id = rawNextOnConvexBoundary(half_edges, finite_he_id);
+    c_prime = halfEdgeDestination(half_edges, next_he_id);
+  }
+  else
+  {
+    return std::nullopt;
+  }
+
+  if (c_prime < 0)
+  {
+    return std::nullopt;
+  }
+
+  const glm::dvec2* p_apex = try_point(apex);
+  const glm::dvec2* p_c = try_point(c);
+  const glm::dvec2* p_c_prime = try_point(c_prime);
+  if (p_apex == nullptr || p_c == nullptr || p_c_prime == nullptr)
+  {
+    return std::nullopt;
+  }
+
+  glm::dvec2 dir = normalizeOrUnit(*p_c - *p_apex) + normalizeOrUnit(*p_c_prime - *p_apex);
+  if (glm::dot(dir, dir) <= 1e-24)
+  {
+    dir = glm::dvec2(-normalizeOrUnit(*p_c_prime - *p_c).y, normalizeOrUnit(*p_c_prime - *p_c).x);
+  }
+
+  // Convex-hull bisector points into the mesh; negate to point outward toward infinity.
+  AngularBisectorRay ray;
+  ray.apex = apex;
+  ray.origin = *p_apex;
+  ray.direction = -normalizeOrUnit(dir);
+  return ray;
+}
+
+bool isInfiniteHalfEdgePair(
+  const HalfEdgeDelaunayGraph::HalfEdge& he, const HalfEdgeDelaunayGraph::HalfEdge& twin)
+{
+  if (HalfEdgeDelaunayGraph::isTombstone(he))
+  {
+    return false;
+  }
+  return (he.origin < 0) != (twin.origin < 0);
+}
+
+void appendClippedRay(svg::Document& doc, const glm::dvec2& origin, const glm::dvec2& direction, double ray_length,
+  const HalfEdgeDelaunayGraphToSVG::BoundingBox& bb, const svg::Color& color, double stroke_w)
+{
+  glm::dvec2 p0 = origin;
+  glm::dvec2 p1 = origin + ray_length * direction;
+  if (!HalfEdgeDelaunayGraphToSVG::clipSegmentToBoundingBox(p0, p1, bb))
+  {
+    return;
+  }
+
+  doc << svg::Line(svg::Point(p0.x, p0.y), svg::Point(p1.x, p1.y), svg::Stroke(stroke_w, color));
+}
+
+void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const std::vector<glm::dvec2>& points,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
+  const std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles, const std::string& phase_title,
+  const std::unordered_set<size_t>* highlight_interior_boundary = nullptr)
+{
+  if (points.empty())
+  {
+    return;
+  }
+
+  const HalfEdgeDelaunayGraphToSVG::BoundingBox bb = HalfEdgeDelaunayGraphToSVG::computeBoundingBox(points, 0.1);
+  svg::Document doc = HalfEdgeDelaunayGraphToSVG::setupDocument(points, filepath, bb);
+
+  constexpr double label_unit = 0.01 * HalfEdgeDelaunayGraphToSVG::label_scale;
+  const double label_font_size = label_unit;
+  const double label_pad_sm = 0.5 * label_unit;
+  const double label_pad_he_along = label_unit;
+  const double min_twin_label_dy = 1.2 * label_unit;
+  const svg::Color infinite_edge_color(255, 105, 0);
+  constexpr double infinite_edge_stroke_w = 0.009;
+  const double infinite_ray_length
+    = std::max(bb.max_x - bb.min_x, bb.max_y - bb.min_y) * 0.35 + 2.0 * label_pad_sm;
+
+  if (!phase_title.empty())
+  {
+    doc << svg::Text(svg::Point(bb.min_x, bb.max_y + 0.05), phase_title, svg::Fill(svg::Color::Black),
+      svg::Font(1.5 * label_font_size));
+  }
+
+  const auto try_point = [&](int vertex_id) -> const glm::dvec2*
+  {
+    if (vertex_id < 0 || static_cast<size_t>(vertex_id) >= points.size())
+    {
+      return nullptr;
+    }
+    const glm::dvec2& point = points[static_cast<size_t>(vertex_id)];
+    if (!std::isfinite(point.x) || !std::isfinite(point.y))
+    {
+      return nullptr;
+    }
+    return &point;
+  };
+
+  for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
+  {
+    const HalfEdgeDelaunayGraph::Triangle& tri = triangles[face_id];
+    if (isDeadFaceSlot(tri))
+    {
+      continue;
+    }
+
+    std::array<const glm::dvec2*, 3> face_vertices {};
+    bool has_infinite_vertex = false;
+    for (size_t corner = 0; corner < 3; ++corner)
+    {
+      const size_t he_id = tri.half_edges[corner];
+      if (he_id >= half_edges.size())
+      {
+        has_infinite_vertex = true;
+        break;
+      }
+      const int origin = half_edges[he_id].origin;
+      if (origin < 0)
+      {
+        has_infinite_vertex = true;
+        break;
+      }
+      face_vertices[corner] = try_point(origin);
+      if (face_vertices[corner] == nullptr)
+      {
+        has_infinite_vertex = true;
+        break;
+      }
+    }
+
+    if (has_infinite_vertex)
+    {
+      continue;
+    }
+
+    svg::Polygon face { svg::Fill(svg::Color(230, 230, 230)) };
+    face << svg::Point((*face_vertices[0])[0], (*face_vertices[0])[1])
+         << svg::Point((*face_vertices[1])[0], (*face_vertices[1])[1])
+         << svg::Point((*face_vertices[2])[0], (*face_vertices[2])[1]);
+    doc << face;
+  }
+
+  for (size_t he_id = 0; he_id + 1 < half_edges.size(); he_id += 2)
+  {
+    const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[he_id];
+    const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[he_id ^ 1];
+    if (HalfEdgeDelaunayGraph::isTombstone(he) && HalfEdgeDelaunayGraph::isTombstone(twin))
+    {
+      continue;
+    }
+
+    const bool highlighted
+      = highlight_interior_boundary != nullptr && highlight_interior_boundary->count(he_id ^ 1) != 0;
+    const svg::Color stroke_color = highlighted ? svg::Color(0, 0, 255) : svg::Color(svg::Color::Black);
+    const double stroke_w = highlighted ? 0.012 : 0.006;
+
+    const glm::dvec2* start = try_point(he.origin);
+    const glm::dvec2* end = try_point(twin.origin);
+    if (start != nullptr && end != nullptr)
+    {
+      glm::dvec2 clipped_start = *start;
+      glm::dvec2 clipped_end = *end;
+      if (HalfEdgeDelaunayGraphToSVG::clipSegmentToBoundingBox(clipped_start, clipped_end, bb))
+      {
+        doc << svg::Line(svg::Point(clipped_start[0], clipped_start[1]), svg::Point(clipped_end[0], clipped_end[1]),
+          svg::Stroke(stroke_w, stroke_color));
+      }
+    }
+  }
+
+  for (size_t he_id = 0; he_id + 1 < half_edges.size(); he_id += 2)
+  {
+    const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[he_id];
+    const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[he_id ^ 1];
+    if (!isInfiniteHalfEdgePair(he, twin))
+    {
+      continue;
+    }
+
+    // Prefer the half-edge with origin at infinity: its next pointer is wired in phase 2,
+    // while the finite-origin twin may still have next=-1 before phase 3 closes the face.
+    const size_t inf_origin_he_id = he.origin < 0 ? he_id : (twin.origin < 0 ? he_id ^ 1 : he_id);
+    std::optional<AngularBisectorRay> ray = computeAngularBisectorRayFromMesh(inf_origin_he_id, half_edges, try_point);
+    if (!ray.has_value() && inf_origin_he_id != he_id)
+    {
+      ray = computeAngularBisectorRayFromMesh(he_id, half_edges, try_point);
+    }
+    if (!ray.has_value() && inf_origin_he_id != (he_id ^ 1))
+    {
+      ray = computeAngularBisectorRayFromMesh(he_id ^ 1, half_edges, try_point);
+    }
+    if (!ray.has_value())
+    {
+      continue;
+    }
+
+    appendClippedRay(doc, ray->origin, ray->direction, infinite_ray_length, bb, infinite_edge_color,
+      infinite_edge_stroke_w);
+  }
+
+  for (size_t v = 0; v < points.size(); ++v)
+  {
+    const glm::dvec2* point = try_point(static_cast<int>(v));
+    if (point == nullptr)
+    {
+      continue;
+    }
+    if (!HalfEdgeDelaunayGraphToSVG::isWithinBoundingBox(*point, bb))
+    {
+      continue;
+    }
+    doc << svg::Circle(svg::Point((*point)[0], (*point)[1]), 0.018, svg::Fill(svg::Color(173, 216, 230)),
+      svg::Stroke(0.0, svg::Color::Black));
+    doc << svg::Text(svg::Point((*point)[0] - label_pad_sm, (*point)[1] - label_pad_sm), std::to_string(v),
+      svg::Fill(svg::Color::Black), svg::Font(label_font_size));
+  }
+
+  for (size_t he_id = 0; he_id + 1 < half_edges.size(); he_id += 2)
+  {
+    const HalfEdgeDelaunayGraph::HalfEdge& he_even = half_edges[he_id];
+    const HalfEdgeDelaunayGraph::HalfEdge& he_odd = half_edges[he_id ^ 1];
+    if (HalfEdgeDelaunayGraph::isTombstone(he_even) && HalfEdgeDelaunayGraph::isTombstone(he_odd))
+    {
+      continue;
+    }
+
+    const glm::dvec2* start = try_point(he_even.origin);
+    const glm::dvec2* end = try_point(he_odd.origin);
+    if (start != nullptr && end != nullptr)
+    {
+      const glm::dvec2 midpoint = 0.5 * ((*start) + (*end));
+      glm::dvec2 edge_dir = (*end) - (*start);
+      const double len2 = glm::dot(edge_dir, edge_dir);
+      if (len2 > 0.0)
+      {
+        edge_dir /= std::sqrt(len2);
+      }
+      else
+      {
+        edge_dir = glm::dvec2(1.0, 0.0);
+      }
+
+      const std::array<glm::dvec2, 2> label_positions = HalfEdgeDelaunayGraphToSVG::twinHalfEdgeLabelPositions(
+        midpoint, edge_dir, label_pad_he_along, label_pad_sm, min_twin_label_dy);
+
+      for (size_t i = 0; i < 2; ++i)
+      {
+        const size_t current_he_id = he_id + i;
+        const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[current_he_id];
+        const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[current_he_id ^ 1];
+        if (HalfEdgeDelaunayGraph::isTombstone(he))
+        {
+          continue;
+        }
+
+        const glm::dvec2& label_pos = label_positions[i];
+        if (!HalfEdgeDelaunayGraphToSVG::isWithinBoundingBox(label_pos, bb, label_pad_sm))
+        {
+          continue;
+        }
+
+        const bool highlighted = highlight_interior_boundary != nullptr
+          && highlight_interior_boundary->count(current_he_id ^ 1) != 0;
+        const bool infinite_edge = isInfiniteHalfEdgePair(he, twin);
+        const svg::Color label_color = infinite_edge ? infinite_edge_color
+          : (highlighted ? svg::Color(0, 0, 200) : svg::Color(120, 0, 120));
+        doc << svg::Text(svg::Point(label_pos[0], label_pos[1]),
+          formatHalfEdgeTopologyLabel(current_he_id, he, twin), svg::Fill(label_color), svg::Font(label_font_size));
+      }
+      continue;
+    }
+
+    for (size_t i = 0; i < 2; ++i)
+    {
+      const size_t current_he_id = he_id + i;
+      const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[current_he_id];
+      const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[current_he_id ^ 1];
+      if (HalfEdgeDelaunayGraph::isTombstone(he))
+      {
+        continue;
+      }
+
+      const glm::dvec2* finite = try_point(he.origin);
+      if (finite == nullptr)
+      {
+        finite = try_point(twin.origin);
+      }
+      if (finite == nullptr)
+      {
+        continue;
+      }
+
+      const glm::dvec2 label_pos
+        = *finite + (i == 0 ? glm::dvec2(label_pad_sm, -label_pad_sm) : glm::dvec2(-label_pad_sm, label_pad_sm));
+      if (!HalfEdgeDelaunayGraphToSVG::isWithinBoundingBox(label_pos, bb, label_pad_sm))
+      {
+        continue;
+      }
+
+      const bool highlighted = highlight_interior_boundary != nullptr
+        && highlight_interior_boundary->count(current_he_id ^ 1) != 0;
+      const bool infinite_edge = isInfiniteHalfEdgePair(he, twin);
+      const svg::Color label_color = infinite_edge ? infinite_edge_color
+        : (highlighted ? svg::Color(0, 0, 200) : svg::Color(120, 0, 120));
+      doc << svg::Text(svg::Point(label_pos[0], label_pos[1]), formatHalfEdgeTopologyLabel(current_he_id, he, twin),
+        svg::Fill(label_color), svg::Font(label_font_size));
+    }
+  }
+
+  KINDS_DEBUG("Wrote createInfiniteFacesFromBoundary debug SVG: " << filepath);
+  doc.save();
+}
+
+struct CreateInfiniteFacesDebugContext
+{
+  const std::function<glm::dvec2(size_t)>* vertex_at = nullptr;
+  std::string output_prefix;
+};
+
+std::unordered_set<size_t> collectLiveVertexOrigins(
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t vertex_count)
+{
+  std::unordered_set<size_t> live_vertices;
+  live_vertices.reserve(vertex_count);
+  for (const HalfEdgeDelaunayGraph::HalfEdge& he : half_edges)
+  {
+    if (HalfEdgeDelaunayGraph::isTombstone(he))
+    {
+      continue;
+    }
+    if (he.origin >= 0 && static_cast<size_t>(he.origin) < vertex_count)
+    {
+      live_vertices.insert(static_cast<size_t>(he.origin));
+    }
+  }
+  return live_vertices;
+}
+
+void maybeWriteCreateInfiniteFacesPhaseDebug(const CreateInfiniteFacesDebugContext* debug_context,
+  const std::string& phase_suffix, const std::string& phase_title,
+  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
+  const std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles, size_t vertex_count,
+  const std::unordered_set<size_t>* highlight_interior_boundary = nullptr)
+{
+  if (debug_context == nullptr || debug_context->vertex_at == nullptr || debug_context->output_prefix.empty())
+  {
+    return;
+  }
+
+  const std::unordered_set<size_t> live_vertices = collectLiveVertexOrigins(half_edges, vertex_count);
+  std::vector<glm::dvec2> points(vertex_count, glm::dvec2(std::numeric_limits<double>::quiet_NaN()));
+  for (size_t v : live_vertices)
+  {
+    points[v] = (*debug_context->vertex_at)(v);
+  }
+
+  writeCreateInfiniteFacesPhaseDebugSvg(
+    debug_context->output_prefix + phase_suffix + ".svg", points, half_edges, triangles, phase_title,
+    highlight_interior_boundary);
+}
+
 void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interior,
   std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles,
-  size_t vertex_count)
+  size_t vertex_count, const CreateInfiniteFacesDebugContext* debug_context = nullptr)
 {
   // `boundary_interior` contains the finite half-edges whose twin lies on the outside of the triangulation.
   // This routine rebuilds the "outside" as explicit infinite faces, one face per boundary edge / boundary vertex corner.
@@ -113,6 +619,10 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
   {
     return;
   }
+
+  const std::unordered_set<size_t> boundary_interior_set(boundary_interior.begin(), boundary_interior.end());
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase0_before", "Phase 0: input boundary_interior",
+    half_edges, triangles, vertex_count, &boundary_interior_set);
 
   // Phase 1: index each exterior boundary half-edge by its finite origin vertex.
   // After this pass, `boundary_edge_map[u]` tells us which exterior half-edge leaves finite vertex `u`.
@@ -136,6 +646,10 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
     }
     boundary_edge_map[static_cast<size_t>(u)] = static_cast<int>(exterior_he);
   }
+
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase1_indexed",
+    "Phase 1: boundary_edge_map filled, exterior face=-1 next=-1", half_edges, triangles, vertex_count,
+    &boundary_interior_set);
 
   // Phase 2: for every boundary exterior half-edge u->v, create a new pair of half-edges that connects
   // the finite vertex `v` to the implicit vertex at infinity.
@@ -184,6 +698,10 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
     incoming_edge_map[static_cast<size_t>(v)] = static_cast<int>(he_at_inf);
   }
 
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase2_wired",
+    "Phase 2: infinity half-edges appended, boundary.next wired", half_edges, triangles, vertex_count,
+    &boundary_interior_set);
+
   // Phase 3: close each infinite face around a boundary vertex.
   //
   // For vertex `u`, `incoming_edge_map[u]` is the infinity-origin half-edge that arrives at the boundary edge
@@ -216,6 +734,9 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
     boundary.face = static_cast<int>(new_face);
     outgoing.face = static_cast<int>(new_face);
   }
+
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase3_closed",
+    "Phase 3: infinite faces closed", half_edges, triangles, vertex_count, &boundary_interior_set);
 
   // Phase 4: sanity-check that every original exterior boundary half-edge now participates in some infinite face
   // and has a valid `next` pointer. If not, the outer boundary walk was broken somewhere earlier.
@@ -966,7 +1487,11 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
     boundary_interior.push_back(he_id);
   }
 
-  createInfiniteFacesFromBoundary(boundary_interior, half_edges, triangles, vertex_count);
+  CreateInfiniteFacesDebugContext infinite_faces_debug;
+  infinite_faces_debug.vertex_at = &vertex_at;
+  infinite_faces_debug.output_prefix = "createInfiniteFacesFromBoundary_" + debug_tag;
+  createInfiniteFacesFromBoundary(
+    boundary_interior, half_edges, triangles, vertex_count, &infinite_faces_debug);
 
   // --- Tombstone original edge pairs that no longer border any live face ---
   for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)

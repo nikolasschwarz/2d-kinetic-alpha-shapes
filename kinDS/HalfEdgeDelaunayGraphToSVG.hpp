@@ -165,6 +165,28 @@ class HalfEdgeDelaunayGraphToSVG
     return BoundingBox(min_x, min_y, max_x, max_y);
   }
 
+  /// Positions for the two directed labels on one Delaunay edge; enforces @p min_twin_label_dy on y separation.
+  static std::array<glm::dvec2, 2> twinHalfEdgeLabelPositions(const glm::dvec2& midpoint,
+    const glm::dvec2& edge_dir_normalized, double label_pad_he_along, double label_pad_sm, double min_twin_label_dy)
+  {
+    const glm::dvec2 edge_normal(edge_dir_normalized.y, -edge_dir_normalized.x);
+    const glm::dvec2 corner_offset(-label_pad_sm, -label_pad_sm);
+    std::array<glm::dvec2, 2> positions {
+      midpoint + label_pad_he_along * edge_normal + corner_offset,
+      midpoint - label_pad_he_along * edge_normal + corner_offset,
+    };
+
+    const double dy = positions[1].y - positions[0].y;
+    if (std::abs(dy) < min_twin_label_dy)
+    {
+      const double center_y = 0.5 * (positions[0].y + positions[1].y);
+      positions[0].y = center_y - 0.5 * min_twin_label_dy;
+      positions[1].y = center_y + 0.5 * min_twin_label_dy;
+    }
+
+    return positions;
+  }
+
   static svg::Document setupDocument(
     const std::vector<glm::dvec2> points, const std::string& filename, const BoundingBox& bb)
   {
@@ -792,20 +814,32 @@ class HalfEdgeDelaunayGraphToSVG
           continue;
         }
         glm::dvec2 midpoint = (*start + *end) / 2.0;
-        glm::dvec2 edge_dir = glm::normalize((*end) - (*start));
-        glm::dvec2 edge_normal(edge_dir[1], -edge_dir[0]);
+        glm::dvec2 edge_dir = (*end) - (*start);
+        const double edge_len2 = glm::dot(edge_dir, edge_dir);
+        if (edge_len2 > 0.0)
+        {
+          edge_dir /= std::sqrt(edge_len2);
+        }
+        else
+        {
+          edge_dir = glm::dvec2(1.0, 0.0);
+        }
 
-        // Do this for both half-edges
+        const std::array<glm::dvec2, 2> label_positions
+          = twinHalfEdgeLabelPositions(midpoint, edge_dir, label_pad_he_along, label_pad_sm, label_secondary_line_dy);
+
         for (size_t i = 0; i < 2; i++)
         {
           const size_t current_he_id = he_id + i;
           const int source = graph.halfEdge(current_he_id).origin;
           const int destination = graph.halfEdge(current_he_id ^ 1).origin;
-          const std::string label_text = std::to_string(current_he_id) + " (" + std::to_string(source) + " --> "
-            + std::to_string(destination) + ")";
-          // Rotate 90 degrees to get normal
-          glm::dvec2 label_pos = midpoint + std::pow(-1, i) * label_pad_he_along * edge_normal
-            - glm::dvec2(label_pad_sm, label_pad_sm);
+          const int next = graph.halfEdge(current_he_id).next;
+          const int face = graph.halfEdge(current_he_id).face;
+          const std::string label_text = std::to_string(current_he_id) + " ("
+            + (source < 0 ? "inf" : std::to_string(source)) + " --> "
+            + (destination < 0 ? "inf" : std::to_string(destination)) + ") next=" + std::to_string(next)
+            + " face=" + std::to_string(face);
+          const glm::dvec2& label_pos = label_positions[i];
           const size_t undirected_edge_id = he_id / 2;
           if (!selective || highlight->affectsDirectedHalfEdge(current_he_id)
             || highlight->affectsPrimaryVoronoiEdge(undirected_edge_id))

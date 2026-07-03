@@ -76,6 +76,9 @@ void KineticDelaunay::SectionEvent::handleEvent()
     event_handler->beforeEvent(*this);
   }
 
+  // Retire finished input branches before graph cuts so vertex positions are not queried past strand data.
+  kd->retireFinishedInputBranches(static_cast<double>(section_index));
+
   // Replace the old `advanceOneSection()` logic.
   if (kd->component_data.components.size() > kd->prev_component_count)
   {
@@ -99,7 +102,6 @@ void KineticDelaunay::SectionEvent::handleEvent()
     kd->prev_component_count = kd->component_data.components.size();
   }
 
-  kd->retireFinishedInputBranches(static_cast<double>(section_index));
   kd->precomputeStep(static_cast<double>(section_index));
 
   kd->section_event_manager_->updateProgress(section_index);

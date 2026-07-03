@@ -1434,8 +1434,21 @@ size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
 
 glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, size_t reference_branch) const
 {
-  const size_t section = static_cast<size_t>(std::floor(t));
-  const double frac = t - static_cast<double>(section);
+  const std::vector<glm::dvec2>& support = branch_trajs.getSupportPoints(v);
+  if (support.empty())
+  {
+    throw std::out_of_range("getPointAt: strand " + std::to_string(v) + " has no support points");
+  }
+
+  const size_t last_index = support.size() - 1;
+  double query_t = t;
+  if (static_cast<size_t>(std::floor(query_t)) >= last_index)
+  {
+    query_t = static_cast<double>(last_index);
+  }
+
+  const size_t section = static_cast<size_t>(std::floor(query_t));
+  const double frac = query_t - static_cast<double>(section);
 
   if (frac < std::numeric_limits<double>::epsilon())
   {
