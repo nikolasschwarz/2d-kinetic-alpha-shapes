@@ -649,24 +649,48 @@ void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const 
 
 void TreeMesher::transformToWorldSpace(VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform) const
 {
+  const auto& branch_indices = strand_tree.getBranchIndices(strand_id);
+  auto& vertices = mesh.getVertices();
 
   // transform points
-  for (auto& v : mesh.getVertices())
+  for (auto& v : vertices)
   {
     v = root_transform
       * glm::dvec4(ProfileToModelCoordinates(
-                     strand_tree.getTransformsByHeightAndBranch(), v, v.z, strand_tree.getBranchIndices(strand_id)),
+                     strand_tree.getTransformsByHeightAndBranch(), v, v.z, branch_indices),
         1.0);
   }
 
-  auto& normal_transforms = strand_tree.getNormalTransformsByHeightAndBranch();
-  // transform normals
-  for (auto& n : mesh.getNormals())
+  if (mesh.getNormalMode() == NormalMode::NoNormals)
   {
-    // The root transform is assumed to be orthogonal, so we can apply it directly to the normal vector without using
-    // the inverse transpose
-    n = root_transform
-      * glm::dvec4(
-        ProfileToModelCoordinates(normal_transforms, n, n.z, strand_tree.getBranchIndices(strand_id), 0.0f), 0.0);
+    return;
+  }
+
+  auto& normal_transforms = strand_tree.getNormalTransformsByHeightAndBranch();
+
+  if (mesh.getNormalMode() == NormalMode::PerTriangleCorner)
+  {
+    const auto& triangles = mesh.getTriangles();
+    for (size_t triangle_vertex_index = 0; triangle_vertex_index < triangles.size(); ++triangle_vertex_index)
+    {
+      const size_t vertex_index = triangles[triangle_vertex_index];
+      const glm::dvec3& old_normal = mesh.getNormal(triangle_vertex_index);
+      const glm::dvec3 transformed_normal = root_transform
+        * glm::dvec4(ProfileToModelCoordinates(normal_transforms, old_normal, vertices[vertex_index].z, branch_indices,
+                      0.0f),
+          0.0);
+      mesh.setNormal(transformed_normal, triangle_vertex_index);
+    }
+  }
+  else
+  {
+    auto& normals = mesh.getNormals();
+    for (size_t vertex_index = 0; vertex_index < normals.size(); ++vertex_index)
+    {
+      glm::dvec3& n = normals[vertex_index];
+      n = root_transform
+        * glm::dvec4(ProfileToModelCoordinates(normal_transforms, n, vertices[vertex_index].z, branch_indices, 0.0f),
+          0.0);
+    }
   }
 }

@@ -7,6 +7,8 @@
 #include <iosfwd>
 #include <glm/glm.hpp>
 #include <optional>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace kinDS
@@ -69,6 +71,53 @@ class HalfEdgeDelaunayGraph
     const std::vector<HalfEdge>& fresh_half_edges, const std::vector<int>& tri_remap);
   bool halfEdgeInFaceCycle(size_t he_id, size_t face_id) const;
   bool faceHasInfiniteVertex(size_t face_id) const;
+  bool isDeadFaceSlot(const Triangle& tri) const;
+  void tombstoneHalfEdge(size_t he_id);
+  void killFaceSlot(Triangle& tri, size_t invalid_he);
+
+  struct OuterBoundaryMaps
+  {
+    std::vector<int> new_outer_outgoing;
+    std::vector<int> new_outer_incoming;
+    std::vector<int> existing_outer_outgoing;
+    std::vector<int> existing_incoming_inf;
+  };
+
+  struct CreateInfiniteFacesDebugContext
+  {
+    const std::function<glm::dvec2(size_t)>* vertex_at = nullptr;
+    std::string output_prefix;
+  };
+
+  struct AngularBisectorRay
+  {
+    int apex = -1;
+    glm::dvec2 origin {};
+    glm::dvec2 direction {};
+  };
+
+  OuterBoundaryMaps buildOuterBoundaryMaps(const std::unordered_set<size_t>& new_outer_half_edge_set) const;
+  bool infiniteHalfEdgeBordersTombstonedTriangle(size_t he_id) const;
+  void clearTombstonedFaceRef(size_t he_id);
+  void spliceExistingInfiniteEdgesToNewOuter(
+    const OuterBoundaryMaps& maps, std::vector<int>& incoming_inf_override);
+  int resolveNextOuterBoundaryHalfEdge(int vertex, const OuterBoundaryMaps& maps) const;
+  void createInfiniteFacesFromBoundary(const std::vector<size_t>& outer_half_edges,
+    const std::function<glm::dvec2(size_t)>& vertex_at,
+    const CreateInfiniteFacesDebugContext* debug_context = nullptr);
+  void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const std::vector<glm::dvec2>& points,
+    const std::string& phase_title, const std::unordered_set<size_t>* highlight_outer_half_edges = nullptr) const;
+  void maybeWriteCreateInfiniteFacesPhaseDebug(const CreateInfiniteFacesDebugContext* debug_context,
+    const std::string& phase_suffix, const std::string& phase_title,
+    const std::unordered_set<size_t>* highlight_outer_half_edges = nullptr) const;
+  std::optional<AngularBisectorRay> computeAngularBisectorRayFromMesh(
+    size_t he_id, const std::function<const glm::dvec2*(int)>& try_point) const;
+  static bool isInfiniteHalfEdgePair(const HalfEdge& he, const HalfEdge& twin);
+  static std::string formatHalfEdgeTopologyLabel(
+    size_t he_id, const HalfEdge& he, const HalfEdge& twin);
+  size_t prevAroundFace(size_t he_id) const;
+  size_t nextOnOuterBoundaryRaw(size_t he_id) const;
+  size_t prevOnOuterBoundaryRaw(size_t he_id) const;
 
  public:
   HalfEdgeDelaunayGraph() = default;
@@ -84,7 +133,12 @@ class HalfEdgeDelaunayGraph
 
   /**
    * Apply a pending runtime-branch split without retriangulating: tombstone cross-component
-   * triangles/edges and add infinite faces along new component boundaries (see @ref build).
+   * finite triangles/edges, preserve surviving infinite topology (infinity is a wildcard, not
+   * branch-owned), and add infinite faces only along newly opened outer edges.
+   *
+   * Here "outer" means: this directed half-edge borders an infinite or tombstoned triangle on
+   * its own side and a regular finite triangle on its twin side. This is distinct from any
+   * alpha-shape boundary classification derived from inside/outside face flags.
    */
   void applyRuntimeBranchSplit(
     const std::vector<size_t>& component_map,

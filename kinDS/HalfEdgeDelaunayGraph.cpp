@@ -19,98 +19,30 @@
 
 using namespace kinDS;
 
+
 namespace
 {
-void tombstoneHalfEdge(std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+glm::dvec2 normalizeOrUnit(const glm::dvec2& v)
 {
-  half_edges[he_id] = HalfEdgeDelaunayGraph::HalfEdge {};
-}
-
-void killFaceSlot(HalfEdgeDelaunayGraph::Triangle& tri, size_t invalid_he)
-{
-  tri.half_edges[0] = invalid_he;
-  tri.half_edges[1] = invalid_he;
-  tri.half_edges[2] = invalid_he;
-}
-
-double ccwAngle(const glm::dvec2& from, const glm::dvec2& to)
-{
-  return std::atan2(to.y - from.y, to.x - from.x);
-}
-
-size_t nextBoundaryHalfEdgeLeaving(size_t vertex, size_t arrived_from, const std::vector<size_t>& boundary_edges,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
-  const std::function<glm::dvec2(size_t)>& vertex_at, size_t component_id, const std::vector<size_t>& component_map)
-{
-  const glm::dvec2 pos_v = vertex_at(vertex);
-  const double arrive_angle = ccwAngle(pos_v, vertex_at(arrived_from));
-  double best_delta = std::numeric_limits<double>::infinity();
-  size_t best_he = static_cast<size_t>(-1);
-
-  for (size_t he_id : boundary_edges)
+  const double len2 = glm::dot(v, v);
+  if (len2 <= 1e-24)
   {
-    const int origin = half_edges[he_id].origin;
-    const int dest = half_edges[he_id ^ 1].origin;
-    if (origin < 0 || dest < 0 || static_cast<size_t>(origin) != vertex)
-    {
-      continue;
-    }
-    if (component_map[static_cast<size_t>(origin)] != component_id)
-    {
-      continue;
-    }
+    return glm::dvec2(1.0, 0.0);
+  }
+  return v / std::sqrt(len2);
+}
 
-    const double out_angle = ccwAngle(pos_v, vertex_at(static_cast<size_t>(dest)));
-    double delta = out_angle - arrive_angle;
-    while (delta <= 0.0)
-    {
-      delta += 2.0 * std::acos(-1.0);
-    }
-    if (delta < best_delta)
-    {
-      best_delta = delta;
-      best_he = he_id;
-    }
+void appendClippedRay(svg::Document& doc, const glm::dvec2& origin, const glm::dvec2& direction, double ray_length,
+  const HalfEdgeDelaunayGraphToSVG::BoundingBox& bb, const svg::Color& color, double stroke_w)
+{
+  glm::dvec2 p0 = origin;
+  glm::dvec2 p1 = origin + ray_length * direction;
+  if (!HalfEdgeDelaunayGraphToSVG::clipSegmentToBoundingBox(p0, p1, bb))
+  {
+    return;
   }
 
-  return best_he;
-}
-
-std::vector<size_t> traceBoundaryCycle(size_t start_he, const std::vector<size_t>& boundary_edges,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
-  const std::function<glm::dvec2(size_t)>& vertex_at, size_t component_id, const std::vector<size_t>& component_map,
-  std::unordered_set<size_t>& visited)
-{
-  std::vector<size_t> cycle;
-  cycle.reserve(boundary_edges.size());
-  size_t current = start_he;
-  const size_t start_tail = static_cast<size_t>(half_edges[start_he ^ 1].origin);
-  for (size_t guard = 0; guard <= boundary_edges.size(); ++guard)
-  {
-    if (!visited.insert(current).second)
-    {
-      break;
-    }
-    cycle.push_back(current);
-    const size_t tail = static_cast<size_t>(half_edges[current ^ 1].origin);
-    const size_t tip = static_cast<size_t>(half_edges[current].origin);
-    current = nextBoundaryHalfEdgeLeaving(tip, tail, boundary_edges, half_edges, vertex_at, component_id, component_map);
-    if (current == static_cast<size_t>(-1))
-    {
-      break;
-    }
-    if (current == start_he && static_cast<size_t>(half_edges[current ^ 1].origin) == start_tail)
-    {
-      break;
-    }
-  }
-
-  return cycle;
-}
-
-bool isDeadFaceSlot(const HalfEdgeDelaunayGraph::Triangle& tri)
-{
-  return tri.half_edges[0] == tri.half_edges[1] && tri.half_edges[1] == tri.half_edges[2];
+  doc << svg::Line(svg::Point(p0.x, p0.y), svg::Point(p1.x, p1.y), svg::Stroke(stroke_w, color));
 }
 
 std::string formatVertexId(int vertex_id)
@@ -118,8 +50,351 @@ std::string formatVertexId(int vertex_id)
   return vertex_id < 0 ? "inf" : std::to_string(vertex_id);
 }
 
-std::string formatHalfEdgeTopologyLabel(
-  size_t he_id, const HalfEdgeDelaunayGraph::HalfEdge& he, const HalfEdgeDelaunayGraph::HalfEdge& twin)
+} // namespace
+
+
+void HalfEdgeDelaunayGraph::tombstoneHalfEdge(size_t he_id)
+{
+  half_edges[he_id] = HalfEdge {};
+}
+
+void HalfEdgeDelaunayGraph::killFaceSlot(Triangle& tri, size_t invalid_he)
+{
+  tri.half_edges[0] = invalid_he;
+  tri.half_edges[1] = invalid_he;
+  tri.half_edges[2] = invalid_he;
+}
+
+bool HalfEdgeDelaunayGraph::isDeadFaceSlot(const Triangle& tri) const
+{
+  return tri.half_edges[0] == tri.half_edges[1] && tri.half_edges[1] == tri.half_edges[2];
+}
+
+
+
+HalfEdgeDelaunayGraph::OuterBoundaryMaps HalfEdgeDelaunayGraph::buildOuterBoundaryMaps(const std::unordered_set<size_t>& new_outer_half_edge_set) const
+{
+  OuterBoundaryMaps maps;
+  maps.new_outer_outgoing.assign(vertex_count, -1);
+  maps.new_outer_incoming.assign(vertex_count, -1);
+  maps.existing_outer_outgoing.assign(vertex_count, -1);
+  maps.existing_incoming_inf.assign(vertex_count, -1);
+
+  for (size_t interior_he : new_outer_half_edge_set)
+  {
+    const size_t exterior_he = interior_he ^ 1;
+    if (exterior_he >= half_edges.size())
+    {
+      continue;
+    }
+    const int origin = half_edges[exterior_he].origin;
+    const int dest = destination(exterior_he);
+    if (origin < 0 || dest < 0 || static_cast<size_t>(origin) >= vertex_count
+      || static_cast<size_t>(dest) >= vertex_count)
+    {
+      continue;
+    }
+    maps.new_outer_outgoing[static_cast<size_t>(origin)] = static_cast<int>(exterior_he);
+    maps.new_outer_incoming[static_cast<size_t>(dest)] = static_cast<int>(exterior_he);
+  }
+
+  for (size_t he_id = 0; he_id + 1 < half_edges.size(); he_id += 2)
+  {
+    if (HalfEdgeDelaunayGraph::isTombstone(half_edges[he_id]))
+    {
+      continue;
+    }
+
+    const int origin = half_edges[he_id].origin;
+    const int dest = destination(he_id);
+    if (origin < 0 || dest < 0 || static_cast<size_t>(origin) >= vertex_count
+      || static_cast<size_t>(dest) >= vertex_count)
+    {
+      continue;
+    }
+
+    if (new_outer_half_edge_set.count(he_id) != 0 || new_outer_half_edge_set.count(he_id ^ 1) != 0)
+    {
+      continue;
+    }
+
+    const int face0 = half_edges[he_id].face;
+    const int face1 = half_edges[he_id ^ 1].face;
+    const bool face0_infinite = face0 >= 0 && isLiveFace(static_cast<size_t>(face0))
+      && faceHasInfiniteVertex(static_cast<size_t>(face0));
+    const bool face1_infinite = face1 >= 0 && isLiveFace(static_cast<size_t>(face1))
+      && faceHasInfiniteVertex(static_cast<size_t>(face1));
+    const bool face0_finite = face0 >= 0 && isLiveFace(static_cast<size_t>(face0))
+      && !faceHasInfiniteVertex(static_cast<size_t>(face0));
+    const bool face1_finite = face1 >= 0 && isLiveFace(static_cast<size_t>(face1))
+      && !faceHasInfiniteVertex(static_cast<size_t>(face1));
+
+    if (face0_infinite && face1_finite)
+    {
+      maps.existing_outer_outgoing[static_cast<size_t>(origin)] = static_cast<int>(he_id);
+    }
+    else if (face1_infinite && face0_finite)
+    {
+      maps.existing_outer_outgoing[static_cast<size_t>(origin)] = static_cast<int>(he_id ^ 1);
+    }
+  }
+
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (HalfEdgeDelaunayGraph::isTombstone(half_edges[he_id]) || half_edges[he_id].origin != -1)
+    {
+      continue;
+    }
+
+    const int face_id = half_edges[he_id].face;
+    if (face_id < 0 || !isLiveFace(static_cast<size_t>(face_id))
+      || !faceHasInfiniteVertex(static_cast<size_t>(face_id)))
+    {
+      continue;
+    }
+
+    const int apex = half_edges[he_id ^ 1].origin;
+    if (apex < 0 || static_cast<size_t>(apex) >= vertex_count)
+    {
+      continue;
+    }
+    maps.existing_incoming_inf[static_cast<size_t>(apex)] = static_cast<int>(he_id);
+  }
+
+  return maps;
+}
+
+bool HalfEdgeDelaunayGraph::infiniteHalfEdgeBordersTombstonedTriangle(size_t he_id) const
+{
+  if (he_id >= half_edges.size() || HalfEdgeDelaunayGraph::isTombstone(half_edges[he_id]))
+  {
+    return false;
+  }
+
+  const int origin = half_edges[he_id].origin;
+  const int dest = destination(he_id);
+  if ((origin >= 0) == (dest >= 0))
+  {
+    return false;
+  }
+
+  const int face_id = half_edges[he_id].face;
+  if (face_id < 0 || !isLiveFace(static_cast<size_t>(face_id))
+    || !faceHasInfiniteVertex(static_cast<size_t>(face_id)))
+  {
+    return false;
+  }
+
+  for (size_t corner_he : triangles[static_cast<size_t>(face_id)].half_edges)
+  {
+    if (corner_he >= half_edges.size())
+    {
+      continue;
+    }
+    const int u = half_edges[corner_he].origin;
+    const int v = destination(corner_he);
+    if (u < 0 || v < 0)
+    {
+      continue;
+    }
+
+    const int interior_face = half_edges[corner_he ^ 1].face;
+    if (!isLiveFace(static_cast<size_t>(interior_face)))
+    {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void HalfEdgeDelaunayGraph::clearTombstonedFaceRef(size_t he_id)
+{
+  if (he_id >= half_edges.size())
+  {
+    return;
+  }
+  const int face_id = half_edges[he_id].face;
+  if (face_id < 0)
+  {
+    return;
+  }
+  if (isLiveFace(static_cast<size_t>(face_id)) && faceHasInfiniteVertex(static_cast<size_t>(face_id)))
+  {
+    return;
+  }
+  half_edges[he_id].face = -1;
+}
+
+void HalfEdgeDelaunayGraph::spliceExistingInfiniteEdgesToNewOuter(const OuterBoundaryMaps& maps, std::vector<int>& incoming_inf_override)
+{
+  incoming_inf_override.assign(vertex_count, -1);
+  std::vector<int> pending_incoming_inf_next(vertex_count, -1);
+
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (!infiniteHalfEdgeBordersTombstonedTriangle(he_id))
+    {
+      continue;
+    }
+
+    if (half_edges[he_id].origin < 0)
+    {
+      continue;
+    }
+
+    // Finite-origin half-edge points away from apex toward infinity: wire new outer arriving at
+    // apex -> that spoke (same convention as build(): exterior u->v .next = finite spoke at v).
+    const int apex = half_edges[he_id].origin;
+    if (apex < 0 || static_cast<size_t>(apex) >= vertex_count)
+    {
+      continue;
+    }
+
+    const int adjacent_new_outer = maps.new_outer_incoming[static_cast<size_t>(apex)];
+    if (adjacent_new_outer < 0)
+    {
+      continue;
+    }
+
+    half_edges[static_cast<size_t>(adjacent_new_outer)].next = static_cast<int>(he_id);
+    pending_incoming_inf_next[static_cast<size_t>(apex)] = static_cast<int>(he_id ^ 1);
+    clearTombstonedFaceRef(he_id);
+  }
+
+  // Infinite half-edge points inward (origin=-1) at apex: inf.next = new outer leaving apex.
+  // Same as build() wiring incoming(inf@u).next = boundary_edge_map[u]. Scan all inf-origin
+  // half-edges directly; existing_incoming_inf alone can miss the correct spoke.
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (HalfEdgeDelaunayGraph::isTombstone(half_edges[he_id]) || half_edges[he_id].origin != -1)
+    {
+      continue;
+    }
+
+    const int apex = half_edges[he_id ^ 1].origin;
+    if (apex < 0 || static_cast<size_t>(apex) >= vertex_count)
+    {
+      continue;
+    }
+
+    const int new_outgoing = maps.new_outer_outgoing[static_cast<size_t>(apex)];
+    if (new_outgoing < 0)
+    {
+      continue;
+    }
+
+    // Phase 2 mints a fresh corner when both new in/out exist at this vertex.
+    if (maps.new_outer_incoming[static_cast<size_t>(apex)] >= 0)
+    {
+      continue;
+    }
+
+    half_edges[he_id].next = new_outgoing;
+    clearTombstonedFaceRef(he_id);
+  }
+
+  for (size_t he_id = 0; he_id < half_edges.size(); ++he_id)
+  {
+    if (HalfEdgeDelaunayGraph::isTombstone(half_edges[he_id]))
+    {
+      continue;
+    }
+
+    const int origin = half_edges[he_id].origin;
+    const int dest = destination(he_id);
+    if (origin < 0 || dest >= 0)
+    {
+      continue;
+    }
+
+    const int face_id = half_edges[he_id].face;
+    if (face_id < 0 || !isLiveFace(static_cast<size_t>(face_id))
+      || !faceHasInfiniteVertex(static_cast<size_t>(face_id)))
+    {
+      continue;
+    }
+
+    if (origin >= static_cast<int>(vertex_count))
+    {
+      continue;
+    }
+
+    if (maps.new_outer_incoming[static_cast<size_t>(origin)] < 0 && maps.new_outer_outgoing[static_cast<size_t>(origin)] < 0)
+    {
+      continue;
+    }
+
+    pending_incoming_inf_next[static_cast<size_t>(origin)] = static_cast<int>(he_id ^ 1);
+    clearTombstonedFaceRef(he_id);
+  }
+
+  for (size_t u = 0; u < vertex_count; ++u)
+  {
+    const int new_outgoing = maps.new_outer_outgoing[u];
+    if (new_outgoing < 0)
+    {
+      continue;
+    }
+
+    const int dest = destination(static_cast<size_t>(new_outgoing));
+    if (dest < 0 || static_cast<size_t>(dest) >= vertex_count)
+    {
+      continue;
+    }
+
+    const size_t v = static_cast<size_t>(dest);
+    const bool destination_between_two_new
+      = maps.new_outer_incoming[v] >= 0 && maps.new_outer_outgoing[v] >= 0;
+    if (destination_between_two_new)
+    {
+      continue;
+    }
+
+    const int existing_outgoing = maps.existing_outer_outgoing[v];
+    if (existing_outgoing < 0 && maps.existing_incoming_inf[v] < 0)
+    {
+      continue;
+    }
+
+    HalfEdge& new_outer_he = half_edges[static_cast<size_t>(new_outgoing)];
+    if (new_outer_he.next >= 0)
+    {
+      continue;
+    }
+
+    if (maps.existing_incoming_inf[v] < 0)
+    {
+      continue;
+    }
+
+    // After exterior u->v the infinite-face cycle continues through the finite spoke at v,
+    // not through existing_outgoing.next (which is the spoke one step further along the old hull).
+    const int spoke_at_v = static_cast<int>(maps.existing_incoming_inf[v] ^ 1);
+    new_outer_he.next = spoke_at_v;
+    clearTombstonedFaceRef(static_cast<size_t>(spoke_at_v));
+  }
+
+  incoming_inf_override = std::move(pending_incoming_inf_next);
+}
+
+int HalfEdgeDelaunayGraph::resolveNextOuterBoundaryHalfEdge(int vertex, const OuterBoundaryMaps& maps) const
+{
+  if (vertex < 0)
+  {
+    return -1;
+  }
+
+  const size_t vertex_index = static_cast<size_t>(vertex);
+  if (maps.new_outer_outgoing[vertex_index] >= 0)
+  {
+    return maps.new_outer_outgoing[vertex_index];
+  }
+  return maps.existing_outer_outgoing[vertex_index];
+}
+
+std::string HalfEdgeDelaunayGraph::formatHalfEdgeTopologyLabel(
+  size_t he_id, const HalfEdge& he, const HalfEdge& twin)
 {
   std::ostringstream oss;
   oss << he_id << " (" << formatVertexId(he.origin) << "->" << formatVertexId(twin.origin) << ") next=" << he.next
@@ -127,12 +402,7 @@ std::string formatHalfEdgeTopologyLabel(
   return oss.str();
 }
 
-int halfEdgeDestination(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
-{
-  return half_edges[he_id ^ 1].origin;
-}
-
-size_t rawPrevAroundFace(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+size_t HalfEdgeDelaunayGraph::prevAroundFace(size_t he_id) const
 {
   if (half_edges[he_id].next < 0)
   {
@@ -142,7 +412,8 @@ size_t rawPrevAroundFace(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& hal
   const size_t start = he_id;
   size_t next_he_id = static_cast<size_t>(half_edges[he_id].next);
   size_t prev_he_id = he_id;
-  while (next_he_id != start)
+  constexpr int max_steps = 4;
+  for (int step = 0; step < max_steps && next_he_id != start; ++step)
   {
     prev_he_id = next_he_id;
     if (half_edges[next_he_id].next < 0)
@@ -151,10 +422,18 @@ size_t rawPrevAroundFace(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& hal
     }
     next_he_id = static_cast<size_t>(half_edges[next_he_id].next);
   }
+
+  if (next_he_id != start && half_edges[next_he_id].next >= 0)
+  {
+    throw std::runtime_error(
+      "prevAroundFace: face cycle did not close within " + std::to_string(max_steps)
+      + " steps starting from half-edge " + std::to_string(he_id) + " (stuck at " + std::to_string(next_he_id) + ")");
+  }
+
   return prev_he_id;
 }
 
-size_t rawNextOnConvexBoundary(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+size_t HalfEdgeDelaunayGraph::nextOnOuterBoundaryRaw(size_t he_id) const
 {
   if (half_edges[he_id].next < 0)
   {
@@ -170,33 +449,14 @@ size_t rawNextOnConvexBoundary(const std::vector<HalfEdgeDelaunayGraph::HalfEdge
   return static_cast<size_t>(half_edges[next_he_id].next);
 }
 
-size_t rawPrevOnConvexBoundary(const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t he_id)
+size_t HalfEdgeDelaunayGraph::prevOnOuterBoundaryRaw(size_t he_id) const
 {
-  size_t prev_he_id = rawPrevAroundFace(half_edges, he_id);
+  size_t prev_he_id = prevAroundFace(he_id);
   prev_he_id ^= 1;
-  return rawPrevAroundFace(half_edges, prev_he_id);
+  return prevAroundFace(prev_he_id);
 }
 
-glm::dvec2 normalizeOrUnit(const glm::dvec2& v)
-{
-  const double len2 = glm::dot(v, v);
-  if (len2 <= 1e-24)
-  {
-    return glm::dvec2(1.0, 0.0);
-  }
-  return v / std::sqrt(len2);
-}
-
-struct AngularBisectorRay
-{
-  int apex = -1;
-  glm::dvec2 origin {};
-  glm::dvec2 direction {};
-};
-
-std::optional<AngularBisectorRay> computeAngularBisectorRayFromMesh(size_t he_id,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
-  const std::function<const glm::dvec2*(int)>& try_point)
+std::optional<HalfEdgeDelaunayGraph::AngularBisectorRay> HalfEdgeDelaunayGraph::computeAngularBisectorRayFromMesh(size_t he_id, const std::function<const glm::dvec2*(int)>& try_point) const
 {
   if (he_id >= half_edges.size() || HalfEdgeDelaunayGraph::isTombstone(half_edges[he_id]))
   {
@@ -204,7 +464,7 @@ std::optional<AngularBisectorRay> computeAngularBisectorRayFromMesh(size_t he_id
   }
 
   int apex = half_edges[he_id].origin;
-  const int dest = halfEdgeDestination(half_edges, he_id);
+  const int dest = destination(he_id);
   if (half_edges[he_id].next < 0)
   {
     return std::nullopt;
@@ -222,13 +482,13 @@ std::optional<AngularBisectorRay> computeAngularBisectorRayFromMesh(size_t he_id
       return std::nullopt;
     }
 
-    c = halfEdgeDestination(half_edges, finite_he_id);
+    c = destination(finite_he_id);
     if (c < 0)
     {
       return std::nullopt;
     }
 
-    const size_t prev_he_id = rawPrevOnConvexBoundary(half_edges, finite_he_id);
+    const size_t prev_he_id = prevOnOuterBoundaryRaw(finite_he_id);
     c_prime = half_edges[prev_he_id].origin;
   }
   else if (dest < 0)
@@ -245,8 +505,8 @@ std::optional<AngularBisectorRay> computeAngularBisectorRayFromMesh(size_t he_id
       return std::nullopt;
     }
 
-    const size_t next_he_id = rawNextOnConvexBoundary(half_edges, finite_he_id);
-    c_prime = halfEdgeDestination(half_edges, next_he_id);
+    const size_t next_he_id = nextOnOuterBoundaryRaw(finite_he_id);
+    c_prime = destination(next_he_id);
   }
   else
   {
@@ -280,8 +540,8 @@ std::optional<AngularBisectorRay> computeAngularBisectorRayFromMesh(size_t he_id
   return ray;
 }
 
-bool isInfiniteHalfEdgePair(
-  const HalfEdgeDelaunayGraph::HalfEdge& he, const HalfEdgeDelaunayGraph::HalfEdge& twin)
+bool HalfEdgeDelaunayGraph::isInfiniteHalfEdgePair(
+  const HalfEdge& he, const HalfEdge& twin)
 {
   if (HalfEdgeDelaunayGraph::isTombstone(he))
   {
@@ -290,23 +550,8 @@ bool isInfiniteHalfEdgePair(
   return (he.origin < 0) != (twin.origin < 0);
 }
 
-void appendClippedRay(svg::Document& doc, const glm::dvec2& origin, const glm::dvec2& direction, double ray_length,
-  const HalfEdgeDelaunayGraphToSVG::BoundingBox& bb, const svg::Color& color, double stroke_w)
-{
-  glm::dvec2 p0 = origin;
-  glm::dvec2 p1 = origin + ray_length * direction;
-  if (!HalfEdgeDelaunayGraphToSVG::clipSegmentToBoundingBox(p0, p1, bb))
-  {
-    return;
-  }
-
-  doc << svg::Line(svg::Point(p0.x, p0.y), svg::Point(p1.x, p1.y), svg::Stroke(stroke_w, color));
-}
-
-void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const std::vector<glm::dvec2>& points,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
-  const std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles, const std::string& phase_title,
-  const std::unordered_set<size_t>* highlight_interior_boundary = nullptr)
+void HalfEdgeDelaunayGraph::writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const std::vector<glm::dvec2>& points, const std::string& phase_title,
+  const std::unordered_set<size_t>* highlight_outer_half_edges) const
 {
   if (points.empty())
   {
@@ -346,9 +591,15 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
     return &point;
   };
 
+  const auto is_outer_edge = [&](size_t a_he_id, size_t b_he_id) -> bool
+  {
+    return highlight_outer_half_edges != nullptr
+      && (highlight_outer_half_edges->count(a_he_id) != 0 || highlight_outer_half_edges->count(b_he_id) != 0);
+  };
+
   for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
   {
-    const HalfEdgeDelaunayGraph::Triangle& tri = triangles[face_id];
+    const Triangle& tri = triangles[face_id];
     if (isDeadFaceSlot(tri))
     {
       continue;
@@ -392,15 +643,14 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
 
   for (size_t he_id = 0; he_id + 1 < half_edges.size(); he_id += 2)
   {
-    const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[he_id];
-    const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[he_id ^ 1];
+    const HalfEdge& he = half_edges[he_id];
+    const HalfEdge& twin = half_edges[he_id ^ 1];
     if (HalfEdgeDelaunayGraph::isTombstone(he) && HalfEdgeDelaunayGraph::isTombstone(twin))
     {
       continue;
     }
 
-    const bool highlighted
-      = highlight_interior_boundary != nullptr && highlight_interior_boundary->count(he_id ^ 1) != 0;
+    const bool highlighted = is_outer_edge(he_id, he_id ^ 1);
     const svg::Color stroke_color = highlighted ? svg::Color(0, 0, 255) : svg::Color(svg::Color::Black);
     const double stroke_w = highlighted ? 0.012 : 0.006;
 
@@ -420,8 +670,8 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
 
   for (size_t he_id = 0; he_id + 1 < half_edges.size(); he_id += 2)
   {
-    const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[he_id];
-    const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[he_id ^ 1];
+    const HalfEdge& he = half_edges[he_id];
+    const HalfEdge& twin = half_edges[he_id ^ 1];
     if (!isInfiniteHalfEdgePair(he, twin))
     {
       continue;
@@ -430,14 +680,14 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
     // Prefer the half-edge with origin at infinity: its next pointer is wired in phase 2,
     // while the finite-origin twin may still have next=-1 before phase 3 closes the face.
     const size_t inf_origin_he_id = he.origin < 0 ? he_id : (twin.origin < 0 ? he_id ^ 1 : he_id);
-    std::optional<AngularBisectorRay> ray = computeAngularBisectorRayFromMesh(inf_origin_he_id, half_edges, try_point);
+    std::optional<AngularBisectorRay> ray = computeAngularBisectorRayFromMesh(inf_origin_he_id, try_point);
     if (!ray.has_value() && inf_origin_he_id != he_id)
     {
-      ray = computeAngularBisectorRayFromMesh(he_id, half_edges, try_point);
+      ray = computeAngularBisectorRayFromMesh(he_id, try_point);
     }
     if (!ray.has_value() && inf_origin_he_id != (he_id ^ 1))
     {
-      ray = computeAngularBisectorRayFromMesh(he_id ^ 1, half_edges, try_point);
+      ray = computeAngularBisectorRayFromMesh(he_id ^ 1, try_point);
     }
     if (!ray.has_value())
     {
@@ -467,8 +717,8 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
 
   for (size_t he_id = 0; he_id + 1 < half_edges.size(); he_id += 2)
   {
-    const HalfEdgeDelaunayGraph::HalfEdge& he_even = half_edges[he_id];
-    const HalfEdgeDelaunayGraph::HalfEdge& he_odd = half_edges[he_id ^ 1];
+    const HalfEdge& he_even = half_edges[he_id];
+    const HalfEdge& he_odd = half_edges[he_id ^ 1];
     if (HalfEdgeDelaunayGraph::isTombstone(he_even) && HalfEdgeDelaunayGraph::isTombstone(he_odd))
     {
       continue;
@@ -496,8 +746,8 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
       for (size_t i = 0; i < 2; ++i)
       {
         const size_t current_he_id = he_id + i;
-        const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[current_he_id];
-        const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[current_he_id ^ 1];
+        const HalfEdge& he = half_edges[current_he_id];
+        const HalfEdge& twin = half_edges[current_he_id ^ 1];
         if (HalfEdgeDelaunayGraph::isTombstone(he))
         {
           continue;
@@ -509,8 +759,8 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
           continue;
         }
 
-        const bool highlighted = highlight_interior_boundary != nullptr
-          && highlight_interior_boundary->count(current_he_id ^ 1) != 0;
+        const bool highlighted = highlight_outer_half_edges != nullptr
+          && highlight_outer_half_edges->count(current_he_id ^ 1) != 0;
         const bool infinite_edge = isInfiniteHalfEdgePair(he, twin);
         const svg::Color label_color = infinite_edge ? infinite_edge_color
           : (highlighted ? svg::Color(0, 0, 200) : svg::Color(120, 0, 120));
@@ -523,8 +773,8 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
     for (size_t i = 0; i < 2; ++i)
     {
       const size_t current_he_id = he_id + i;
-      const HalfEdgeDelaunayGraph::HalfEdge& he = half_edges[current_he_id];
-      const HalfEdgeDelaunayGraph::HalfEdge& twin = half_edges[current_he_id ^ 1];
+      const HalfEdge& he = half_edges[current_he_id];
+      const HalfEdge& twin = half_edges[current_he_id ^ 1];
       if (HalfEdgeDelaunayGraph::isTombstone(he))
       {
         continue;
@@ -547,8 +797,8 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
         continue;
       }
 
-      const bool highlighted = highlight_interior_boundary != nullptr
-        && highlight_interior_boundary->count(current_he_id ^ 1) != 0;
+      const bool highlighted = highlight_outer_half_edges != nullptr
+        && highlight_outer_half_edges->count(current_he_id ^ 1) != 0;
       const bool infinite_edge = isInfiniteHalfEdgePair(he, twin);
       const svg::Color label_color = infinite_edge ? infinite_edge_color
         : (highlighted ? svg::Color(0, 0, 200) : svg::Color(120, 0, 120));
@@ -561,20 +811,19 @@ void writeCreateInfiniteFacesPhaseDebugSvg(const std::string& filepath, const st
   doc.save();
 }
 
-struct CreateInfiniteFacesDebugContext
+void HalfEdgeDelaunayGraph::maybeWriteCreateInfiniteFacesPhaseDebug(const CreateInfiniteFacesDebugContext* debug_context, const std::string& phase_suffix, const std::string& phase_title,
+  const std::unordered_set<size_t>* highlight_outer_half_edges) const
 {
-  const std::function<glm::dvec2(size_t)>* vertex_at = nullptr;
-  std::string output_prefix;
-};
+  if (debug_context == nullptr || debug_context->vertex_at == nullptr || debug_context->output_prefix.empty())
+  {
+    return;
+  }
 
-std::unordered_set<size_t> collectLiveVertexOrigins(
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, size_t vertex_count)
-{
   std::unordered_set<size_t> live_vertices;
   live_vertices.reserve(vertex_count);
-  for (const HalfEdgeDelaunayGraph::HalfEdge& he : half_edges)
+  for (const HalfEdge& he : half_edges)
   {
-    if (HalfEdgeDelaunayGraph::isTombstone(he))
+    if (isTombstone(he))
     {
       continue;
     }
@@ -583,164 +832,282 @@ std::unordered_set<size_t> collectLiveVertexOrigins(
       live_vertices.insert(static_cast<size_t>(he.origin));
     }
   }
-  return live_vertices;
-}
-
-void maybeWriteCreateInfiniteFacesPhaseDebug(const CreateInfiniteFacesDebugContext* debug_context,
-  const std::string& phase_suffix, const std::string& phase_title,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges,
-  const std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles, size_t vertex_count,
-  const std::unordered_set<size_t>* highlight_interior_boundary = nullptr)
-{
-  if (debug_context == nullptr || debug_context->vertex_at == nullptr || debug_context->output_prefix.empty())
-  {
-    return;
-  }
-
-  const std::unordered_set<size_t> live_vertices = collectLiveVertexOrigins(half_edges, vertex_count);
   std::vector<glm::dvec2> points(vertex_count, glm::dvec2(std::numeric_limits<double>::quiet_NaN()));
   for (size_t v : live_vertices)
   {
     points[v] = (*debug_context->vertex_at)(v);
   }
 
-  writeCreateInfiniteFacesPhaseDebugSvg(
-    debug_context->output_prefix + phase_suffix + ".svg", points, half_edges, triangles, phase_title,
-    highlight_interior_boundary);
+  writeCreateInfiniteFacesPhaseDebugSvg(debug_context->output_prefix + phase_suffix + ".svg", points, phase_title, highlight_outer_half_edges);
 }
 
-void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interior,
-  std::vector<HalfEdgeDelaunayGraph::HalfEdge>& half_edges, std::vector<HalfEdgeDelaunayGraph::Triangle>& triangles,
-  size_t vertex_count, const CreateInfiniteFacesDebugContext* debug_context = nullptr)
+void HalfEdgeDelaunayGraph::createInfiniteFacesFromBoundary(const std::vector<size_t>& outer_half_edges, const std::function<glm::dvec2(size_t)>& vertex_at, const CreateInfiniteFacesDebugContext* debug_context)
 {
-  // `boundary_interior` contains the finite half-edges whose twin lies on the outside of the triangulation.
-  // This routine rebuilds the "outside" as explicit infinite faces, one face per boundary edge / boundary vertex corner.
-  if (boundary_interior.empty())
+  // `outer_half_edges` contains finite half-edges whose own side borders an infinite or tombstoned triangle,
+  // while the twin side borders a regular finite triangle. These "outer" edges are runtime-branch cut geometry
+  // and are distinct from alpha-shape boundaries derived from per-face inside/outside flags.
+  //
+  // Phases:
+  //  1) index new outer exterior edges and reset their exterior links
+  //  1b) splice surviving infinite half-edges to adjacent new outer edges
+  //  2) append new infinity pairs only at vertices between two new outer edges
+  //  3) close infinite faces (new corners) or reattach spliced corners to existing infinite faces
+  if (outer_half_edges.empty())
   {
     return;
   }
 
-  const std::unordered_set<size_t> boundary_interior_set(boundary_interior.begin(), boundary_interior.end());
-  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase0_before", "Phase 0: input boundary_interior",
-    half_edges, triangles, vertex_count, &boundary_interior_set);
+  const std::unordered_set<size_t> outer_half_edge_set(outer_half_edges.begin(), outer_half_edges.end());
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase0_before", "Phase 0: input outer_half_edges",
+    &outer_half_edge_set);
 
-  // Phase 1: index each exterior boundary half-edge by its finite origin vertex.
-  // After this pass, `boundary_edge_map[u]` tells us which exterior half-edge leaves finite vertex `u`.
-  // Each boundary vertex is expected to contribute exactly one outgoing exterior boundary half-edge.
-  std::vector<int> boundary_edge_map(vertex_count, -1);
-  for (size_t interior_he : boundary_interior)
+  // Phase 1: index each new outer exterior half-edge by its finite origin vertex and reset its exterior links.
+  std::vector<int> new_outer_outgoing_map(vertex_count, -1);
+  for (size_t interior_he : outer_half_edges)
   {
     const size_t exterior_he = interior_he ^ 1;
-    HalfEdgeDelaunayGraph::HalfEdge& exterior = half_edges[exterior_he];
-    const int u = exterior.origin;
-    if (u < 0 || static_cast<size_t>(u) >= vertex_count)
+    HalfEdge& exterior = half_edges[exterior_he];
+    const int origin = exterior.origin;
+    if (origin < 0 || static_cast<size_t>(origin) >= vertex_count)
     {
-      throw std::runtime_error("createInfiniteFacesFromBoundary: boundary exterior has invalid finite origin");
+      throw std::runtime_error("createInfiniteFacesFromBoundary: outer exterior has invalid finite origin");
     }
     exterior.face = -1;
     exterior.next = -1;
-    if (boundary_edge_map[static_cast<size_t>(u)] != -1)
+    if (new_outer_outgoing_map[static_cast<size_t>(origin)] != -1)
     {
-      throw std::runtime_error("createInfiniteFacesFromBoundary: duplicate outgoing boundary edge at vertex "
-        + std::to_string(static_cast<size_t>(u)));
+      throw std::runtime_error("createInfiniteFacesFromBoundary: duplicate outgoing new outer edge at vertex "
+        + std::to_string(static_cast<size_t>(origin)));
     }
-    boundary_edge_map[static_cast<size_t>(u)] = static_cast<int>(exterior_he);
+    new_outer_outgoing_map[static_cast<size_t>(origin)] = static_cast<int>(exterior_he);
   }
 
-  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase1_indexed",
-    "Phase 1: boundary_edge_map filled, exterior face=-1 next=-1", half_edges, triangles, vertex_count,
-    &boundary_interior_set);
+  OuterBoundaryMaps boundary_maps = buildOuterBoundaryMaps(outer_half_edge_set);
+  boundary_maps.new_outer_outgoing = std::move(new_outer_outgoing_map);
 
-  // Phase 2: for every boundary exterior half-edge u->v, create a new pair of half-edges that connects
-  // the finite vertex `v` to the implicit vertex at infinity.
-  //
-  // The intended cycle around one infinite face is:
-  //   incoming infinity edge -> boundary exterior edge leaving v -> outgoing infinity edge
-  //
-  // To prepare that cycle:
-  // - `boundary.next` is set to the newly created finite-origin half-edge at `v`
-  // - the twin half-edge at infinity stores `next = next_boundary_he`, i.e. the next boundary edge in the outer walk
-  // - `incoming_edge_map[v]` remembers that the face corner at vertex `v` should later be closed
-  std::vector<int> incoming_edge_map(vertex_count, -1);
-  for (size_t u = 0; u < vertex_count; ++u)
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase1_indexed", "Phase 1: new_outer_outgoing_map filled, exterior face=-1 next=-1", &outer_half_edge_set);
+
+  std::vector<int> incoming_inf_override;
+  spliceExistingInfiniteEdgesToNewOuter(boundary_maps, incoming_inf_override);
+
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase1b_spliced", "Phase 1b: existing infinite edges spliced to new outer edges", &outer_half_edge_set);
+
+  // Phase 2: append new infinity half-edge pairs at each vertex that lies between two new outer edges.
+  std::vector<int> created_incoming_inf_map(vertex_count, -1);
+  std::vector<int> created_finite_spoke_map(vertex_count, -1);
+  for (size_t v = 0; v < vertex_count; ++v)
   {
-    const int boundary_edge_index = boundary_edge_map[u];
-    if (boundary_edge_index == -1)
+    if (boundary_maps.new_outer_outgoing[v] < 0 || boundary_maps.new_outer_incoming[v] < 0)
     {
       continue;
     }
 
-    HalfEdgeDelaunayGraph::HalfEdge& boundary = half_edges[static_cast<size_t>(boundary_edge_index)];
-    const int v = half_edges[static_cast<size_t>(boundary_edge_index ^ 1)].origin;
-    if (v < 0 || static_cast<size_t>(v) >= vertex_count)
+    // Same convention as build(): on exterior edge arriving at v, append the spoke at v.
+    const int boundary_edge_index = boundary_maps.new_outer_incoming[v];
+    HalfEdge& boundary = half_edges[static_cast<size_t>(boundary_edge_index)];
+
+    const int next_boundary_he = incoming_inf_override[v] >= 0
+      ? incoming_inf_override[v]
+      : resolveNextOuterBoundaryHalfEdge(v, boundary_maps);
+    if (next_boundary_he < 0)
     {
-      throw std::runtime_error("createInfiniteFacesFromBoundary: boundary edge has invalid finite destination");
-    }
-    const int next_boundary_he = boundary_edge_map[static_cast<size_t>(v)];
-    if (next_boundary_he == -1)
-    {
-      throw std::runtime_error("createInfiniteFacesFromBoundary: missing successor boundary edge at vertex "
-        + std::to_string(static_cast<size_t>(v)));
+      throw std::runtime_error("createInfiniteFacesFromBoundary: missing successor outer edge at vertex "
+        + std::to_string(v));
     }
 
     const size_t he_at_v = half_edges.size();
-    half_edges.push_back(HalfEdgeDelaunayGraph::HalfEdge {});
+    half_edges.push_back(HalfEdge {});
     const size_t he_at_inf = half_edges.size();
-    half_edges.push_back(HalfEdgeDelaunayGraph::HalfEdge {});
+    half_edges.push_back(HalfEdge {});
 
-    half_edges[he_at_v].origin = v;
+    half_edges[he_at_v].origin = static_cast<int>(v);
     half_edges[he_at_v].face = -1;
     half_edges[he_at_inf].origin = -1;
     half_edges[he_at_inf].face = -1;
     half_edges[he_at_inf].next = next_boundary_he;
 
     boundary.next = static_cast<int>(he_at_v);
-    incoming_edge_map[static_cast<size_t>(v)] = static_cast<int>(he_at_inf);
+    created_incoming_inf_map[v] = static_cast<int>(he_at_inf);
+    created_finite_spoke_map[v] = static_cast<int>(he_at_v);
   }
 
-  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase2_wired",
-    "Phase 2: infinity half-edges appended, boundary.next wired", half_edges, triangles, vertex_count,
-    &boundary_interior_set);
+  const auto resolve_finite_spoke_at = [&](size_t w) -> int
+  {
+    if (w >= vertex_count)
+    {
+      return -1;
+    }
+    if (created_finite_spoke_map[w] >= 0)
+    {
+      return created_finite_spoke_map[w];
+    }
+    if (boundary_maps.existing_incoming_inf[w] >= 0)
+    {
+      return static_cast<int>(boundary_maps.existing_incoming_inf[w] ^ 1);
+    }
+    return -1;
+  };
+
+  // Wire exterior edges leaving v to the finite spoke at their destination (build() first pass).
+  for (size_t v = 0; v < vertex_count; ++v)
+  {
+    const int leave_v = boundary_maps.new_outer_outgoing[v];
+    if (leave_v < 0)
+    {
+      continue;
+    }
+    const int w = destination(static_cast<size_t>(leave_v));
+    if (w < 0 || static_cast<size_t>(w) >= vertex_count)
+    {
+      continue;
+    }
+    const int spoke_at_w = resolve_finite_spoke_at(static_cast<size_t>(w));
+    if (spoke_at_w < 0)
+    {
+      continue;
+    }
+    half_edges[static_cast<size_t>(leave_v)].next = spoke_at_w;
+  }
+
+  //maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase2_wired", "Phase 2: infinity half-edges appended at between-two-new vertices", &outer_half_edge_set);
 
   // Phase 3: close each infinite face around a boundary vertex.
-  //
-  // For vertex `u`, `incoming_edge_map[u]` is the infinity-origin half-edge that arrives at the boundary edge
-  // leaving `u`. Its `next` field already points to that boundary edge. That boundary edge's `next` field
-  // should already point to the newly created finite-origin half-edge that heads back toward infinity.
-  //
-  // We then wire the last edge back to the incoming one and assign all three half-edges to a new triangle slot
-  // representing the infinite face adjacent to that boundary corner.
+  std::vector<int> corner_incoming_inf_map(vertex_count, -1);
   for (size_t u = 0; u < vertex_count; ++u)
   {
-    const int incoming_edge_index = incoming_edge_map[u];
-    if (incoming_edge_index == -1)
+    if (created_incoming_inf_map[u] >= 0)
+    {
+      corner_incoming_inf_map[u] = created_incoming_inf_map[u];
+      continue;
+    }
+    if (incoming_inf_override[u] >= 0)
+    {
+      corner_incoming_inf_map[u] = incoming_inf_override[u];
+      continue;
+    }
+    corner_incoming_inf_map[u] = boundary_maps.existing_incoming_inf[u];
+  }
+
+  for (size_t u = 0; u < vertex_count; ++u)
+  {
+    const int incoming_edge_index = corner_incoming_inf_map[u];
+    if (incoming_edge_index < 0)
     {
       continue;
     }
 
-    HalfEdgeDelaunayGraph::HalfEdge& incoming = half_edges[static_cast<size_t>(incoming_edge_index)];
-    HalfEdgeDelaunayGraph::HalfEdge& boundary = half_edges[static_cast<size_t>(incoming.next)];
-    HalfEdgeDelaunayGraph::HalfEdge& outgoing = half_edges[static_cast<size_t>(boundary.next)];
+    clearTombstonedFaceRef(static_cast<size_t>(incoming_edge_index));
+  }
 
-    outgoing.next = incoming_edge_index;
+  const auto close_infinite_face_triangle = [&](size_t incoming_he, size_t boundary_he, size_t outgoing_he)
+  {
+    HalfEdge& incoming = half_edges[incoming_he];
+    HalfEdge& boundary = half_edges[boundary_he];
+    HalfEdge& outgoing = half_edges[outgoing_he];
+
+    outgoing.next = static_cast<int>(incoming_he);
+
+    const int preferred_face = incoming.face;
+    const bool use_existing = preferred_face >= 0 && isLiveFace(static_cast<size_t>(preferred_face))
+      && faceHasInfiniteVertex(static_cast<size_t>(preferred_face));
+
+    if (use_existing)
+    {
+      boundary.face = preferred_face;
+      outgoing.face = preferred_face;
+      Triangle& tri = triangles[static_cast<size_t>(preferred_face)];
+      tri.half_edges[0] = incoming_he;
+      tri.half_edges[1] = boundary_he;
+      tri.half_edges[2] = outgoing_he;
+      return;
+    }
 
     const size_t new_face = triangles.size();
     triangles.emplace_back();
-    triangles[new_face].half_edges[0] = static_cast<size_t>(incoming_edge_index);
-    triangles[new_face].half_edges[1] = static_cast<size_t>(incoming.next);
-    triangles[new_face].half_edges[2] = static_cast<size_t>(boundary.next);
+    triangles[new_face].half_edges[0] = incoming_he;
+    triangles[new_face].half_edges[1] = boundary_he;
+    triangles[new_face].half_edges[2] = outgoing_he;
 
-    incoming.face = static_cast<int>(new_face);
-    boundary.face = static_cast<int>(new_face);
-    outgoing.face = static_cast<int>(new_face);
+    const int face_id = static_cast<int>(new_face);
+    incoming.face = face_id;
+    boundary.face = face_id;
+    outgoing.face = face_id;
+  };
+
+  for (size_t u = 0; u < vertex_count; ++u)
+  {
+    const int incoming_edge_index = corner_incoming_inf_map[u];
+    if (incoming_edge_index < 0)
+    {
+      continue;
+    }
+
+    HalfEdge& incoming = half_edges[static_cast<size_t>(incoming_edge_index)];
+    if (incoming.next < 0)
+    {
+      continue;
+    }
+
+    const size_t boundary_he = static_cast<size_t>(incoming.next);
+    HalfEdge& boundary = half_edges[boundary_he];
+    if (boundary.next < 0)
+    {
+      continue;
+    }
+
+    const size_t outgoing_he = static_cast<size_t>(boundary.next);
+
+    close_infinite_face_triangle(static_cast<size_t>(incoming_edge_index), boundary_he, outgoing_he);
   }
 
-  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase3_closed",
-    "Phase 3: infinite faces closed", half_edges, triangles, vertex_count, &boundary_interior_set);
+  // build() assigns the spoke at v to the infinite face closed at predecessor u (u->v exterior).
+  for (size_t v = 0; v < vertex_count; ++v)
+  {
+    const int he_at_v = created_finite_spoke_map[v];
+    if (he_at_v < 0 || half_edges[static_cast<size_t>(he_at_v)].face >= 0)
+    {
+      continue;
+    }
+
+    const int arrive_he = boundary_maps.new_outer_incoming[v];
+    if (arrive_he < 0)
+    {
+      continue;
+    }
+
+    const int u = half_edges[static_cast<size_t>(arrive_he)].origin;
+    if (u < 0 || static_cast<size_t>(u) >= vertex_count)
+    {
+      continue;
+    }
+
+    const int incoming_edge_index = corner_incoming_inf_map[static_cast<size_t>(u)];
+    if (incoming_edge_index < 0)
+    {
+      continue;
+    }
+
+    HalfEdge& incoming = half_edges[static_cast<size_t>(incoming_edge_index)];
+    if (incoming.next != arrive_he)
+    {
+      continue;
+    }
+
+    HalfEdge& boundary = half_edges[static_cast<size_t>(arrive_he)];
+    if (boundary.next != he_at_v)
+    {
+      continue;
+    }
+
+    close_infinite_face_triangle(static_cast<size_t>(incoming_edge_index), static_cast<size_t>(arrive_he),
+      static_cast<size_t>(he_at_v));
+  }
+
+  maybeWriteCreateInfiniteFacesPhaseDebug(debug_context, "_phase3_closed", "Phase 3: infinite faces closed", &outer_half_edge_set);
 
   // Phase 4: sanity-check that every original exterior boundary half-edge now participates in some infinite face
   // and has a valid `next` pointer. If not, the outer boundary walk was broken somewhere earlier.
-  for (size_t interior_he : boundary_interior)
+  for (size_t interior_he : outer_half_edges)
   {
     const size_t exterior_he = interior_he ^ 1;
     if (half_edges[exterior_he].next < 0 || half_edges[exterior_he].face < 0)
@@ -751,7 +1118,6 @@ void createInfiniteFacesFromBoundary(const std::vector<size_t>& boundary_interio
     }
   }
 }
-} // namespace
 
 void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 {
@@ -1343,10 +1709,11 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
 {
   // In-place component split (no retriangulation). Given component_map[v] = component id for each site vertex,
   // disconnect topology across components while keeping each component's interior triangulation:
-  //  1) decide which original Delaunay edge pairs survive the split
+  //  1) decide which original Delaunay edge pairs survive the split (finite-finite only; infinity is a wildcard)
   //  2) kill any finite triangle that uses a dead cross-component edge
-  //  3) reuse the surviving boundary edge pairs whose exterior face died to create new infinite caps
-  //  4) tombstone edge pairs with no live incident face on either side; refresh indices
+  //  3) drop infinite faces whose interior finite neighbor died; tombstone only orphaned infinite half-edges
+  //  4) cap newly opened boundaries (twin has no live face) with fresh infinite faces
+  //  5) tombstone finite edge pairs with no live incident face on either side; refresh indices
 
   if (component_map.size() < vertex_count)
   {
@@ -1433,30 +1800,71 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
     }
   }
 
-  // The old infinity topology is no longer authoritative after the cut. Remove all original infinite faces and
-  // half-edge pairs incident to infinity, then rebuild fresh caps around the surviving component boundaries.
+  // Infinity is a wildcard: keep infinite faces whose interior finite triangle survived. Drop only caps whose
+  // interior neighbor was removed by the cut (e.g. a hull edge between two components).
   for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
   {
     if (!isLiveFace(face_id) || !faceHasInfiniteVertex(face_id))
     {
       continue;
     }
-    killFaceSlot(triangles[face_id], invalid_he);
-  }
-  for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
-  {
-    if (half_edges[he_id].origin < 0 || half_edges[he_id ^ 1].origin < 0)
+
+    bool kill_infinite_face = false;
+    for (int i = 0; i < 3; ++i)
     {
-      tombstoneHalfEdge(half_edges, he_id);
-      tombstoneHalfEdge(half_edges, he_id ^ 1);
+      const size_t he_id = triangles[face_id].half_edges[i];
+      const int u = half_edges[he_id].origin;
+      const int v = destination(he_id);
+      if (u < 0 || v < 0)
+      {
+        continue;
+      }
+
+      const int interior_face = half_edges[he_id ^ 1].face;
+      if (interior_face < 0 || static_cast<size_t>(interior_face) >= triangles.size()
+        || !isLiveFace(static_cast<size_t>(interior_face)) || faceHasInfiniteVertex(static_cast<size_t>(interior_face)))
+      {
+        kill_infinite_face = true;
+        break;
+      }
+    }
+
+    if (kill_infinite_face)
+    {
+      killFaceSlot(triangles[face_id], invalid_he);
     }
   }
 
-  // --- Collect interior boundary half-edges ---
-  // A directed half-edge is on the new component boundary when its own finite face survives, but the twin no longer
-  // borders a live face. The twin half-edge is then reused as the exterior side of a new infinite cap.
-  std::vector<size_t> boundary_interior;
-  boundary_interior.reserve(half_edges.size() / 6);
+  // Tombstone infinite half-edge pairs only when neither direction still borders a live infinite face.
+  for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
+  {
+    if (half_edges[he_id].origin >= 0 && half_edges[he_id ^ 1].origin >= 0)
+    {
+      continue;
+    }
+
+    const auto borders_live_infinite_face = [&](size_t directed_he) -> bool
+    {
+      const int face_id = half_edges[directed_he].face;
+      return face_id >= 0 && static_cast<size_t>(face_id) < triangles.size()
+        && isLiveFace(static_cast<size_t>(face_id)) && faceHasInfiniteVertex(static_cast<size_t>(face_id));
+    };
+
+    if (borders_live_infinite_face(he_id) || borders_live_infinite_face(he_id ^ 1))
+    {
+      continue;
+    }
+
+    tombstoneHalfEdge(he_id);
+    tombstoneHalfEdge(he_id ^ 1);
+  }
+
+  // --- Collect outer half-edges ---
+  // A directed half-edge is "outer" when its own side borders an infinite or tombstoned triangle, while the twin side
+  // borders a regular finite triangle. This is runtime-branch cut / outer-cap geometry, not an alpha-shape boundary
+  // defined by face_inside.
+  std::vector<size_t> outer_half_edges;
+  outer_half_edges.reserve(half_edges.size() / 6);
   for (size_t he_id = 0; he_id < original_half_edge_count; ++he_id)
   {
     if (!isLiveHalfEdge(he_id))
@@ -1484,18 +1892,22 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
       continue;
     }
 
-    boundary_interior.push_back(he_id);
+    outer_half_edges.push_back(he_id);
   }
 
   CreateInfiniteFacesDebugContext infinite_faces_debug;
   infinite_faces_debug.vertex_at = &vertex_at;
   infinite_faces_debug.output_prefix = "createInfiniteFacesFromBoundary_" + debug_tag;
-  createInfiniteFacesFromBoundary(
-    boundary_interior, half_edges, triangles, vertex_count, &infinite_faces_debug);
+  createInfiniteFacesFromBoundary(outer_half_edges, vertex_at, &infinite_faces_debug);
 
-  // --- Tombstone original edge pairs that no longer border any live face ---
+  // --- Tombstone original finite edge pairs that no longer border any live face ---
   for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
   {
+    if (half_edges[he_id].origin < 0 || half_edges[he_id ^ 1].origin < 0)
+    {
+      continue;
+    }
+
     const int face0 = half_edges[he_id].face;
     const int face1 = half_edges[he_id ^ 1].face;
     const bool face0_live = face0 >= 0 && static_cast<size_t>(face0) < triangles.size()
@@ -1506,8 +1918,8 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
     {
       continue;
     }
-    tombstoneHalfEdge(half_edges, he_id);
-    tombstoneHalfEdge(half_edges, he_id ^ 1);
+    tombstoneHalfEdge(he_id);
+    tombstoneHalfEdge(he_id ^ 1);
   }
 
   // Repair pass: some half-edges may still reference a killed face slot after the above edits.
@@ -1622,8 +2034,8 @@ void HalfEdgeDelaunayGraph::killVertices(const std::vector<bool>& dead_vertex_ma
       continue;
     }
 
-    tombstoneHalfEdge(half_edges, he_id);
-    tombstoneHalfEdge(half_edges, he_id ^ 1);
+    tombstoneHalfEdge(he_id);
+    tombstoneHalfEdge(he_id ^ 1);
   }
 
   vertex_to_half_edge.assign(vertex_count, static_cast<size_t>(-1));
@@ -1874,7 +2286,10 @@ bool kinDS::HalfEdgeDelaunayGraph::isInfinite(size_t he_id) const
   return (half_edges[he_id].origin == -1) || (destination(he_id) == -1);
 }
 
-int HalfEdgeDelaunayGraph::destination(size_t he_id) const { return half_edges[he_id ^ 1].origin; }
+int HalfEdgeDelaunayGraph::destination(size_t he_id) const
+{
+  return half_edges[he_id ^ 1].origin;
+}
 
 int HalfEdgeDelaunayGraph::triangleOppositeVertex(size_t he_id) const
 {

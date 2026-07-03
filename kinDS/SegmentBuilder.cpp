@@ -5423,32 +5423,31 @@ void SegmentBuilder::finalize(double t)
 
   // Finalize the segments by finishing all meshes
   auto& graph = kin_del.getGraph();
-  size_t half_edge_count = graph.halfEdgeSlotCount();
 
-  for (size_t i = 0; i < half_edge_count; i += 2)
+  for (size_t he_id : graph.liveDelaunayEdges())
   {
-    auto vertex = graph.halfEdge(i).origin;
+    auto vertex = graph.halfEdge(he_id).origin;
 
     // fall back for infinite vertices
     if (vertex == -1)
     {
-      vertex = graph.destination(i);
+      vertex = graph.destination(he_id);
     }
 
     size_t component_index = kin_del.component_data.component_map[vertex];
     auto& boundary_points = kin_del.component_data.component_boundaries[component_index][0];
 
-    finishMesh(i, t, boundary_points);
+    finishMesh(he_id, t, boundary_points);
   }
 
   // Finalize boundary-interval meshes once more at the final time for all boundary Delaunay-edge sections.
-  for (size_t i = 0; i < half_edge_count; i += 2)
+  for (size_t he_id : graph.liveDelaunayEdges())
   {
-    if (!kin_del.isOnComponentBoundary(i))
+    if (!kin_del.isOnComponentBoundary(he_id))
     {
       continue;
     }
-    const size_t d_edge_id = i / 2;
+    const size_t d_edge_id = he_id / 2;
     const auto& d_intersections = kin_del.getCrossingData().delaunay_edge_intersections[d_edge_id];
     if (d_intersections.empty())
     {
