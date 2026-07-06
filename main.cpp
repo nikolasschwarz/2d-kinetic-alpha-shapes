@@ -453,6 +453,8 @@ static void print_usage(const char* program_name)
             << "  --export-mode <mode>      Meshlet export mode for --mesh: combined, segments, raw (default: raw)\n"
             << "  --export-path <path>      Output path; default: raw_meshlets/, segment_meshlets/, or combined_mesh.obj\n"
             << "  --untransformed           Export meshlets in profile/local space (default: world space)\n"
+            << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
+            << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -503,7 +505,8 @@ static std::filesystem::path default_mesh_export_path(kinDS::MeshletExportMode e
 }
 
 static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
-  const std::optional<std::filesystem::path>& export_path, bool transformed)
+  const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
+  bool transform_mesh_at_construction)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -537,19 +540,28 @@ static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
 
     std::cout << "Running TreeMesher..." << std::endl;
     kinDS::TreeMesher mesher(strand_tree);
+    mesher.getSettings().transform_mesh_at_construction = transform_mesh_at_construction;
     const auto& meshes = mesher.runMeshingAlgorithm(true);
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
 
     const std::filesystem::path resolved_export_path
       = export_path.value_or(default_mesh_export_path(export_mode));
+    const std::optional<bool> export_transform
+      = profile_space_export ? std::optional<bool>(false) : std::nullopt;
+    const bool apply_export_transform
+      = export_transform.value_or(!mesher.meshletsTransformedAtConstruction());
     std::cout << "Exporting meshlets to: " << resolved_export_path.string()
-              << (transformed ? " (world space)" : " (profile space)") << std::endl;
-    mesher.exportMeshlets(export_mode, resolved_export_path, transformed);
+              << (profile_space_export ? " (profile space)" : " (world space)")
+              << (mesher.meshletsTransformedAtConstruction() && !profile_space_export
+                     ? ", transformed at construction"
+                     : apply_export_transform ? ", transformed at export" : "")
+              << std::endl;
+    mesher.exportMeshlets(export_mode, resolved_export_path, export_transform);
 
     // Export boundary mesh
     kinDS::VoronoiMesh boundary_mesh = mesher.getBoundaryMesh();
-    if (transformed)
+    if (apply_export_transform)
     {
       mesher.transformBoundaryMesh(boundary_mesh);
     }
@@ -586,7 +598,8 @@ int main(int argc, char* argv[])
   std::string mesh_file; // for --mesh
   kinDS::MeshletExportMode mesh_export_mode = kinDS::MeshletExportMode::Raw;
   std::optional<std::filesystem::path> mesh_export_path;
-  bool mesh_export_transformed = true;
+  bool mesh_export_profile_space = false;
+  bool mesh_transform_at_construction = true;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -684,7 +697,17 @@ int main(int argc, char* argv[])
     }
     else if (arg == "--untransformed")
     {
-      mesh_export_transformed = false;
+      mesh_export_profile_space = true;
+      ++arg_idx;
+    }
+    else if (arg == "--transform-at-construction")
+    {
+      mesh_transform_at_construction = true;
+      ++arg_idx;
+    }
+    else if (arg == "--transform-at-export")
+    {
+      mesh_transform_at_construction = false;
       ++arg_idx;
     }
     else if (arg == "--help" || arg == "-h")
@@ -757,7 +780,8 @@ int main(int argc, char* argv[])
   else if (command == "mesh")
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
-    mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_transformed);
+    mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
+      mesh_transform_at_construction);
     return 0;
   }
 

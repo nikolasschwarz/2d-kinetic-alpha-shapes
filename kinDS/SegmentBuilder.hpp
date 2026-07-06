@@ -253,6 +253,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// stay empty.
   bool intersection_strip_flexible_vertices_enabled = true;
 
+  glm::dvec3 transformFromRuntimeBranchToObjectSpace(glm::dvec3 vertex, size_t strand_id, double t) const;
+
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
   std::vector<RegularMeshStripIntervalEndpoints> collectRegularMeshStripIntervalsOnVoronoiEdge(
@@ -433,6 +435,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t addBoundaryIntervalTriangleOriented(VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id,
     double t, const std::string& metadata = "{}");
 
+  /// @p strand_id Delaunay site id for transform frame lookup; may be a Voronoi vertex id when it matches
+  /// @p meshlet_voronoi_vertex_for_alpha_check (resolved to an adjacent site automatically).
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
@@ -487,7 +491,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Validates both circumcenters (Delaunay face ids) incident to a Voronoi edge.
   void requireLiveRegisteredVoronoiEdgeEndpoints(size_t voronoi_edge_id, const char* context) const;
 
-  void addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset);
+  void addDelaunayTriangulationToBoundaryMesh(
+    double t, size_t input_branch_id, bool invert_orientation, double offset);
 
   std::vector<BoundaryPoint> traceConvexHull(double t) const;
 
@@ -599,7 +604,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @param ordered_segments Segments to validate.
    */
   void closingMeshValidateOrderedSegmentGeometry(
-    double t, const VoronoiMesh& mesh, const std::vector<MeshingData*>& ordered_segments);
+    double t, const VoronoiMesh& mesh, const std::vector<MeshingData*>& ordered_segments) const;
 
   /**
    * @brief Walks Voronoi inside legs and Delaunay component boundary to assemble closing polygons.

@@ -1670,6 +1670,39 @@ size_t KineticDelaunay::minInputBranchForStrands(
   return min_branch;
 }
 
+size_t KineticDelaunay::representativeStrandIdForRuntimeBranch(size_t strand_id) const
+{
+  if (strand_id == static_cast<size_t>(-1))
+  {
+    throw std::runtime_error("representativeStrandIdForRuntimeBranch: invalid strand id.");
+  }
+
+  const size_t runtime_branch_id = getRuntimeBranchIdForStrand(strand_id);
+  if (runtime_branch_id == static_cast<size_t>(-1))
+  {
+    return strand_id;
+  }
+
+  std::optional<size_t> representative;
+  for (size_t candidate = 0; candidate < runtime_branch_map_.size(); ++candidate)
+  {
+    if (isDummyBoundary(candidate))
+    {
+      continue;
+    }
+    if (runtime_branch_map_[candidate] != runtime_branch_id)
+    {
+      continue;
+    }
+    if (!representative.has_value() || candidate < representative.value())
+    {
+      representative = candidate;
+    }
+  }
+
+  return representative.value_or(strand_id);
+}
+
 void KineticDelaunay::clearPendingSplitReference()
 {
   std::fill(
@@ -2025,16 +2058,14 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
   }
 }
 
-void KineticDelaunay::retireFinishedInputBranches(double t)
+std::vector<size_t> KineticDelaunay::inputBranchesFinishingAtSection(double t) const
 {
   const size_t section = static_cast<size_t>(t);
+  std::vector<size_t> finished;
   if (section >= branch_trajs.getStrandsByBranchId().size())
   {
-    return;
+    return finished;
   }
-
-  std::vector<bool> dead_vertex_mask(graph.getVertexCount(), false);
-  bool has_finished_branch = false;
 
   const auto& branches_at_section = branch_trajs.getStrandBranchesByHeight(section);
   for (size_t input_branch_id = 0; input_branch_id < branches_at_section.size(); ++input_branch_id)
@@ -2073,8 +2104,29 @@ void KineticDelaunay::retireFinishedInputBranches(double t)
         + " has inconsistent strand heights at section " + std::to_string(section));
     }
 
+    finished.push_back(input_branch_id);
+  }
+
+  return finished;
+}
+
+void KineticDelaunay::retireFinishedInputBranches(double t)
+{
+  const size_t section = static_cast<size_t>(t);
+  if (section >= branch_trajs.getStrandsByBranchId().size())
+  {
+    return;
+  }
+
+  std::vector<bool> dead_vertex_mask(graph.getVertexCount(), false);
+  bool has_finished_branch = false;
+
+  for (size_t input_branch_id : inputBranchesFinishingAtSection(t))
+  {
     validateFinishedInputBranchMatchesRuntime(section, input_branch_id);
     has_finished_branch = true;
+
+    const auto& branch_strands = branch_trajs.getStrandsByBranch(section, input_branch_id);
 
     for (size_t strand_id : branch_strands)
     {

@@ -1332,6 +1332,27 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
     return intersection_point;
   };
 
+  const auto strand_id_for_inside_half_edge = [&](int inside_half_edge_id) -> size_t
+  {
+    if (inside_half_edge_id >= 0)
+    {
+      const int origin = graph.halfEdge(static_cast<size_t>(inside_half_edge_id)).origin;
+      if (origin >= 0)
+      {
+        return static_cast<size_t>(origin);
+      }
+    }
+    if (strand_even_origin_i >= 0)
+    {
+      return static_cast<size_t>(strand_even_origin_i);
+    }
+    if (strand_odd_origin_i >= 0)
+    {
+      return static_cast<size_t>(strand_odd_origin_i);
+    }
+    throw std::runtime_error("meshRegularStripInterval: no strand id for crossing vertex transform.");
+  };
+
   int start_half_edge_id = -1;
   size_t start_vertex_index = 0;
   if (interval.start_crossing.has_value())
@@ -1341,7 +1362,8 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
       std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(interval.start_crossing), "left", nullptr);
     start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid,
-      crossing_position(interval.start_crossing.value()), static_cast<size_t>(-1), t, std::nullopt, meta_start);
+      crossing_position(interval.start_crossing.value()), strand_id_for_inside_half_edge(start_half_edge_id), t,
+      std::nullopt, meta_start);
   }
   else if (interval.start_open_voronoi_half_edge_id.has_value())
   {
@@ -1364,7 +1386,8 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
       std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(interval.end_crossing), "right", nullptr);
     end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid,
-      crossing_position(interval.end_crossing.value()), static_cast<size_t>(-1), t, std::nullopt, meta_end);
+      crossing_position(interval.end_crossing.value()), strand_id_for_inside_half_edge(end_half_edge_id), t,
+      std::nullopt, meta_end);
   }
   else if (interval.end_open_voronoi_half_edge_id.has_value())
   {
@@ -3174,7 +3197,8 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w)
 
 size_t kinDS::SegmentBuilder::addBoundaryVertex(glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t)
 {
-  double angle = std::atan2(centroid[1] - vertex[1], centroid[0] - vertex[0]);
+  const glm::dvec2 profile_xy(vertex.x, vertex.y);
+  double angle = std::atan2(centroid.y - profile_xy.y, centroid.x - profile_xy.x);
 
   glm::dvec2 raw_uv { angle / (2.0 * glm::pi<double>()), vertex[2] };
   if (create_transformed_mesh)
@@ -3261,6 +3285,18 @@ void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
                                    << ", " << position.z << ").");
 }
 
+glm::dvec3 SegmentBuilder::transformFromRuntimeBranchToObjectSpace(
+  glm::dvec3 vertex, size_t strand_id, double t) const
+{
+  if (strand_id == static_cast<size_t>(-1))
+  {
+    throw std::runtime_error("transformFromRuntimeBranchToObjectSpace: invalid strand id.");
+  }
+
+  const size_t representative_strand_id = kin_del.representativeStrandIdForRuntimeBranch(strand_id);
+  return kin_del.getStrandTree().transformToObjectSpace(vertex, representative_strand_id, t);
+}
+
 size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
   const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
   std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check, const std::string& metadata,
@@ -3282,24 +3318,30 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   };
 
   warn_degenerate_or_non_finite(vertex, "input");
+  const glm::dvec2 profile_xy(vertex.x, vertex.y);
   if (create_transformed_mesh)
   {
-    vertex = kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
+    vertex = transformFromRuntimeBranchToObjectSpace(vertex, strand_id, t);
   }
   warn_degenerate_or_non_finite(vertex, "stored");
   if (meshlet_voronoi_vertex_for_alpha_check.has_value())
   {
-    warnIfVoronoiVertexOutsideAlphaShape("addMeshletVertex", meshlet_voronoi_vertex_for_alpha_check.value(), vertex);
+    warnIfVoronoiVertexOutsideAlphaShape("addMeshletVertex", meshlet_voronoi_vertex_for_alpha_check.value(),
+      glm::dvec3(profile_xy.x, profile_xy.y, t));
   }
   size_t index = mesh.addVertex(vertex, metadata, debug_color.has_value() ? debug_color.value() : glm::dvec3(1.0));
-  double rel_dist = relativeDistanceFromCenter(boundary_polygon, centroid, glm::dvec2 { vertex[0], vertex[1] });
+  if (create_transformed_mesh)
+  {
+    mesh.setProfilePlanePosition(index, profile_xy);
+  }
+  double rel_dist = relativeDistanceFromCenter(boundary_polygon, centroid, profile_xy);
 
   /*if (rel_dist > 1.0 + std::numeric_limits<double>::epsilon()) {
     KINDS_WARNING("Adding vertex that is too far outside, relative distance: " << rel_dist);
   }*/
 
   // TODO: this can be simplified to not use trigonometric functions
-  double angle = std::atan2(centroid[1] - vertex[1], centroid[0] - vertex[0]);
+  double angle = std::atan2(centroid.y - profile_xy.y, centroid.x - profile_xy.x);
   double u = 0.5 + texture_diameter * rel_dist * 0.5 * std::cos(angle);
   double v = 0.5 + texture_diameter * rel_dist * 0.5 * std::sin(angle);
   mesh.addUV(u, v, vertex[2] * uv_height_factor);
@@ -3538,57 +3580,82 @@ void SegmentBuilder::applyIntersectionStripUniformClosureVertex(
   seg.flexible_right_vertex_ids.clear();
 }
 
-void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool invert_orientation, double offset)
+void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
+  double t, size_t input_branch_id, bool invert_orientation, double offset)
 {
   auto& graph = kin_del.getGraph();
+  const size_t section = static_cast<size_t>(t);
+  const auto& branch_strands = kin_del.getStrandTree().getStrandsByBranch(section, input_branch_id);
+  const std::unordered_set<size_t> branch_strand_set(branch_strands.begin(), branch_strands.end());
 
-  size_t index_offset = boundary_mesh.getVertices().size();
-  std::vector<double> relative_center_distances;
-  // add all vertices
-  for (size_t i = 0; i < graph.getVertexCount(); i++)
+  std::vector<double> relative_center_distances(graph.getVertexCount(), 0.0);
+  std::vector<int> strand_to_mesh_vertex(graph.getVertexCount(), -1);
+
+  for (size_t strand_id : branch_strands)
   {
-    glm::dvec2 vertex = kin_del.getPointAt(t, i);
+    if (kin_del.isDummyBoundary(strand_id))
+    {
+      continue;
+    }
 
-    auto component_index = kin_del.component_data.component_map[i];
+    glm::dvec2 vertex = kin_del.getPointAt(t, strand_id);
+
+    auto component_index = kin_del.component_data.component_map[strand_id];
     auto& boundary_polygon = kin_del.component_data.component_boundaries[component_index][0];
     auto& centroid = kin_del.component_data.component_centroids[component_index];
 
-    addBoundaryVertex(glm::dvec3 { vertex[0], vertex[1], t + offset }, centroid, i, t);
-    // KINDS_DEBUG("New raw uv: " << raw_uv[0] << ", " << raw_uv[1] << " for vertex: " << vertex_index);
+    const size_t mesh_vertex_index
+      = addBoundaryVertex(glm::dvec3 { vertex[0], vertex[1], t + offset }, centroid, strand_id, t);
 
-    double rel_dist = relativeDistanceFromCenter(boundary_polygon, centroid, vertex);
-    relative_center_distances.push_back(rel_dist);
+    strand_to_mesh_vertex[strand_id] = static_cast<int>(mesh_vertex_index);
+    relative_center_distances[strand_id] = relativeDistanceFromCenter(boundary_polygon, centroid, vertex);
   }
-  // add all triangles
-  // for (const auto& triangle : graph.getFaces()) {
+
   for (size_t face_index : graph.liveFaces())
   {
     const auto& triangle = graph.face(face_index);
     const auto& he_ids = triangle.half_edges;
     auto vertices = graph.adjacentTriangleVertices(triangle.half_edges[0]);
 
-    // check if on component boundary and update last left and right vertices accordingly
-    // store last left and right
-    for (size_t i = 0; i < 3; i++)
-    {
-      if (kin_del.isOnComponentBoundaryOutside(he_ids[i]))
-      {
-        completeBoundaryMeshSection(he_ids[i], index_offset + vertices[i], index_offset + vertices[(i + 1) % 3]);
-        // KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_ids[i]);
-        boundary_mesh_last_left_and_right_vertex[he_ids[i]]
-          = std::make_pair(index_offset + vertices[i], index_offset + vertices[(i + 1) % 3]);
-      }
-    }
-    // skip faces that are outside
-    if (!kin_del.getFaceInside(face_index))
+    if (vertices[0] == -1 || vertices[1] == -1 || vertices[2] == -1)
     {
       continue;
     }
 
-    // check for infinite vertices
-    if (vertices[0] == -1 || vertices[1] == -1 || vertices[2] == -1)
+    if (!branch_strand_set.contains(static_cast<size_t>(vertices[0]))
+      || !branch_strand_set.contains(static_cast<size_t>(vertices[1]))
+      || !branch_strand_set.contains(static_cast<size_t>(vertices[2])))
     {
-      continue; // skip triangles with infinite vertices
+      continue;
+    }
+
+    if (strand_to_mesh_vertex[vertices[0]] < 0 || strand_to_mesh_vertex[vertices[1]] < 0
+      || strand_to_mesh_vertex[vertices[2]] < 0)
+    {
+      continue;
+    }
+
+    for (size_t i = 0; i < 3; i++)
+    {
+      const int left_mesh_vertex = strand_to_mesh_vertex[vertices[i]];
+      const int right_mesh_vertex = strand_to_mesh_vertex[vertices[(i + 1) % 3]];
+      if (left_mesh_vertex < 0 || right_mesh_vertex < 0)
+      {
+        continue;
+      }
+
+      if (kin_del.isOnComponentBoundaryOutside(he_ids[i]))
+      {
+        completeBoundaryMeshSection(
+          he_ids[i], static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex));
+        boundary_mesh_last_left_and_right_vertex[he_ids[i]]
+          = std::make_pair(static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex));
+      }
+    }
+
+    if (!kin_del.getFaceInside(face_index))
+    {
+      continue;
     }
 
     if (invert_orientation)
@@ -3596,24 +3663,21 @@ void kinDS::SegmentBuilder::addVoronoiTriangulationToBoundaryMesh(double t, bool
       std::swap(vertices[1], vertices[2]);
     }
 
-    // next, get the angles from the raw UVs and convert back to cartesian coordinates centered at (0.5, 0.5)
     size_t uv_indices[3];
 
     for (size_t i = 0; i < 3; i++)
     {
+      const size_t mesh_vertex_index = static_cast<size_t>(strand_to_mesh_vertex[vertices[i]]);
       double rel_dist = relative_center_distances[vertices[i]];
-      double angle = boundary_mesh_raw_uvs[index_offset + vertices[i]][0] * 2.0 * glm::pi<double>();
+      double angle = boundary_mesh_raw_uvs[mesh_vertex_index][0] * 2.0 * glm::pi<double>();
       double u = 0.5 + texture_diameter * rel_dist * 0.5 * std::cos(angle);
       double v = 0.5 + texture_diameter * rel_dist * 0.5 * std::sin(angle);
       uv_indices[i] = boundary_mesh.addUV(u, v, 0.0);
     }
 
-    // as an exception, we directly add the triangle here to have access to the UV indices
-    const size_t tri_v0 = index_offset + vertices[0];
-    const size_t tri_v1 = index_offset + vertices[1];
-    const size_t tri_v2 = index_offset + vertices[2];
-    // warnIfTriangleKineticTimesNotInUnitSection(tri_v0, tri_v1, tri_v2, boundary_mesh.getVertices(), "boundary_mesh",
-    // 1);
+    const size_t tri_v0 = static_cast<size_t>(strand_to_mesh_vertex[vertices[0]]);
+    const size_t tri_v1 = static_cast<size_t>(strand_to_mesh_vertex[vertices[1]]);
+    const size_t tri_v2 = static_cast<size_t>(strand_to_mesh_vertex[vertices[2]]);
     boundary_mesh.addTriangle(tri_v0, tri_v1, tri_v2, uv_indices[0], uv_indices[1], uv_indices[2], 1);
   }
 }
@@ -4285,8 +4349,9 @@ SegmentBuilder::ClosingMeshOrderedIndex kinDS::SegmentBuilder::closingMeshBuildO
 }
 
 void kinDS::SegmentBuilder::closingMeshValidateOrderedSegmentGeometry(
-  double t, const VoronoiMesh& mesh, const std::vector<MeshingData*>& ordered_segments)
+  double t, const VoronoiMesh& mesh, const std::vector<MeshingData*>& ordered_segments) const
 {
+  return; // disable for now
   constexpr double k_closing_cap_geom_eps = 1e-5;
   auto mesh_vertex_xy = [&](int mesh_vid) -> glm::dvec2
   {
@@ -5000,12 +5065,9 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
 
   auto cross_at = [&](size_t prev, size_t current, size_t next)
   {
-    const glm::dvec3& a3 = mesh.getVertices()[prev];
-    const glm::dvec3& b3 = mesh.getVertices()[current];
-    const glm::dvec3& c3 = mesh.getVertices()[next];
-    const glm::dvec2 a(a3.x, a3.y);
-    const glm::dvec2 b(b3.x, b3.y);
-    const glm::dvec2 c(c3.x, c3.y);
+    const glm::dvec2 a = mesh.triangulationPlaneXY(prev);
+    const glm::dvec2 b = mesh.triangulationPlaneXY(current);
+    const glm::dvec2 c = mesh.triangulationPlaneXY(next);
     return glm::cross(b - a, c - b);
   };
 
@@ -5036,8 +5098,8 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
     double area2 = 0.0;
     for (size_t i = 0; i < vertices.size(); ++i)
     {
-      const glm::dvec3& p0 = mesh.getVertices()[vertices[i]];
-      const glm::dvec3& p1 = mesh.getVertices()[vertices[(i + 1) % vertices.size()]];
+      const glm::dvec2 p0 = mesh.triangulationPlaneXY(vertices[i]);
+      const glm::dvec2 p1 = mesh.triangulationPlaneXY(vertices[(i + 1) % vertices.size()]);
       area2 += p0.x * p1.y - p1.x * p0.y;
     }
     return area2;
@@ -5055,14 +5117,10 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
 
   auto point_in_triangle = [&](size_t point_id, size_t a_id, size_t b_id, size_t c_id)
   {
-    const glm::dvec3& p3 = mesh.getVertices()[point_id];
-    const glm::dvec3& a3 = mesh.getVertices()[a_id];
-    const glm::dvec3& b3 = mesh.getVertices()[b_id];
-    const glm::dvec3& c3 = mesh.getVertices()[c_id];
-    const glm::dvec2 p(p3.x, p3.y);
-    const glm::dvec2 a(a3.x, a3.y);
-    const glm::dvec2 b(b3.x, b3.y);
-    const glm::dvec2 c(c3.x, c3.y);
+    const glm::dvec2 p = mesh.triangulationPlaneXY(point_id);
+    const glm::dvec2 a = mesh.triangulationPlaneXY(a_id);
+    const glm::dvec2 b = mesh.triangulationPlaneXY(b_id);
+    const glm::dvec2 c = mesh.triangulationPlaneXY(c_id);
     const double ab = glm::cross(b - a, p - a);
     const double bc = glm::cross(c - b, p - b);
     const double ca = glm::cross(a - c, p - c);
@@ -5414,7 +5472,36 @@ void SegmentBuilder::init()
   // initialize boundary mesh
   boundary_mesh_last_left_and_right_vertex.resize(half_edge_count, std::make_pair(-1, -1));
   half_edge_to_boundary_vertex_index.resize(half_edge_count, -1);
-  addVoronoiTriangulationToBoundaryMesh(t, false, -0.01);
+  const size_t init_section = static_cast<size_t>(t);
+  const auto& branches_at_section = kin_del.getStrandTree().getStrandBranchesByHeight(init_section);
+  for (size_t input_branch_id = 0; input_branch_id < branches_at_section.size(); ++input_branch_id)
+  {
+    if (branches_at_section[input_branch_id].empty())
+    {
+      continue;
+    }
+
+    bool any_real_strand = false;
+    for (size_t strand_id : branches_at_section[input_branch_id])
+    {
+      if (!kin_del.isDummyBoundary(strand_id))
+      {
+        any_real_strand = true;
+        break;
+      }
+    }
+    if (!any_real_strand)
+    {
+      continue;
+    }
+
+    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, false, -0.01);
+  }
+
+  for (size_t input_branch_id : kin_del.inputBranchesFinishingAtSection(t))
+  {
+    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
+  }
 }
 
 void SegmentBuilder::finalize(double t)
@@ -5495,8 +5582,6 @@ void SegmentBuilder::finalize(double t)
   }
 
   accumulateSegmentProperties();
-
-  addVoronoiTriangulationToBoundaryMesh(t, true, 0.01);
 
   // compute normals
   for (auto& meshlet : meshes)

@@ -108,6 +108,33 @@ size_t VoronoiMesh::addVertex(const glm::dvec3& p, const std::string& metadata, 
   return index;
 }
 
+void VoronoiMesh::setProfilePlanePosition(size_t vertex_index, glm::dvec2 xy)
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("setProfilePlanePosition: vertex index out of range.");
+  }
+  if (profile_plane_xy_.size() < vertices.size())
+  {
+    profile_plane_xy_.resize(vertices.size());
+  }
+  profile_plane_xy_[vertex_index] = xy;
+}
+
+glm::dvec2 VoronoiMesh::triangulationPlaneXY(size_t vertex_index) const
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("triangulationPlaneXY: vertex index out of range.");
+  }
+  if (vertex_index < profile_plane_xy_.size())
+  {
+    return profile_plane_xy_[vertex_index];
+  }
+  const glm::dvec3& v = vertices[vertex_index];
+  return glm::dvec2(v.x, v.y);
+}
+
 void kinDS::VoronoiMesh::replaceVertex(size_t index, const glm::dvec3& new_position) { vertices[index] = new_position; }
 
 size_t VoronoiMesh::addTriangle(size_t v1, size_t v2, size_t v3, int material_id, const std::string& metadata)

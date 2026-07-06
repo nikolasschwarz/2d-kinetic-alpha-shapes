@@ -48,6 +48,9 @@ class TreeMesher
     bool store_mesh_metadata = true;
     /// When false, skip meshlet diagnostic logging and related string assembly (@ref meshletDiagnosticLogLine).
     bool diagnostics = false;
+    /// When true, mesh vertices are stored in object space during meshing (@ref SegmentBuilder::create_transformed_mesh).
+    /// Export skips a second transform; polygon triangulation still uses profile-plane xy.
+    bool transform_mesh_at_construction = true;
 
     // for debugging purposes:
     bool debug_export_meshes = false;
@@ -92,9 +95,11 @@ class TreeMesher
   /// @param export_mode How meshlets are grouped into output file(s).
   /// @param export_path Output directory for @c PerSegment/@c Raw; output OBJ path for @c Combined.
   /// @param max_exports Maximum meshlets to export; default unlimited.
-  /// @param transformed When true (default), map meshlet vertices from profile space into world space before writing.
-  void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path, bool transformed = true,
-    std::optional<size_t> max_exports = std::nullopt) const;
+  /// @param transformed When set, force export-time world/profile mapping. When unset, uses
+  ///   @c !settings.transform_mesh_at_construction.
+  void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
+    std::optional<bool> transformed = std::nullopt, std::optional<size_t> max_exports = std::nullopt) const;
+  bool meshletsTransformedAtConstruction() const { return settings.transform_mesh_at_construction; }
   void truncateToBoundary(const VoronoiMesh& boundary_mesh);
   void fixFailedSegments(const MeshIntersection& boundary_intersector);
   std::pair<std::vector<float>, std::vector<float>> computeTopAndBottomBoundaryDistances(

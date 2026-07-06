@@ -88,6 +88,10 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     }
   });
 
+  for (size_t input_branch_id : segment_builder_.kin_del.inputBranchesFinishingAtSection(t))
+  {
+    segment_builder_.addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
+  }
 }
 
 void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)

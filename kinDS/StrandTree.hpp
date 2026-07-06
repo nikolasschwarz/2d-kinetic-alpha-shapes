@@ -55,6 +55,8 @@ class StrandTree
   glm::dvec3 getPointInObjectSpace(size_t strand_id, double t) const;
 
   glm::dvec3 transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const;
+  glm::dvec3 transformToObjectSpace(
+    glm::dvec3 v_3d, double t, const std::vector<size_t>& branch_indices_by_height) const;
 
   /**
    * Linear motion on [@p index, @p index + 1]: support points at those heights are each transformed into the

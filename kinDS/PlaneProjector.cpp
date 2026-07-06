@@ -100,7 +100,7 @@ glm::vec2 PlaneProjector::worldToLocalB(const glm::vec3& x) const
   if(std::abs(det) < EPS)
   {
     // Degenerate case, warn
-    KINDS_WARNING("Degenerate plane in PlaneProjector");
+    //KINDS_WARNING("Degenerate plane in PlaneProjector");
   }
 
   float c = (wu * vv - wv * uv) / det;

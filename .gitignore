@@ -47,7 +47,7 @@
 *.mtl
 *.svg
 *.log
-applyComponentSplit*.txt
+*.txt
 
 /raw_meshlets/
 /segment_meshlets/

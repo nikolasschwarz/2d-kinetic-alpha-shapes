@@ -266,6 +266,9 @@ class KineticDelaunay
   /** Branch frame used by getPointAt for sites in the same component as @p strand_id. */
   size_t getReferenceBranch(size_t strand_id, double t) const;
 
+  /// Smallest live strand id sharing @p strand_id's runtime branch; used for transform frame lookup.
+  size_t representativeStrandIdForRuntimeBranch(size_t strand_id) const;
+
   /// One shared reference branch for all @p strand_ids (e.g. flip quadrilateral vertices).
   size_t getSharedReferenceBranchForStrands(const std::vector<size_t>& strand_ids, double branch_lookup_time) const;
 
@@ -279,6 +282,9 @@ class KineticDelaunay
   glm::dvec3 getPointInObjectSpace(size_t v, double t) const;
 
   const StrandTree& getStrandTree() const;
+
+  /// Input branch ids whose last real-strand section is @p t (same criterion as @ref retireFinishedInputBranches).
+  std::vector<size_t> inputBranchesFinishingAtSection(double t) const;
 
   void setVisualDebugOutputRoot(const std::filesystem::path& root);
   const std::optional<std::filesystem::path>& getVisualDebugOutputRoot() const;

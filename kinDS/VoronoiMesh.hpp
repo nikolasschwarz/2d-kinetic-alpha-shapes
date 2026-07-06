@@ -33,6 +33,9 @@ class VoronoiMesh
   std::vector<std::string> vertex_metadata;
   std::vector<std::string> face_metadata;
 
+  /// Profile-plane (x,y) per vertex when stored positions are object-space (ear clipping).
+  std::vector<glm::dvec2> profile_plane_xy_;
+
   NormalMode normal_mode;
 
   /// Kinetic time when this meshlet was first registered / last rebuilt in @ref SegmentBuilder (NaN if unset).
@@ -160,6 +163,9 @@ class VoronoiMesh
 
   void setStoreMetadata(bool enabled) { store_metadata_ = enabled; }
   bool storeMetadata() const { return store_metadata_; }
+
+  void setProfilePlanePosition(size_t vertex_index, glm::dvec2 xy);
+  glm::dvec2 triangulationPlaneXY(size_t vertex_index) const;
 
   /// Empty string if unset; otherwise a stable fragment for filenames, e.g. `_t0.000000` or `_t3.500000`.
   std::string creationKineticTimeFilenameSuffix() const;

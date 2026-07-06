@@ -265,7 +265,14 @@ glm::dvec3 StrandTree::getPointInObjectSpace(size_t strand_id, double t) const
 
 glm::dvec3 StrandTree::transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const
 {
-  return ProfileToModelCoordinatesBranch(transforms_by_height_and_branch, v_3d, t, branch_indices[strand_id]);
+  return transformToObjectSpace(v_3d, t, branch_indices[strand_id]);
+}
+
+glm::dvec3 StrandTree::transformToObjectSpace(
+  glm::dvec3 v_3d, double t, const std::vector<size_t>& branch_indices_by_height) const
+{
+  return ProfileToModelCoordinatesBranch(
+    transforms_by_height_and_branch, v_3d, static_cast<float>(t), branch_indices_by_height);
 }
 
 Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const

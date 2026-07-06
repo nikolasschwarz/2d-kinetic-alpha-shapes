@@ -82,13 +82,15 @@ TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::
 {
 }
 
-void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path, bool transformed,
-  std::optional<size_t> max_exports) const
+void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
+  std::optional<bool> transformed, std::optional<size_t> max_exports) const
 {
   if (!mesh_builder)
   {
     throw std::runtime_error("exportMeshlets: meshing has not been run yet.");
   }
+
+  const bool apply_export_transform = transformed.value_or(!settings.transform_mesh_at_construction);
 
   std::vector<VoronoiMesh> meshlets_to_export;
   std::vector<std::string> export_suffixes;
@@ -111,7 +113,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
   auto meshlet_for_export = [&](size_t i) -> VoronoiMesh
   {
     VoronoiMesh mesh = meshlets_to_export[i];
-    if (transformed)
+    if (apply_export_transform)
     {
       const size_t strand_id = export_mode == MeshletExportMode::Raw
         ? mesh_builder->strandIdForRawMeshlet(i)
@@ -139,7 +141,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
       kinDS::ObjExporter::writeMesh(meshlet_for_export(i), export_path / meshlet_filename(i));
     }
     KINDS_DEBUG("Exported " << export_count << " meshlet OBJ file(s) (mode=" << meshletExportModeToString(export_mode)
-                            << ", transformed=" << transformed << ") to " << export_path.string() << ".");
+                            << ", transformed=" << apply_export_transform << ") to " << export_path.string() << ".");
     return;
   }
 
@@ -186,7 +188,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
 
   kinDS::ObjExporter::writeMesh(combined_mesh, obj_path);
   KINDS_DEBUG("Exported combined mesh (" << export_count << " meshlet group(s), mode=combined, transformed="
-                                       << transformed << ") to " << obj_path.string() << ".");
+                                       << apply_export_transform << ") to " << obj_path.string() << ".");
 }
 
 void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
@@ -460,16 +462,16 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
       ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
       : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
 
-  bool transform_mesh_at_construction = false;
-
   mesh_builder
     = std::make_shared<SegmentBuilder>(
-      *kinetic_delaunay, subdivisions, transform_mesh_at_construction, visual_debug, parallel_for);
+      *kinetic_delaunay, subdivisions, settings.transform_mesh_at_construction, visual_debug, parallel_for);
   mesh_builder->store_mesh_metadata = settings.store_mesh_metadata;
   mesh_builder->diagnostics = settings.diagnostics;
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
                                                                                       << ", visual_debug=" << visual_debug
+                                                                                      << ", transform_mesh_at_construction="
+                                                                                      << settings.transform_mesh_at_construction
                                                                                       << ", debug_export_meshes="
                                                                                       << settings.debug_export_meshes
                                                                                       << ", max_meshlet_export="
@@ -611,18 +613,29 @@ static glm::dvec3 ProfileToModelCoordinates(const std::vector<std::vector<glm::d
   return glm::dvec3(global_pos);
 }
 
+static const std::vector<size_t>& transformBranchIndicesForStrand(
+  const std::shared_ptr<KineticDelaunay>& kinetic_delaunay, const StrandTree& strand_tree, size_t strand_id)
+{
+  if (kinetic_delaunay != nullptr)
+  {
+    const size_t representative_strand_id = kinetic_delaunay->representativeStrandIdForRuntimeBranch(strand_id);
+    return strand_tree.getBranchIndices(representative_strand_id);
+  }
+  return strand_tree.getBranchIndices(strand_id);
+}
+
 void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const glm::dmat4& root_transform)
 {
-  auto& branch_indices = strand_tree.getBranchIndices();
   auto& vertices = boundary_mesh.getVertices();
   for (size_t i = 0; i < vertices.size(); i++)
   {
     size_t strand_id = getBoundaryVertexToStrandId()[i];
+    const auto& branch_indices = transformBranchIndicesForStrand(kinetic_delaunay, strand_tree, strand_id);
     auto& v = vertices[i];
     // v is a relative position in 2D, we need to convert it to 3D
     v = glm::dvec3(root_transform
       * glm::dvec4(
-        ProfileToModelCoordinates(strand_tree.getTransformsByHeightAndBranch(), v, v[2], branch_indices[strand_id]),
+        ProfileToModelCoordinates(strand_tree.getTransformsByHeightAndBranch(), v, v[2], branch_indices),
         1.0));
   }
 
@@ -636,11 +649,12 @@ void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const 
       auto source_tri_vertex_index = boundary_mesh.getTriangles()[triangle_vertex_index + j];
 
       size_t strand_id = getBoundaryVertexToStrandId()[source_tri_vertex_index];
+      const auto& branch_indices = transformBranchIndicesForStrand(kinetic_delaunay, strand_tree, strand_id);
       size_t normal_index = triangle_vertex_index + j;
       const glm::vec3& old_normal = boundary_mesh.getNormal(normal_index);
       glm::vec3 transformed_normal = root_transform
         * glm::vec4(ProfileToModelCoordinates(strand_tree.getNormalTransformsByHeightAndBranch(), old_normal,
-                      boundary_mesh.getVertices()[source_tri_vertex_index][2], branch_indices[strand_id], 0.0f),
+                      boundary_mesh.getVertices()[source_tri_vertex_index][2], branch_indices, 0.0f),
           0.0f);
       boundary_mesh.replaceNormal(normal_index, transformed_normal);
     }
@@ -649,7 +663,7 @@ void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const 
 
 void TreeMesher::transformToWorldSpace(VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform) const
 {
-  const auto& branch_indices = strand_tree.getBranchIndices(strand_id);
+  const auto& branch_indices = transformBranchIndicesForStrand(kinetic_delaunay, strand_tree, strand_id);
   auto& vertices = mesh.getVertices();
 
   // transform points
