@@ -289,7 +289,8 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   const std::unordered_set<size_t>& positioned_strands,
   const std::unordered_map<size_t, size_t>& site_input_branch_labels,
   const std::unordered_map<size_t, glm::dvec3>& site_world_positions,
-  const std::unordered_map<size_t, glm::dvec3>& voronoi_vertex_world_positions)
+  const std::unordered_map<size_t, glm::dvec3>& voronoi_vertex_world_positions,
+  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr)
 {
   const std::filesystem::path filepath(relative_path);
   if (filepath.has_parent_path())
@@ -298,13 +299,14 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   }
   HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &kin_del.getFacesInside(), true,
     &containing_tri_ids, &intersection_debug_data, &highlight, highlighted_strands, &site_input_branch_labels,
-    &positioned_strands, &site_world_positions, &voronoi_vertex_world_positions);
+    &positioned_strands, &site_world_positions, &voronoi_vertex_world_positions, separation_offset_segments);
 }
 } // namespace
 
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
   double occurrence_time, const char* phase, const std::string& event_descriptor,
-  const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id)
+  const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id,
+  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments)
 {
   if (!visual_debug)
   {
@@ -342,7 +344,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       occurrence_time, phase, event_descriptor, runtime_branch_id, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       &branch_strands, positioned_strands, site_input_branch_labels, branch_site_world_positions,
-      voronoi_vertex_world_positions);
+      voronoi_vertex_world_positions, separation_offset_segments);
   };
 
   if (!per_branch_svgs)
@@ -372,7 +374,8 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     const std::string filename
       = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      nullptr, positioned_strands, site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions);
+      nullptr, positioned_strands, site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions,
+      separation_offset_segments);
     return;
   }
 

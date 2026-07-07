@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <optional>
 #include <queue>
 #include <string>
@@ -26,6 +27,42 @@ struct BoundaryPoint
   size_t vertex_id;
   size_t he_id;
   glm::dvec2 p;
+};
+
+/// Data recorded when a component split awaits graph retriangulation.
+struct PendingBranchSplit
+{
+  size_t parent_component_id = static_cast<size_t>(-1);
+  /// Reference strand from the parent component used for the frozen frame.
+  size_t reference_vertex = static_cast<size_t>(-1);
+  /// Full pre-split parent-component strand list.
+  std::vector<size_t> frozen_parent_strands;
+  /// Component ids from the split: retained parent first, then split-off components.
+  std::vector<size_t> split_component_ids;
+  glm::dvec2 old_branch_centroid { 0.0, 0.0 };
+  glm::dvec2 new_branch_centroid { 0.0, 0.0 };
+  glm::dvec2 separation_direction { 0.0, 0.0 };
+  double separation_t0 = 0.0;
+  double separation_te = 0.0;
+  size_t separation_iteration = 0;
+  bool separation_trajectory_active = false;
+};
+
+/// Registry of pending branch splits and per-strand lookup into the frozen parent frame.
+struct PendingBranchSplitState
+{
+  static constexpr size_t no_parent_component = static_cast<size_t>(-1);
+
+  void clear();
+  void resetStrandLookup(size_t strand_count);
+  PendingBranchSplit& getOrCreate(size_t parent_component_id);
+  const PendingBranchSplit* findByParent(size_t parent_component_id) const;
+  void registerStrandsForSplit(
+    size_t parent_component_id, const std::vector<std::vector<size_t>>& new_components);
+  const std::vector<size_t>* frozenStrandsForStrand(size_t strand_id) const;
+
+  std::unordered_map<size_t, PendingBranchSplit> by_parent_;
+  std::vector<size_t> strand_parent_component_;
 };
 
 static glm::dvec2 polygonCentroid(const std::vector<BoundaryPoint>& polygon)
@@ -115,6 +152,8 @@ class KineticDelaunay
   class SectionEventManager;
   class SubdivisionEvent;
   class SubdivisionEventManager;
+  class SeparationEvent;
+  class SeparationEventManager;
 
   /// Forward declaration; full definition in `KineticDelaunayCrossingEvent.hpp`.
   struct CrossingData;
@@ -150,6 +189,7 @@ class KineticDelaunay
  private:
   friend class SectionEventManager;
   friend class SubdivisionEvent;
+  friend class SeparationEvent;
 
   StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
@@ -161,6 +201,7 @@ class KineticDelaunay
   std::unique_ptr<CrossingEventManager> crossing_event_manager_;
   std::unique_ptr<SectionEventManager> section_event_manager_;
   std::unique_ptr<SubdivisionEventManager> subdivision_event_manager_;
+  std::unique_ptr<SeparationEventManager> separation_event_manager_;
   /// Strand mesh subdivision schedule; consumed on the first @ref enqueueScheduledSubdivisionEvents in @ref compute.
   std::vector<std::pair<size_t, double>> subdivision_schedule_;
   CallbackManager* callback_manager_ = nullptr;
@@ -172,11 +213,7 @@ class KineticDelaunay
   std::vector<glm::dvec2> dummy_boundary;
   bool add_dummy_boundary;
   size_t prev_component_count = 1;
-  static constexpr size_t no_pending_split_reference_vertex = static_cast<size_t>(-1);
-  /// While a component split awaits section retriangulation, affected strands keep the parent component frame.
-  std::vector<size_t> pending_split_reference_vertex_;
-  /// Full parent-component strand lists captured at the first pending split per component id (before subdivision).
-  std::unordered_map<size_t, std::vector<size_t>> pending_split_frozen_parent_strands_;
+  PendingBranchSplitState pending_branch_splits_;
   /// Per-strand runtime branch id (see @ref getRuntimeBranchIdForStrand). Differs from @ref ComponentData::component_map
   /// (inside-face connectivity) and from @ref StrandTree::getBranchIndex (input branch). Updated only when Delaunay
   /// graph connectivity is severed (@ref onGraphCutApplied / @ref onGraphRetriangulated), using live-face adjacency.
@@ -186,6 +223,7 @@ class KineticDelaunay
   /// Liveness per runtime branch id (index = id).
   std::vector<bool> runtime_branch_alive_;
   ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
+  double separation_offset_scale_ = 100.0;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
   bool on_the_fly_boundary = true;
@@ -218,7 +256,20 @@ class KineticDelaunay
   size_t findContainingTriForVoronoiVertex(size_t voronoi_vertex_id, double t) const;
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
-  void clearPendingSplitReference();
+  void clearPendingBranchSplits();
+  bool pendingSplitSeamsAreConvex(size_t parent_component_id, double t) const;
+  void maybeScheduleSeparationOrApplyPendingSplit(size_t parent_component_id, double split_time);
+  void handleSeparationEventAtTime(size_t parent_component_id, double t);
+  void applyPendingComponentGraphSplit(double t);
+  void startSeparationSchedule(size_t parent_component_id, double segment_start_time);
+  void continueSeparationSchedule(size_t parent_component_id, double segment_start_time);
+  void recomputeEventsAfterSeparationTrajectory(size_t parent_component_id, double t);
+  void collectSeparationRecomputeTargets(size_t parent_component_id, std::unordered_set<size_t>& affected_quads,
+    std::unordered_set<size_t>& affected_faces) const;
+  const PendingBranchSplit* activeSeparationForStrand(size_t strand_id) const;
+  glm::dvec2 separationOffsetAt(size_t strand_id, double t) const;
+  Trajectory<2> addSeparationOffsetToPiecePolynomial(
+    const Trajectory<2>& base, size_t strand_id, size_t section) const;
   /// Strand ids whose min input branch defines the motion frame for @p strand_id.
   void collectReferenceBranchStrandPool(size_t strand_id, std::vector<size_t>& pool) const;
   void updateRuntimeBranchMapFromInputBranches(double t);
@@ -306,10 +357,33 @@ class KineticDelaunay
 
   void setComponentSplitPolicy(ComponentSplitPolicy policy) { component_split_policy_ = policy; }
   ComponentSplitPolicy getComponentSplitPolicy() const { return component_split_policy_; }
+  void setSeparationOffsetScale(double scale) { separation_offset_scale_ = scale; }
+  double getSeparationOffsetScale() const { return separation_offset_scale_; }
 
-  /// Record parent-component frame for strands in @p new_components until the next graph cut/retriangulation.
-  /// Captures the full pre-split strand list for @p parent_component_id on first use.
-  void notePendingSplitReference(size_t parent_component_id, const std::vector<std::vector<size_t>>& new_components);
+  /// Record a pending branch split until the next graph cut/retriangulation.
+  void notePendingBranchSplit(size_t parent_component_id, double split_time,
+    const std::vector<size_t>& pre_split_parent_strands, const std::vector<std::vector<size_t>>& new_components,
+    const std::vector<size_t>& split_component_ids);
+
+  /// Pending split data keyed by the parent component id, if recorded.
+  std::optional<PendingBranchSplit> getPendingBranchSplit(size_t parent_component_id) const;
+
+  /**
+   * Seam outline between @p component_id and its pending-split partner components.
+   * Walks live cross-component Delaunay edges that will be severed by @ref HalfEdgeDelaunayGraph::applyRuntimeBranchSplit.
+   */
+  std::vector<BoundaryPoint> collectFutureRuntimeBranchOutline(size_t component_id, double t) const;
+
+  /// One outer outline per future runtime branch listed in the pending split metadata.
+  std::vector<std::vector<BoundaryPoint>> collectPendingSplitBranchOutlines(
+    size_t parent_component_id, double t) const;
+
+  /// Delaunay simplices whose flip/radius/crossing events are recomputed during separation scheduling.
+  VisualDebugHighlight buildSeparationRecomputeHighlight(size_t parent_component_id) const;
+
+  /// Base-to-offset segments for separated strands in an active pending split.
+  std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment> collectSeparationOffsetSegments(
+    size_t parent_component_id, double t) const;
 
   /// Smallest @ref StrandTree::getBranchIndex among live strands in @p component_id at @p branch_lookup_height.
   size_t minInputBranchForComponent(size_t component_id, size_t branch_lookup_height) const;
@@ -334,6 +408,7 @@ class KineticDelaunay
   void registerRadiusEventCallback(EventCallback* callback);
   void registerCrossingEventCallback(EventCallback* callback);
   void registerSubdivisionEventCallback(EventCallback* callback);
+  void registerSeparationEventCallback(EventCallback* callback);
   /// Pairs `(strand_id, t)` sorted by non-decreasing `t`; enqueued once when @ref compute builds the initial queue.
   void setSubdivisionSchedule(std::vector<std::pair<size_t, double>> schedule);
   void registerEventCallbacks(EventCallback* section_callback, EventCallback* flip_callback,
@@ -398,6 +473,14 @@ class KineticDelaunay
   bool isOnComponentBoundary(size_t he_id) const;
 
   bool isOnComponentBoundaryOutside(size_t he_id) const;
+
+  bool isOnFutureBranchSeamForComponent(
+    size_t he_id, size_t component_id, const std::unordered_set<size_t>& partner_component_ids) const;
+  size_t nextOnFutureBranchSeamId(
+    size_t he_id, size_t component_id, const std::unordered_set<size_t>& partner_component_ids) const;
+  std::vector<BoundaryPoint> traverseFutureBranchSeam(size_t start_he_id, size_t component_id,
+    const std::unordered_set<size_t>& partner_component_ids, double t) const;
+  std::optional<std::unordered_set<size_t>> seamPartnerComponentsFor(size_t component_id) const;
 
   size_t nextOnComponentBoundaryId(size_t he_id) const;
 

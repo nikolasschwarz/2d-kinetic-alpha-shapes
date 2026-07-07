@@ -49,6 +49,8 @@ struct VisualDebugHighlight
   static VisualDebugHighlight forSubdivisionStrand(const HalfEdgeDelaunayGraph& graph, size_t strand_vertex_id);
   static VisualDebugHighlight forSectionBoundary(
     const HalfEdgeDelaunayGraph& graph, const std::function<bool(size_t even_half_edge_id)>& is_boundary_edge);
+  static VisualDebugHighlight forSeparationRecompute(const HalfEdgeDelaunayGraph& graph,
+    const std::unordered_set<size_t>& affected_quads, const std::unordered_set<size_t>& affected_faces);
 
   /**
    * Highlight invariant-failure context: at most one @p primary_dual_edge (magenta), label all intersections on that

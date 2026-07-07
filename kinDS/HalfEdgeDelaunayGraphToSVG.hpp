@@ -209,6 +209,13 @@ class HalfEdgeDelaunayGraphToSVG
     double delaunay_edge_param = 0.0;
   };
 
+  /// Base position and offset end position for a separated strand site.
+  struct SeparationOffsetSegment
+  {
+    glm::dvec2 base { 0.0, 0.0 };
+    glm::dvec2 end { 0.0, 0.0 };
+  };
+
   using IntersectionMarker = std::pair<glm::dvec2, IntersectionDebugInfo>;
 
   static std::string formatIntersectionParam(double delaunay_edge_param)
@@ -373,7 +380,8 @@ class HalfEdgeDelaunayGraphToSVG
     const std::unordered_map<size_t, size_t>* site_input_branch_labels = nullptr,
     const std::unordered_set<size_t>* positioned_strands = nullptr,
     const std::unordered_map<size_t, glm::dvec3>* site_world_positions = nullptr,
-    const std::unordered_map<size_t, glm::dvec3>* voronoi_vertex_world_positions = nullptr)
+    const std::unordered_map<size_t, glm::dvec3>* voronoi_vertex_world_positions = nullptr,
+    const std::vector<SeparationOffsetSegment>* separation_offset_segments = nullptr)
   {
     auto in_component = [&](size_t strand_id) -> bool
     {
@@ -485,6 +493,16 @@ class HalfEdgeDelaunayGraphToSVG
       }
       return computeBoundingBox(points, margin);
     }();
+    if (separation_offset_segments != nullptr)
+    {
+      for (const SeparationOffsetSegment& segment : *separation_offset_segments)
+      {
+        bb.min_x = std::min({ bb.min_x, segment.base.x, segment.end.x });
+        bb.min_y = std::min({ bb.min_y, segment.base.y, segment.end.y });
+        bb.max_x = std::max({ bb.max_x, segment.base.x, segment.end.x });
+        bb.max_y = std::max({ bb.max_y, segment.base.y, segment.end.y });
+      }
+    }
     svg::Document doc = setupDocument(points, filename, bb);
 
     struct Label
@@ -1118,6 +1136,30 @@ class HalfEdgeDelaunayGraphToSVG
     {
       auto marker_data = computeIntersectionMarkerData(points, graph, *intersection_debug_info, positioned_strands);
       drawIntersections(marker_data);
+    }
+
+    if (separation_offset_segments != nullptr)
+    {
+      const svg::Color offset_line_color(0, 128, 255);
+      const svg::Color offset_base_color(255, 140, 0);
+      constexpr double offset_line_stroke_w = 0.01;
+      constexpr double offset_base_radius = 0.018;
+      for (const SeparationOffsetSegment& segment : *separation_offset_segments)
+      {
+        glm::dvec2 clipped_start = segment.base;
+        glm::dvec2 clipped_end = segment.end;
+        if (!clipSegmentToBoundingBox(clipped_start, clipped_end, bb))
+        {
+          continue;
+        }
+        doc << svg::Line(svg::Point(clipped_start[0], clipped_start[1]), svg::Point(clipped_end[0], clipped_end[1]),
+          svg::Stroke(offset_line_stroke_w, offset_line_color));
+        if (isWithinBoundingBox(segment.base, bb))
+        {
+          doc << svg::Circle(svg::Point(segment.base[0], segment.base[1]), offset_base_radius,
+            svg::Fill(svg::Color::White), svg::Stroke(offset_line_stroke_w, offset_base_color));
+        }
+      }
     }
 
     for (const auto& label : labels)

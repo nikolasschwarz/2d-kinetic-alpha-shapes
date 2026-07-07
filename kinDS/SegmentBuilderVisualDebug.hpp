@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HalfEdgeDelaunayGraph.hpp"
+#include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "VisualDebugHighlight.hpp"
 
 #include <optional>
@@ -16,6 +17,7 @@ class KineticDelaunay;
 /// @p highlight, only that runtime branch is written; otherwise one file is written per active runtime branch.
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
   double occurrence_time, const char* phase, const std::string& event_descriptor,
-  const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id = std::nullopt);
+  const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id = std::nullopt,
+  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr);
 
 } // namespace kinDS

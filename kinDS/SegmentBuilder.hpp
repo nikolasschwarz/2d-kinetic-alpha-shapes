@@ -35,6 +35,7 @@ class SegmentBuilderFlipCallback;
 class SegmentBuilderRadiusCallback;
 class SegmentBuilderCrossingCallback;
 class SegmentBuilderSubdivisionCallback;
+class SegmentBuilderSeparationCallback;
 
 class SegmentBuilder : public KineticDelaunay::CallbackManager
 {
@@ -45,7 +46,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     Section,
     Radius,
     Crossing,
-    Subdivision
+    Subdivision,
+    Separation
   };
 
   enum class BoundarySegmentAction
@@ -91,6 +93,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   friend class SegmentBuilderRadiusCallback;
   friend class SegmentBuilderCrossingCallback;
   friend class SegmentBuilderSubdivisionCallback;
+  friend class SegmentBuilderSeparationCallback;
 
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
@@ -246,6 +249,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::unique_ptr<SegmentBuilderRadiusCallback> radius_callback_;
   std::unique_ptr<SegmentBuilderCrossingCallback> crossing_callback_;
   std::unique_ptr<SegmentBuilderSubdivisionCallback> subdivision_callback_;
+  std::unique_ptr<SegmentBuilderSeparationCallback> separation_callback_;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
   bool visual_debug = false; // SVG exports when true (set from @ref TreeMesher::runMeshingAlgorithm)
   /// When true, one-sided intersection-strip updates append a flexible placeholder on the opposite side (full scheme).

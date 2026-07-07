@@ -292,6 +292,50 @@ VisualDebugHighlight VisualDebugHighlight::forSectionBoundary(
   return highlight;
 }
 
+VisualDebugHighlight VisualDebugHighlight::forSeparationRecompute(const HalfEdgeDelaunayGraph& graph,
+  const std::unordered_set<size_t>& affected_quads, const std::unordered_set<size_t>& affected_faces)
+{
+  VisualDebugHighlight highlight;
+  std::vector<size_t> face_pending;
+  std::vector<size_t> edge_pending;
+  edge_pending.reserve(affected_quads.size() * 5 + affected_faces.size() * 3);
+
+  for (size_t quad_id : affected_quads)
+  {
+    const size_t flip_half_edge_id = quad_id * 2;
+    if (flip_half_edge_id + 1 >= graph.halfEdgeSlotCount())
+    {
+      continue;
+    }
+
+    edge_pending.push_back(flip_half_edge_id);
+    const auto& flip_he = graph.halfEdge(flip_half_edge_id);
+    const auto& flip_twin_he = graph.halfEdge(flip_half_edge_id ^ 1);
+    if (flip_he.face != -1)
+    {
+      face_pending.push_back(static_cast<size_t>(flip_he.face));
+    }
+    if (flip_twin_he.face != -1)
+    {
+      face_pending.push_back(static_cast<size_t>(flip_twin_he.face));
+    }
+
+    const std::array<size_t, 4> quad_hes = graph.getQuadBoundaryHalfEdgeIndices(quad_id);
+    for (size_t quad_he : quad_hes)
+    {
+      edge_pending.push_back(quad_he);
+    }
+  }
+
+  for (size_t face_id : affected_faces)
+  {
+    face_pending.push_back(face_id);
+  }
+
+  flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  return highlight;
+}
+
 VisualDebugHighlight VisualDebugHighlight::forInvariantViolation(const HalfEdgeDelaunayGraph& graph,
   std::optional<size_t> primary_dual_edge, const std::unordered_set<size_t>& auxiliary_dual_edges,
   const std::unordered_set<uint64_t>& crossing_intersection_keys)

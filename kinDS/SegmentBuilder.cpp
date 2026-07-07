@@ -8,6 +8,7 @@
 #include "SegmentBuilderRadiusCallback.hpp"
 #include "SegmentBuilderSectionCallback.hpp"
 #include "SegmentBuilderSubdivisionCallback.hpp"
+#include "SegmentBuilderSeparationCallback.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -157,6 +158,8 @@ const char* boundaryEventTypeToString(SegmentBuilder::BoundaryEventType event_ty
     return "crossing_event";
   case SegmentBuilder::BoundaryEventType::Subdivision:
     return "subdivision_event";
+  case SegmentBuilder::BoundaryEventType::Separation:
+    return "separation_event";
   default:
     return "unknown_event";
   }
@@ -1071,6 +1074,7 @@ SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<s
   , radius_callback_(std::make_unique<SegmentBuilderRadiusCallback>(*this))
   , crossing_callback_(std::make_unique<SegmentBuilderCrossingCallback>(*this))
   , subdivision_callback_(std::make_unique<SegmentBuilderSubdivisionCallback>(*this))
+  , separation_callback_(std::make_unique<SegmentBuilderSeparationCallback>(*this))
   , visual_debug(visual_debug)
   , create_transformed_mesh(create_transformed_mesh)
   , boundary_mesh({ "bark", "interior" })
@@ -1099,6 +1103,7 @@ SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed
   , radius_callback_(std::make_unique<SegmentBuilderRadiusCallback>(*this))
   , crossing_callback_(std::make_unique<SegmentBuilderCrossingCallback>(*this))
   , subdivision_callback_(std::make_unique<SegmentBuilderSubdivisionCallback>(*this))
+  , separation_callback_(std::make_unique<SegmentBuilderSeparationCallback>(*this))
   , visual_debug(visual_debug)
   , create_transformed_mesh(create_transformed_mesh)
   , boundary_mesh({ "bark", "interior" })
@@ -1735,9 +1740,9 @@ SegmentBuilder::neighborIntersectionOnTargetAlongVoronoiEdge(
     {
       return *nit;
     }
-    KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: source crossing has no adjacent crossing on target "
+    /*KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: source crossing has no adjacent crossing on target "
                   "delaunay_edge="
-      << target_d_edge << " along voronoi_edge=" << voronoi_edge_id << " (source delaunay_edge=" << d_edge << ").");
+      << target_d_edge << " along voronoi_edge=" << voronoi_edge_id << " (source delaunay_edge=" << d_edge << ").");*/
     return std::nullopt;
   }
 
@@ -5339,7 +5344,7 @@ void kinDS::SegmentBuilder::splitComponent(
     return;
   }
 
-  kin_del.notePendingSplitReference(component_id, new_components);
+  const std::vector<size_t> pre_split_parent_strands = kin_del.component_data.components[component_id];
 
   // Update component data
   std::vector<size_t> component_ids(new_components.size(), -1);
@@ -5376,6 +5381,9 @@ void kinDS::SegmentBuilder::splitComponent(
       = polygonCentroid(kin_del.component_data.component_boundaries[cid][0]);
     kin_del.component_data.component_last_updated[cid] = t;
   }
+
+  kin_del.notePendingBranchSplit(
+    component_id, t, pre_split_parent_strands, new_components, component_ids);
 }
 
 void SegmentBuilder::init()
@@ -5385,6 +5393,7 @@ void SegmentBuilder::init()
   kin_del.registerEventCallbacks(
     section_callback_.get(), flip_callback_.get(), radius_callback_.get(), crossing_callback_.get());
   kin_del.registerSubdivisionEventCallback(subdivision_callback_.get());
+  kin_del.registerSeparationEventCallback(separation_callback_.get());
 
   auto& graph = kin_del.getGraph();
 
