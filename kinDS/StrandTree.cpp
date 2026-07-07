@@ -225,7 +225,7 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
   }
 
   PlaneProjector plane_projector(
-    transforms_by_height_and_branch[index][actual_branch], transforms_by_height_and_branch[index][reference_branch]);
+    transforms_by_height_and_branch[index][reference_branch], transforms_by_height_and_branch[index][actual_branch]);
 
   auto result = plane_projector.project(glm::vec2(point[0], point[1]));
   return glm::dvec2 { result.x, result.y };

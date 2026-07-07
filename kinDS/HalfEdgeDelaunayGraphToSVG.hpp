@@ -371,7 +371,9 @@ class HalfEdgeDelaunayGraphToSVG
     const std::vector<IntersectionDebugInfo>* intersection_debug_info = nullptr,
     const VisualDebugHighlight* highlight = nullptr, const std::unordered_set<size_t>* component_strands = nullptr,
     const std::unordered_map<size_t, size_t>* site_input_branch_labels = nullptr,
-    const std::unordered_set<size_t>* positioned_strands = nullptr)
+    const std::unordered_set<size_t>* positioned_strands = nullptr,
+    const std::unordered_map<size_t, glm::dvec3>* site_world_positions = nullptr,
+    const std::unordered_map<size_t, glm::dvec3>* voronoi_vertex_world_positions = nullptr)
   {
     auto in_component = [&](size_t strand_id) -> bool
     {
@@ -599,6 +601,15 @@ class HalfEdgeDelaunayGraphToSVG
       label_text.setf(std::ios::fixed);
       label_text.precision(6);
       label_text << vertex_id << " (" << (*point)[0] << "," << (*point)[1] << ")";
+      if (site_world_positions != nullptr)
+      {
+        const auto world_it = site_world_positions->find(vertex_id);
+        if (world_it != site_world_positions->end())
+        {
+          label_text << " world=(" << world_it->second.x << "," << world_it->second.y << "," << world_it->second.z
+                     << ")";
+        }
+      }
       if (site_input_branch_labels != nullptr)
       {
         const auto branch_it = site_input_branch_labels->find(vertex_id);
@@ -953,6 +964,20 @@ class HalfEdgeDelaunayGraphToSVG
             else
             {
               label_text = std::to_string(i);
+            }
+
+            if (voronoi_vertex_world_positions != nullptr)
+            {
+              const auto world_it = voronoi_vertex_world_positions->find(i);
+              if (world_it != voronoi_vertex_world_positions->end())
+              {
+                std::ostringstream world_text;
+                world_text.setf(std::ios::fixed);
+                world_text.precision(6);
+                world_text << " world=(" << world_it->second.x << "," << world_it->second.y << ","
+                           << world_it->second.z << ")";
+                label_text += world_text.str();
+              }
             }
 
             labels.push_back(Label(cc.first[0] - label_pad_sm, cc.first[1] - label_pad_sm, label_text,

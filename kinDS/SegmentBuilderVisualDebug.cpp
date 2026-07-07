@@ -224,13 +224,72 @@ std::pair<std::vector<glm::dvec2>, std::unordered_set<size_t>> buildVisualDebugS
   return { std::move(points), std::move(positioned_strands) };
 }
 
+std::unordered_map<size_t, glm::dvec3> buildSiteWorldPositions(
+  KineticDelaunay& kin_del, double occurrence_time, const std::unordered_set<size_t>& strand_ids)
+{
+  std::unordered_map<size_t, glm::dvec3> world_positions;
+  world_positions.reserve(strand_ids.size());
+
+  for (size_t strand_id : strand_ids)
+  {
+    if (kin_del.isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+
+    const glm::dvec2 profile_pos = kin_del.getPointAt(strand_id, occurrence_time);
+    const size_t representative_strand_id = kin_del.representativeStrandIdForRuntimeBranch(strand_id);
+    glm::dvec3 profile_pos_3d(profile_pos, occurrence_time);
+    world_positions[strand_id]
+      = kin_del.getStrandTree().transformToObjectSpace(profile_pos_3d, representative_strand_id, occurrence_time);
+  }
+
+  return world_positions;
+}
+
+std::unordered_map<size_t, glm::dvec3> buildVoronoiVertexWorldPositions(
+  KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph, double occurrence_time)
+{
+  std::unordered_map<size_t, glm::dvec3> world_positions;
+
+  for (size_t voronoi_vertex_id : graph.liveFaces())
+  {
+    const auto& face = graph.face(voronoi_vertex_id);
+    size_t reference_strand_id = static_cast<size_t>(-1);
+    for (size_t he_id : face.half_edges)
+    {
+      const int origin = graph.halfEdge(he_id).origin;
+      if (origin >= 0 && !kin_del.isDummyBoundary(static_cast<size_t>(origin)))
+      {
+        reference_strand_id = static_cast<size_t>(origin);
+        break;
+      }
+    }
+    if (reference_strand_id == static_cast<size_t>(-1))
+    {
+      continue;
+    }
+
+    const glm::dvec3 profile_pos
+      = kin_del.computeVoronoiVertexClampedInfinity(face.half_edges[0], occurrence_time);
+    const size_t representative_strand_id = kin_del.representativeStrandIdForRuntimeBranch(reference_strand_id);
+    glm::dvec3 world_pos_input = profile_pos;
+    world_positions[voronoi_vertex_id]
+      = kin_del.getStrandTree().transformToObjectSpace(world_pos_input, representative_strand_id, occurrence_time);
+  }
+
+  return world_positions;
+}
+
 void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector<glm::dvec2>& points,
   const HalfEdgeDelaunayGraph& graph, KineticDelaunay& kin_del,
   const std::vector<size_t>& containing_tri_ids,
   const std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo>& intersection_debug_data,
   const VisualDebugHighlight& highlight, const std::unordered_set<size_t>* highlighted_strands,
   const std::unordered_set<size_t>& positioned_strands,
-  const std::unordered_map<size_t, size_t>& site_input_branch_labels)
+  const std::unordered_map<size_t, size_t>& site_input_branch_labels,
+  const std::unordered_map<size_t, glm::dvec3>& site_world_positions,
+  const std::unordered_map<size_t, glm::dvec3>& voronoi_vertex_world_positions)
 {
   const std::filesystem::path filepath(relative_path);
   if (filepath.has_parent_path())
@@ -239,7 +298,7 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   }
   HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &kin_del.getFacesInside(), true,
     &containing_tri_ids, &intersection_debug_data, &highlight, highlighted_strands, &site_input_branch_labels,
-    &positioned_strands);
+    &positioned_strands, &site_world_positions, &voronoi_vertex_world_positions);
 }
 } // namespace
 
@@ -257,6 +316,10 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const std::unordered_map<size_t, size_t> site_input_branch_labels
     = buildSiteInputBranchLabels(kin_del, graph, occurrence_time);
   const std::unordered_set<size_t> live_strand_ids = collectLiveStrandIds(graph);
+  const std::unordered_map<size_t, glm::dvec3> live_site_world_positions
+    = buildSiteWorldPositions(kin_del, occurrence_time, live_strand_ids);
+  const std::unordered_map<size_t, glm::dvec3> voronoi_vertex_world_positions
+    = buildVoronoiVertexWorldPositions(kin_del, graph, occurrence_time);
   const std::optional<std::filesystem::path>& output_root = kin_del.getVisualDebugOutputRoot();
   const std::unordered_set<size_t> active_runtime_branches
     = collectActiveRuntimeBranches(kin_del, live_strand_ids);
@@ -267,6 +330,8 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   {
     const std::unordered_set<size_t> branch_strands
       = collectStrandIdsForRuntimeBranch(kin_del, live_strand_ids, runtime_branch_id);
+    const std::unordered_map<size_t, glm::dvec3> branch_site_world_positions
+      = buildSiteWorldPositions(kin_del, occurrence_time, branch_strands);
     const auto [points, positioned_strands]
       = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, branch_strands);
     if (positioned_strands.empty())
@@ -276,7 +341,8 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     const std::string filename = visualDebugSvgRelativePath(
       occurrence_time, phase, event_descriptor, runtime_branch_id, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      &branch_strands, positioned_strands, site_input_branch_labels);
+      &branch_strands, positioned_strands, site_input_branch_labels, branch_site_world_positions,
+      voronoi_vertex_world_positions);
   };
 
   if (!per_branch_svgs)
@@ -306,7 +372,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     const std::string filename
       = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
-      nullptr, positioned_strands, site_input_branch_labels);
+      nullptr, positioned_strands, site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions);
     return;
   }
 
