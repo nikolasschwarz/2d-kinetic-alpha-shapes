@@ -18,6 +18,7 @@ class KineticDelaunay;
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
   double occurrence_time, const char* phase, const std::string& event_descriptor,
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id = std::nullopt,
-  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr);
+  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr,
+  const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr);
 
 } // namespace kinDS

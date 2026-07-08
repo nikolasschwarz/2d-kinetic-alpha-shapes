@@ -64,7 +64,7 @@ void noteRuntimeBranchForStrand(
     return;
   }
 
-  runtime_branches.insert(runtime_branch_map[strand_id]);
+  runtime_branches.insert(kin_del.unsplitRuntimeBranchId(runtime_branch_map[strand_id]));
 }
 
 std::optional<size_t> uniqueBranchOrNull(const std::unordered_set<size_t>& branches)
@@ -138,11 +138,18 @@ std::optional<size_t> inferEventRuntimeBranchFromHighlight(
   return uniqueBranchOrNull(runtime_branches);
 }
 
+/// Chronologically sortable phase token: "before" gets a '!' prefix so it sorts ahead of "after" (which is otherwise
+/// alphabetically first) within the same event.
+std::string chronologicalPhaseToken(const char* phase)
+{
+  return std::string(phase) == "before" ? "!before" : phase;
+}
+
 std::string visualDebugSvgRelativePath(double occurrence_time, const char* phase, const std::string& event_descriptor,
   std::optional<size_t> runtime_branch_id, const std::optional<std::filesystem::path>& output_root)
 {
-  const std::string basename = "t" + std::to_string(occurrence_time) + "_segmentbuilder_" + phase + "_"
-    + event_descriptor + ".svg";
+  const std::string basename = "t" + std::to_string(occurrence_time) + "_segmentbuilder_"
+    + chronologicalPhaseToken(phase) + "_" + event_descriptor + ".svg";
   const std::string relative = runtime_branch_id.has_value()
     ? ("branch" + std::to_string(runtime_branch_id.value()) + "/" + basename)
     : ("branch0/" + basename);
@@ -182,7 +189,7 @@ std::unordered_set<size_t> collectActiveRuntimeBranches(
   {
     if (strand_id < runtime_branch_map.size())
     {
-      runtime_branches.insert(runtime_branch_map[strand_id]);
+      runtime_branches.insert(kin_del.unsplitRuntimeBranchId(runtime_branch_map[strand_id]));
     }
   }
   return runtime_branches;
@@ -191,11 +198,12 @@ std::unordered_set<size_t> collectActiveRuntimeBranches(
 std::unordered_set<size_t> collectStrandIdsForRuntimeBranch(
   const KineticDelaunay& kin_del, const std::unordered_set<size_t>& live_strand_ids, size_t runtime_branch_id)
 {
+  // @p runtime_branch_id is an unsplit branch id: gather its own strands plus those of any pending split-off children,
+  // keeping only the live ones.
   std::unordered_set<size_t> strand_ids;
-  const auto& runtime_branch_map = kin_del.getRuntimeBranchMap();
-  for (size_t strand_id : live_strand_ids)
+  for (size_t strand_id : kin_del.collectUnsplitRuntimeBranchStrands(runtime_branch_id))
   {
-    if (strand_id < runtime_branch_map.size() && runtime_branch_map[strand_id] == runtime_branch_id)
+    if (live_strand_ids.count(strand_id) != 0)
     {
       strand_ids.insert(strand_id);
     }
@@ -290,7 +298,8 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   const std::unordered_map<size_t, size_t>& site_input_branch_labels,
   const std::unordered_map<size_t, glm::dvec3>& site_world_positions,
   const std::unordered_map<size_t, glm::dvec3>& voronoi_vertex_world_positions,
-  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr)
+  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr,
+  const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr)
 {
   const std::filesystem::path filepath(relative_path);
   if (filepath.has_parent_path())
@@ -299,18 +308,26 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   }
   HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &kin_del.getFacesInside(), true,
     &containing_tri_ids, &intersection_debug_data, &highlight, highlighted_strands, &site_input_branch_labels,
-    &positioned_strands, &site_world_positions, &voronoi_vertex_world_positions, separation_offset_segments);
+    &positioned_strands, &site_world_positions, &voronoi_vertex_world_positions, separation_offset_segments,
+    seam_outlines);
 }
 } // namespace
 
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
   double occurrence_time, const char* phase, const std::string& event_descriptor,
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id,
-  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments)
+  const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments,
+  const std::vector<std::vector<glm::dvec2>>* seam_outlines)
 {
   if (!visual_debug)
   {
     return;
+  }
+
+  // Debug SVGs are always grouped by unsplit branch, so map any pending split-off child id back to its parent.
+  if (event_runtime_branch_id.has_value())
+  {
+    event_runtime_branch_id = kin_del.unsplitRuntimeBranchId(event_runtime_branch_id.value());
   }
 
   const auto& containing_tri_ids = kin_del.getCrossingData().getContainingTriIds();
@@ -344,7 +361,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       occurrence_time, phase, event_descriptor, runtime_branch_id, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       &branch_strands, positioned_strands, site_input_branch_labels, branch_site_world_positions,
-      voronoi_vertex_world_positions, separation_offset_segments);
+      voronoi_vertex_world_positions, separation_offset_segments, seam_outlines);
   };
 
   if (!per_branch_svgs)
@@ -375,7 +392,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       nullptr, positioned_strands, site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions,
-      separation_offset_segments);
+      separation_offset_segments, seam_outlines);
     return;
   }
 

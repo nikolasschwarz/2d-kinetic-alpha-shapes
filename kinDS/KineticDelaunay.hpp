@@ -171,6 +171,157 @@ class KineticDelaunay
 
   ComponentData component_data;
 
+  /// Runtime-branch bookkeeping. Mirrors @ref ComponentData (a per-strand id lookup plus a per-branch strand list) but
+  /// is keyed by runtime branch ids, which are allocated monotonically and never reused. Also tracks split lineage:
+  /// the parent each branch split off from, and, for a branch whose split is scheduled but not yet executed, the child
+  /// branch ids that split will produce.
+  struct RuntimeBranchData
+  {
+    static constexpr size_t no_branch = static_cast<size_t>(-1);
+
+    /// Per-strand runtime branch id (index = strand id); @ref no_branch when unassigned/retired.
+    std::vector<size_t> branch_map;
+    /// Strand ids per runtime branch id (index = branch id); inverse of @ref branch_map over live strands. Rebuilt via
+    /// @ref rebuildBranchStrandLists.
+    std::vector<std::vector<size_t>> branches;
+    /// Parent runtime branch each branch split from (index = branch id); @ref no_branch for original branches.
+    std::vector<size_t> parent;
+    /// Liveness per runtime branch id (index = branch id).
+    std::vector<bool> alive;
+    /// For a parent branch mid-split, the child branch ids whose split has not been executed yet. Populated when the
+    /// pending split is first noted and cleared when the split is executed.
+    std::unordered_map<size_t, std::vector<size_t>> pending_splits;
+    /// Monotonic runtime-branch id allocator; ids are never reused.
+    size_t next_branch_id = 0;
+
+    /// Reserve per-branch bookkeeping so @p branch_id is addressable.
+    void ensureBranchCapacity(size_t branch_id)
+    {
+      if (branch_id + 1 > branches.size())
+      {
+        branches.resize(branch_id + 1);
+      }
+      if (branch_id + 1 > parent.size())
+      {
+        parent.resize(branch_id + 1, no_branch);
+      }
+      if (branch_id + 1 > alive.size())
+      {
+        alive.resize(branch_id + 1, false);
+      }
+    }
+
+    /// Allocate a fresh, live runtime branch id, optionally recording its @p parent_branch.
+    size_t allocate(size_t parent_branch = no_branch)
+    {
+      const size_t branch_id = next_branch_id++;
+      ensureBranchCapacity(branch_id);
+      alive[branch_id] = true;
+      parent[branch_id] = parent_branch;
+      return branch_id;
+    }
+
+    /// Runtime branch id for @p strand_id, or @ref no_branch when out of range.
+    size_t branchForStrand(size_t strand_id) const
+    {
+      return strand_id < branch_map.size() ? branch_map[strand_id] : no_branch;
+    }
+
+    /// Rebuild @ref branches from the current @ref branch_map (skipping @ref no_branch entries).
+    void rebuildBranchStrandLists()
+    {
+      for (std::vector<size_t>& strands : branches)
+      {
+        strands.clear();
+      }
+      for (size_t strand_id = 0; strand_id < branch_map.size(); ++strand_id)
+      {
+        const size_t branch_id = branch_map[strand_id];
+        if (branch_id == no_branch)
+        {
+          continue;
+        }
+        ensureBranchCapacity(branch_id);
+        branches[branch_id].push_back(strand_id);
+      }
+    }
+
+    /// Record that @p parent_branch will split into @p child_branches (not yet executed).
+    void noteSplit(size_t parent_branch, std::vector<size_t> child_branches)
+    {
+      pending_splits[parent_branch] = std::move(child_branches);
+    }
+
+    /// Clear the pending-split record for @p parent_branch once its split has been executed.
+    void completeSplit(size_t parent_branch) { pending_splits.erase(parent_branch); }
+
+    /// Child branch ids of @p parent_branch whose split has not been executed, or nullptr if none pending.
+    const std::vector<size_t>* pendingChildBranches(size_t parent_branch) const
+    {
+      const auto it = pending_splits.find(parent_branch);
+      return it == pending_splits.end() ? nullptr : &it->second;
+    }
+
+    /// True iff @p branch_id is a child produced by a split that has not been executed yet (so it is still part of a
+    /// larger, not-yet-separated "unsplit" branch).
+    bool isPendingSplitChild(size_t branch_id) const
+    {
+      if (branch_id >= parent.size() || parent[branch_id] == no_branch)
+      {
+        return false;
+      }
+      const std::vector<size_t>* children = pendingChildBranches(parent[branch_id]);
+      if (children == nullptr)
+      {
+        return false;
+      }
+      for (size_t child : *children)
+      {
+        if (child == branch_id)
+        {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /// The enclosing unsplit branch id for @p branch_id: walks up pending-split parents until reaching a branch that is
+    /// not itself a pending-split child. Returns @p branch_id when it is already unsplit.
+    size_t unsplitBranchId(size_t branch_id) const
+    {
+      size_t current = branch_id;
+      while (isPendingSplitChild(current))
+      {
+        current = parent[current];
+      }
+      return current;
+    }
+
+    /// Strand ids of the unsplit branch rooted at @p branch_id: its own strands plus those of all (recursively) pending
+    /// split-off children.
+    std::vector<size_t> unsplitBranchStrands(size_t branch_id) const
+    {
+      std::vector<size_t> strands;
+      std::vector<size_t> pending = { branch_id };
+      while (!pending.empty())
+      {
+        const size_t current = pending.back();
+        pending.pop_back();
+        if (current < branches.size())
+        {
+          strands.insert(strands.end(), branches[current].begin(), branches[current].end());
+        }
+        if (const std::vector<size_t>* children = pendingChildBranches(current))
+        {
+          pending.insert(pending.end(), children->begin(), children->end());
+        }
+      }
+      return strands;
+    }
+  };
+
+  RuntimeBranchData runtime_branch_data_;
+
   std::pair<glm::dvec2, glm::dvec2> computeAngularBisector(size_t he_id, double t) const;
 
   std::pair<double, double> delaunayVoronoiEdgeIntersection(
@@ -214,14 +365,6 @@ class KineticDelaunay
   bool add_dummy_boundary;
   size_t prev_component_count = 1;
   PendingBranchSplitState pending_branch_splits_;
-  /// Per-strand runtime branch id (see @ref getRuntimeBranchIdForStrand). Differs from @ref ComponentData::component_map
-  /// (inside-face connectivity) and from @ref StrandTree::getBranchIndex (input branch). Updated only when Delaunay
-  /// graph connectivity is severed (@ref onGraphCutApplied / @ref onGraphRetriangulated), using live-face adjacency.
-  std::vector<size_t> runtime_branch_map_;
-  /// Monotonic runtime-branch id allocator; ids are never reused.
-  size_t next_runtime_branch_id_ = 0;
-  /// Liveness per runtime branch id (index = id).
-  std::vector<bool> runtime_branch_alive_;
   ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
   double separation_offset_scale_ = 100.0;
   std::vector<double> quadrilateral_last_updated;
@@ -269,7 +412,9 @@ class KineticDelaunay
   const PendingBranchSplit* activeSeparationForStrand(size_t strand_id) const;
   glm::dvec2 separationOffsetAt(size_t strand_id, double t) const;
   Trajectory<2> addSeparationOffsetToPiecePolynomial(
-    const Trajectory<2>& base, size_t strand_id, size_t section) const;
+    const Trajectory<2>& base, size_t strand_id, size_t section, double schedule_time) const;
+  void debugSeparationTrackedFlipProbe(
+    size_t parent_component_id, double t, const char* phase, size_t even_half_edge_id = 22) const;
   /// Strand ids whose min input branch defines the motion frame for @p strand_id.
   void collectReferenceBranchStrandPool(size_t strand_id, std::vector<size_t>& pool) const;
   void updateRuntimeBranchMapFromInputBranches(double t);
@@ -326,7 +471,7 @@ class KineticDelaunay
   glm::dvec2 getPointAtWithReferenceBranch(size_t v, double t, size_t reference_branch) const;
 
   Trajectory<2> getSitePiecePolynomialWithReferenceBranch(
-    size_t strand_id, size_t section, size_t reference_branch) const;
+    size_t strand_id, size_t section, size_t reference_branch, double schedule_time) const;
 
   std::vector<glm::dvec2> getPointsAt(double t) const;
 
@@ -359,6 +504,8 @@ class KineticDelaunay
   ComponentSplitPolicy getComponentSplitPolicy() const { return component_split_policy_; }
   void setSeparationOffsetScale(double scale) { separation_offset_scale_ = scale; }
   double getSeparationOffsetScale() const { return separation_offset_scale_; }
+  /// Section fraction in [0,1] where the active separation ramp ends, if it ends inside the section.
+  std::optional<double> separationRampEndSectionFraction(size_t strand_id, size_t section) const;
 
   /// Record a pending branch split until the next graph cut/retriangulation.
   void notePendingBranchSplit(size_t parent_component_id, double split_time,
@@ -369,10 +516,12 @@ class KineticDelaunay
   std::optional<PendingBranchSplit> getPendingBranchSplit(size_t parent_component_id) const;
 
   /**
-   * Seam outline between @p component_id and its pending-split partner components.
-   * Walks live cross-component Delaunay edges that will be severed by @ref HalfEdgeDelaunayGraph::applyRuntimeBranchSplit.
+   * Best (largest-area) seam outline loop walked from the precomputed @p start_edges (see
+   * @ref collectFutureBranchSeamStartEdges). The walk follows runtime branch ids alone; it performs no seam/partner
+   * lookups of its own.
    */
-  std::vector<BoundaryPoint> collectFutureRuntimeBranchOutline(size_t component_id, double t) const;
+  std::vector<BoundaryPoint> collectFutureRuntimeBranchOutline(
+    const std::vector<size_t>& start_edges, double t) const;
 
   /// One outer outline per future runtime branch listed in the pending split metadata.
   std::vector<std::vector<BoundaryPoint>> collectPendingSplitBranchOutlines(
@@ -446,7 +595,7 @@ class KineticDelaunay
   bool isMinimalInputBranchTriangle(const std::array<int, 3>& vertices, double t) const;
 
   /**
-   * Runtime branch of @p strand_id (see @ref runtime_branch_map_).
+   * Runtime branch of @p strand_id (see @ref RuntimeBranchData::branch_map).
    * Not the inside-face component id and not the input @ref StrandTree branch index.
    */
   size_t getRuntimeBranchIdForStrand(size_t strand_id) const;
@@ -466,7 +615,19 @@ class KineticDelaunay
   /** True iff the live Delaunay graph contains exactly one finite triangle in @p runtime_branch_id. */
   bool runtimeBranchHasSingleFiniteTriangle(size_t runtime_branch_id) const;
 
-  const std::vector<size_t>& getRuntimeBranchMap() const { return runtime_branch_map_; }
+  const std::vector<size_t>& getRuntimeBranchMap() const { return runtime_branch_data_.branch_map; }
+  const RuntimeBranchData& getRuntimeBranchData() const { return runtime_branch_data_; }
+
+  /// Strand ids of the unsplit runtime branch @p branch_id: the branch's own strands plus those of any pending (not yet
+  /// executed) split-off children. Use this to treat a mid-split branch as a single, not-yet-separated branch.
+  std::vector<size_t> collectUnsplitRuntimeBranchStrands(size_t branch_id) const
+  {
+    return runtime_branch_data_.unsplitBranchStrands(branch_id);
+  }
+  /// Maps a (possibly pending split-off child) runtime branch id to its enclosing unsplit branch id.
+  size_t unsplitRuntimeBranchId(size_t branch_id) const { return runtime_branch_data_.unsplitBranchId(branch_id); }
+  /// True iff @p branch_id is an unsplit branch (not a pending split-off child).
+  bool isUnsplitRuntimeBranch(size_t branch_id) const { return !runtime_branch_data_.isPendingSplitChild(branch_id); }
 
   bool mustRemainInside(size_t face_index, double t) const;
 
@@ -476,11 +637,17 @@ class KineticDelaunay
 
   bool isOnFutureBranchSeamForComponent(
     size_t he_id, size_t component_id, const std::unordered_set<size_t>& partner_component_ids) const;
-  size_t nextOnFutureBranchSeamId(
-    size_t he_id, size_t component_id, const std::unordered_set<size_t>& partner_component_ids) const;
-  std::vector<BoundaryPoint> traverseFutureBranchSeam(size_t start_he_id, size_t component_id,
-    const std::unordered_set<size_t>& partner_component_ids, double t) const;
-  std::optional<std::unordered_set<size_t>> seamPartnerComponentsFor(size_t component_id) const;
+  /// Cross-component (tombstoning-criterion) seam half-edges pointing inward into @p component_id (destination in the
+  /// component, origin in a partner). Each is an entry seed for the outline walk and is not itself part of the outline.
+  std::vector<size_t> collectFutureBranchSeamStartEdges(
+    size_t component_id, const std::unordered_set<size_t>& partner_component_ids) const;
+  /// Next seam half-edge after @p he_id: the first edge, rotating around the pivot vertex from @p he_id's `next`, whose
+  /// origin and destination lie in the same runtime branch. Uses runtime branch ids only.
+  size_t nextOnFutureBranchSeamId(size_t he_id) const;
+  /// Walk one seam outline loop. @p start_he_id is a start seed (see @ref collectFutureBranchSeamStartEdges); the walk
+  /// advances via @ref nextOnFutureBranchSeamId and closes when a half-edge's destination returns to the seed's
+  /// destination.
+  std::vector<BoundaryPoint> traverseFutureBranchSeam(size_t start_he_id, double t) const;
 
   size_t nextOnComponentBoundaryId(size_t he_id) const;
 

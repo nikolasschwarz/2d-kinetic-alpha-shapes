@@ -1738,7 +1738,8 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
     debug_tag += time_suffix;
   }
   {
-    std::ofstream before_dump("applyRuntimeBranchSplit_before_" + debug_tag + ".txt");
+    // '!' prefix so the "before" dump sorts chronologically ahead of the "after" dump.
+    std::ofstream before_dump("applyRuntimeBranchSplit_!before_" + debug_tag + ".txt");
     if (before_dump.is_open())
     {
       printDebug(&before_dump);

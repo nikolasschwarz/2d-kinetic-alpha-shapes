@@ -97,7 +97,7 @@ double referenceBranchLookupTimeForSection(size_t section, double schedule_time)
 Trajectory<2> sitePiecePolynomialAtScheduleTime(const KineticDelaunay& kd, size_t strand_id, size_t section,
   double schedule_time, size_t shared_reference_branch)
 {
-  return kd.getSitePiecePolynomialWithReferenceBranch(strand_id, section, shared_reference_branch);
+  return kd.getSitePiecePolynomialWithReferenceBranch(strand_id, section, shared_reference_branch, schedule_time);
 }
 
 size_t branchLookupHeightForTime(const StrandTree& tree, double t)

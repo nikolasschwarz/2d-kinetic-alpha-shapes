@@ -371,6 +371,8 @@ class HalfEdgeDelaunayGraphToSVG
    *        section index; fractional times use the next section (ceil).
    * @param positioned_strands Optional: strand ids for which @p points contains valid coordinates. When set,
    *        geometry that needs an unpositioned strand is skipped instead of indexing outside the live set.
+   * @param seam_outlines Optional: closed loops (world/profile positions) drawn as bright magenta polygons, used to
+   *        visualize the extracted future-branch seam outlines that feed the pending-split convexity check.
    */
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
     const std::string& filename, double margin = 0.0, const std::vector<bool>* face_inside = nullptr,
@@ -381,7 +383,8 @@ class HalfEdgeDelaunayGraphToSVG
     const std::unordered_set<size_t>* positioned_strands = nullptr,
     const std::unordered_map<size_t, glm::dvec3>* site_world_positions = nullptr,
     const std::unordered_map<size_t, glm::dvec3>* voronoi_vertex_world_positions = nullptr,
-    const std::vector<SeparationOffsetSegment>* separation_offset_segments = nullptr)
+    const std::vector<SeparationOffsetSegment>* separation_offset_segments = nullptr,
+    const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr)
   {
     auto in_component = [&](size_t strand_id) -> bool
     {
@@ -501,6 +504,19 @@ class HalfEdgeDelaunayGraphToSVG
         bb.min_y = std::min({ bb.min_y, segment.base.y, segment.end.y });
         bb.max_x = std::max({ bb.max_x, segment.base.x, segment.end.x });
         bb.max_y = std::max({ bb.max_y, segment.base.y, segment.end.y });
+      }
+    }
+    if (seam_outlines != nullptr)
+    {
+      for (const std::vector<glm::dvec2>& outline : *seam_outlines)
+      {
+        for (const glm::dvec2& p : outline)
+        {
+          bb.min_x = std::min(bb.min_x, p.x);
+          bb.min_y = std::min(bb.min_y, p.y);
+          bb.max_x = std::max(bb.max_x, p.x);
+          bb.max_y = std::max(bb.max_y, p.y);
+        }
       }
     }
     svg::Document doc = setupDocument(points, filename, bb);
@@ -1158,6 +1174,39 @@ class HalfEdgeDelaunayGraphToSVG
         {
           doc << svg::Circle(svg::Point(segment.base[0], segment.base[1]), offset_base_radius,
             svg::Fill(svg::Color::White), svg::Stroke(offset_line_stroke_w, offset_base_color));
+        }
+      }
+    }
+
+    if (seam_outlines != nullptr)
+    {
+      const svg::Color seam_outline_color(255, 0, 255);
+      constexpr double seam_outline_stroke_w = 0.022;
+      constexpr double seam_outline_vertex_radius = 0.03;
+      for (const std::vector<glm::dvec2>& outline : *seam_outlines)
+      {
+        const size_t n = outline.size();
+        if (n < 2)
+        {
+          continue;
+        }
+        for (size_t i = 0; i < n; ++i)
+        {
+          glm::dvec2 clipped_start = outline[i];
+          glm::dvec2 clipped_end = outline[(i + 1) % n];
+          if (clipSegmentToBoundingBox(clipped_start, clipped_end, bb))
+          {
+            doc << svg::Line(svg::Point(clipped_start[0], clipped_start[1]),
+              svg::Point(clipped_end[0], clipped_end[1]), svg::Stroke(seam_outline_stroke_w, seam_outline_color));
+          }
+        }
+        for (const glm::dvec2& p : outline)
+        {
+          if (isWithinBoundingBox(p, bb))
+          {
+            doc << svg::Circle(svg::Point(p[0], p[1]), seam_outline_vertex_radius, svg::Fill(seam_outline_color),
+              svg::Stroke(0.0, seam_outline_color));
+          }
         }
       }
     }
