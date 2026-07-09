@@ -621,7 +621,7 @@ static const std::vector<size_t>& transformBranchIndicesForStrand(
 {
   if (kinetic_delaunay != nullptr)
   {
-    const size_t representative_strand_id = kinetic_delaunay->representativeStrandIdForRuntimeBranch(strand_id);
+    const size_t representative_strand_id = kinetic_delaunay->representativeStrandIdForMeshTransform(strand_id);
     return strand_tree.getBranchIndices(representative_strand_id);
   }
   return strand_tree.getBranchIndices(strand_id);

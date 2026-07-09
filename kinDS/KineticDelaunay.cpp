@@ -61,16 +61,6 @@ const PendingBranchSplit* PendingBranchSplitState::findByParent(size_t parent_co
   return &it->second;
 }
 
-const PendingBranchSplit* PendingBranchSplitState::findByStrand(size_t strand_id) const
-{
-  if (strand_id >= strand_parent_component_.size()
-    || strand_parent_component_[strand_id] == no_parent_component)
-  {
-    return nullptr;
-  }
-  return findByParent(strand_parent_component_[strand_id]);
-}
-
 void PendingBranchSplitState::registerStrandsForSplit(
   size_t parent_component_id, const std::vector<std::vector<size_t>>& new_components)
 {
@@ -85,6 +75,30 @@ void PendingBranchSplitState::registerStrandsForSplit(
       strand_parent_component_[strand_id] = parent_component_id;
     }
   }
+}
+
+const std::vector<size_t>* PendingBranchSplitState::frozenStrandsForStrand(size_t strand_id) const
+{
+  if (strand_id < strand_parent_component_.size()
+    && strand_parent_component_[strand_id] != no_parent_component)
+  {
+    const PendingBranchSplit* split = findByParent(strand_parent_component_[strand_id]);
+    if (split != nullptr)
+    {
+      return &split->frozen_parent_strands;
+    }
+  }
+
+  for (const auto& entry : by_parent_)
+  {
+    const std::vector<size_t>& frozen_strands = entry.second.frozen_parent_strands;
+    if (std::find(frozen_strands.begin(), frozen_strands.end(), strand_id) != frozen_strands.end())
+    {
+      return &frozen_strands;
+    }
+  }
+
+  return nullptr;
 }
 
 namespace
@@ -1418,23 +1432,10 @@ void KineticDelaunay::collectReferenceBranchStrandPool(size_t strand_id, std::ve
 
   if (!isGraphRetriangulatedForComponents())
   {
-    if (const PendingBranchSplit* split = pending_branch_splits_.findByStrand(strand_id); split != nullptr)
+    if (const std::vector<size_t>* frozen_strands = pending_branch_splits_.frozenStrandsForStrand(strand_id);
+      frozen_strands != nullptr)
     {
-      if (!split->split_component_ids.empty())
-      {
-        const size_t retained_component_id = split->split_component_ids.front();
-        if (strand_id < component_data.component_map.size()
-          && component_data.component_map[strand_id] == retained_component_id)
-        {
-          if (retained_component_id < component_data.components.size())
-          {
-            pool = component_data.components[retained_component_id];
-          }
-          return;
-        }
-      }
-
-      pool = split->frozen_parent_strands;
+      pool = *frozen_strands;
       return;
     }
   }
@@ -1483,19 +1484,9 @@ size_t KineticDelaunay::getSharedReferenceBranchForStrands(
 
 size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
 {
-  const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, t);
-  if (!isGraphRetriangulatedForComponents())
-  {
-    if (const PendingBranchSplit* split = pending_branch_splits_.findByStrand(strand_id);
-      split != nullptr && !split->split_component_ids.empty() && strand_id < component_data.component_map.size()
-      && component_data.component_map[strand_id] == split->split_component_ids.front())
-    {
-      return branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
-    }
-  }
-
   std::vector<size_t> pool;
   collectReferenceBranchStrandPool(strand_id, pool);
+  const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, t);
   if (pool.empty())
   {
     return branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
@@ -2613,6 +2604,32 @@ size_t KineticDelaunay::representativeStrandIdForRuntimeBranch(size_t strand_id)
   }
 
   return representative.value_or(strand_id);
+}
+
+size_t KineticDelaunay::representativeStrandIdForMeshTransform(size_t strand_id) const
+{
+  if (strand_id == static_cast<size_t>(-1))
+  {
+    throw std::runtime_error("representativeStrandIdForMeshTransform: invalid strand id.");
+  }
+
+  // During a pending split, the retained/original component already lives in its input branch's profile frame.
+  // Only mesh vertices use this shortcut; kinetic predicates and graph updates still use the normal runtime-frame path.
+  if (!isGraphRetriangulatedForComponents() && strand_id < component_data.component_map.size()
+    && !isDummyBoundary(strand_id))
+  {
+    const size_t component_id = component_data.component_map[strand_id];
+    for (const auto& entry : pending_branch_splits_.by_parent_)
+    {
+      const PendingBranchSplit& split = entry.second;
+      if (!split.split_component_ids.empty() && split.split_component_ids.front() == component_id)
+      {
+        return strand_id;
+      }
+    }
+  }
+
+  return representativeStrandIdForRuntimeBranch(strand_id);
 }
 
 namespace

@@ -3509,7 +3509,7 @@ glm::dvec3 SegmentBuilder::transformFromRuntimeBranchToObjectSpace(
     throw std::runtime_error("transformFromRuntimeBranchToObjectSpace: invalid strand id.");
   }
 
-  const size_t representative_strand_id = kin_del.representativeStrandIdForRuntimeBranch(strand_id);
+  const size_t representative_strand_id = kin_del.representativeStrandIdForMeshTransform(strand_id);
   return kin_del.getStrandTree().transformToObjectSpace(vertex, representative_strand_id, t);
 }
 

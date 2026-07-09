@@ -57,9 +57,9 @@ struct PendingBranchSplitState
   void resetStrandLookup(size_t strand_count);
   PendingBranchSplit& getOrCreate(size_t parent_component_id);
   const PendingBranchSplit* findByParent(size_t parent_component_id) const;
-  const PendingBranchSplit* findByStrand(size_t strand_id) const;
   void registerStrandsForSplit(
     size_t parent_component_id, const std::vector<std::vector<size_t>>& new_components);
+  const std::vector<size_t>* frozenStrandsForStrand(size_t strand_id) const;
 
   std::unordered_map<size_t, PendingBranchSplit> by_parent_;
   std::vector<size_t> strand_parent_component_;
@@ -469,6 +469,9 @@ class KineticDelaunay
 
   /// Smallest live strand id sharing @p strand_id's runtime branch; used for transform frame lookup.
   size_t representativeStrandIdForRuntimeBranch(size_t strand_id) const;
+
+  /// Strand id whose input branch should transform a mesh vertex tagged with @p strand_id.
+  size_t representativeStrandIdForMeshTransform(size_t strand_id) const;
 
   /// One shared reference branch for all @p strand_ids (e.g. flip quadrilateral vertices).
   size_t getSharedReferenceBranchForStrands(const std::vector<size_t>& strand_ids, double branch_lookup_time) const;
