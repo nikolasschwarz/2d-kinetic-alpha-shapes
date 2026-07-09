@@ -91,6 +91,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
   }
 
   const bool apply_export_transform = transformed.value_or(!settings.transform_mesh_at_construction);
+  const bool include_metadata = mesh_builder->store_mesh_metadata;
 
   std::vector<VoronoiMesh> meshlets_to_export;
   std::vector<std::string> export_suffixes;
@@ -138,7 +139,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     std::filesystem::create_directories(export_path);
     for (size_t i = 0; i < export_count; ++i)
     {
-      kinDS::ObjExporter::writeMesh(meshlet_for_export(i), export_path / meshlet_filename(i));
+      kinDS::ObjExporter::writeMesh(meshlet_for_export(i), export_path / meshlet_filename(i), 1.0, 1.0, {}, include_metadata);
     }
     KINDS_DEBUG("Exported " << export_count << " meshlet OBJ file(s) (mode=" << meshletExportModeToString(export_mode)
                             << ", transformed=" << apply_export_transform << ") to " << export_path.string() << ".");
@@ -186,7 +187,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     return;
   }
 
-  kinDS::ObjExporter::writeMesh(combined_mesh, obj_path);
+  kinDS::ObjExporter::writeMesh(combined_mesh, obj_path, 1.0, 1.0, {}, include_metadata);
   KINDS_DEBUG("Exported combined mesh (" << export_count << " meshlet group(s), mode=combined, transformed="
                                        << apply_export_transform << ") to " << obj_path.string() << ".");
 }
@@ -225,7 +226,8 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
             = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
           kinDS::ObjExporter::writeMesh(segment_meshlets[mesh_index],
             "meshlet" + std::to_string(mesh_index) + suffix
-              + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix() + "_raw.obj");
+              + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix() + "_raw.obj",
+            1.0, 1.0, {}, mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata);
         }
         std::tie(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index])
           = boundary_intersector.Intersect(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index]);
@@ -465,7 +467,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   mesh_builder
     = std::make_shared<SegmentBuilder>(
       *kinetic_delaunay, subdivisions, settings.transform_mesh_at_construction, visual_debug, parallel_for);
-  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata;
+  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata || visual_debug;
   mesh_builder->diagnostics = settings.diagnostics;
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
@@ -479,7 +481,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << ", fix_missing_meshes="
                                                                                       << settings.fix_missing_meshes
                                                                                       << ", store_mesh_metadata="
-                                                                                      << settings.store_mesh_metadata
+                                                                                      << mesh_builder->store_mesh_metadata
                                                                                       << ", diagnostics="
                                                                                       << settings.diagnostics
                                                                                       << ", radius_vertex_shift_enabled="
@@ -527,7 +529,8 @@ const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm(bool visu
 
   if (settings.debug_export_meshes)
   {
-    kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
+    kinDS::ObjExporter::writeMesh(
+      boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata);
   }
 
   // truncateToBoundary(boundary_mesh);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "KineticDelaunay.hpp"
+#include "Logger.hpp"
 
 #include <stdexcept>
 
@@ -12,17 +13,22 @@ public:
   KineticDelaunay* kd_;
   size_t half_edge_id;
   glm::dvec2 position;
+  /// Target state implied by the radius predicate sign change. Positive -> negative means the triangle is added
+  /// (inside); negative -> positive means it is removed (outside). This makes duplicate events idempotent.
+  bool target_inside;
 
   RadiusEvent(
     KineticDelaunay* kd,
     double t,
     size_t he_id,
     double creation_time,
-    glm::dvec2 position)
+    glm::dvec2 position,
+    bool target_inside)
     : KineticDelaunay::Event(t, creation_time, 30u)
     , kd_(kd)
     , half_edge_id(he_id)
     , position(position)
+    , target_inside(target_inside)
   {
   }
 
@@ -69,13 +75,22 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
     return;
   }
 
+  if (kd->face_inside[face_id] == target_inside)
+  {
+    KINDS_DEBUG("RadiusEvent no-op: face " << face_id << " is already "
+                                           << (target_inside ? "inside" : "outside")
+                                           << " at t=" << occurrence_time
+                                           << " for half_edge_id=" << half_edge_id);
+    return;
+  }
+
   auto* event_handler = kd->radius_event_manager_->getCallback();
   if (event_handler)
   {
     event_handler->beforeEvent(*this);
   }
 
-  kd->setFaceInside(face_id, !kd->face_inside[face_id], occurrence_time);
+  kd->setFaceInside(face_id, target_inside, occurrence_time);
 
   if (event_handler)
   {

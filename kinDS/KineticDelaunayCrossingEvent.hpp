@@ -435,7 +435,8 @@ std::string formatCrossingIntersectionForLog(const KineticDelaunay& kd,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection);
 
 bool tryComputeCrossingIntersectionPosition2D(const KineticDelaunay& kd,
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection, double t, glm::dvec2& out_xy);
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection, double t, glm::dvec2& out_xy,
+  bool include_virtual_offset = true);
 
 /** No-op if @p intersection is empty; otherwise log KINDS_ERROR on mismatch with expected dual edge / half-edge. */
 void validateClosingCapCrossingRef(const KineticDelaunay& kd, const char* context_msg,

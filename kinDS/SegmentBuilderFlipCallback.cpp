@@ -11,6 +11,26 @@
 
 namespace kinDS
 {
+namespace
+{
+glm::dvec3 unshiftedFlipEventPoint(const KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph, size_t he_id, double t)
+{
+  const std::vector<size_t> strand_ids = collectFlipQuadrilateralStrandIds(graph, he_id);
+  if (strand_ids.empty())
+  {
+    return glm::dvec3(0.0, 0.0, t);
+  }
+
+  glm::dvec2 center(0.0);
+  for (size_t strand_id : strand_ids)
+  {
+    center += kin_del.getPointAt(strand_id, t, false);
+  }
+  center /= static_cast<double>(strand_ids.size());
+  return glm::dvec3(center, t);
+}
+} // namespace
+
 void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
 {
   auto* flip = dynamic_cast<KineticDelaunay::FlipEvent*>(&e);
@@ -18,6 +38,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
   auto& graph = segment_builder_.kin_del.getGraph();
 
   auto vertex = graph.halfEdge(flip->half_edge_id).origin;
@@ -35,7 +56,8 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   auto centroid = polygonCentroid(boundary_polygon);
 
   // Finish the segment mesh pair of the edge being flipped
-  glm::dvec3 event_point { flip->position[0], flip->position[1], flip->occurrence_time };
+  const glm::dvec3 event_point
+    = unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
   size_t segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[flip->half_edge_id];
 
   if(graph.isInfinite(flip->half_edge_id) && segment_builder_.kin_del.computeBoundaryOnTheFly())
@@ -51,7 +73,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
       const size_t pre_even_flip_he = flip->half_edge_id & ~1;
       const size_t pre_left_voronoi_vertex_id = graph.halfEdge(pre_even_flip_he).face;
       size_t event_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
-        flip->occurrence_time, std::optional<size_t>(pre_left_voronoi_vertex_id));
+        flip->occurrence_time, false, std::optional<size_t>(pre_left_voronoi_vertex_id));
       size_t last_left = last_segments.front().mesh_start_vertex_id;
       size_t last_right = last_segments.back().mesh_end_vertex_id;
       // create one triangle to the event point
@@ -93,12 +115,12 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
     const auto& boundary_last_vertices = segment_builder_.boundary_mesh_last_left_and_right_vertex[outer_he_id];
 
-    glm::dvec2 new_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex);
+    glm::dvec2 new_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex, false);
 
     size_t new_boundary_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
     // TODO: raw UVs
     segment_builder_.addBoundaryVertex(
-      glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], flip->occurrence_time }, centroid, opposite_vertex, flip->occurrence_time);
+      glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], flip->occurrence_time }, centroid, opposite_vertex, flip->occurrence_time, false);
 
     // create one triangle to the event point
     segment_builder_.addBoundaryTriangle(boundary_last_vertices.first, boundary_last_vertices.second, new_boundary_vertex_index);
@@ -124,6 +146,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
   auto& graph = segment_builder_.kin_del.getGraph();
 
   int vertex = graph.halfEdge(flip->half_edge_id).origin;
@@ -157,6 +180,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   const bool left_inside = segment_builder_.kin_del.getFaceInside(left_containing_tri_id);
   const bool flip_pos_finite = std::isfinite(flip->position[0]) && std::isfinite(flip->position[1]);
   const bool seed_mesh_with_flip_vertex = left_inside && flip_pos_finite;
+  const glm::dvec3 event_point
+    = unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
 
   // For now also create a mesh, but this might be changed later
   VoronoiMesh mesh;
@@ -165,9 +190,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
   if (seed_mesh_with_flip_vertex)
   {
-    size_t index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
-      glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time,
-      std::optional<size_t>(left_voronoi_vertex_id));
+    size_t index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
+      flip->occurrence_time, false, std::optional<size_t>(left_voronoi_vertex_id));
     segment_builder_.segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
       SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
   }
@@ -195,8 +219,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     }
 
     // Same geometric seed as above; alpha warning already emitted from addMeshletVertex for the new meshlet.
-    size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid,
-      glm::dvec3 { flip->position[0], flip->position[1], flip->occurrence_time }, vertex, flip->occurrence_time);
+    size_t new_vertex_index
+      = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid, event_point, vertex, flip->occurrence_time, false);
 
     int he_id_left = segments.front().start_half_edge_id;
     int he_id_right = segments.back().end_half_edge_id;
@@ -251,11 +275,11 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
     const auto& boundary_last_vertices = segment_builder_.boundary_mesh_last_left_and_right_vertex[outer_he_id];
 
-    glm::dvec2 old_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex);
+    glm::dvec2 old_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex, false);
 
     size_t old_boundary_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
     segment_builder_.addBoundaryVertex(
-      glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], flip->occurrence_time }, centroid, opposite_vertex, flip->occurrence_time);
+      glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], flip->occurrence_time }, centroid, opposite_vertex, flip->occurrence_time, false);
 
     size_t he1_id = graph.halfEdge(inner_he_id).next;
     size_t he2_id = graph.halfEdge(he1_id).next;

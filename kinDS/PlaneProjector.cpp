@@ -6,9 +6,9 @@
 
 using namespace kinDS;
 
-static const float EPS = 1e-8f;
+static const double EPS = 1e-8;
 
-PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& planeBToWorld)
+PlaneProjector::PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4& planeBToWorld)
 {
   // Extract plane A
   extractPlaneFromTransform(planeAToWorld, m_oA, m_uA, m_vA);
@@ -21,8 +21,8 @@ PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& 
   m_nB = glm::normalize(glm::cross(m_uB, m_vB));
 
   // Check parallelism
-  glm::vec3 axis = glm::cross(m_nA, m_nB);
-  float axisLen = glm::length(axis);
+  glm::dvec3 axis = glm::cross(m_nA, m_nB);
+  double axisLen = glm::length(axis);
 
   if (axisLen < EPS)
   {
@@ -37,18 +37,18 @@ PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& 
 
     m_axis = axis / axisLen;
 
-    float cosTheta = glm::clamp(glm::dot(m_nA, m_nB), -1.0f, 1.0f);
+    double cosTheta = glm::clamp(glm::dot(m_nA, m_nB), -1.0, 1.0);
     m_angle = std::acos(cosTheta);
 
     // Rotation matrix
-    m_rot = glm::mat3(glm::rotate(glm::mat4(1.0f), m_angle, m_axis));
+    m_rot = glm::dmat3(glm::rotate(glm::dmat4(1.0), m_angle, m_axis));
 
     // Plane offsets
-    float dA = -glm::dot(m_nA, m_oA);
-    float dB = -glm::dot(m_nB, m_oB);
+    double dA = -glm::dot(m_nA, m_oA);
+    double dB = -glm::dot(m_nB, m_oB);
 
     // Point on intersection line
-    float denom = glm::dot(m_nA, glm::cross(m_nB, m_axis));
+    double denom = glm::dot(m_nA, glm::cross(m_nB, m_axis));
 
     assert(std::abs(denom) > EPS);
 
@@ -56,20 +56,20 @@ PlaneProjector::PlaneProjector(const glm::mat4& planeAToWorld, const glm::mat4& 
   }
 }
 
-void PlaneProjector::extractPlaneFromTransform(const glm::mat4& M, glm::vec3& origin, glm::vec3& u, glm::vec3& v)
+void PlaneProjector::extractPlaneFromTransform(const glm::dmat4& M, glm::dvec3& origin, glm::dvec3& u, glm::dvec3& v)
 {
   // Origin
-  origin = glm::vec3(M * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+  origin = glm::dvec3(M * glm::dvec4(0.0, 0.0, 0.0, 1.0));
 
   // Spanning vectors (directions)
-  u = glm::vec3(M * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+  u = glm::dvec3(M * glm::dvec4(1.0, 0.0, 0.0, 0.0));
 
-  v = glm::vec3(M * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
+  v = glm::dvec3(M * glm::dvec4(0.0, 0.0, 1.0, 0.0));
 }
 
-glm::vec3 PlaneProjector::localAToWorld(float a, float b) const { return m_oA + a * m_uA + b * m_vA; }
+glm::dvec3 PlaneProjector::localAToWorld(double a, double b) const { return m_oA + a * m_uA + b * m_vA; }
 
-glm::vec3 PlaneProjector::applyTransform(const glm::vec3& x) const
+glm::dvec3 PlaneProjector::applyTransform(const glm::dvec3& x) const
 {
   if (!m_parallel)
   {
@@ -79,23 +79,23 @@ glm::vec3 PlaneProjector::applyTransform(const glm::vec3& x) const
   else
   {
     // Project along plane normal
-    float t = (glm::dot(m_nB, x) + m_dB) / glm::dot(m_nB, m_nA);
+    double t = (glm::dot(m_nB, x) + m_dB) / glm::dot(m_nB, m_nA);
     return x - t * m_nA;
   }
 }
 
-glm::vec2 PlaneProjector::worldToLocalB(const glm::vec3& x) const
+glm::dvec2 PlaneProjector::worldToLocalB(const glm::dvec3& x) const
 {
-  glm::vec3 w = x - m_oB;
+  glm::dvec3 w = x - m_oB;
 
-  float uu = glm::dot(m_uB, m_uB);
-  float uv = glm::dot(m_uB, m_vB);
-  float vv = glm::dot(m_vB, m_vB);
+  double uu = glm::dot(m_uB, m_uB);
+  double uv = glm::dot(m_uB, m_vB);
+  double vv = glm::dot(m_vB, m_vB);
 
-  float wu = glm::dot(w, m_uB);
-  float wv = glm::dot(w, m_vB);
+  double wu = glm::dot(w, m_uB);
+  double wv = glm::dot(w, m_vB);
 
-  float det = uu * vv - uv * uv;
+  double det = uu * vv - uv * uv;
   //assert(std::abs(det) > EPS);
   if(std::abs(det) < EPS)
   {
@@ -103,15 +103,15 @@ glm::vec2 PlaneProjector::worldToLocalB(const glm::vec3& x) const
     //KINDS_WARNING("Degenerate plane in PlaneProjector");
   }
 
-  float c = (wu * vv - wv * uv) / det;
-  float d = (wv * uu - wu * uv) / det;
+  double c = (wu * vv - wv * uv) / det;
+  double d = (wv * uu - wu * uv) / det;
 
-  return glm::vec2(c, d);
+  return glm::dvec2(c, d);
 }
 
-glm::vec2 PlaneProjector::project(const glm::vec2& v) const
+glm::dvec2 PlaneProjector::project(const glm::dvec2& v) const
 {
-  glm::vec3 xA = localAToWorld(v.x, v.y);
-  glm::vec3 xW = applyTransform(xA);
+  glm::dvec3 xA = localAToWorld(v.x, v.y);
+  glm::dvec3 xW = applyTransform(xA);
   return worldToLocalB(xW);
 }

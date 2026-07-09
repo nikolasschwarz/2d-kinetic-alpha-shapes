@@ -73,6 +73,9 @@ StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_point
   , branch_indices(branch_indices)
   , strands_by_branch_id(strands_by_branch_id)
 {
+  // Snap all profile transforms to similarities before anything derived from them (normals, projections) is computed.
+  conditionProfileTransforms();
+
   // compute height
   for (const auto& pts : support_points)
   {
@@ -227,7 +230,7 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
   PlaneProjector plane_projector(
     transforms_by_height_and_branch[index][reference_branch], transforms_by_height_and_branch[index][actual_branch]);
 
-  auto result = plane_projector.project(glm::vec2(point[0], point[1]));
+  glm::dvec2 result = plane_projector.project(glm::dvec2(point[0], point[1]));
   return glm::dvec2 { result.x, result.y };
 }
 
@@ -651,6 +654,59 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
   }
 
   return tree;
+}
+
+void StrandTree::conditionProfileTransforms()
+{
+  for (auto& transforms_at_height : transforms_by_height_and_branch)
+  {
+    for (glm::dmat4& transform : transforms_at_height)
+    {
+      // Columns 0 and 2 are the in-plane profile axes; column 1 is the plane normal; column 3 is the origin.
+      const glm::dvec3 u(transform[0]);
+      const glm::dvec3 normal(transform[1]);
+      const glm::dvec3 v(transform[2]);
+
+      const double lu = glm::length(u);
+      const double lv = glm::length(v);
+      if (lu <= 0.0 || lv <= 0.0)
+      {
+        continue;
+      }
+
+      // Symmetric (minimal-rotation) orthonormalization of the in-plane axes: rotate u and v by equal and opposite
+      // amounts about their bisector until they are orthogonal, then give both the geometric-mean length so the
+      // in-plane block becomes scalar * orthonormal.
+      const glm::dvec3 a = u / lu;
+      const glm::dvec3 b = v / lv;
+      const glm::dvec3 sum = a + b; // bisector direction
+      const glm::dvec3 diff = a - b; // in-plane, perpendicular to the bisector (|a| == |b|)
+      const double sum_len = glm::length(sum);
+      const double diff_len = glm::length(diff);
+      if (sum_len <= 1e-12 || diff_len <= 1e-12)
+      {
+        continue;
+      }
+
+      const glm::dvec3 bisector = sum / sum_len;
+      const glm::dvec3 perp = diff / diff_len;
+      const double scale = std::sqrt(lu * lv); // representative in-plane scale, preserved per branch
+
+      // e_u = (bisector + perp)/sqrt(2) stays near a, e_v = (bisector - perp)/sqrt(2) stays near b; both orthonormal.
+      const glm::dvec3 new_u = scale * glm::normalize(bisector + perp);
+      const glm::dvec3 new_v = scale * glm::normalize(bisector - perp);
+
+      // Give the normal the same length as the in-plane axes so the whole 3x3 is scalar * orthogonal. The normal does
+      // not affect point positions (it is zeroed for points), but this keeps normal transforms consistent too.
+      const double ln = glm::length(normal);
+      const glm::dvec3 unit_normal = (ln > 0.0) ? normal / ln : glm::normalize(glm::cross(new_u, new_v));
+      const glm::dvec3 new_normal = scale * unit_normal;
+
+      transform[0] = glm::dvec4(new_u, transform[0].w);
+      transform[1] = glm::dvec4(new_normal, transform[1].w);
+      transform[2] = glm::dvec4(new_v, transform[2].w);
+    }
+  }
 }
 
 void StrandTree::computeNormalTransforms()

@@ -40,6 +40,39 @@ class SegmentBuilderSeparationCallback;
 class SegmentBuilder : public KineticDelaunay::CallbackManager
 {
  public:
+  class MetadataBuilder
+  {
+   public:
+    static MetadataBuilder fromObject(const std::string& metadata);
+
+    MetadataBuilder& addString(const char* key, const char* value);
+    MetadataBuilder& addString(const char* key, const std::string& value);
+    MetadataBuilder& addSize(const char* key, size_t value);
+    MetadataBuilder& addInt(const char* key, int value);
+    MetadataBuilder& addDouble(const char* key, double value);
+    MetadataBuilder& addBool(const char* key, bool value);
+    MetadataBuilder& addRaw(const char* key, const std::string& raw_json_value);
+    MetadataBuilder& ensureString(const char* key, const char* value);
+    MetadataBuilder& ensureBool(const char* key, bool value);
+    std::string build() const;
+
+   private:
+    bool hasKey(const char* key) const;
+    std::string raw_body_;
+    std::vector<std::pair<std::string, std::string>> fields_;
+  };
+
+  class ScopedMetadataCallbackPhase
+  {
+   public:
+    ScopedMetadataCallbackPhase(SegmentBuilder& segment_builder, const char* callback_phase);
+    ~ScopedMetadataCallbackPhase();
+
+   private:
+    SegmentBuilder& segment_builder_;
+    std::string previous_phase_;
+  };
+
   enum class BoundaryEventType
   {
     Init,
@@ -65,7 +98,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
     BoundarySegmentAction segment_action,
     const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing, const char* pos,
-    const char* op = nullptr) const;
+    const char* op = nullptr, const char* source = nullptr) const;
 
   /// JSON for Voronoi-edge strip meshlet faces (quads emitted as two triangles in @ref finishMesh, etc.).
   std::string composeRegularStripFaceMetadata(double kinetic_time, size_t voronoi_edge_id, size_t even_half_edge_id,
@@ -102,6 +135,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs;
   std::vector<MeshStructure::SegmentMeshPair> intersection_segment_mesh_pairs;
   std::vector<MeshStructure::IntersectionMeshPairMetadata> intersection_mesh_pair_metadata;
+  std::string metadata_callback_phase_;
   std::vector<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
@@ -426,7 +460,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   size_t addBoundaryTriangle(size_t u, size_t v, size_t w);
 
-  size_t addBoundaryVertex(glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t);
+  size_t addBoundaryVertex(
+    glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift);
 
   size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}",
     int material_id = RegularMeshletMaterialId);
@@ -442,7 +477,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// @p strand_id Delaunay site id for transform frame lookup; may be a Voronoi vertex id when it matches
   /// @p meshlet_voronoi_vertex_for_alpha_check (resolved to an adjacent site automatically).
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
-    const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t,
+    const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
     const std::optional<glm::dvec3>& debug_color = std::nullopt);
 
@@ -531,7 +566,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   int closingMeshAppendVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position,
-    std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt);
+    bool includes_virtual_shift, std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt);
 
   /**
    * @brief Finds the CrossingData intersection record for a Voronoi/Delaunay edge pair.

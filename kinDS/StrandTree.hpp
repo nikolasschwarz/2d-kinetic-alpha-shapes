@@ -114,6 +114,15 @@ class StrandTree
  private:
   void computeNormalTransforms();
 
+  /**
+   * Preprocessing: snap every profile-to-world transform to a similarity (orthogonal * scalar). The source frames
+   * carry a small in-plane shear and length anisotropy between the two profile axes; left unconditioned this injects
+   * skew whenever points are projected between branch frames (see @ref PlaneProjector). Each transform's basis is
+   * replaced by the nearest orthogonal, equal-length frame while preserving the plane, the origin, and the branch's
+   * own scale.
+   */
+  void conditionProfileTransforms();
+
   glm::dvec2 getPointTransformedAtSection(
     size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const;
 

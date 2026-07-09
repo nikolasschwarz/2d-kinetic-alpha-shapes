@@ -13,6 +13,7 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
   const size_t index = section->section_id;
 
   auto& graph = segment_builder_.kin_del.getGraph();
@@ -101,6 +102,7 @@ void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
 
   const size_t index = section->section_id;
   auto& graph = segment_builder_.kin_del.getGraph();

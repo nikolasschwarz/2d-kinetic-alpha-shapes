@@ -22,6 +22,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
 
   const size_t strand_id = sub->strand_id;
   const double t = sub->occurrence_time;
@@ -348,7 +349,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
 
     glm::dvec3 vertex = segment_builder_.computeVoronoiVertex(adjacent_he_id, t);
     size_t new_vertex_index = segment_builder_.addMeshletVertex(
-      adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t, std::optional<size_t>(voronoi_vertex_id), adj_vertex_meta);
+      adjacent_mesh, boundary_polygon, centroid, vertex, strand_id, t, false, std::optional<size_t>(voronoi_vertex_id), adj_vertex_meta);
     auto& segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[adjacent_segment_mesh_pair_index];
 
     if (!segments.empty())
@@ -412,6 +413,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
 
 void SegmentBuilderSubdivisionCallback::afterEvent(KineticDelaunay::Event& e)
 {
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
   (void)e;
 }
 } // namespace kinDS

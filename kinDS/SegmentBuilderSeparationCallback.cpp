@@ -82,6 +82,7 @@ void SegmentBuilderSeparationCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
 
   writeSeparationVisualDebugSvg(*separation, "before");
 }
@@ -93,6 +94,7 @@ void SegmentBuilderSeparationCallback::afterEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
 
   writeSeparationVisualDebugSvg(*separation, "after");
 }
