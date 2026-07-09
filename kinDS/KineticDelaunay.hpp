@@ -470,9 +470,6 @@ class KineticDelaunay
   /// Smallest live strand id sharing @p strand_id's runtime branch; used for transform frame lookup.
   size_t representativeStrandIdForRuntimeBranch(size_t strand_id) const;
 
-  /// Strand id whose input branch should transform a mesh vertex tagged with @p strand_id.
-  size_t representativeStrandIdForMeshTransform(size_t strand_id) const;
-
   /// One shared reference branch for all @p strand_ids (e.g. flip quadrilateral vertices).
   size_t getSharedReferenceBranchForStrands(const std::vector<size_t>& strand_ids, double branch_lookup_time) const;
 

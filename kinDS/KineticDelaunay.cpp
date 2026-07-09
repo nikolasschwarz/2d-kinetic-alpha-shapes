@@ -2606,32 +2606,6 @@ size_t KineticDelaunay::representativeStrandIdForRuntimeBranch(size_t strand_id)
   return representative.value_or(strand_id);
 }
 
-size_t KineticDelaunay::representativeStrandIdForMeshTransform(size_t strand_id) const
-{
-  if (strand_id == static_cast<size_t>(-1))
-  {
-    throw std::runtime_error("representativeStrandIdForMeshTransform: invalid strand id.");
-  }
-
-  // During a pending split, the retained/original component already lives in its input branch's profile frame.
-  // Only mesh vertices use this shortcut; kinetic predicates and graph updates still use the normal runtime-frame path.
-  if (!isGraphRetriangulatedForComponents() && strand_id < component_data.component_map.size()
-    && !isDummyBoundary(strand_id))
-  {
-    const size_t component_id = component_data.component_map[strand_id];
-    for (const auto& entry : pending_branch_splits_.by_parent_)
-    {
-      const PendingBranchSplit& split = entry.second;
-      if (!split.split_component_ids.empty() && split.split_component_ids.front() == component_id)
-      {
-        return strand_id;
-      }
-    }
-  }
-
-  return representativeStrandIdForRuntimeBranch(strand_id);
-}
-
 namespace
 {
 size_t runtimeBranchSectionIndex(const KineticDelaunay& kd, double t)

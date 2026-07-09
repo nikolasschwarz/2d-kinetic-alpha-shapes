@@ -3403,7 +3403,7 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(
   glm::dvec2 raw_uv { angle / (2.0 * glm::pi<double>()), vertex[2] };
   if (create_transformed_mesh)
   {
-    vertex = kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
+    vertex = transformFromReferenceBranchToObjectSpace(vertex, strand_id, t);
   }
 
   const std::string metadata = store_mesh_metadata
@@ -3501,16 +3501,18 @@ void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
                                    << ", " << position.z << ").");
 }
 
-glm::dvec3 SegmentBuilder::transformFromRuntimeBranchToObjectSpace(
+glm::dvec3 SegmentBuilder::transformFromReferenceBranchToObjectSpace(
   glm::dvec3 vertex, size_t strand_id, double t) const
 {
   if (strand_id == static_cast<size_t>(-1))
   {
-    throw std::runtime_error("transformFromRuntimeBranchToObjectSpace: invalid strand id.");
+    throw std::runtime_error("transformFromReferenceBranchToObjectSpace: invalid strand id.");
   }
 
-  const size_t representative_strand_id = kin_del.representativeStrandIdForMeshTransform(strand_id);
-  return kin_del.getStrandTree().transformToObjectSpace(vertex, representative_strand_id, t);
+  const size_t reference_branch = kin_del.getReferenceBranch(strand_id, t);
+  const std::vector<size_t> branch_indices
+    = kin_del.getStrandTree().resolvedBranchIndicesForReferenceBranch(reference_branch);
+  return kin_del.getStrandTree().transformToObjectSpace(vertex, t, branch_indices);
 }
 
 size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
@@ -3537,7 +3539,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   const glm::dvec2 profile_xy(vertex.x, vertex.y);
   if (create_transformed_mesh)
   {
-    vertex = transformFromRuntimeBranchToObjectSpace(vertex, strand_id, t);
+    vertex = transformFromReferenceBranchToObjectSpace(vertex, strand_id, t);
   }
   warn_degenerate_or_non_finite(vertex, "stored");
   if (meshlet_voronoi_vertex_for_alpha_check.has_value())

@@ -291,7 +291,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// stay empty.
   bool intersection_strip_flexible_vertices_enabled = true;
 
-  glm::dvec3 transformFromRuntimeBranchToObjectSpace(glm::dvec3 vertex, size_t strand_id, double t) const;
+  glm::dvec3 transformFromReferenceBranchToObjectSpace(glm::dvec3 vertex, size_t strand_id, double t) const;
 
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
