@@ -3,6 +3,7 @@
 #include "Polynomial.hpp"
 #include "StrandTree.hpp"
 
+#include <cmath>
 #include <glm/geometric.hpp>
 
 namespace kinDS
@@ -86,6 +87,15 @@ static Polynomial angularBisector(
 {
   return angularBisectorHelper(voronoi_homogeneous, a, c, c_prime)
     - angularBisectorHelper(voronoi_homogeneous, a, c_prime, c);
+}
+
+/// Upper fraction bound for event-root filtering; matches @ref eventIntervalUpperBound in absolute time.
+constexpr double kEventIntervalFractionUpperBound = 1.0;
+
+/// Absolute-time upper bound of the section interval events are computed for: [t, result].
+inline double eventIntervalUpperBound(double t)
+{
+  return std::floor(t) + kEventIntervalFractionUpperBound;
 }
 } // namespace kinDS
 

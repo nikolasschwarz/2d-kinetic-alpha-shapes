@@ -1,13 +1,17 @@
 #include "KineticDelaunayRadiusEvent.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <sstream>
+#include <utility>
 #include <vector>
 
-using namespace kinDS;
-
 #include "KineticDelaunayEventPredicates.hpp"
+
+using namespace kinDS;
 
 namespace
 {
@@ -16,6 +20,33 @@ struct SignedRadiusRoot
   double fraction = 0.0;
   bool target_inside = false;
 };
+
+std::string formatSignLabel(double sign)
+{
+  return sign > 0.0 ? "+" : "-";
+}
+
+std::string formatSignChange(double sign_before, double sign_after)
+{
+  return "(" + formatSignLabel(sign_before) + " => " + formatSignLabel(sign_after) + ")";
+}
+
+std::pair<double, double> signChangeAtRoot(const Polynomial& event_trigger, double root,
+  const std::vector<double>& sorted_zeros)
+{
+  const auto root_it = std::lower_bound(sorted_zeros.begin(), sorted_zeros.end(), root);
+  const size_t root_index = static_cast<size_t>(root_it - sorted_zeros.begin());
+
+  const double left_bound = root_index == 0 ? 0.0 : sorted_zeros[root_index - 1];
+  const double right_bound
+    = root_index + 1 < sorted_zeros.size() ? sorted_zeros[root_index + 1] : 1.0;
+
+  const double before_test = (left_bound + root) * 0.5;
+  const double after_test = (root + right_bound) * 0.5;
+  const double sign_before = event_trigger(before_test) > 0.0 ? 1.0 : -1.0;
+  const double sign_after = event_trigger(after_test) > 0.0 ? 1.0 : -1.0;
+  return { sign_before, sign_after };
+}
 
 std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, double min_fraction)
 {
@@ -29,7 +60,7 @@ std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, d
   std::vector<double> filtered_sorted_zeros;
   for (double root : zeros)
   {
-    if (!std::isnan(root) && root > min_fraction && root <= 1.0)
+    if (!std::isnan(root) && root > min_fraction && root <= kEventIntervalFractionUpperBound)
     {
       filtered_sorted_zeros.push_back(root);
     }
@@ -70,7 +101,163 @@ std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, d
   }
   return roots;
 }
+
+void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t section, double schedule_t,
+  const std::array<size_t, 3>& strand_ids, const std::array<Trajectory<2>, 3>& trajectories)
+{
+  const std::vector<size_t> event_strand_ids = { strand_ids[0], strand_ids[1], strand_ids[2] };
+  const double event_interval_upper_bound = eventIntervalUpperBound(schedule_t);
+  const size_t branch_section_index = kd.inputBranchSectionIndexAtIntervalUpperBound(event_interval_upper_bound);
+  const std::vector<size_t> distinct_input_branches
+    = kd.collectDistinctInputBranchesForEventTrigger(event_strand_ids, event_interval_upper_bound);
+  const bool use_shared_transformed_frame
+    = kd.eventTriggerUsesSharedTransformedFrame(event_strand_ids, event_interval_upper_bound);
+  std::ostringstream branch_summary;
+  branch_summary << "  event_trigger_strands=" << event_strand_ids[0] << "," << event_strand_ids[1] << ","
+                 << event_strand_ids[2] << " schedule_t=" << schedule_t
+                 << " event_interval_upper_bound=" << event_interval_upper_bound
+                 << " branch_section_index=" << branch_section_index << " distinct_input_branches=[";
+  for (size_t i = 0; i < distinct_input_branches.size(); ++i)
+  {
+    if (i > 0)
+    {
+      branch_summary << ',';
+    }
+    branch_summary << distinct_input_branches[i];
+  }
+  branch_summary << "] uses_shared_transformed_frame=" << (use_shared_transformed_frame ? "true" : "false");
+  if (use_shared_transformed_frame)
+  {
+    branch_summary << " shared_reference_branch="
+                   << kd.sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound);
+  }
+  branch_summary << " frame_policy=" << (use_shared_transformed_frame ? "shared_transformed" : "local_support");
+  KINDS_INFO(branch_summary.str());
+
+  const StrandTree& tree = kd.getStrandTree();
+  for (size_t vertex_index = 0; vertex_index < 3; ++vertex_index)
+  {
+    const size_t strand_id = strand_ids[vertex_index];
+    const size_t input_branch_at_section = tree.getBranchIndex(strand_id, section);
+    const glm::dvec2 raw_section_start = tree.getSupportPoints(strand_id)[section];
+    const glm::dvec2 raw_section_end = tree.getSupportPoints(strand_id)[section + 1];
+    KINDS_INFO("  trajectory[" << vertex_index << "] strand=" << strand_id << " input_branch_at_section="
+                               << input_branch_at_section << " raw_support_at_section=(" << raw_section_start.x
+                               << "," << raw_section_start.y << ") raw_support_at_section_end=(" << raw_section_end.x
+                               << "," << raw_section_end.y << ")");
+
+    for (double eval_t : { static_cast<double>(section), static_cast<double>(section) + 1.0 })
+    {
+      const double fraction = eval_t - static_cast<double>(section);
+      const double x = trajectories[vertex_index][0](fraction);
+      const double y = trajectories[vertex_index][1](fraction);
+      std::ostringstream line;
+      line << std::setprecision(17) << "  trajectory[" << vertex_index << "] strand=" << strand_id << " at t="
+           << eval_t << " fraction=" << fraction << " pos=(" << x << "," << y << ")";
+      KINDS_INFO(line.str());
+    }
+  }
+}
+
+void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t face_id, size_t he_id, double t,
+  double min_fraction, Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
+  const std::array<Trajectory<2>, 3>& trajectories)
+{
+  if (!kd.diagnosticsEnabled() || face_id != KineticDelaunay::kDiagnosticsMonitoredFaceId)
+  {
+    return;
+  }
+
+  const size_t section = static_cast<size_t>(t);
+  const double event_interval_upper_bound = eventIntervalUpperBound(t);
+  std::ostringstream header;
+  header << "Radius trigger roots monitor (face " << face_id << ", he_id=" << he_id << ", schedule_t=" << t
+         << ", event_interval_upper_bound=" << event_interval_upper_bound << ", section=" << section
+         << ", min_fraction=" << min_fraction << ", cutoff=" << kd.getCutoff()
+         << ", trigger_degree=" << event_trigger.degree() << ")";
+  KINDS_INFO(header.str());
+  logMonitoredFaceRadiusTrajectories(kd, section, t, strand_ids, trajectories);
+
+  if (event_trigger.degree() == -1)
+  {
+    KINDS_INFO("  trigger empty (degree -1)");
+    return;
+  }
+
+  event_trigger.trim();
+  const auto zeros = event_trigger.realRoots();
+  if (zeros.empty())
+  {
+    KINDS_INFO("  no real roots");
+    return;
+  }
+
+  std::vector<double> sorted_zeros;
+  sorted_zeros.reserve(zeros.size());
+  for (double root : zeros)
+  {
+    if (!std::isnan(root))
+    {
+      sorted_zeros.push_back(root);
+    }
+  }
+  std::sort(sorted_zeros.begin(), sorted_zeros.end());
+
+  for (size_t root_index = 0; root_index < zeros.size(); ++root_index)
+  {
+    const double root = zeros[root_index];
+    std::ostringstream line;
+    line << std::setprecision(17) << "  root[" << root_index << "] fraction=" << root << " absolute_t="
+         << (root + static_cast<double>(section));
+
+    if (std::isnan(root))
+    {
+      line << " filtered (nan)";
+      KINDS_INFO(line.str());
+      continue;
+    }
+
+    const auto [sign_before, sign_after] = signChangeAtRoot(event_trigger, root, sorted_zeros);
+    line << " sign_change=" << formatSignChange(sign_before, sign_after);
+
+    if (root <= min_fraction)
+    {
+      line << " filtered (fraction <= min_fraction)";
+      KINDS_INFO(line.str());
+      continue;
+    }
+    if (root > kEventIntervalFractionUpperBound)
+    {
+      line << " filtered (fraction > " << kEventIntervalFractionUpperBound << ")";
+      KINDS_INFO(line.str());
+      continue;
+    }
+
+    if (sign_before == sign_after)
+    {
+      line << " filtered (no_sign_change)";
+      KINDS_INFO(line.str());
+      continue;
+    }
+
+    const bool target_inside = sign_before > 0.0 && sign_after < 0.0;
+    line << " enqueued target_inside=" << (target_inside ? "true" : "false");
+    KINDS_INFO(line.str());
+  }
+}
 } // namespace
+
+void KineticDelaunay::setDiagnosticsEnabled(bool enabled) { diagnostics_enabled_ = enabled; }
+
+bool KineticDelaunay::diagnosticsEnabled() const { return diagnostics_enabled_; }
+
+void KineticDelaunay::logRadiusEventTriggerRoots(size_t face_id, size_t he_id, double t, double min_fraction,
+  Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
+  const std::array<Trajectory<2>, 3>& trajectories) const
+{
+  logRadiusTriggerRootsForMonitoredFace(
+    *this, face_id, he_id, t, min_fraction, std::move(event_trigger), strand_ids, trajectories);
+}
 
 void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
 {
@@ -103,7 +290,11 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     return;
   }
 
-  const auto piece_poly = [&](size_t strand_id) { return kd->getSitePiecePolynomial(strand_id, section, t); };
+  const std::vector<size_t> event_strand_ids
+    = { static_cast<size_t>(u), static_cast<size_t>(v), static_cast<size_t>(w) };
+  const auto piece_poly = [&](size_t strand_id) {
+    return kd->getSitePiecePolynomialForEventStrands(strand_id, section, t, event_strand_ids);
+  };
 
   std::vector<Trajectory<2>> trajs;
 
@@ -114,6 +305,13 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
   Polynomial event_trigger
     = circumradiusEquals(
       trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], kd->cutoff);
+
+  if (kd->diagnosticsEnabled() && face_id == KineticDelaunay::kDiagnosticsMonitoredFaceId)
+  {
+    kd->logRadiusEventTriggerRoots(face_id, he_id, t, fraction, event_trigger,
+      { static_cast<size_t>(u), static_cast<size_t>(v), static_cast<size_t>(w) },
+      { trajs[0], trajs[1], trajs[2] });
+  }
 
   auto event_times = findSignedRadiusRoots(event_trigger, fraction);
   for (const auto& event_time : event_times)

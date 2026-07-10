@@ -68,12 +68,21 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     VoronoiMesh& mesh = segment_builder_.meshes[segment_mesh_pair_index];
     const auto& last_segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
+    const auto flip_vertex_metadata = [](size_t voronoi_vertex_id)
+    {
+      return SegmentBuilder::MetadataBuilder()
+        .addString("event_type", "flip_event")
+        .addString("source", "Voronoi vertex")
+        .addSize("voronoi_vertex_id", voronoi_vertex_id)
+        .build();
+    };
     if (!last_segments.empty())
     {
       const size_t pre_even_flip_he = flip->half_edge_id & ~1;
       const size_t pre_left_voronoi_vertex_id = graph.halfEdge(pre_even_flip_he).face;
       size_t event_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
-        flip->occurrence_time, false, std::optional<size_t>(pre_left_voronoi_vertex_id));
+        flip->occurrence_time, false, std::optional<size_t>(pre_left_voronoi_vertex_id),
+        flip_vertex_metadata(pre_left_voronoi_vertex_id));
       size_t last_left = last_segments.front().mesh_start_vertex_id;
       size_t last_right = last_segments.back().mesh_end_vertex_id;
       // create one triangle to the event point
@@ -149,6 +158,12 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
   auto& graph = segment_builder_.kin_del.getGraph();
 
+  if (segment_builder_.diagnostics)
+  {
+    segment_builder_.kin_del.validateFlipAdjacentFaceInsideConsistency(flip->half_edge_id, flip->occurrence_time);
+    segment_builder_.logDiagnosticsMonitoredFaceInsideState(flip->occurrence_time, "flip_event");
+  }
+
   int vertex = graph.halfEdge(flip->half_edge_id).origin;
   if (vertex == -1)
   {
@@ -182,6 +197,18 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   const bool seed_mesh_with_flip_vertex = left_inside && flip_pos_finite;
   const glm::dvec3 event_point
     = unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
+  const auto flip_vertex_metadata = [](size_t voronoi_vertex_id)
+  {
+    return SegmentBuilder::MetadataBuilder()
+      .addString("event_type", "flip_event")
+      .addString("source", "Voronoi vertex")
+      .addSize("voronoi_vertex_id", voronoi_vertex_id)
+      .build();
+  };
+  const std::string generic_flip_vertex_metadata = SegmentBuilder::MetadataBuilder()
+                                                     .addString("event_type", "flip_event")
+                                                     .addString("source", "site")
+                                                     .build();
 
   // For now also create a mesh, but this might be changed later
   VoronoiMesh mesh;
@@ -191,7 +218,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   if (seed_mesh_with_flip_vertex)
   {
     size_t index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
-      flip->occurrence_time, false, std::optional<size_t>(left_voronoi_vertex_id));
+      flip->occurrence_time, false, std::optional<size_t>(left_voronoi_vertex_id),
+      flip_vertex_metadata(left_voronoi_vertex_id));
     segment_builder_.segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
       SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
   }
@@ -220,7 +248,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
 
     // Same geometric seed as above; alpha warning already emitted from addMeshletVertex for the new meshlet.
     size_t new_vertex_index
-      = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid, event_point, vertex, flip->occurrence_time, false);
+      = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid, event_point, vertex,
+        flip->occurrence_time, false, std::nullopt, generic_flip_vertex_metadata);
 
     int he_id_left = segments.front().start_half_edge_id;
     int he_id_right = segments.back().end_half_edge_id;

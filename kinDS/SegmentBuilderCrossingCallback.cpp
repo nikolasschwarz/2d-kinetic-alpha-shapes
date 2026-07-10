@@ -5,6 +5,7 @@
 #include "SegmentBuilderVisualDebug.hpp"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -83,7 +84,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     return;
   }
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
-  auto& graph = segment_builder_.kin_del.getGraph();
+  const HalfEdgeDelaunayGraph& graph = segment_builder_.kin_del.getGraph();
 
   // `KineticDelaunay::CrossingEvent::handleEvent` already ran `updateAfterCrossingEvent`, which erases/inserts
   // `edge_intersections` records. Re-resolve iterators for strips incident to this Voronoi vertex before mesh edits.
@@ -113,7 +114,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
   const glm::dvec3 voronoi_vertex_position
     = segment_builder_.kin_del.computeVoronoiVertexClampedInfinity(
       graph.face(voronoi_vertex_id).half_edges[0], crossing->occurrence_time, false);
-  const auto half_edges = graph.face(voronoi_vertex_id).half_edges;
+  const std::array<size_t, 3> half_edges = graph.face(voronoi_vertex_id).half_edges;
   if (!segment_builder_.kin_del.isOnComponentBoundary(crossing->half_edge_id))
   {
     write_crossing_visual_debug_svg(runtime_branch_id);
@@ -122,20 +123,21 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
   // Boundary-interval crossing handling on the crossed Delaunay edge.
   const size_t crossed_d_edge = crossing->half_edge_id / 2;
-  const auto& crossing_data_after = segment_builder_.kin_del.getCrossingData();
+  const KineticDelaunay::CrossingData& crossing_data_after = segment_builder_.kin_del.getCrossingData();
   if (crossed_d_edge < crossing_data_after.delaunay_edge_intersections.size() && !crossing_edge_snapshot_.empty())
   {
-    const auto& d_refs_after = crossing_data_after.delaunay_edge_intersections[crossed_d_edge];
+    const KineticDelaunay::CrossingData::EdgeIntersectionRefListSlots::RefList& d_refs_after
+      = crossing_data_after.delaunay_edge_intersections[crossed_d_edge];
     std::vector<size_t> after_voronoi_edge_ids;
     after_voronoi_edge_ids.reserve(d_refs_after.size());
-    for (const auto& r : d_refs_after)
+    for (KineticDelaunay::CrossingData::EdgeIntersectionRef r : d_refs_after)
     {
       after_voronoi_edge_ids.push_back(r->voronoi_edge_id);
     }
 
     std::vector<size_t> old_voronoi_edge_ids;
     old_voronoi_edge_ids.reserve(crossing_edge_snapshot_.size());
-    for (const auto& s : crossing_edge_snapshot_)
+    for (const CrossingEdgeSnapshotEntry& s : crossing_edge_snapshot_)
     {
       old_voronoi_edge_ids.push_back(s.voronoi_edge_id);
     }
@@ -149,7 +151,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     std::vector<std::pair<size_t, KineticDelaunay::CrossingData::EdgeIntersectionRef>> inserted;
     for (size_t i = 0; i < crossing_edge_snapshot_.size(); ++i)
     {
-      const auto& old_ref = crossing_edge_snapshot_[i];
+      const CrossingEdgeSnapshotEntry& old_ref = crossing_edge_snapshot_[i];
       if (std::find(after_voronoi_edge_ids.begin(), after_voronoi_edge_ids.end(), old_ref.voronoi_edge_id)
         == after_voronoi_edge_ids.end())
       {
@@ -158,9 +160,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     }
     for (size_t i = 0; i < d_refs_after.size(); ++i)
     {
-      auto ref = d_refs_after.begin();
+      KineticDelaunay::CrossingData::EdgeIntersectionRefListSlots::RefList::const_iterator ref = d_refs_after.begin();
       std::advance(ref, static_cast<long long>(i));
-      auto r = *ref;
+      KineticDelaunay::CrossingData::EdgeIntersectionRef r = *ref;
       if (std::find(old_voronoi_edge_ids.begin(), old_voronoi_edge_ids.end(), r->voronoi_edge_id) == old_voronoi_edge_ids.end())
       {
         inserted.emplace_back(i, r);
@@ -169,8 +171,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
     const glm::dvec3 event_pos = voronoi_vertex_position;
     const size_t component_id = segment_builder_.kin_del.component_data.component_map[graph.destination(crossing->half_edge_id)];
-    auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-    const auto centroid_local = segment_builder_.kin_del.component_data.component_centroids[component_id];
+    std::vector<BoundaryPoint>& boundary_polygon
+      = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
+    const glm::dvec2 centroid_local = segment_builder_.kin_del.component_data.component_centroids[component_id];
     const bool boundary_even_he_is_outside = segment_builder_.kin_del.isOnComponentBoundaryOutside(2 * crossed_d_edge);
     const int inside_boundary_he_id
       = boundary_even_he_is_outside ? static_cast<int>(2 * crossed_d_edge + 1) : static_cast<int>(2 * crossed_d_edge);
@@ -194,13 +197,14 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       {
         return;
       }
-      auto& mesh = segment_builder_.intersection_meshes[pair_idx];
-      auto& segs = segment_builder_.intersection_mesh_pair_last_left_and_right_vertex[pair_idx];
+      VoronoiMesh& mesh = segment_builder_.intersection_meshes[pair_idx];
+      std::list<SegmentBuilder::MeshingData>& segs
+        = segment_builder_.intersection_mesh_pair_last_left_and_right_vertex[pair_idx];
       if (segs.empty())
       {
         return;
       }
-      auto& seg = segs.front();
+      SegmentBuilder::MeshingData& seg = segs.front();
       if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
       {
         return;
@@ -213,7 +217,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       const size_t he_odd = he_even + 1;
       if (pair_idx < segment_builder_.intersection_mesh_pair_metadata.size() && he_odd < graph.halfEdgeSlotCount())
       {
-        const auto& pair_meta = segment_builder_.intersection_mesh_pair_metadata[pair_idx];
+        const MeshStructure::IntersectionMeshPairMetadata& pair_meta
+          = segment_builder_.intersection_mesh_pair_metadata[pair_idx];
         const int even_origin = graph.halfEdge(he_even).origin;
         const int odd_origin = graph.halfEdge(he_odd).origin;
         if (even_origin >= 0 && odd_origin >= 0)
@@ -272,9 +277,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       const std::string crossing_update_meta_case = with_crossing_case(crossing_update_meta, "merge_2_to_1");
       // Case 1 (merge): two removed, one inserted. Middle strip is whichever `next` of one equals the other's `prev`;
       // `removed` order does not matter.
-      auto inserted_ref = inserted.front().second;
-      const auto& s0 = removed[0].snapshot;
-      const auto& s1 = removed[1].snapshot;
+      KineticDelaunay::CrossingData::EdgeIntersectionRef inserted_ref = inserted.front().second;
+      const CrossingEdgeSnapshotEntry& s0 = removed[0].snapshot;
+      const CrossingEdgeSnapshotEntry& s1 = removed[1].snapshot;
 
       // The completed strip is the mesh pair referenced from *both* removed crossings on the side between them.
       // The merged crossing must inherit only the outer neighbour links.
@@ -323,11 +328,14 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       KINDS_DEBUG("Boundary crossing case: split_1_to_2 on de=" << crossed_d_edge << " t=" << crossing->occurrence_time);
       const std::string crossing_update_meta_case = with_crossing_case(crossing_update_meta, "split_1_to_2");
       // Case 2 (split): one removed, two inserted — canonical (start,end) is adjacency in delaunay_edge_intersections.
-      const auto& d_list_split = crossing_data_after.delaunay_edge_intersections[crossed_d_edge];
+      const KineticDelaunay::CrossingData::EdgeIntersectionRefListSlots::RefList& d_list_split
+        = crossing_data_after.delaunay_edge_intersections[crossed_d_edge];
       const KineticDelaunay::CrossingData::EdgeIntersectionRef r0 = inserted[0].second;
       const KineticDelaunay::CrossingData::EdgeIntersectionRef r1 = inserted[1].second;
-      const auto it0 = std::find(d_list_split.begin(), d_list_split.end(), r0);
-      const auto it1 = std::find(d_list_split.begin(), d_list_split.end(), r1);
+      const KineticDelaunay::CrossingData::EdgeIntersectionRefListSlots::RefList::const_iterator it0
+        = std::find(d_list_split.begin(), d_list_split.end(), r0);
+      const KineticDelaunay::CrossingData::EdgeIntersectionRefListSlots::RefList::const_iterator it1
+        = std::find(d_list_split.begin(), d_list_split.end(), r1);
       if (it0 == d_list_split.end() || it1 == d_list_split.end())
       {
         std::ostringstream oss;
@@ -355,7 +363,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         throw std::runtime_error(oss.str());
       }
 
-      const auto& old = removed[0].snapshot;
+      const CrossingEdgeSnapshotEntry& old = removed[0].snapshot;
 
       // Outer topology: strips that met the old crossing keep the same mesh-pair ids on the open sides of the split.
       start_ref->prev_segment_mesh_pair_index = old.prev_pair_idx;
@@ -391,16 +399,17 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
   }
 
   size_t component_id = segment_builder_.kin_del.component_data.component_map[graph.destination(inside_he_id)];
-  auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-  auto centroid = segment_builder_.kin_del.component_data.component_centroids[component_id];
+  std::vector<BoundaryPoint>& boundary_polygon
+    = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
+  const glm::dvec2 centroid = segment_builder_.kin_del.component_data.component_centroids[component_id];
 
   for (size_t voronoi_he_id : half_edges)
   {
     const size_t strip_voronoi_edge_id = (voronoi_he_id & ~1) / 2;
     const size_t even_id = voronoi_he_id & ~static_cast<size_t>(1);
     const size_t odd_id = even_id + 1;
-    const auto& he_even = graph.halfEdge(even_id);
-    const auto& he_odd = graph.halfEdge(odd_id);
+    const HalfEdgeDelaunayGraph::HalfEdge& he_even = graph.halfEdge(even_id);
+    const HalfEdgeDelaunayGraph::HalfEdge& he_odd = graph.halfEdge(odd_id);
     const int strand_even_origin_i = static_cast<int>(he_even.origin);
     const int strand_odd_origin_i = static_cast<int>(he_odd.origin);
 
@@ -448,11 +457,12 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     const size_t strand_id_for_transform = strand_id_for_voronoi_strip();
     const std::optional<size_t> voronoi_vertex_for_alpha_check = voronoi_vertex_id;
 
-    auto& segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[voronoi_he_id];
+    size_t& segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[voronoi_he_id];
     VoronoiMesh& mesh = segment_builder_.meshes[segment_mesh_pair_index];
 
-    auto& segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
-    auto it = std::find_if(segments.begin(), segments.end(),
+    std::list<SegmentBuilder::MeshingData>& segments
+      = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
+    std::list<SegmentBuilder::MeshingData>::iterator it = std::find_if(segments.begin(), segments.end(),
       [inside_he_id](const SegmentBuilder::MeshingData& data)
       {
         return data.end_half_edge_id == static_cast<int>(inside_he_id)
@@ -532,7 +542,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       {
         if (entering_boundary)
         {
-          const auto boundary_crossing
+          const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("left", "enter_boundary_tail_seed",
             SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
@@ -547,7 +557,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         else
         {
           assert(segments.back().end_half_edge_id == -1);
-          const auto boundary_crossing
+          const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("right", "tail_close",
             SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
@@ -573,7 +583,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       {
         if (entering_boundary)
         {
-          const auto boundary_crossing
+          const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("right", "enter_boundary_head_seed",
             SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
@@ -588,7 +598,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         else
         {
           assert(segments.front().start_half_edge_id == -1);
-          const auto boundary_crossing
+          const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("left", "head_close",
             SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
@@ -612,7 +622,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       }
     }
 
-    for (auto& seg : segments)
+    for (SegmentBuilder::MeshingData& seg : segments)
     {
       segment_builder_.refreshMeshingDataCrossingRefs(seg, strip_voronoi_edge_id);
     }

@@ -3,6 +3,7 @@
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "KineticDelaunayEventPredicates.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -14,28 +15,13 @@ namespace kinDS
 {
 namespace
 {
-size_t inputBranchSectionIndex(double t, size_t tree_height)
-{
-  const size_t lower_index = static_cast<size_t>(std::floor(t));
-  const double frac = t - static_cast<double>(lower_index);
-  size_t section_index = lower_index;
-  if (frac > std::numeric_limits<double>::epsilon())
-  {
-    section_index = lower_index + 1;
-  }
-  if (tree_height > 0 && section_index >= tree_height)
-  {
-    section_index = tree_height - 1;
-  }
-  return section_index;
-}
-
 std::unordered_map<size_t, size_t> buildSiteInputBranchLabels(
   KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph, double occurrence_time)
 {
   std::unordered_map<size_t, size_t> labels;
   const size_t vertex_count = graph.getVertexCount();
-  const size_t section_index = inputBranchSectionIndex(occurrence_time, kin_del.getStrandTree().getHeight());
+  const size_t section_index = kin_del.inputBranchSectionIndexAtIntervalUpperBound(
+    eventIntervalUpperBound(occurrence_time));
 
   for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
   {

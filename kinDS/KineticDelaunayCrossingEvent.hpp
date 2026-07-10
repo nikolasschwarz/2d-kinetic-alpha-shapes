@@ -428,6 +428,11 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
 
   // Re-compute crossing events for this Voronoi vertex
   kd->crossing_event_manager_->computeEvents(occurrence_time, voronoi_vertex_id);
+
+  if (kd->diagnosticsEnabled())
+  {
+    kd->logFaceInsideStateAtTime(kDiagnosticsMonitoredFaceId, occurrence_time, "crossing_event");
+  }
 }
 
 /** Empty optional formats as "null". Log form is V{idx}xD{idx} for list positions along voronoi/delaunay edge lists. */

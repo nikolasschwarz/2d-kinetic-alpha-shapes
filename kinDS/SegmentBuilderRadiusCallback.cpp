@@ -552,6 +552,10 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     return;
   }
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
+  if (segment_builder_.diagnostics)
+  {
+    segment_builder_.logDiagnosticsMonitoredFaceInsideState(radius->occurrence_time, "radius_event");
+  }
   auto& graph = segment_builder_.kin_del.getGraph();
   auto vertices = graph.adjacentTriangleVertices(radius->half_edge_id);
   size_t component_id = segment_builder_.kin_del.component_data.component_map[vertices[0]];

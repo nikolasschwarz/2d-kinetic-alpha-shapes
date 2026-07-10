@@ -95,30 +95,13 @@ double referenceBranchLookupTimeForSection(size_t section, double schedule_time)
 }
 
 Trajectory<2> sitePiecePolynomialAtScheduleTime(const KineticDelaunay& kd, size_t strand_id, size_t section,
-  double schedule_time, size_t shared_reference_branch)
+  double schedule_time, const std::vector<size_t>& event_strand_ids)
 {
-  return kd.getSitePiecePolynomialWithReferenceBranch(strand_id, section, shared_reference_branch, schedule_time);
-}
-
-size_t branchLookupHeightForTime(const StrandTree& tree, double t)
-{
-  const size_t tree_height = tree.getHeight();
-  const size_t lower_index = static_cast<size_t>(std::floor(t));
-  const double frac = t - static_cast<double>(lower_index);
-  size_t branch_lookup_height = lower_index;
-  if (frac > std::numeric_limits<double>::epsilon())
-  {
-    branch_lookup_height = lower_index + 1;
-  }
-  if (tree_height > 0 && branch_lookup_height >= tree_height)
-  {
-    branch_lookup_height = tree_height - 1;
-  }
-  return branch_lookup_height;
+  return kd.getSitePiecePolynomialForEventStrands(strand_id, section, schedule_time, event_strand_ids);
 }
 
 void appendSiteTrajectorySection(std::ostringstream& oss, const KineticDelaunay& kd, int vertex_id, size_t section,
-  double schedule_time, const Trajectory<2>& trajectory, char label, size_t shared_reference_branch)
+  double schedule_time, const Trajectory<2>& trajectory, char label, const std::vector<size_t>& event_strand_ids)
 {
   if (vertex_id < 0)
   {
@@ -126,28 +109,41 @@ void appendSiteTrajectorySection(std::ostringstream& oss, const KineticDelaunay&
   }
 
   const size_t strand_id = static_cast<size_t>(vertex_id);
-  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
-  const size_t branch_lookup_height = branchLookupHeightForTime(kd.getStrandTree(), branch_lookup_time);
-  const size_t per_vertex_reference_branch = kd.getReferenceBranch(strand_id, branch_lookup_time);
-  const size_t input_branch = kd.getStrandTree().getBranchIndex(strand_id, section);
+  const double event_interval_upper_bound = eventIntervalUpperBound(schedule_time);
+  const size_t branch_section_index = kd.inputBranchSectionIndexAtIntervalUpperBound(event_interval_upper_bound);
+  const size_t input_branch_at_section = kd.getStrandTree().getBranchIndex(strand_id, branch_section_index);
+  const std::vector<size_t> distinct_input_branches
+    = kd.collectDistinctInputBranchesForEventTrigger(event_strand_ids, event_interval_upper_bound);
+  const bool use_shared_transformed_frame
+    = kd.eventTriggerUsesSharedTransformedFrame(event_strand_ids, event_interval_upper_bound);
   const size_t runtime_branch = kd.getRuntimeBranchIdForStrand(strand_id);
   const size_t component_id = kd.getInsideFaceComponentId(strand_id);
-  const size_t lowest_strand_in_component = kd.getComponentLowestStrandId(component_id);
-  const size_t reference_from_lowest_strand
-    = kd.getStrandTree().getBranchIndex(lowest_strand_in_component, branch_lookup_height);
 
   oss << "\nSite " << label << " (strand " << vertex_id << ")\n";
   oss << "  component_id=" << component_id << '\n';
   oss << "  runtime_branch=" << runtime_branch << '\n';
-  oss << "  input_branch_at_section=" << input_branch << '\n';
-  oss << "  input_branch_at_lookup_height=" << kd.getStrandTree().getBranchIndex(strand_id, branch_lookup_height)
-      << '\n';
-  oss << "  reference_branch_for_motion=" << per_vertex_reference_branch << '\n';
-  oss << "  shared_reference_branch_for_predicate=" << shared_reference_branch << '\n';
-  oss << "  reference_from_lowest_strand_id=" << reference_from_lowest_strand << " (strand "
-      << lowest_strand_in_component << ")\n";
-  oss << "  branch_lookup_time=" << std::setprecision(17) << branch_lookup_time << '\n';
-  oss << "  branch_lookup_height=" << branch_lookup_height << '\n';
+  oss << "  input_branch_at_section=" << input_branch_at_section << " (branch_section_index=" << branch_section_index
+      << ")\n";
+  oss << "  distinct_input_branches=[";
+  for (size_t i = 0; i < distinct_input_branches.size(); ++i)
+  {
+    if (i > 0)
+    {
+      oss << ',';
+    }
+    oss << distinct_input_branches[i];
+  }
+  oss << "]\n";
+  oss << "  uses_shared_transformed_frame=" << (use_shared_transformed_frame ? "true" : "false") << '\n';
+  if (use_shared_transformed_frame)
+  {
+    oss << "  shared_reference_branch_for_predicate="
+        << kd.sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound) << '\n';
+  }
+  oss << "  reference_branch_for_motion=" << kd.getReferenceBranch(strand_id, schedule_time) << '\n';
+  oss << "  schedule_time=" << std::setprecision(17) << schedule_time << '\n';
+  oss << "  event_interval_upper_bound=" << event_interval_upper_bound << '\n';
+  oss << "  section=" << section << '\n';
   oss << "  " << formatTrajectoryHumanReadable(trajectory) << '\n';
 }
 
@@ -160,14 +156,16 @@ void appendInCircleComposition(std::ostringstream& oss)
   oss << "  fx = cx - px,  fy = cy - py\n";
   oss << "  ap = dx^2 + dy^2,  bp = ex^2 + ey^2,  cp = fx^2 + fy^2\n";
   oss << "  event_trigger(X) = dx*(ey*cp - bp*fy) - dy*(ex*cp - bp*fx) + ap*(ex*fy - ey*fx)\n";
-  oss << "  Flip roots are real roots of event_trigger(X) in (section_fraction, 1].\n";
+  oss << "  Flip roots are real roots of event_trigger(X) in (section_fraction, "
+      << kEventIntervalFractionUpperBound << "].\n";
 }
 
 void appendCcwComposition(std::ostringstream& oss)
 {
   oss << "\nComposition (ccw orientation test; X is the section fraction parameter)\n";
   oss << "  event_trigger(X) = ax*by + bx*cy + cx*ay - ay*bx - by*cx - cy*ax\n";
-  oss << "  Flip roots are real roots of event_trigger(X) in (section_fraction, 1].\n";
+  oss << "  Flip roots are real roots of event_trigger(X) in (section_fraction, "
+      << kEventIntervalFractionUpperBound << "].\n";
 }
 } // namespace
 
@@ -176,10 +174,7 @@ FlipEventTriggerDump buildFlipEventTriggerDump(const KineticDelaunay& kd, size_t
   const auto& graph = kd.getGraph();
   const size_t section = static_cast<size_t>(schedule_time);
   const double section_fraction = schedule_time - static_cast<double>(section);
-  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
   const std::vector<size_t> quad_strand_ids = collectFlipQuadrilateralStrandIds(graph, half_edge_id);
-  const size_t shared_reference_branch
-    = kd.getSharedReferenceBranchForStrands(quad_strand_ids, branch_lookup_time);
 
   FlipEventTriggerDump dump;
   dump.section = section;
@@ -210,9 +205,8 @@ FlipEventTriggerDump buildFlipEventTriggerDump(const KineticDelaunay& kd, size_t
     for (size_t i = 0; i < filtered_indices.size() && i < dump.vertex_ids.size(); ++i)
     {
       dump.vertex_ids[i] = filtered_indices[i];
-      dump.site_trajectories.push_back(
-        sitePiecePolynomialAtScheduleTime(kd, static_cast<size_t>(filtered_indices[i]), section, schedule_time,
-          shared_reference_branch));
+      dump.site_trajectories.push_back(sitePiecePolynomialAtScheduleTime(kd,
+        static_cast<size_t>(filtered_indices[i]), section, schedule_time, quad_strand_ids));
     }
 
     if (filtered_indices.size() >= 3)
@@ -238,9 +232,8 @@ FlipEventTriggerDump buildFlipEventTriggerDump(const KineticDelaunay& kd, size_t
 
     for (size_t i = 0; i < dump.vertex_count; ++i)
     {
-      dump.site_trajectories.push_back(
-        sitePiecePolynomialAtScheduleTime(kd, static_cast<size_t>(dump.vertex_ids[i]), section, schedule_time,
-          shared_reference_branch));
+      dump.site_trajectories.push_back(sitePiecePolynomialAtScheduleTime(kd,
+        static_cast<size_t>(dump.vertex_ids[i]), section, schedule_time, quad_strand_ids));
     }
 
     dump.event_trigger = inCircle(dump.site_trajectories[0][0], dump.site_trajectories[0][1], dump.site_trajectories[1][0],
@@ -263,12 +256,43 @@ void writeFlipEventTriggerPolynomialDump(
   oss << "half_edge_id: " << dump.half_edge_id << '\n';
   oss << "occurrence_time: " << occurrence_time << '\n';
   oss << "schedule_time_used_for_polynomials: " << dump.schedule_time << '\n';
+  const double event_interval_upper_bound = eventIntervalUpperBound(dump.schedule_time);
+  oss << "event_interval_upper_bound: " << event_interval_upper_bound << '\n';
   const double branch_lookup_time = referenceBranchLookupTimeForSection(dump.section, dump.schedule_time);
   const std::vector<size_t> quad_strand_ids
     = collectFlipQuadrilateralStrandIds(kd.getGraph(), dump.half_edge_id);
-  const size_t shared_reference_branch
-    = kd.getSharedReferenceBranchForStrands(quad_strand_ids, branch_lookup_time);
-  oss << "shared_reference_branch_for_predicate: " << shared_reference_branch << '\n';
+  oss << "event_trigger_strands: ";
+  for (size_t i = 0; i < quad_strand_ids.size(); ++i)
+  {
+    if (i > 0)
+    {
+      oss << ',';
+    }
+    oss << quad_strand_ids[i];
+  }
+  oss << '\n';
+  const std::vector<size_t> distinct_input_branches
+    = kd.collectDistinctInputBranchesForEventTrigger(quad_strand_ids, event_interval_upper_bound);
+  const size_t branch_section_index = kd.inputBranchSectionIndexAtIntervalUpperBound(event_interval_upper_bound);
+  oss << "distinct_input_branches: [";
+  for (size_t i = 0; i < distinct_input_branches.size(); ++i)
+  {
+    if (i > 0)
+    {
+      oss << ',';
+    }
+    oss << distinct_input_branches[i];
+  }
+  oss << "]\n";
+  oss << "branch_section_index: " << branch_section_index << '\n';
+  oss << "uses_shared_transformed_frame: "
+      << (kd.eventTriggerUsesSharedTransformedFrame(quad_strand_ids, event_interval_upper_bound) ? "true" : "false")
+      << '\n';
+  if (kd.eventTriggerUsesSharedTransformedFrame(quad_strand_ids, event_interval_upper_bound))
+  {
+    oss << "shared_reference_branch_for_predicate: "
+        << kd.sharedReferenceBranchForEventTrigger(quad_strand_ids, event_interval_upper_bound) << '\n';
+  }
   oss << "section: " << dump.section << '\n';
   oss << "section_fraction_at_schedule_time: " << dump.section_fraction << '\n';
   oss << "section_fraction_at_occurrence_time: " << event_fraction << '\n';
@@ -292,7 +316,7 @@ void writeFlipEventTriggerPolynomialDump(
     {
       appendSiteTrajectorySection(
         oss, kd, dump.vertex_ids[i], dump.section, dump.schedule_time, dump.site_trajectories[i], labels[i],
-        shared_reference_branch);
+        quad_strand_ids);
     }
   }
   else
@@ -305,7 +329,7 @@ void writeFlipEventTriggerPolynomialDump(
     {
       appendSiteTrajectorySection(
         oss, kd, dump.vertex_ids[i], dump.section, dump.schedule_time, dump.site_trajectories[i], labels[i],
-        shared_reference_branch);
+        quad_strand_ids);
     }
   }
 

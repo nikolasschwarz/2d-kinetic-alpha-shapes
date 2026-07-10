@@ -57,13 +57,15 @@ class StrandTree
   glm::dvec3 transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const;
   glm::dvec3 transformToObjectSpace(
     glm::dvec3 v_3d, double t, const std::vector<size_t>& branch_indices_by_height) const;
-  std::vector<size_t> resolvedBranchIndicesForReferenceBranch(size_t reference_branch) const;
 
   /**
    * Linear motion on [@p index, @p index + 1]: support points at those heights are each transformed into the
    * @p reference_branch frame at the same height, then connected by a linear segment in the section parameter.
    */
   Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const;
+
+  /// Linear motion on [@p index, @p index + 1] in the strand's native profile support coordinates (no frame transform).
+  Trajectory<2> getLocalPiecePolynomial(size_t strand_id, size_t index) const;
 
   // getters with named indices
   const std::vector<glm::dvec2>& getSupportPoints(size_t strand_id) const { return support_points[strand_id]; }

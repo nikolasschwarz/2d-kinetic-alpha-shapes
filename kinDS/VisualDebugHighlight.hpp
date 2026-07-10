@@ -25,6 +25,8 @@ struct VisualDebugHighlight
   std::unordered_set<size_t> primary_voronoi_edges;
   /// Label every intersection whose delaunay_edge_id is in this set (see @ref shouldLabelCrossing).
   std::unordered_set<size_t> label_crossings_on_delaunay_edges;
+  /// Label every intersection whose voronoi_edge_id is in this set (see @ref shouldLabelCrossing).
+  std::unordered_set<size_t> label_crossings_on_voronoi_edges;
   /// (d,v) pairs drawn with a stronger intersection marker (@ref emphasizesCrossing).
   std::unordered_set<uint64_t> crossing_intersection_keys;
 
@@ -43,7 +45,8 @@ struct VisualDebugHighlight
 
   static VisualDebugHighlight forFlip(const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id);
   static VisualDebugHighlight forRadius(const HalfEdgeDelaunayGraph& graph, size_t radius_half_edge_id);
-  /// Highlight the crossed Delaunay edge and the moving Voronoi vertex only (no dual Voronoi edge stroke).
+  /// Highlight the crossed Delaunay edge, the three Voronoi edges at the moving circumcenter, and label every
+  /// intersection on those Voronoi edges.
   static VisualDebugHighlight forCrossing(
     const HalfEdgeDelaunayGraph& graph, size_t crossed_half_edge_id, size_t voronoi_vertex_id);
   static VisualDebugHighlight forSubdivisionStrand(const HalfEdgeDelaunayGraph& graph, size_t strand_vertex_id);

@@ -951,8 +951,11 @@ class HalfEdgeDelaunayGraphToSVG
             svg::Color stroke_c = dim_voronoi_edge;
             if (selective)
             {
-              if (highlight->affectsPrimaryVoronoiEdge(voronoi_edge_id)
-                || highlight->affectsVoronoiEdge(voronoi_edge_id))
+              if (highlight->affectsPrimaryVoronoiEdge(voronoi_edge_id))
+              {
+                stroke_c = hi_primary_edge;
+              }
+              else if (highlight->affectsVoronoiEdge(voronoi_edge_id))
               {
                 stroke_c = hi_voronoi_edge;
               }

@@ -13,6 +13,7 @@
 #include "Polygon2D.hpp"
 #include "VisualDebugHighlight.hpp"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <fstream>
@@ -385,7 +386,7 @@ std::vector<double> KineticDelaunay::findEvents(
       continue; // Skip NaN roots
     }
 
-    if (root > min_fraction && root <= 1)
+    if (root > min_fraction && root <= kEventIntervalFractionUpperBound)
     {
       double event_time = root;
       filtered_sorted_zeros.emplace_back(event_time);
@@ -1495,6 +1496,71 @@ size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
   return minInputBranchForStrands(pool, branch_lookup_height);
 }
 
+size_t KineticDelaunay::inputBranchSectionIndexAtIntervalUpperBound(double event_interval_upper_bound) const
+{
+  const size_t tree_height = branch_trajs.getHeight();
+  size_t section_index = static_cast<size_t>(event_interval_upper_bound);
+  if (tree_height > 0 && section_index >= tree_height)
+  {
+    section_index = tree_height - 1;
+  }
+  return section_index;
+}
+
+std::vector<size_t> KineticDelaunay::collectDistinctInputBranchesForEventTrigger(
+  const std::vector<size_t>& event_strand_ids, double event_interval_upper_bound) const
+{
+  const size_t branch_section_index = inputBranchSectionIndexAtIntervalUpperBound(event_interval_upper_bound);
+  std::vector<size_t> distinct_branches;
+  for (size_t strand_id : event_strand_ids)
+  {
+    if (isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+
+    const size_t input_branch = branch_trajs.getBranchIndex(strand_id, branch_section_index);
+    if (std::find(distinct_branches.begin(), distinct_branches.end(), input_branch) == distinct_branches.end())
+    {
+      distinct_branches.push_back(input_branch);
+    }
+  }
+
+  std::sort(distinct_branches.begin(), distinct_branches.end());
+  return distinct_branches;
+}
+
+bool KineticDelaunay::eventTriggerUsesSharedTransformedFrame(
+  const std::vector<size_t>& event_strand_ids, double event_interval_upper_bound) const
+{
+  return collectDistinctInputBranchesForEventTrigger(event_strand_ids, event_interval_upper_bound).size() > 1;
+}
+
+size_t KineticDelaunay::sharedReferenceBranchForEventTrigger(
+  const std::vector<size_t>& event_strand_ids, double event_interval_upper_bound) const
+{
+  const size_t branch_section_index = inputBranchSectionIndexAtIntervalUpperBound(event_interval_upper_bound);
+  return minInputBranchForStrands(event_strand_ids, branch_section_index);
+}
+
+Trajectory<2> KineticDelaunay::getSitePiecePolynomialForEventStrands(size_t strand_id, size_t section,
+  double schedule_time, const std::vector<size_t>& event_strand_ids) const
+{
+  const double event_interval_upper_bound = eventIntervalUpperBound(schedule_time);
+  Trajectory<2> base;
+  if (eventTriggerUsesSharedTransformedFrame(event_strand_ids, event_interval_upper_bound))
+  {
+    const size_t reference_branch = sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound);
+    base = branch_trajs.getPiecePolynomial(strand_id, section, reference_branch);
+  }
+  else
+  {
+    base = branch_trajs.getLocalPiecePolynomial(strand_id, section);
+  }
+
+  return addSeparationOffsetToPiecePolynomial(base, strand_id, section, schedule_time);
+}
+
 glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(
   size_t v, double t, size_t reference_branch, bool include_virtual_offset) const
 {
@@ -1514,6 +1580,11 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(
   const size_t section = static_cast<size_t>(std::floor(query_t));
   const double frac = query_t - static_cast<double>(section);
 
+  if (!include_virtual_offset)
+  {
+    return branch_trajs.evaluate(v, query_t);
+  }
+
   glm::dvec2 position;
   if (frac < std::numeric_limits<double>::epsilon())
   {
@@ -1525,7 +1596,7 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(
     position = glm::dvec2(piece[0](frac), piece[1](frac));
   }
 
-  return include_virtual_offset ? position + separationOffsetAt(v, t) : position;
+  return position + separationOffsetAt(v, t);
 }
 
 glm::dvec2 KineticDelaunay::getPointAt(size_t v, double t, bool include_virtual_offset) const
@@ -2096,6 +2167,10 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
     KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
                                                    << " has convex seam outlines at t=" << t
                                                    << "; deferring graph split to next section (temporary)");
+    // Separation flips are normally scheduled for (t, section_end] on each continue iteration via a post-ramp pass
+    // at separation_te. The final separation event does not call continueSeparationSchedule, so without this pass
+    // events in [separation_te, ceil(t)] are never enqueued (full virtual shift at schedule_time >= separation_te).
+    recomputeEventsAfterSeparationTrajectory(parent_component_id, t);
     debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
     return;
   }
@@ -3357,6 +3432,12 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(
     glm::dvec2 edge_end = getPointAt(static_cast<size_t>(graph.destination(2 * delaunay_edge_id)), t);
     return segmentIntersectionParameters(edge_start, edge_end, start_point, destination);
   }
+}
+
+double KineticDelaunay::delaunayVoronoiEdgeIntersectionParameter(
+  size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const
+{
+  return delaunayVoronoiEdgeIntersection(delaunay_edge_id, voronoi_edge_id, t).first;
 }
 
 std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCrossedHalfEdges(
@@ -5181,4 +5262,208 @@ size_t KineticDelaunay::nextOnComponentBoundaryId(size_t he_id) const
   }
 
   return next_he_id;
+}
+
+namespace
+{
+struct FiniteFaceInsideExpectation
+{
+  bool valid = false;
+  double circumradius = 0.0;
+  bool expected_inside = false;
+  std::array<int, 3> vertices { -1, -1, -1 };
+};
+
+FiniteFaceInsideExpectation computeFiniteFaceInsideExpectation(
+  const KineticDelaunay& kd, size_t face_id, double t)
+{
+  FiniteFaceInsideExpectation out;
+  const HalfEdgeDelaunayGraph& graph = kd.getGraph();
+  if (!graph.isLiveFace(face_id) || face_id >= kd.getFacesInside().size())
+  {
+    return out;
+  }
+
+  out.vertices = graph.getTriangleVertexIndices(face_id);
+  if (out.vertices[0] < 0 || out.vertices[1] < 0 || out.vertices[2] < 0)
+  {
+    return out;
+  }
+
+  const glm::dvec2 p0 = kd.getPointAt(static_cast<size_t>(out.vertices[0]), t);
+  const glm::dvec2 p1 = kd.getPointAt(static_cast<size_t>(out.vertices[1]), t);
+  const glm::dvec2 p2 = kd.getPointAt(static_cast<size_t>(out.vertices[2]), t);
+  try
+  {
+    out.circumradius = circumradius(p0, p1, p2);
+  }
+  catch (const std::exception&)
+  {
+    return out;
+  }
+
+  out.expected_inside = (out.circumradius < kd.getCutoff()) || kd.mustRemainInside(face_id, t);
+  out.valid = true;
+  return out;
+}
+
+std::string formatTriangleVertices(const std::array<int, 3>& vertices)
+{
+  return "(" + std::to_string(vertices[0]) + "," + std::to_string(vertices[1]) + "," + std::to_string(vertices[2])
+    + ")";
+}
+
+std::string formatFaceInsideStateValues(
+  bool stored_inside, const FiniteFaceInsideExpectation& info, double cutoff)
+{
+  std::ostringstream oss;
+  oss << "(stored_inside=" << stored_inside;
+  if (info.valid)
+  {
+    oss << ", expected_inside=" << info.expected_inside << ", circumradius=" << info.circumradius << ", cutoff="
+        << cutoff << ", vertices=" << formatTriangleVertices(info.vertices) << ", must_remain_inside="
+        << (info.expected_inside && !(info.circumradius < cutoff)) << ")";
+  }
+  else
+  {
+    oss << ", expected_inside=unavailable, circumradius=unavailable, cutoff=" << cutoff
+        << ", vertices=" << formatTriangleVertices(info.vertices) << ", must_remain_inside=unavailable)";
+  }
+  return oss.str();
+}
+
+[[noreturn]] void throwIncorrectFaceInsideState(const char* context, size_t face_id, bool stored_inside,
+  const FiniteFaceInsideExpectation& info, double cutoff, double t, const std::string& extra_detail = {})
+{
+  std::ostringstream oss;
+  oss << "Face inside/outside sanity check failed";
+  if (context != nullptr && context[0] != '\0')
+  {
+    oss << " (" << context << ")";
+  }
+  oss << ": face " << face_id << " has incorrect inside state at t=" << t << " "
+      << formatFaceInsideStateValues(stored_inside, info, cutoff);
+  if (!extra_detail.empty())
+  {
+    oss << ". " << extra_detail;
+  }
+  throw std::runtime_error(oss.str());
+}
+
+void validateStoredFaceInsideAgainstExpectation(const KineticDelaunay& kd, size_t face_id, double t,
+  const char* context, const std::string& extra_detail = {})
+{
+  if (!kd.getGraph().isLiveFace(face_id) || face_id >= kd.getFacesInside().size())
+  {
+    return;
+  }
+
+  const FiniteFaceInsideExpectation info = computeFiniteFaceInsideExpectation(kd, face_id, t);
+  if (!info.valid)
+  {
+    return;
+  }
+
+  const bool stored_inside = kd.getFaceInside(face_id);
+  if (stored_inside != info.expected_inside)
+  {
+    throwIncorrectFaceInsideState(context, face_id, stored_inside, info, kd.getCutoff(), t, extra_detail);
+  }
+}
+} // namespace
+
+void KineticDelaunay::validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const
+{
+  const size_t face_a = graph.halfEdge(half_edge_id).face;
+  const size_t face_b = graph.halfEdge(half_edge_id ^ 1).face;
+  if (face_a >= face_inside.size() || face_b >= face_inside.size())
+  {
+    return;
+  }
+
+  const bool inside_a = face_inside[face_a];
+  const bool inside_b = face_inside[face_b];
+  if (inside_a == inside_b)
+  {
+    return;
+  }
+
+  const FiniteFaceInsideExpectation info_a = computeFiniteFaceInsideExpectation(*this, face_a, t);
+  const FiniteFaceInsideExpectation info_b = computeFiniteFaceInsideExpectation(*this, face_b, t);
+  if (!info_a.valid || !info_b.valid)
+  {
+    return;
+  }
+
+  const bool incorrect_a = inside_a != info_a.expected_inside;
+  const bool incorrect_b = inside_b != info_b.expected_inside;
+
+  std::ostringstream detail;
+  detail << "flip half-edge " << half_edge_id << " adjacent faces " << face_a << " (inside=" << inside_a << ", r="
+         << info_a.circumradius << ", expected=" << info_a.expected_inside << ") and " << face_b << " (inside="
+         << inside_b << ", r=" << info_b.circumradius << ", expected=" << info_b.expected_inside << ")";
+
+  if (incorrect_a && incorrect_b)
+  {
+    detail << "; both faces disagree with circumradius/cutoff expectation";
+    throwIncorrectFaceInsideState("flip_event", face_a, inside_a, info_a, getCutoff(), t, detail.str());
+  }
+  if (incorrect_a)
+  {
+    throwIncorrectFaceInsideState("flip_event", face_a, inside_a, info_a, getCutoff(), t, detail.str());
+  }
+  if (incorrect_b)
+  {
+    throwIncorrectFaceInsideState("flip_event", face_b, inside_b, info_b, getCutoff(), t, detail.str());
+  }
+
+  std::ostringstream oss;
+  oss << "Face inside/outside sanity check failed (flip_event): flip half-edge " << half_edge_id << " at t=" << t
+      << " has adjacent faces with mismatched inside status (face " << face_a << " inside=" << inside_a << ", r="
+      << info_a.circumradius << "; face " << face_b << " inside=" << inside_b << ", r=" << info_b.circumradius
+      << ", cutoff=" << getCutoff()
+      << ") but neither face violates circumradius/cutoff expectation (possible mustRemainInside asymmetry)";
+  throw std::runtime_error(oss.str());
+}
+
+void KineticDelaunay::validateAllFaceInsideStatesAtTime(double t, const char* context) const
+{
+  for (size_t face_id : graph.liveFaces())
+  {
+    validateStoredFaceInsideAgainstExpectation(*this, face_id, t, context);
+  }
+}
+
+void KineticDelaunay::logFaceInsideStateAtTime(size_t face_id, double t, const char* context) const
+{
+  std::ostringstream oss;
+  oss << "Face inside/outside sanity check monitor";
+  if (context != nullptr && context[0] != '\0')
+  {
+    oss << " (" << context << ")";
+  }
+
+  if (!graph.isLiveFace(face_id))
+  {
+    oss << ": face " << face_id << " at t=" << t << " (not live)";
+    KINDS_INFO(oss.str());
+    return;
+  }
+
+  if (face_id >= face_inside.size())
+  {
+    oss << ": face " << face_id << " at t=" << t << " (face_inside slot missing)";
+    KINDS_INFO(oss.str());
+    return;
+  }
+
+  const FiniteFaceInsideExpectation info = computeFiniteFaceInsideExpectation(*this, face_id, t);
+  const bool stored_inside = face_inside[face_id];
+  oss << ": face " << face_id << " has inside state at t=" << t << " "
+      << formatFaceInsideStateValues(stored_inside, info, getCutoff());
+  if (info.valid && stored_inside != info.expected_inside)
+  {
+    oss << " MISMATCH";
+  }
+  KINDS_INFO(oss.str());
 }

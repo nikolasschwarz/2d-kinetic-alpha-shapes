@@ -278,17 +278,6 @@ glm::dvec3 StrandTree::transformToObjectSpace(
     transforms_by_height_and_branch, v_3d, static_cast<float>(t), branch_indices_by_height);
 }
 
-std::vector<size_t> StrandTree::resolvedBranchIndicesForReferenceBranch(size_t reference_branch) const
-{
-  std::vector<size_t> resolved;
-  resolved.reserve(transforms_by_height_and_branch.size());
-  for (size_t height = 0; height < transforms_by_height_and_branch.size(); ++height)
-  {
-    resolved.push_back(resolveBranchAtHeight(height, reference_branch, height));
-  }
-  return resolved;
-}
-
 Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const
 {
   if (strand_id >= support_points.size())
@@ -308,6 +297,30 @@ Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, siz
   for (int i = 0; i < 2; ++i)
   {
     result[i] = POLYNOMIAL(P0[i] + (P1[i] - P0[i]) * x);
+  }
+
+  return result;
+}
+
+Trajectory<2> StrandTree::getLocalPiecePolynomial(size_t strand_id, size_t index) const
+{
+  if (strand_id >= support_points.size())
+  {
+    throw std::out_of_range("Strand id " + std::to_string(strand_id) + " out of range.");
+  }
+
+  if (index >= support_points[strand_id].size() - 1)
+  {
+    throw std::out_of_range("Index " + std::to_string(index) + " out of range for piece polynomial.");
+  }
+
+  const glm::dvec2& p0 = support_points[strand_id][index];
+  const glm::dvec2& p1 = support_points[strand_id][index + 1];
+
+  Trajectory<2> result;
+  for (int i = 0; i < 2; ++i)
+  {
+    result[i] = POLYNOMIAL(p0[i] + (p1[i] - p0[i]) * x);
   }
 
   return result;

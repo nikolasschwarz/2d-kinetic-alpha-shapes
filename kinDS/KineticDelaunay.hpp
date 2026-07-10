@@ -373,6 +373,7 @@ class KineticDelaunay
   std::optional<std::filesystem::path> visual_debug_output_root_;
   std::optional<double> flip_polynomial_dump_target_time_;
   std::optional<size_t> flip_polynomial_dump_target_half_edge_;
+  bool diagnostics_enabled_ = false;
 
   // crossing-related data (see public `CrossingData` forward declaration above).
 
@@ -436,7 +437,6 @@ class KineticDelaunay
   size_t getRuntimeBranchIdForFace(size_t face_id) const;
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots);
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots, bool update_runtime_branch_map = true);
-  bool isStrandLiveInGraph(size_t strand_id) const;
 
   void handleEvents();
 
@@ -458,6 +458,9 @@ class KineticDelaunay
 
   bool isDummyBoundary(size_t v) const;
 
+  /// True when @p strand_id has at least one incident half-edge in the live Delaunay graph.
+  bool isStrandLiveInGraph(size_t strand_id) const;
+
   bool computeBoundaryOnTheFly() const;
 
   glm::dvec2 getPointAt(size_t v, double t, bool include_virtual_offset = true) const;
@@ -467,11 +470,33 @@ class KineticDelaunay
   /** Branch frame used by getPointAt for sites in the same component as @p strand_id. */
   size_t getReferenceBranch(size_t strand_id, double t) const;
 
+  /// Input-branch section index at the upper bound of an event computation interval.
+  size_t inputBranchSectionIndexAtIntervalUpperBound(double event_interval_upper_bound) const;
+
   /// Smallest live strand id sharing @p strand_id's runtime branch; used for transform frame lookup.
   size_t representativeStrandIdForRuntimeBranch(size_t strand_id) const;
 
   /// One shared reference branch for all @p strand_ids (e.g. flip quadrilateral vertices).
   size_t getSharedReferenceBranchForStrands(const std::vector<size_t>& strand_ids, double branch_lookup_time) const;
+
+  /// Distinct input-branch ids among @p event_strand_ids at @p event_interval_upper_bound.
+  std::vector<size_t> collectDistinctInputBranchesForEventTrigger(
+    const std::vector<size_t>& event_strand_ids, double event_interval_upper_bound) const;
+
+  /// True when @p event_strand_ids for one event trigger involve more than one input branch at @p event_interval_upper_bound.
+  bool eventTriggerUsesSharedTransformedFrame(
+    const std::vector<size_t>& event_strand_ids, double event_interval_upper_bound) const;
+
+  /// Shared reference input branch for a multi-branch event trigger at @p event_interval_upper_bound.
+  size_t sharedReferenceBranchForEventTrigger(
+    const std::vector<size_t>& event_strand_ids, double event_interval_upper_bound) const;
+
+  /// Piece polynomial for one strand in an event trigger (frame choice uses eventIntervalUpperBound(@p schedule_time)).
+  Trajectory<2> getSitePiecePolynomialForEventStrands(size_t strand_id, size_t section, double schedule_time,
+    const std::vector<size_t>& event_strand_ids) const;
+
+  /// Parameter of the Voronoi/Delaunay crossing along the Delaunay edge, computed in Delaunay profile space.
+  double delaunayVoronoiEdgeIntersectionParameter(size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
 
   glm::dvec2 getPointAtWithReferenceBranch(
     size_t v, double t, size_t reference_branch, bool include_virtual_offset = true) const;
@@ -598,6 +623,9 @@ class KineticDelaunay
 
   bool getFaceInside(size_t face_index) const;
 
+  /** Alpha / radius cutoff used for inside-outside classification (see radius events). */
+  double getCutoff() const { return cutoff; }
+
   void setFaceInside(size_t face_index, bool value, double t);
 
   /** All three vertices share one input branch with exactly three strands at @p t. */
@@ -680,5 +708,19 @@ class KineticDelaunay
     size_t half_edge_id, double t, bool include_virtual_offset = true) const;
   glm::dvec3 computeVoronoiVertexClampedInfinityWithReferenceBranch(
     size_t half_edge_id, double t, size_t reference_branch, bool include_virtual_offset = true) const;
+
+  /**
+   * Debug sanity checks: compare @ref face_inside against circumradius and @ref cutoff (and @ref mustRemainInside).
+   * Intended to be called only when @ref SegmentBuilder::diagnostics is enabled.
+   */
+  static constexpr size_t kDiagnosticsMonitoredFaceId = 54;
+  void setDiagnosticsEnabled(bool enabled);
+  bool diagnosticsEnabled() const;
+  void validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const;
+  void validateAllFaceInsideStatesAtTime(double t, const char* context) const;
+  void logFaceInsideStateAtTime(size_t face_id, double t, const char* context) const;
+  void logRadiusEventTriggerRoots(size_t face_id, size_t he_id, double t, double min_fraction,
+    Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
+    const std::array<Trajectory<2>, 3>& trajectories) const;
 };
 } // namespace kinDS

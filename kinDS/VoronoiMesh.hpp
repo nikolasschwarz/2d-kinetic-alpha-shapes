@@ -35,6 +35,8 @@ class VoronoiMesh
 
   /// Profile-plane (x,y) per vertex when stored positions are object-space (ear clipping).
   std::vector<glm::dvec2> profile_plane_xy_;
+  /// Kinetic time per vertex. This stays separate from stored vertex.z because transformed meshes use object-space z.
+  std::vector<double> vertex_kinetic_times_;
 
   NormalMode normal_mode;
 
@@ -166,6 +168,9 @@ class VoronoiMesh
 
   void setProfilePlanePosition(size_t vertex_index, glm::dvec2 xy);
   glm::dvec2 triangulationPlaneXY(size_t vertex_index) const;
+  void setVertexKineticTime(size_t vertex_index, double t);
+  double vertexKineticTime(size_t vertex_index) const;
+  void setVertexMetadata(size_t vertex_index, const std::string& metadata);
 
   /// Empty string if unset; otherwise a stable fragment for filenames, e.g. `_t0.000000` or `_t3.500000`.
   std::string creationKineticTimeFilenameSuffix() const;

@@ -291,7 +291,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// stay empty.
   bool intersection_strip_flexible_vertices_enabled = true;
 
-  glm::dvec3 transformFromReferenceBranchToObjectSpace(glm::dvec3 vertex, size_t strand_id, double t) const;
+  glm::dvec3 transformFromInputBranchToObjectSpace(glm::dvec3 vertex, size_t strand_id, double t) const;
+  glm::dvec3 computeMeshIntersectionObjectSpace(
+    const std::string& metadata, glm::dvec3 fallback_profile_vertex, size_t fallback_strand_id, double t) const;
+  glm::dvec3 computeMeshVoronoiVertexObjectSpace(size_t voronoi_vertex_id, glm::dvec3 fallback_profile_vertex,
+    size_t fallback_strand_id, double t) const;
 
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
@@ -514,13 +518,15 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t new_fixed_vertex_index, int inside_half_edge_id,
     const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& new_crossing_for_updated_side,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
-    bool keep_strip_alive, bool append_flexible_placeholder = true);
+    bool keep_strip_alive, bool append_flexible_placeholder = true, const std::string& flexible_base_metadata = "{}");
 
   /**
    * For a merge closure vertex (`pos` uniform): both flex chains lerp from their fixed corners to the same
    * @p closure_vertex_index, then lists are cleared. No endpoint reassignment and no new flex.
    */
   void applyIntersectionStripUniformClosureVertex(VoronoiMesh& mesh, MeshingData& seg, size_t closure_vertex_index);
+  void resolveRemainingFlexibleVertices(VoronoiMesh& mesh, MeshingData& seg, const char* context);
+  void resolveAllIntersectionFlexibleVertices(const char* context);
 
   /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p
   /// position.
@@ -566,7 +572,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   int closingMeshAppendVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position,
-    bool includes_virtual_shift, std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt);
+    bool includes_virtual_shift, std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt,
+    const std::string& metadata = "{}");
 
   /**
    * @brief Finds the CrossingData intersection record for a Voronoi/Delaunay edge pair.
@@ -615,7 +622,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * boundary crossing points.
    */
   std::vector<MeshingData> extractSegmentsForVoronoiEdge(double t, int incident_edge_index, size_t voronoi_edge_id,
-    const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex, bool reverse = false);
+    const std::function<int(const glm::dvec3&, std::optional<size_t>, const std::string&)>& track_vertex,
+    bool reverse = false);
 
   /**
    * @brief Extracts raw inside Voronoi polylines for one dual edge incident to the strand (one Voronoi edge id).
@@ -627,7 +635,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   std::vector<MeshingData> closingMeshExtractRawSegmentsForVoronoiEdge(size_t strand_id, double t, VoronoiMesh& mesh,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, int incident_edge_index,
-    size_t incident_he, const std::function<int(const glm::dvec3&, std::optional<size_t>)>& track_vertex);
+    size_t incident_he,
+    const std::function<int(const glm::dvec3&, std::optional<size_t>, const std::string&)>& track_vertex);
 
   /**
    * @brief Builds ordered segment pointers and a start-ref map from a raw segment list.
@@ -682,6 +691,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /**
    * @brief Triangulates one simple polygon ring into @p mesh using ear clipping.
+   * Rings that revisit the same profile XY position are split into sub-rings first.
    * @param polygon Vertex index ring into @p mesh.
    * @param orient_upwards If true, emits CCW XY triangles; otherwise emits CW triangles.
    */
@@ -710,9 +720,18 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// One-line Voronoi meshlet diagnostics: dual edge id, pair slot, verts, tris, strip counts (@p extra_note optional).
   void meshletDiagnosticLogLine(const char* tag, size_t half_edge_id, double t, const char* extra_note = "") const;
 
+  /// When @ref diagnostics is enabled, log @ref KineticDelaunay::kDiagnosticsMonitoredFaceId inside state at @p t.
+  void logDiagnosticsMonitoredFaceInsideState(double t, const char* event_context) const;
+
   /// After @ref startNewMesh strip build: warn if topology/metadata suggests a non-empty mesh but vertices are missing.
   void meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewMesh(size_t half_edge_even, double t,
     bool initial_left_inside, const VoronoiMesh& mesh, const std::list<MeshingData>& strips) const;
+
+  /// Initial-cap / strand-segment wiring diagnostics (@p tag is breakpoint anchor, e.g. `init_cap_begin`).
+  void strandInitDiagnosticLogLine(const char* tag, size_t strand_id, double t, const char* extra_note = "") const;
+
+  /// Post-init snapshot for strand 0 (and general wiring) when @ref diagnostics is enabled.
+  void logStrandInitDiagnosticsSummary(double t) const;
 
   SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<size_t, double>> subdivisions,
     bool create_transformed_mesh, bool visual_debug = false,

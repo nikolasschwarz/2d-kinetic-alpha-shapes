@@ -5,10 +5,10 @@ Half-Edges:
   [3] † origin = -1, next = -1, face = -1, twin = 2
   [4] † origin = -1, next = -1, face = -1, twin = 5
   [5] † origin = -1, next = -1, face = -1, twin = 4
-  [6] origin = 17, next = 92, face = 0, twin = 7
-  [7] origin = 16, next = 83, face = 1, twin = 6
-  [8] † origin = -1, next = -1, face = -1, twin = 9
-  [9] † origin = -1, next = -1, face = -1, twin = 8
+  [6] † origin = -1, next = -1, face = -1, twin = 7
+  [7] † origin = -1, next = -1, face = -1, twin = 6
+  [8] origin = 16, next = 220, face = 74, twin = 9
+  [9] origin = 17, next = 118, face = 41, twin = 8
   [10] † origin = -1, next = -1, face = -1, twin = 11
   [11] † origin = -1, next = -1, face = -1, twin = 10
   [12] † origin = -1, next = -1, face = -1, twin = 13
@@ -19,361 +19,677 @@ Half-Edges:
   [17] † origin = -1, next = -1, face = -1, twin = 16
   [18] † origin = -1, next = -1, face = -1, twin = 19
   [19] † origin = -1, next = -1, face = -1, twin = 18
-  [20] origin = 17, next = 132, face = 47, twin = 21
-  [21] origin = 18, next = 6, face = 0, twin = 20
-  [22] origin = 6, next = 129, face = 45, twin = 23
-  [23] origin = -1, next = 29, face = 18, twin = 22
+  [20] † origin = -1, next = -1, face = -1, twin = 21
+  [21] † origin = -1, next = -1, face = -1, twin = 20
+  [22] † origin = -1, next = -1, face = -1, twin = 23
+  [23] † origin = -1, next = -1, face = -1, twin = 22
   [24] † origin = -1, next = -1, face = -1, twin = 25
   [25] † origin = -1, next = -1, face = -1, twin = 24
-  [26] origin = 4, next = 102, face = 32, twin = 27
-  [27] origin = 5, next = 32, face = 29, twin = 26
-  [28] origin = 4, next = 38, face = 24, twin = 29
-  [29] origin = 6, next = 100, face = 18, twin = 28
-  [30] † origin = -1, next = -1, face = -1, twin = 31
-  [31] † origin = -1, next = -1, face = -1, twin = 30
-  [32] origin = 4, next = 35, face = 29, twin = 33
-  [33] origin = 7, next = 28, face = 24, twin = 32
-  [34] origin = 5, next = 128, face = 44, twin = 35
-  [35] origin = 7, next = 27, face = 29, twin = 34
-  [36] † origin = -1, next = -1, face = -1, twin = 37
-  [37] † origin = -1, next = -1, face = -1, twin = 36
-  [38] origin = 6, next = 33, face = 24, twin = 39
-  [39] origin = 7, next = 22, face = 45, twin = 38
-  [40] † origin = -1, next = -1, face = -1, twin = 41
-  [41] † origin = -1, next = -1, face = -1, twin = 40
+  [26] † origin = -1, next = -1, face = -1, twin = 27
+  [27] † origin = -1, next = -1, face = -1, twin = 26
+  [28] origin = 4, next = 194, face = 62, twin = 29
+  [29] origin = 5, next = 34, face = 37, twin = 28
+  [30] origin = 4, next = 38, face = 44, twin = 31
+  [31] origin = 6, next = 190, face = 78, twin = 30
+  [32] † origin = -1, next = -1, face = -1, twin = 33
+  [33] † origin = -1, next = -1, face = -1, twin = 32
+  [34] origin = 4, next = 37, face = 37, twin = 35
+  [35] origin = 7, next = 30, face = 44, twin = 34
+  [36] origin = 5, next = 199, face = 68, twin = 37
+  [37] origin = 7, next = 29, face = 37, twin = 36
+  [38] origin = 6, next = 35, face = 44, twin = 39
+  [39] origin = 7, next = 228, face = 79, twin = 38
+  [40] origin = 15, next = 232, face = 80, twin = 41
+  [41] origin = 24, next = 109, face = 20, twin = 40
   [42] † origin = -1, next = -1, face = -1, twin = 43
   [43] † origin = -1, next = -1, face = -1, twin = 42
   [44] † origin = -1, next = -1, face = -1, twin = 45
   [45] † origin = -1, next = -1, face = -1, twin = 44
-  [46] origin = 9, next = 96, face = 16, twin = 47
-  [47] origin = 18, next = 130, face = 48, twin = 46
-  [48] origin = 19, next = 46, face = 16, twin = 49
-  [49] origin = 9, next = 87, face = 15, twin = 48
-  [50] origin = 8, next = 64, face = 26, twin = 51
-  [51] origin = 10, next = 54, face = 20, twin = 50
-  [52] origin = 8, next = 61, face = 21, twin = 53
-  [53] origin = 11, next = 50, face = 26, twin = 52
-  [54] origin = 8, next = 67, face = 20, twin = 55
-  [55] origin = 12, next = 58, face = 13, twin = 54
-  [56] origin = 8, next = 84, face = 14, twin = 57
-  [57] origin = 14, next = 71, face = 27, twin = 56
-  [58] origin = 8, next = 75, face = 13, twin = 59
-  [59] origin = 15, next = 56, face = 14, twin = 58
-  [60] origin = 9, next = 106, face = 46, twin = 61
-  [61] origin = 11, next = 70, face = 21, twin = 60
-  [62] origin = 9, next = 57, face = 27, twin = 63
-  [63] origin = 14, next = 49, face = 15, twin = 62
-  [64] origin = 10, next = 53, face = 26, twin = 65
-  [65] origin = 11, next = 110, face = 36, twin = 64
-  [66] origin = 10, next = 72, face = 40, twin = 67
-  [67] origin = 12, next = 51, face = 20, twin = 66
-  [68] † origin = -1, next = -1, face = -1, twin = 69
-  [69] † origin = -1, next = -1, face = -1, twin = 68
-  [70] origin = 9, next = 52, face = 21, twin = 71
-  [71] origin = 8, next = 62, face = 27, twin = 70
-  [72] origin = 12, next = 118, face = 40, twin = 73
-  [73] origin = 13, next = 74, face = 8, twin = 72
-  [74] origin = 12, next = 79, face = 8, twin = 75
-  [75] origin = 15, next = 55, face = 13, twin = 74
-  [76] † origin = -1, next = -1, face = -1, twin = 77
-  [77] † origin = -1, next = -1, face = -1, twin = 76
-  [78] origin = 13, next = 88, face = 2, twin = 79
-  [79] origin = 15, next = 73, face = 8, twin = 78
-  [80] origin = 13, next = 7, face = 1, twin = 81
-  [81] origin = 16, next = 78, face = 2, twin = 80
-  [82] origin = 13, next = 122, face = 42, twin = 83
-  [83] origin = 17, next = 80, face = 1, twin = 82
-  [84] origin = 14, next = 59, face = 14, twin = 85
-  [85] origin = 15, next = 86, face = 12, twin = 84
-  [86] origin = 14, next = 91, face = 12, twin = 87
-  [87] origin = 19, next = 63, face = 15, twin = 86
-  [88] origin = 15, next = 81, face = 2, twin = 89
-  [89] origin = 16, next = 90, face = 11, twin = 88
-  [90] origin = 15, next = 95, face = 11, twin = 91
-  [91] origin = 19, next = 85, face = 12, twin = 90
-  [92] origin = 16, next = 21, face = 0, twin = 93
-  [93] origin = 18, next = 94, face = 7, twin = 92
-  [94] origin = 16, next = 97, face = 7, twin = 95
-  [95] origin = 19, next = 89, face = 11, twin = 94
-  [96] origin = 18, next = 48, face = 16, twin = 97
-  [97] origin = 19, next = 93, face = 7, twin = 96
-  [98] † origin = -1, next = -1, face = -1, twin = 99
-  [99] † origin = -1, next = -1, face = -1, twin = 98
-  [100] origin = 4, next = 23, face = 18, twin = 101
-  [101] origin = -1, next = 26, face = 32, twin = 100
-  [102] origin = 5, next = 101, face = 32, twin = 103
-  [103] origin = -1, next = 34, face = 44, twin = 102
-  [104] † origin = -1, next = -1, face = -1, twin = 105
-  [105] † origin = -1, next = -1, face = -1, twin = 104
-  [106] origin = 11, next = 131, face = 46, twin = 107
-  [107] origin = -1, next = 65, face = 36, twin = 106
-  [108] † origin = -1, next = -1, face = -1, twin = 109
-  [109] † origin = -1, next = -1, face = -1, twin = 108
-  [110] origin = 10, next = 107, face = 36, twin = 111
-  [111] origin = -1, next = 119, face = 41, twin = 110
-  [112] † origin = -1, next = -1, face = -1, twin = 113
-  [113] † origin = -1, next = -1, face = -1, twin = 112
-  [114] † origin = -1, next = -1, face = -1, twin = 115
-  [115] † origin = -1, next = -1, face = -1, twin = 114
-  [116] † origin = -1, next = -1, face = -1, twin = 117
-  [117] † origin = -1, next = -1, face = -1, twin = 116
-  [118] origin = 13, next = 66, face = 40, twin = 119
-  [119] origin = 10, next = 120, face = 41, twin = 118
-  [120] origin = 13, next = 111, face = 41, twin = 121
-  [121] origin = -1, next = 82, face = 42, twin = 120
-  [122] origin = 17, next = 121, face = 42, twin = 123
-  [123] origin = -1, next = 20, face = 47, twin = 122
-  [124] † origin = -1, next = -1, face = -1, twin = 125
-  [125] † origin = -1, next = -1, face = -1, twin = 124
-  [126] † origin = -1, next = -1, face = -1, twin = 127
-  [127] † origin = -1, next = -1, face = -1, twin = 126
-  [128] origin = 7, next = 103, face = 44, twin = 129
-  [129] origin = -1, next = 39, face = 45, twin = 128
-  [130] origin = 9, next = 133, face = 48, twin = 131
-  [131] origin = -1, next = 60, face = 46, twin = 130
-  [132] origin = 18, next = 123, face = 47, twin = 133
-  [133] origin = -1, next = 47, face = 48, twin = 132
+  [46] origin = 24, next = 234, face = 82, twin = 47
+  [47] origin = 25, next = 141, face = 19, twin = 46
+  [48] † origin = -1, next = -1, face = -1, twin = 49
+  [49] † origin = -1, next = -1, face = -1, twin = 48
+  [50] † origin = -1, next = -1, face = -1, twin = 51
+  [51] † origin = -1, next = -1, face = -1, twin = 50
+  [52] origin = 8, next = 76, face = 54, twin = 53
+  [53] origin = 10, next = 60, face = 40, twin = 52
+  [54] origin = 8, next = 84, face = 26, twin = 55
+  [55] origin = 11, next = 56, face = 55, twin = 54
+  [56] origin = 8, next = 83, face = 55, twin = 57
+  [57] origin = 23, next = 52, face = 54, twin = 56
+  [58] origin = 8, next = 172, face = 32, twin = 59
+  [59] origin = 29, next = 54, face = 26, twin = 58
+  [60] origin = 8, next = 79, face = 40, twin = 61
+  [61] origin = 30, next = 58, face = 32, twin = 60
+  [62] origin = 9, next = 130, face = 50, twin = 63
+  [63] origin = 20, next = 70, face = 25, twin = 62
+  [64] origin = 9, next = 66, face = 43, twin = 65
+  [65] origin = 21, next = 62, face = 50, twin = 64
+  [66] origin = 21, next = 69, face = 43, twin = 67
+  [67] origin = 27, next = 138, face = 42, twin = 66
+  [68] origin = 9, next = 158, face = 18, twin = 69
+  [69] origin = 27, next = 64, face = 43, twin = 68
+  [70] origin = 9, next = 135, face = 25, twin = 71
+  [71] origin = 32, next = 72, face = 24, twin = 70
+  [72] origin = 9, next = 183, face = 24, twin = 73
+  [73] origin = 35, next = 68, face = 18, twin = 72
+  [74] origin = 10, next = 218, face = 73, twin = 75
+  [75] origin = 16, next = 78, face = 46, twin = 74
+  [76] origin = 10, next = 57, face = 54, twin = 77
+  [77] origin = 23, next = 216, face = 77, twin = 76
+  [78] origin = 10, next = 121, face = 46, twin = 79
+  [79] origin = 30, next = 53, face = 40, twin = 78
+  [80] origin = 11, next = 134, face = 36, twin = 81
+  [81] origin = 20, next = 82, face = 35, twin = 80
+  [82] origin = 11, next = 133, face = 35, twin = 83
+  [83] origin = 23, next = 55, face = 55, twin = 82
+  [84] origin = 11, next = 59, face = 26, twin = 85
+  [85] origin = 29, next = 86, face = 27, twin = 84
+  [86] origin = 11, next = 177, face = 27, twin = 87
+  [87] origin = 32, next = 80, face = 36, twin = 86
+  [88] origin = 12, next = 106, face = 12, twin = 89
+  [89] origin = 13, next = 94, face = 21, twin = 88
+  [90] origin = 12, next = 108, face = 14, twin = 91
+  [91] origin = 14, next = 96, face = 6, twin = 90
+  [92] origin = 12, next = 116, face = 30, twin = 93
+  [93] origin = 15, next = 90, face = 14, twin = 92
+  [94] origin = 12, next = 101, face = 21, twin = 95
+  [95] origin = 18, next = 92, face = 30, twin = 94
+  [96] origin = 12, next = 115, face = 6, twin = 97
+  [97] origin = 34, next = 88, face = 12, twin = 96
+  [98] origin = 18, next = 103, face = 22, twin = 99
+  [99] origin = 19, next = 123, face = 31, twin = 98
+  [100] origin = 13, next = 98, face = 22, twin = 101
+  [101] origin = 18, next = 89, face = 21, twin = 100
+  [102] origin = 13, next = 128, face = 15, twin = 103
+  [103] origin = 19, next = 100, face = 22, twin = 102
+  [104] origin = 13, next = 180, face = 4, twin = 105
+  [105] origin = 31, next = 102, face = 15, twin = 104
+  [106] origin = 13, next = 97, face = 12, twin = 107
+  [107] origin = 34, next = 104, face = 4, twin = 106
+  [108] origin = 14, next = 93, face = 14, twin = 109
+  [109] origin = 15, next = 110, face = 20, twin = 108
+  [110] origin = 14, next = 41, face = 20, twin = 111
+  [111] origin = 24, next = 112, face = 2, twin = 110
+  [112] origin = 14, next = 151, face = 2, twin = 113
+  [113] origin = 33, next = 114, face = 3, twin = 112
+  [114] origin = 14, next = 185, face = 3, twin = 115
+  [115] origin = 34, next = 91, face = 6, twin = 114
+  [116] origin = 15, next = 95, face = 30, twin = 117
+  [117] origin = 18, next = 230, face = 81, twin = 116
+  [118] origin = 16, next = 125, face = 41, twin = 119
+  [119] origin = 19, next = 120, face = 39, twin = 118
+  [120] origin = 16, next = 127, face = 39, twin = 121
+  [121] origin = 30, next = 75, face = 46, twin = 120
+  [122] origin = 17, next = 222, face = 75, twin = 123
+  [123] origin = 18, next = 124, face = 31, twin = 122
+  [124] origin = 17, next = 99, face = 31, twin = 125
+  [125] origin = 19, next = 9, face = 41, twin = 124
+  [126] origin = 19, next = 178, face = 17, twin = 127
+  [127] origin = 30, next = 119, face = 39, twin = 126
+  [128] origin = 19, next = 105, face = 15, twin = 129
+  [129] origin = 31, next = 126, face = 17, twin = 128
+  [130] origin = 20, next = 65, face = 50, twin = 131
+  [131] origin = 21, next = 132, face = 51, twin = 130
+  [132] origin = 20, next = 137, face = 51, twin = 133
+  [133] origin = 23, next = 81, face = 35, twin = 132
+  [134] origin = 20, next = 87, face = 36, twin = 135
+  [135] origin = 32, next = 63, face = 25, twin = 134
+  [136] origin = 21, next = 208, face = 69, twin = 137
+  [137] origin = 23, next = 131, face = 51, twin = 136
+  [138] origin = 21, next = 156, face = 42, twin = 139
+  [139] origin = 26, next = 136, face = 69, twin = 138
+  [140] origin = 22, next = 150, face = 13, twin = 141
+  [141] origin = 24, next = 142, face = 19, twin = 140
+  [142] origin = 22, next = 47, face = 19, twin = 143
+  [143] origin = 25, next = 144, face = 33, twin = 142
+  [144] origin = 22, next = 155, face = 33, twin = 145
+  [145] origin = 27, next = 148, face = 9, twin = 144
+  [146] origin = 22, next = 186, face = 10, twin = 147
+  [147] origin = 33, next = 140, face = 13, twin = 146
+  [148] origin = 22, next = 159, face = 9, twin = 149
+  [149] origin = 35, next = 146, face = 10, twin = 148
+  [150] origin = 24, next = 147, face = 13, twin = 151
+  [151] origin = 33, next = 111, face = 2, twin = 150
+  [152] origin = 25, next = 206, face = 83, twin = 153
+  [153] origin = 26, next = 154, face = 34, twin = 152
+  [154] origin = 25, next = 157, face = 34, twin = 155
+  [155] origin = 27, next = 143, face = 33, twin = 154
+  [156] origin = 26, next = 67, face = 42, twin = 157
+  [157] origin = 27, next = 153, face = 34, twin = 156
+  [158] origin = 27, next = 73, face = 18, twin = 159
+  [159] origin = 35, next = 145, face = 9, twin = 158
+  [160] origin = 28, next = 176, face = 7, twin = 161
+  [161] origin = 29, next = 162, face = 11, twin = 160
+  [162] origin = 28, next = 175, face = 11, twin = 163
+  [163] origin = 31, next = 168, face = 5, twin = 162
+  [164] origin = 28, next = 182, face = 8, twin = 165
+  [165] origin = 32, next = 160, face = 7, twin = 164
+  [166] origin = 28, next = 184, face = 0, twin = 167
+  [167] origin = 33, next = 170, face = 1, twin = 166
+  [168] origin = 28, next = 181, face = 5, twin = 169
+  [169] origin = 34, next = 166, face = 0, twin = 168
+  [170] origin = 28, next = 187, face = 1, twin = 171
+  [171] origin = 35, next = 164, face = 8, twin = 170
+  [172] origin = 29, next = 61, face = 32, twin = 173
+  [173] origin = 30, next = 174, face = 16, twin = 172
+  [174] origin = 29, next = 179, face = 16, twin = 175
+  [175] origin = 31, next = 161, face = 11, twin = 174
+  [176] origin = 29, next = 165, face = 7, twin = 177
+  [177] origin = 32, next = 85, face = 27, twin = 176
+  [178] origin = 30, next = 129, face = 17, twin = 179
+  [179] origin = 31, next = 173, face = 16, twin = 178
+  [180] origin = 31, next = 107, face = 4, twin = 181
+  [181] origin = 34, next = 163, face = 5, twin = 180
+  [182] origin = 32, next = 171, face = 8, twin = 183
+  [183] origin = 35, next = 71, face = 24, twin = 182
+  [184] origin = 33, next = 169, face = 0, twin = 185
+  [185] origin = 34, next = 113, face = 3, twin = 184
+  [186] origin = 33, next = 149, face = 10, twin = 187
+  [187] origin = 35, next = 167, face = 1, twin = 186
+  [188] † origin = -1, next = -1, face = -1, twin = 189
+  [189] † origin = -1, next = -1, face = -1, twin = 188
+  [190] origin = 4, next = 229, face = 78, twin = 191
+  [191] origin = -1, next = 28, face = 62, twin = 190
+  [192] † origin = -1, next = -1, face = -1, twin = 193
+  [193] † origin = -1, next = -1, face = -1, twin = 192
+  [194] origin = 5, next = 191, face = 62, twin = 195
+  [195] origin = -1, next = 36, face = 68, twin = 194
+  [196] † origin = -1, next = -1, face = -1, twin = 197
+  [197] † origin = -1, next = -1, face = -1, twin = 196
+  [198] origin = -1, next = 39, face = 79, twin = 199
+  [199] origin = 7, next = 195, face = 68, twin = 198
+  [200] † origin = -1, next = -1, face = -1, twin = 201
+  [201] † origin = -1, next = -1, face = -1, twin = 200
+  [202] origin = 23, next = 207, face = 66, twin = 203
+  [203] origin = -1, next = 77, face = 77, twin = 202
+  [204] † origin = -1, next = -1, face = -1, twin = 205
+  [205] † origin = -1, next = -1, face = -1, twin = 204
+  [206] origin = 26, next = 235, face = 83, twin = 207
+  [207] origin = -1, next = 209, face = 66, twin = 206
+  [208] origin = 23, next = 139, face = 69, twin = 209
+  [209] origin = 26, next = 202, face = 66, twin = 208
+  [210] † origin = -1, next = -1, face = -1, twin = 211
+  [211] † origin = -1, next = -1, face = -1, twin = 210
+  [212] † origin = -1, next = -1, face = -1, twin = 213
+  [213] † origin = -1, next = -1, face = -1, twin = 212
+  [214] † origin = -1, next = -1, face = -1, twin = 215
+  [215] † origin = -1, next = -1, face = -1, twin = 214
+  [216] origin = 10, next = 203, face = 77, twin = 217
+  [217] origin = -1, next = 74, face = 73, twin = 216
+  [218] origin = 16, next = 217, face = 73, twin = 219
+  [219] origin = -1, next = 8, face = 74, twin = 218
+  [220] origin = 17, next = 219, face = 74, twin = 221
+  [221] origin = -1, next = 122, face = 75, twin = 220
+  [222] origin = 18, next = 221, face = 75, twin = 223
+  [223] origin = -1, next = 117, face = 81, twin = 222
+  [224] † origin = -1, next = -1, face = -1, twin = 225
+  [225] † origin = -1, next = -1, face = -1, twin = 224
+  [226] † origin = -1, next = -1, face = -1, twin = 227
+  [227] † origin = -1, next = -1, face = -1, twin = 226
+  [228] origin = 6, next = 198, face = 79, twin = 229
+  [229] origin = -1, next = 31, face = 78, twin = 228
+  [230] origin = 15, next = 223, face = 81, twin = 231
+  [231] origin = -1, next = 40, face = 80, twin = 230
+  [232] origin = 24, next = 231, face = 80, twin = 233
+  [233] origin = -1, next = 46, face = 82, twin = 232
+  [234] origin = 25, next = 233, face = 82, twin = 235
+  [235] origin = -1, next = 152, face = 83, twin = 234
 
 Faces:
-  [0] half_edge = 21
-    Vertices: 18 17 16 
-    Half-Edges: 21 6 92 
-  [1] half_edge = 7
-    Vertices: 16 17 13 
-    Half-Edges: 7 83 80 
-  [2] half_edge = 78
-    Vertices: 13 15 16 
-    Half-Edges: 78 88 81 
-  [3] † half_edge = 114
+  [0] half_edge = 169
+    Vertices: 34 28 33 
+    Half-Edges: 169 166 184 
+  [1] half_edge = 170
+    Vertices: 28 35 33 
+    Half-Edges: 170 187 167 
+  [2] half_edge = 111
+    Vertices: 24 14 33 
+    Half-Edges: 111 112 151 
+  [3] half_edge = 113
+    Vertices: 33 14 34 
+    Half-Edges: 113 114 185 
+  [4] half_edge = 104
+    Vertices: 13 31 34 
+    Half-Edges: 104 180 107 
+  [5] half_edge = 181
+    Vertices: 34 31 28 
+    Half-Edges: 181 163 168 
+  [6] half_edge = 91
+    Vertices: 14 12 34 
+    Half-Edges: 91 96 115 
+  [7] half_edge = 176
+    Vertices: 29 32 28 
+    Half-Edges: 176 165 160 
+  [8] half_edge = 164
+    Vertices: 28 32 35 
+    Half-Edges: 164 182 171 
+  [9] half_edge = 145
+    Vertices: 27 22 35 
+    Half-Edges: 145 148 159 
+  [10] half_edge = 149
+    Vertices: 35 22 33 
+    Half-Edges: 149 146 186 
+  [11] half_edge = 175
+    Vertices: 31 29 28 
+    Half-Edges: 175 161 162 
+  [12] half_edge = 88
+    Vertices: 12 13 34 
+    Half-Edges: 88 106 97 
+  [13] half_edge = 140
+    Vertices: 22 24 33 
+    Half-Edges: 140 150 147 
+  [14] half_edge = 108
+    Vertices: 14 15 12 
+    Half-Edges: 108 93 90 
+  [15] half_edge = 102
+    Vertices: 13 19 31 
+    Half-Edges: 102 128 105 
+  [16] half_edge = 179
+    Vertices: 31 30 29 
+    Half-Edges: 179 173 174 
+  [17] half_edge = 126
+    Vertices: 19 30 31 
+    Half-Edges: 126 178 129 
+  [18] half_edge = 68
+    Vertices: 9 27 35 
+    Half-Edges: 68 158 73 
+  [19] half_edge = 47
+    Vertices: 25 24 22 
+    Half-Edges: 47 141 142 
+  [20] half_edge = 41
+    Vertices: 24 15 14 
+    Half-Edges: 41 109 110 
+  [21] half_edge = 94
+    Vertices: 12 18 13 
+    Half-Edges: 94 101 89 
+  [22] half_edge = 98
+    Vertices: 18 19 13 
+    Half-Edges: 98 103 100 
+  [23] † half_edge = 226
     Vertices: -1 
-    Half-Edges: 114 
-  [4] † half_edge = 114
+    Half-Edges: 226 
+  [24] half_edge = 71
+    Vertices: 32 9 35 
+    Half-Edges: 71 72 183 
+  [25] half_edge = 63
+    Vertices: 20 9 32 
+    Half-Edges: 63 70 135 
+  [26] half_edge = 54
+    Vertices: 8 11 29 
+    Half-Edges: 54 84 59 
+  [27] half_edge = 85
+    Vertices: 29 11 32 
+    Half-Edges: 85 86 177 
+  [28] † half_edge = 226
     Vertices: -1 
-    Half-Edges: 114 
-  [5] † half_edge = 124
+    Half-Edges: 226 
+  [29] † half_edge = 226
     Vertices: -1 
-    Half-Edges: 124 
-  [6] † half_edge = 126
-    Vertices: -1 
-    Half-Edges: 126 
-  [7] half_edge = 97
-    Vertices: 19 18 16 
-    Half-Edges: 97 93 94 
-  [8] half_edge = 73
-    Vertices: 13 12 15 
-    Half-Edges: 73 74 79 
-  [9] † half_edge = 114
-    Vertices: -1 
-    Half-Edges: 114 
-  [10] † half_edge = 124
-    Vertices: -1 
-    Half-Edges: 124 
-  [11] half_edge = 90
-    Vertices: 15 19 16 
-    Half-Edges: 90 95 89 
-  [12] half_edge = 86
-    Vertices: 14 19 15 
-    Half-Edges: 86 91 85 
-  [13] half_edge = 55
-    Vertices: 12 8 15 
-    Half-Edges: 55 58 75 
-  [14] half_edge = 56
-    Vertices: 8 14 15 
-    Half-Edges: 56 84 59 
-  [15] half_edge = 49
-    Vertices: 9 19 14 
-    Half-Edges: 49 87 63 
-  [16] half_edge = 46
-    Vertices: 9 18 19 
-    Half-Edges: 46 96 48 
-  [17] † half_edge = 114
-    Vertices: -1 
-    Half-Edges: 114 
-  [18] half_edge = 23
-    Vertices: -1 6 4 
-    Half-Edges: 23 29 100 
-  [19] † half_edge = 114
-    Vertices: -1 
-    Half-Edges: 114 
-  [20] half_edge = 67
-    Vertices: 12 10 8 
-    Half-Edges: 67 51 54 
-  [21] half_edge = 70
-    Vertices: 9 8 11 
-    Half-Edges: 70 52 61 
-  [22] † half_edge = 114
-    Vertices: -1 
-    Half-Edges: 114 
-  [23] † half_edge = 126
-    Vertices: -1 
-    Half-Edges: 126 
-  [24] half_edge = 33
-    Vertices: 7 4 6 
-    Half-Edges: 33 28 38 
-  [25] † half_edge = 126
-    Vertices: -1 
-    Half-Edges: 126 
-  [26] half_edge = 64
-    Vertices: 10 11 8 
-    Half-Edges: 64 53 50 
-  [27] half_edge = 71
-    Vertices: 8 9 14 
-    Half-Edges: 71 62 57 
-  [28] † half_edge = 126
-    Vertices: -1 
-    Half-Edges: 126 
-  [29] half_edge = 32
+    Half-Edges: 226 
+  [30] half_edge = 116
+    Vertices: 15 18 12 
+    Half-Edges: 116 95 92 
+  [31] half_edge = 99
+    Vertices: 19 18 17 
+    Half-Edges: 99 123 124 
+  [32] half_edge = 61
+    Vertices: 30 8 29 
+    Half-Edges: 61 58 172 
+  [33] half_edge = 155
+    Vertices: 27 25 22 
+    Half-Edges: 155 143 144 
+  [34] half_edge = 153
+    Vertices: 26 25 27 
+    Half-Edges: 153 154 157 
+  [35] half_edge = 133
+    Vertices: 23 20 11 
+    Half-Edges: 133 81 82 
+  [36] half_edge = 80
+    Vertices: 11 20 32 
+    Half-Edges: 80 134 87 
+  [37] half_edge = 34
     Vertices: 4 7 5 
-    Half-Edges: 32 35 27 
-  [30] † half_edge = 124
+    Half-Edges: 34 37 29 
+  [38] † half_edge = 226
     Vertices: -1 
-    Half-Edges: 124 
-  [31] † half_edge = 124
+    Half-Edges: 226 
+  [39] half_edge = 119
+    Vertices: 19 16 30 
+    Half-Edges: 119 120 127 
+  [40] half_edge = 79
+    Vertices: 30 10 8 
+    Half-Edges: 79 53 60 
+  [41] half_edge = 9
+    Vertices: 17 16 19 
+    Half-Edges: 9 118 125 
+  [42] half_edge = 67
+    Vertices: 27 21 26 
+    Half-Edges: 67 138 156 
+  [43] half_edge = 66
+    Vertices: 21 27 9 
+    Half-Edges: 66 69 64 
+  [44] half_edge = 35
+    Vertices: 7 4 6 
+    Half-Edges: 35 30 38 
+  [45] † half_edge = 226
     Vertices: -1 
-    Half-Edges: 124 
-  [32] half_edge = 101
+    Half-Edges: 226 
+  [46] half_edge = 75
+    Vertices: 16 10 30 
+    Half-Edges: 75 78 121 
+  [47] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [48] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [49] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [50] half_edge = 130
+    Vertices: 20 21 9 
+    Half-Edges: 130 65 62 
+  [51] half_edge = 137
+    Vertices: 23 21 20 
+    Half-Edges: 137 131 132 
+  [52] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [53] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [54] half_edge = 76
+    Vertices: 10 23 8 
+    Half-Edges: 76 57 52 
+  [55] half_edge = 56
+    Vertices: 8 23 11 
+    Half-Edges: 56 83 55 
+  [56] † half_edge = 224
+    Vertices: -1 
+    Half-Edges: 224 
+  [57] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [58] † half_edge = 224
+    Vertices: -1 
+    Half-Edges: 224 
+  [59] † half_edge = 224
+    Vertices: -1 
+    Half-Edges: 224 
+  [60] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [61] † half_edge = 210
+    Vertices: -1 
+    Half-Edges: 210 
+  [62] half_edge = 191
     Vertices: -1 4 5 
-    Half-Edges: 101 26 102 
-  [33] † half_edge = 126
+    Half-Edges: 191 28 194 
+  [63] † half_edge = 226
     Vertices: -1 
-    Half-Edges: 126 
-  [34] † half_edge = 126
+    Half-Edges: 226 
+  [64] † half_edge = 226
     Vertices: -1 
-    Half-Edges: 126 
-  [35] † half_edge = 114
+    Half-Edges: 226 
+  [65] † half_edge = 210
     Vertices: -1 
-    Half-Edges: 114 
-  [36] half_edge = 107
-    Vertices: -1 11 10 
-    Half-Edges: 107 65 110 
-  [37] † half_edge = 114
+    Half-Edges: 210 
+  [66] half_edge = 207
+    Vertices: -1 26 23 
+    Half-Edges: 207 209 202 
+  [67] † half_edge = 210
     Vertices: -1 
-    Half-Edges: 114 
-  [38] † half_edge = 124
-    Vertices: -1 
-    Half-Edges: 124 
-  [39] † half_edge = 124
-    Vertices: -1 
-    Half-Edges: 124 
-  [40] half_edge = 118
-    Vertices: 13 10 12 
-    Half-Edges: 118 66 72 
-  [41] half_edge = 111
-    Vertices: -1 10 13 
-    Half-Edges: 111 119 120 
-  [42] half_edge = 121
-    Vertices: -1 13 17 
-    Half-Edges: 121 82 122 
-  [43] † half_edge = 126
-    Vertices: -1 
-    Half-Edges: 126 
-  [44] half_edge = 103
+    Half-Edges: 210 
+  [68] half_edge = 195
     Vertices: -1 5 7 
-    Half-Edges: 103 34 128 
-  [45] half_edge = 129
-    Vertices: -1 7 6 
-    Half-Edges: 129 39 22 
-  [46] half_edge = 131
-    Vertices: -1 9 11 
-    Half-Edges: 131 60 106 
-  [47] half_edge = 123
+    Half-Edges: 195 36 199 
+  [69] half_edge = 208
+    Vertices: 23 26 21 
+    Half-Edges: 208 139 136 
+  [70] † half_edge = 224
+    Vertices: -1 
+    Half-Edges: 224 
+  [71] † half_edge = 224
+    Vertices: -1 
+    Half-Edges: 224 
+  [72] † half_edge = 224
+    Vertices: -1 
+    Half-Edges: 224 
+  [73] half_edge = 217
+    Vertices: -1 10 16 
+    Half-Edges: 217 74 218 
+  [74] half_edge = 219
+    Vertices: -1 16 17 
+    Half-Edges: 219 8 220 
+  [75] half_edge = 221
     Vertices: -1 17 18 
-    Half-Edges: 123 20 132 
-  [48] half_edge = 133
-    Vertices: -1 18 9 
-    Half-Edges: 133 47 130 
+    Half-Edges: 221 122 222 
+  [76] † half_edge = 226
+    Vertices: -1 
+    Half-Edges: 226 
+  [77] half_edge = 203
+    Vertices: -1 23 10 
+    Half-Edges: 203 77 216 
+  [78] half_edge = 229
+    Vertices: -1 6 4 
+    Half-Edges: 229 31 190 
+  [79] half_edge = 198
+    Vertices: -1 7 6 
+    Half-Edges: 198 39 228 
+  [80] half_edge = 231
+    Vertices: -1 15 24 
+    Half-Edges: 231 40 232 
+  [81] half_edge = 223
+    Vertices: -1 18 15 
+    Half-Edges: 223 117 230 
+  [82] half_edge = 233
+    Vertices: -1 24 25 
+    Half-Edges: 233 46 234 
+  [83] half_edge = 235
+    Vertices: -1 25 26 
+    Half-Edges: 235 152 206 
 Vertex incident half-edges:
  Outgoing edges from vertex 0:
  Outgoing edges from vertex 1:
  Outgoing edges from vertex 2:
  Outgoing edges from vertex 3:
  Outgoing edges from vertex 4:
-  Half-edge 26 to vertex 5 in face 32
-  Half-edge 32 to vertex 7 in face 29
-  Half-edge 28 to vertex 6 in face 24
-  Half-edge 100 to vertex -1 in face 18
+  Half-edge 28 to vertex 5 in face 62
+  Half-edge 34 to vertex 7 in face 37
+  Half-edge 30 to vertex 6 in face 44
+  Half-edge 190 to vertex -1 in face 78
  Outgoing edges from vertex 5:
-  Half-edge 27 to vertex 4 in face 29
-  Half-edge 102 to vertex -1 in face 32
-  Half-edge 34 to vertex 7 in face 44
+  Half-edge 29 to vertex 4 in face 37
+  Half-edge 194 to vertex -1 in face 62
+  Half-edge 36 to vertex 7 in face 68
  Outgoing edges from vertex 6:
-  Half-edge 22 to vertex -1 in face 45
-  Half-edge 29 to vertex 4 in face 18
-  Half-edge 38 to vertex 7 in face 24
+  Half-edge 31 to vertex 4 in face 78
+  Half-edge 38 to vertex 7 in face 44
+  Half-edge 228 to vertex -1 in face 79
  Outgoing edges from vertex 7:
-  Half-edge 33 to vertex 4 in face 24
-  Half-edge 35 to vertex 5 in face 29
-  Half-edge 128 to vertex -1 in face 44
-  Half-edge 39 to vertex 6 in face 45
+  Half-edge 35 to vertex 4 in face 44
+  Half-edge 37 to vertex 5 in face 37
+  Half-edge 199 to vertex -1 in face 68
+  Half-edge 39 to vertex 6 in face 79
  Outgoing edges from vertex 8:
-  Half-edge 50 to vertex 10 in face 26
-  Half-edge 54 to vertex 12 in face 20
-  Half-edge 58 to vertex 15 in face 13
-  Half-edge 56 to vertex 14 in face 14
-  Half-edge 71 to vertex 9 in face 27
-  Half-edge 52 to vertex 11 in face 21
+  Half-edge 52 to vertex 10 in face 54
+  Half-edge 60 to vertex 30 in face 40
+  Half-edge 58 to vertex 29 in face 32
+  Half-edge 54 to vertex 11 in face 26
+  Half-edge 56 to vertex 23 in face 55
  Outgoing edges from vertex 9:
-  Half-edge 46 to vertex 18 in face 16
-  Half-edge 130 to vertex -1 in face 48
-  Half-edge 60 to vertex 11 in face 46
-  Half-edge 70 to vertex 8 in face 21
-  Half-edge 62 to vertex 14 in face 27
-  Half-edge 49 to vertex 19 in face 15
+  Half-edge 62 to vertex 20 in face 50
+  Half-edge 70 to vertex 32 in face 25
+  Half-edge 72 to vertex 35 in face 24
+  Half-edge 68 to vertex 27 in face 18
+  Half-edge 64 to vertex 21 in face 43
  Outgoing edges from vertex 10:
-  Half-edge 51 to vertex 8 in face 20
-  Half-edge 64 to vertex 11 in face 26
-  Half-edge 110 to vertex -1 in face 36
-  Half-edge 119 to vertex 13 in face 41
-  Half-edge 66 to vertex 12 in face 40
+  Half-edge 53 to vertex 8 in face 40
+  Half-edge 76 to vertex 23 in face 54
+  Half-edge 216 to vertex -1 in face 77
+  Half-edge 74 to vertex 16 in face 73
+  Half-edge 78 to vertex 30 in face 46
  Outgoing edges from vertex 11:
-  Half-edge 53 to vertex 8 in face 26
-  Half-edge 61 to vertex 9 in face 21
-  Half-edge 106 to vertex -1 in face 46
-  Half-edge 65 to vertex 10 in face 36
+  Half-edge 55 to vertex 8 in face 55
+  Half-edge 84 to vertex 29 in face 26
+  Half-edge 86 to vertex 32 in face 27
+  Half-edge 80 to vertex 20 in face 36
+  Half-edge 82 to vertex 23 in face 35
  Outgoing edges from vertex 12:
-  Half-edge 55 to vertex 8 in face 13
-  Half-edge 67 to vertex 10 in face 20
-  Half-edge 72 to vertex 13 in face 40
-  Half-edge 74 to vertex 15 in face 8
+  Half-edge 88 to vertex 13 in face 12
+  Half-edge 94 to vertex 18 in face 21
+  Half-edge 92 to vertex 15 in face 30
+  Half-edge 90 to vertex 14 in face 14
+  Half-edge 96 to vertex 34 in face 6
  Outgoing edges from vertex 13:
-  Half-edge 73 to vertex 12 in face 8
-  Half-edge 118 to vertex 10 in face 40
-  Half-edge 120 to vertex -1 in face 41
-  Half-edge 82 to vertex 17 in face 42
-  Half-edge 80 to vertex 16 in face 1
-  Half-edge 78 to vertex 15 in face 2
+  Half-edge 89 to vertex 12 in face 21
+  Half-edge 106 to vertex 34 in face 12
+  Half-edge 104 to vertex 31 in face 4
+  Half-edge 102 to vertex 19 in face 15
+  Half-edge 100 to vertex 18 in face 22
  Outgoing edges from vertex 14:
-  Half-edge 57 to vertex 8 in face 27
-  Half-edge 84 to vertex 15 in face 14
-  Half-edge 86 to vertex 19 in face 12
-  Half-edge 63 to vertex 9 in face 15
+  Half-edge 91 to vertex 12 in face 6
+  Half-edge 108 to vertex 15 in face 14
+  Half-edge 110 to vertex 24 in face 20
+  Half-edge 112 to vertex 33 in face 2
+  Half-edge 114 to vertex 34 in face 3
  Outgoing edges from vertex 15:
-  Half-edge 59 to vertex 8 in face 14
-  Half-edge 75 to vertex 12 in face 13
-  Half-edge 79 to vertex 13 in face 8
-  Half-edge 88 to vertex 16 in face 2
-  Half-edge 90 to vertex 19 in face 11
-  Half-edge 85 to vertex 14 in face 12
+  Half-edge 40 to vertex 24 in face 80
+  Half-edge 109 to vertex 14 in face 20
+  Half-edge 93 to vertex 12 in face 14
+  Half-edge 116 to vertex 18 in face 30
+  Half-edge 230 to vertex -1 in face 81
  Outgoing edges from vertex 16:
-  Half-edge 7 to vertex 17 in face 1
-  Half-edge 92 to vertex 18 in face 0
-  Half-edge 94 to vertex 19 in face 7
-  Half-edge 89 to vertex 15 in face 11
-  Half-edge 81 to vertex 13 in face 2
+  Half-edge 8 to vertex 17 in face 74
+  Half-edge 118 to vertex 19 in face 41
+  Half-edge 120 to vertex 30 in face 39
+  Half-edge 75 to vertex 10 in face 46
+  Half-edge 218 to vertex -1 in face 73
  Outgoing edges from vertex 17:
-  Half-edge 6 to vertex 16 in face 0
-  Half-edge 83 to vertex 13 in face 1
-  Half-edge 122 to vertex -1 in face 42
-  Half-edge 20 to vertex 18 in face 47
+  Half-edge 9 to vertex 16 in face 41
+  Half-edge 220 to vertex -1 in face 74
+  Half-edge 122 to vertex 18 in face 75
+  Half-edge 124 to vertex 19 in face 31
  Outgoing edges from vertex 18:
-  Half-edge 21 to vertex 17 in face 0
-  Half-edge 132 to vertex -1 in face 47
-  Half-edge 47 to vertex 9 in face 48
-  Half-edge 96 to vertex 19 in face 16
-  Half-edge 93 to vertex 16 in face 7
+  Half-edge 95 to vertex 12 in face 30
+  Half-edge 101 to vertex 13 in face 21
+  Half-edge 98 to vertex 19 in face 22
+  Half-edge 123 to vertex 17 in face 31
+  Half-edge 222 to vertex -1 in face 75
+  Half-edge 117 to vertex 15 in face 81
  Outgoing edges from vertex 19:
-  Half-edge 48 to vertex 9 in face 16
-  Half-edge 87 to vertex 14 in face 15
-  Half-edge 91 to vertex 15 in face 12
-  Half-edge 95 to vertex 16 in face 11
-  Half-edge 97 to vertex 18 in face 7
+  Half-edge 99 to vertex 18 in face 31
+  Half-edge 103 to vertex 13 in face 22
+  Half-edge 128 to vertex 31 in face 15
+  Half-edge 126 to vertex 30 in face 17
+  Half-edge 119 to vertex 16 in face 39
+  Half-edge 125 to vertex 17 in face 41
+ Outgoing edges from vertex 20:
+  Half-edge 63 to vertex 9 in face 25
+  Half-edge 130 to vertex 21 in face 50
+  Half-edge 132 to vertex 23 in face 51
+  Half-edge 81 to vertex 11 in face 35
+  Half-edge 134 to vertex 32 in face 36
+ Outgoing edges from vertex 21:
+  Half-edge 65 to vertex 9 in face 50
+  Half-edge 66 to vertex 27 in face 43
+  Half-edge 138 to vertex 26 in face 42
+  Half-edge 136 to vertex 23 in face 69
+  Half-edge 131 to vertex 20 in face 51
+ Outgoing edges from vertex 22:
+  Half-edge 140 to vertex 24 in face 13
+  Half-edge 142 to vertex 25 in face 19
+  Half-edge 144 to vertex 27 in face 33
+  Half-edge 148 to vertex 35 in face 9
+  Half-edge 146 to vertex 33 in face 10
+ Outgoing edges from vertex 23:
+  Half-edge 57 to vertex 8 in face 54
+  Half-edge 83 to vertex 11 in face 55
+  Half-edge 133 to vertex 20 in face 35
+  Half-edge 137 to vertex 21 in face 51
+  Half-edge 208 to vertex 26 in face 69
+  Half-edge 202 to vertex -1 in face 66
+  Half-edge 77 to vertex 10 in face 77
+ Outgoing edges from vertex 24:
+  Half-edge 41 to vertex 15 in face 20
+  Half-edge 232 to vertex -1 in face 80
+  Half-edge 46 to vertex 25 in face 82
+  Half-edge 141 to vertex 22 in face 19
+  Half-edge 150 to vertex 33 in face 13
+  Half-edge 111 to vertex 14 in face 2
+ Outgoing edges from vertex 25:
+  Half-edge 47 to vertex 24 in face 19
+  Half-edge 234 to vertex -1 in face 82
+  Half-edge 152 to vertex 26 in face 83
+  Half-edge 154 to vertex 27 in face 34
+  Half-edge 143 to vertex 22 in face 33
+ Outgoing edges from vertex 26:
+  Half-edge 139 to vertex 21 in face 69
+  Half-edge 156 to vertex 27 in face 42
+  Half-edge 153 to vertex 25 in face 34
+  Half-edge 206 to vertex -1 in face 83
+  Half-edge 209 to vertex 23 in face 66
+ Outgoing edges from vertex 27:
+  Half-edge 67 to vertex 21 in face 42
+  Half-edge 69 to vertex 9 in face 43
+  Half-edge 158 to vertex 35 in face 18
+  Half-edge 145 to vertex 22 in face 9
+  Half-edge 155 to vertex 25 in face 33
+  Half-edge 157 to vertex 26 in face 34
+ Outgoing edges from vertex 28:
+  Half-edge 160 to vertex 29 in face 7
+  Half-edge 162 to vertex 31 in face 11
+  Half-edge 168 to vertex 34 in face 5
+  Half-edge 166 to vertex 33 in face 0
+  Half-edge 170 to vertex 35 in face 1
+  Half-edge 164 to vertex 32 in face 8
+ Outgoing edges from vertex 29:
+  Half-edge 59 to vertex 8 in face 26
+  Half-edge 172 to vertex 30 in face 32
+  Half-edge 174 to vertex 31 in face 16
+  Half-edge 161 to vertex 28 in face 11
+  Half-edge 176 to vertex 32 in face 7
+  Half-edge 85 to vertex 11 in face 27
+ Outgoing edges from vertex 30:
+  Half-edge 61 to vertex 8 in face 32
+  Half-edge 79 to vertex 10 in face 40
+  Half-edge 121 to vertex 16 in face 46
+  Half-edge 127 to vertex 19 in face 39
+  Half-edge 178 to vertex 31 in face 17
+  Half-edge 173 to vertex 29 in face 16
+ Outgoing edges from vertex 31:
+  Half-edge 105 to vertex 13 in face 15
+  Half-edge 180 to vertex 34 in face 4
+  Half-edge 163 to vertex 28 in face 5
+  Half-edge 175 to vertex 29 in face 11
+  Half-edge 179 to vertex 30 in face 16
+  Half-edge 129 to vertex 19 in face 17
+ Outgoing edges from vertex 32:
+  Half-edge 71 to vertex 9 in face 24
+  Half-edge 135 to vertex 20 in face 25
+  Half-edge 87 to vertex 11 in face 36
+  Half-edge 177 to vertex 29 in face 27
+  Half-edge 165 to vertex 28 in face 7
+  Half-edge 182 to vertex 35 in face 8
+ Outgoing edges from vertex 33:
+  Half-edge 113 to vertex 14 in face 3
+  Half-edge 151 to vertex 24 in face 2
+  Half-edge 147 to vertex 22 in face 13
+  Half-edge 186 to vertex 35 in face 10
+  Half-edge 167 to vertex 28 in face 1
+  Half-edge 184 to vertex 34 in face 0
+ Outgoing edges from vertex 34:
+  Half-edge 97 to vertex 12 in face 12
+  Half-edge 115 to vertex 14 in face 6
+  Half-edge 185 to vertex 33 in face 3
+  Half-edge 169 to vertex 28 in face 0
+  Half-edge 181 to vertex 31 in face 5
+  Half-edge 107 to vertex 13 in face 4
+ Outgoing edges from vertex 35:
+  Half-edge 73 to vertex 9 in face 18
+  Half-edge 183 to vertex 32 in face 24
+  Half-edge 171 to vertex 28 in face 8
+  Half-edge 187 to vertex 33 in face 1
+  Half-edge 149 to vertex 22 in face 10
+  Half-edge 159 to vertex 27 in face 9

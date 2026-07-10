@@ -44,18 +44,27 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   const float fraction = t - section;
 
   size_t he_id = quad_id * 2;
-
-  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, t);
   const std::vector<size_t> quad_strand_ids = collectFlipQuadrilateralStrandIds(graph, he_id);
-  const size_t shared_reference_branch = kd->getSharedReferenceBranchForStrands(quad_strand_ids, branch_lookup_time);
-
-  const auto piece_poly = [&](size_t strand_id, double schedule_time) {
-    return kd->getSitePiecePolynomialWithReferenceBranch(strand_id, section, shared_reference_branch, schedule_time);
-  };
 
   const auto build_trigger = [&](size_t active_he_id, double schedule_time, Polynomial& event_trigger_out,
                                  std::vector<Trajectory<2>>& trajs_out) {
     trajs_out.clear();
+    std::vector<size_t> trigger_strand_ids;
+    const auto append_trigger_strand = [&](int vertex) {
+      if (vertex < 0)
+      {
+        return;
+      }
+      const size_t strand_id = static_cast<size_t>(vertex);
+      if (std::find(trigger_strand_ids.begin(), trigger_strand_ids.end(), strand_id) == trigger_strand_ids.end())
+      {
+        trigger_strand_ids.push_back(strand_id);
+      }
+    };
+    const auto piece_for_trigger = [&](size_t strand_id, double schedule_time) {
+      return kd->getSitePiecePolynomialForEventStrands(strand_id, section, schedule_time, trigger_strand_ids);
+    };
+
     if (graph.isOnConvexBoundary(active_he_id) || graph.isOutsideConvexBoundary(active_he_id))
     {
       if (graph.isOutsideConvexBoundary(active_he_id))
@@ -77,9 +86,14 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
         return;
       }
 
-      trajs_out.push_back(piece_poly(static_cast<size_t>(filtered_indices[0]), schedule_time));
-      trajs_out.push_back(piece_poly(static_cast<size_t>(filtered_indices[1]), schedule_time));
-      trajs_out.push_back(piece_poly(static_cast<size_t>(filtered_indices[2]), schedule_time));
+      for (int vertex : filtered_indices)
+      {
+        append_trigger_strand(vertex);
+      }
+
+      trajs_out.push_back(piece_for_trigger(static_cast<size_t>(filtered_indices[0]), schedule_time));
+      trajs_out.push_back(piece_for_trigger(static_cast<size_t>(filtered_indices[1]), schedule_time));
+      trajs_out.push_back(piece_for_trigger(static_cast<size_t>(filtered_indices[2]), schedule_time));
       event_trigger_out = ccw(trajs_out[0][0], trajs_out[0][1], trajs_out[1][0], trajs_out[1][1], trajs_out[2][0],
         trajs_out[2][1]);
       return;
@@ -89,10 +103,14 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     const int b = graph.triangleOppositeVertex(active_he_id ^ 1);
     const int c = graph.halfEdge(active_he_id ^ 1).origin;
     const int d = graph.triangleOppositeVertex(active_he_id);
-    trajs_out.push_back(piece_poly(static_cast<size_t>(a), schedule_time));
-    trajs_out.push_back(piece_poly(static_cast<size_t>(b), schedule_time));
-    trajs_out.push_back(piece_poly(static_cast<size_t>(c), schedule_time));
-    trajs_out.push_back(piece_poly(static_cast<size_t>(d), schedule_time));
+    for (int vertex : { a, b, c, d })
+    {
+      append_trigger_strand(vertex);
+    }
+    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(a), schedule_time));
+    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(b), schedule_time));
+    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(c), schedule_time));
+    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(d), schedule_time));
     event_trigger_out = inCircle(trajs_out[0][0], trajs_out[0][1], trajs_out[1][0], trajs_out[1][1], trajs_out[2][0],
       trajs_out[2][1], trajs_out[3][0], trajs_out[3][1]);
   };
@@ -130,7 +148,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   enqueue_flip_roots(trajs, event_trigger, fraction, he_id, t);
 
   if (const std::optional<double> ramp_end_fraction = separationRampEndFractionForQuad(*kd, quad_strand_ids, section);
-    ramp_end_fraction.has_value() && fraction < *ramp_end_fraction && *ramp_end_fraction < 1.0)
+    ramp_end_fraction.has_value() && fraction < *ramp_end_fraction && *ramp_end_fraction < kEventIntervalFractionUpperBound)
   {
     const double post_ramp_schedule_time = static_cast<double>(section) + *ramp_end_fraction;
     Polynomial post_ramp_trigger;

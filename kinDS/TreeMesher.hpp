@@ -47,7 +47,7 @@ class TreeMesher
     /// When false, skip JSON vertex/face metadata on meshlets (material_ids still stored for OBJ export).
     bool store_mesh_metadata = true;
     /// When false, skip meshlet diagnostic logging and related string assembly (@ref meshletDiagnosticLogLine).
-    bool diagnostics = false;
+    bool diagnostics = true;
     /// When true, mesh vertices are stored in object space during meshing (@ref SegmentBuilder::create_transformed_mesh).
     /// Export skips a second transform; polygon triangulation still uses profile-plane xy.
     bool transform_mesh_at_construction = true;

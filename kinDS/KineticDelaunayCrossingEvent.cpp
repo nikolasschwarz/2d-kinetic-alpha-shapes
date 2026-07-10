@@ -1,10 +1,11 @@
 #include "KineticDelaunayCrossingEvent.hpp"
 
+#include <algorithm>
 #include <limits>
 
-using namespace kinDS;
-
 #include "KineticDelaunayEventPredicates.hpp"
+
+using namespace kinDS;
 
 void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voronoi_vertex_id)
 {
@@ -25,10 +26,35 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   const size_t section = static_cast<size_t>(t);
   const float fraction = t - section;
 
-  const auto piece_poly = [&](size_t strand_id) { return kd->getSitePiecePolynomial(strand_id, section, t); };
-
   auto& dual_triangle = graph.face(voronoi_vertex_id);
   auto& containing_triangle = graph.face(crossing_data.getContainingTriId(voronoi_vertex_id));
+
+  std::vector<size_t> event_strand_ids;
+  event_strand_ids.reserve(6);
+  const auto append_strand = [&](int vertex) {
+    if (vertex >= 0)
+    {
+      const size_t strand_id = static_cast<size_t>(vertex);
+      if (std::find(event_strand_ids.begin(), event_strand_ids.end(), strand_id) == event_strand_ids.end())
+      {
+        event_strand_ids.push_back(strand_id);
+      }
+    }
+  };
+  for (size_t he_id : dual_triangle.half_edges)
+  {
+    append_strand(static_cast<int>(graph.halfEdge(he_id).origin));
+    append_strand(static_cast<int>(graph.destination(he_id)));
+  }
+  for (size_t he_id : containing_triangle.half_edges)
+  {
+    append_strand(static_cast<int>(graph.halfEdge(he_id).origin));
+    append_strand(static_cast<int>(graph.destination(he_id)));
+  }
+
+  const auto piece_poly = [&](size_t strand_id) {
+    return kd->getSitePiecePolynomialForEventStrands(strand_id, section, t, event_strand_ids);
+  };
 
   // compute polynomials of two bisectors in homogeneous coordinates
   size_t v_i = graph.halfEdge(dual_triangle.half_edges[0]).origin;

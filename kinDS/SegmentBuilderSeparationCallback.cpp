@@ -96,5 +96,10 @@ void SegmentBuilderSeparationCallback::afterEvent(KineticDelaunay::Event& e)
   }
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
 
+  if (segment_builder_.diagnostics)
+  {
+    segment_builder_.logDiagnosticsMonitoredFaceInsideState(separation->occurrence_time, "separation_event");
+  }
+
   writeSeparationVisualDebugSvg(*separation, "after");
 }

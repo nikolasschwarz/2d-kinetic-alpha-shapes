@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}/build-debug/bin/kinDS-demo.exe",
       "args": [
         "--mesh",
-        "input_examples/test_oak_2.txt",
+        "input_examples/test_oak_3.txt",
         "--export-mode",
         "combined"
       ],

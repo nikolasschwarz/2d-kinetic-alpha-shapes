@@ -88,6 +88,7 @@ size_t VoronoiMesh::addVertex(double x, double y, double z, const std::string& m
 {
   size_t index = vertices.size();
   vertices.emplace_back(glm::dvec3 { x, y, z });
+  vertex_kinetic_times_.push_back(std::numeric_limits<double>::quiet_NaN());
   if (store_metadata_)
   {
     vertex_metadata.push_back(metadata);
@@ -100,6 +101,7 @@ size_t VoronoiMesh::addVertex(const glm::dvec3& p, const std::string& metadata, 
 {
   size_t index = vertices.size();
   vertices.emplace_back(p);
+  vertex_kinetic_times_.push_back(std::numeric_limits<double>::quiet_NaN());
   if (store_metadata_)
   {
     vertex_metadata.push_back(metadata);
@@ -133,6 +135,49 @@ glm::dvec2 VoronoiMesh::triangulationPlaneXY(size_t vertex_index) const
   }
   const glm::dvec3& v = vertices[vertex_index];
   return glm::dvec2(v.x, v.y);
+}
+
+void VoronoiMesh::setVertexKineticTime(size_t vertex_index, double t)
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("setVertexKineticTime: vertex index out of range.");
+  }
+  if (vertex_kinetic_times_.size() < vertices.size())
+  {
+    vertex_kinetic_times_.resize(vertices.size(), std::numeric_limits<double>::quiet_NaN());
+  }
+  vertex_kinetic_times_[vertex_index] = t;
+}
+
+double VoronoiMesh::vertexKineticTime(size_t vertex_index) const
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("vertexKineticTime: vertex index out of range.");
+  }
+  if (vertex_index < vertex_kinetic_times_.size() && std::isfinite(vertex_kinetic_times_[vertex_index]))
+  {
+    return vertex_kinetic_times_[vertex_index];
+  }
+  return vertices[vertex_index].z;
+}
+
+void VoronoiMesh::setVertexMetadata(size_t vertex_index, const std::string& metadata)
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("setVertexMetadata: vertex index out of range.");
+  }
+  if (!store_metadata_)
+  {
+    return;
+  }
+  if (vertex_metadata.size() < vertices.size())
+  {
+    vertex_metadata.resize(vertices.size(), "{}");
+  }
+  vertex_metadata[vertex_index] = metadata;
 }
 
 void kinDS::VoronoiMesh::replaceVertex(size_t index, const glm::dvec3& new_position) { vertices[index] = new_position; }
@@ -247,6 +292,16 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   {
     vertex_colors.insert(vertex_colors.end(), other.vertices.size(), glm::dvec3(1.0));
   }
+  if (other.vertex_kinetic_times_.size() == other.vertices.size())
+  {
+    vertex_kinetic_times_.insert(
+      vertex_kinetic_times_.end(), other.vertex_kinetic_times_.begin(), other.vertex_kinetic_times_.end());
+  }
+  else
+  {
+    vertex_kinetic_times_.insert(
+      vertex_kinetic_times_.end(), other.vertices.size(), std::numeric_limits<double>::quiet_NaN());
+  }
 
   size_t old_vertex_indices_size = triangles.size();
   const size_t old_triangle_count = old_vertex_indices_size / 3;
@@ -349,6 +404,8 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   new_vertex_metadata.reserve(vertices.size());
   std::vector<glm::dvec3> new_vertex_colors;
   new_vertex_colors.reserve(vertices.size());
+  std::vector<double> new_vertex_kinetic_times;
+  new_vertex_kinetic_times.reserve(vertices.size());
 
   std::vector<size_t> remap(vertices.size(), size_t(-1));
 
@@ -393,6 +450,14 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
       {
         new_vertex_colors.push_back(glm::dvec3(1.0));
       }
+      if (i < vertex_kinetic_times_.size())
+      {
+        new_vertex_kinetic_times.push_back(vertex_kinetic_times_[i]);
+      }
+      else
+      {
+        new_vertex_kinetic_times.push_back(std::numeric_limits<double>::quiet_NaN());
+      }
       remap[i] = newIndex;
     }
     else
@@ -410,6 +475,7 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   vertices.swap(newVerts);
   vertex_metadata.swap(new_vertex_metadata);
   vertex_colors.swap(new_vertex_colors);
+  vertex_kinetic_times_.swap(new_vertex_kinetic_times);
   if (!store_metadata_)
   {
     vertex_metadata.clear();
@@ -679,6 +745,8 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
   new_vertex_metadata.reserve(new_count);
   std::vector<glm::dvec3> new_vertex_colors;
   new_vertex_colors.reserve(new_count);
+  std::vector<double> new_vertex_kinetic_times;
+  new_vertex_kinetic_times.reserve(new_count);
 
   for (size_t i = 0; i < n_vertices; ++i)
   {
@@ -701,11 +769,20 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
       {
         new_vertex_colors.push_back(glm::dvec3(1.0));
       }
+      if (i < vertex_kinetic_times_.size())
+      {
+        new_vertex_kinetic_times.push_back(vertex_kinetic_times_[i]);
+      }
+      else
+      {
+        new_vertex_kinetic_times.push_back(std::numeric_limits<double>::quiet_NaN());
+      }
     }
   }
   vertices.swap(new_vertices);
   vertex_metadata.swap(new_vertex_metadata);
   vertex_colors.swap(new_vertex_colors);
+  vertex_kinetic_times_.swap(new_vertex_kinetic_times);
   if (!store_metadata_)
   {
     vertex_metadata.clear();

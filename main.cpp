@@ -450,8 +450,8 @@ static void print_usage(const char* program_name)
             << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
             << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
             << "  --log-file <path>         Write logs to file (default: no log file, console only)\n"
-            << "  --export-mode <mode>      Meshlet export mode for --mesh: combined, segments, raw (default: raw)\n"
-            << "  --export-path <path>      Output path; default: raw_meshlets/, segment_meshlets/, or combined_mesh.obj\n"
+            << "  --export-mode <mode>      Also export combined mesh when set to combined (default: raw)\n"
+            << "  --export-path <path>      Base output directory; writes segment_meshlets/ and raw_meshlets/ beneath it\n"
             << "  --untransformed           Export meshlets in profile/local space (default: world space)\n"
             << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
             << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
@@ -490,18 +490,23 @@ static bool parse_meshlet_export_mode(const std::string& value, kinDS::MeshletEx
   return false;
 }
 
-static std::filesystem::path default_mesh_export_path(kinDS::MeshletExportMode export_mode)
+static std::filesystem::path mesh_export_base_directory(const std::optional<std::filesystem::path>& export_path)
 {
-  switch (export_mode)
+  if (!export_path.has_value())
   {
-  case kinDS::MeshletExportMode::Combined:
-    return "combined_mesh.obj";
-  case kinDS::MeshletExportMode::PerSegment:
-    return "segment_meshlets";
-  case kinDS::MeshletExportMode::Raw:
-    return "raw_meshlets";
+    return std::filesystem::current_path();
   }
-  return "raw_meshlets";
+
+  const std::filesystem::path& path = *export_path;
+  if (path.has_extension() && path.extension() == ".obj")
+  {
+    if (path.has_parent_path() && !path.parent_path().empty())
+    {
+      return path.parent_path();
+    }
+    return std::filesystem::current_path();
+  }
+  return path;
 }
 
 static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
@@ -545,19 +550,36 @@ static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
 
-    const std::filesystem::path resolved_export_path
-      = export_path.value_or(default_mesh_export_path(export_mode));
+    const std::filesystem::path export_base = mesh_export_base_directory(export_path);
+    const std::filesystem::path segment_export_dir = export_base / "segment_meshlets";
+    const std::filesystem::path raw_export_dir = export_base / "raw_meshlets";
     const std::optional<bool> export_transform
       = profile_space_export ? std::optional<bool>(false) : std::nullopt;
     const bool apply_export_transform
       = export_transform.value_or(!mesher.meshletsTransformedAtConstruction());
-    std::cout << "Exporting meshlets to: " << resolved_export_path.string()
-              << (profile_space_export ? " (profile space)" : " (world space)")
-              << (mesher.meshletsTransformedAtConstruction() && !profile_space_export
-                     ? ", transformed at construction"
-                     : apply_export_transform ? ", transformed at export" : "")
-              << std::endl;
-    mesher.exportMeshlets(export_mode, resolved_export_path, export_transform);
+    const char* space_label = profile_space_export ? "profile space" : "world space";
+    const char* transform_label = mesher.meshletsTransformedAtConstruction() && !profile_space_export
+      ? "transformed at construction"
+      : apply_export_transform ? "transformed at export" : "no export transform";
+
+    std::cout << "Exporting segment meshlets to: " << segment_export_dir.string() << " (" << space_label << ", "
+              << transform_label << ")" << std::endl;
+    mesher.exportMeshlets(kinDS::MeshletExportMode::PerSegment, segment_export_dir, export_transform);
+
+    std::cout << "Exporting raw meshlets to: " << raw_export_dir.string() << " (" << space_label << ", "
+              << transform_label << ")" << std::endl;
+    mesher.exportMeshlets(kinDS::MeshletExportMode::Raw, raw_export_dir, export_transform);
+
+    if (export_mode == kinDS::MeshletExportMode::Combined)
+    {
+      const std::filesystem::path combined_export_path = export_path.has_value() && export_path->has_extension()
+        && export_path->extension() == ".obj"
+        ? *export_path
+        : export_base / "combined_mesh.obj";
+      std::cout << "Exporting combined mesh to: " << combined_export_path.string() << " (" << space_label << ", "
+                << transform_label << ")" << std::endl;
+      mesher.exportMeshlets(kinDS::MeshletExportMode::Combined, combined_export_path, export_transform);
+    }
 
     // Export boundary mesh
     kinDS::VoronoiMesh boundary_mesh = mesher.getBoundaryMesh();

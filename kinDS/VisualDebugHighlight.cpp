@@ -162,6 +162,13 @@ bool VisualDebugHighlight::shouldLabelCrossing(size_t delaunay_edge_id, size_t v
       return true;
     }
   }
+  if (!label_crossings_on_voronoi_edges.empty())
+  {
+    if (label_crossings_on_voronoi_edges.find(voronoi_edge_id) != label_crossings_on_voronoi_edges.end())
+    {
+      return true;
+    }
+  }
   if (!crossing_intersection_keys.empty())
   {
     const uint64_t key = (static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id;
@@ -252,8 +259,27 @@ VisualDebugHighlight VisualDebugHighlight::forCrossing(
 
   const size_t emphasis_voronoi_edge_id
     = crossingEmphasisVoronoiEdgeId(graph, crossed_half_edge_id, voronoi_vertex_id);
+  highlight.primary_voronoi_edges.insert(emphasis_voronoi_edge_id);
   highlight.crossing_intersection_keys.insert(
     (static_cast<uint64_t>(delaunay_edge_id) << 32) | emphasis_voronoi_edge_id);
+
+  if (voronoi_vertex_id < graph.faceSlotCount())
+  {
+    for (size_t incident_he : graph.face(voronoi_vertex_id).half_edges)
+    {
+      const size_t voronoi_edge_id = incident_he / 2;
+      highlight.voronoi_edges.insert(voronoi_edge_id);
+      highlight.label_crossings_on_voronoi_edges.insert(voronoi_edge_id);
+      highlight.directed_half_edges.insert(incident_he);
+      highlight.directed_half_edges.insert(incident_he ^ 1);
+
+      const int opposite_face = graph.halfEdge(incident_he ^ 1).face;
+      if (opposite_face >= 0)
+      {
+        highlight.voronoi_vertices.insert(static_cast<size_t>(opposite_face));
+      }
+    }
+  }
 
   return highlight;
 }

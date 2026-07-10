@@ -413,7 +413,15 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
 
 void SegmentBuilderSubdivisionCallback::afterEvent(KineticDelaunay::Event& e)
 {
+  auto* sub = dynamic_cast<KineticDelaunay::SubdivisionEvent*>(&e);
+  if (!sub)
+  {
+    return;
+  }
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
-  (void)e;
+  if (segment_builder_.diagnostics)
+  {
+    segment_builder_.logDiagnosticsMonitoredFaceInsideState(sub->occurrence_time, "subdivision_event");
+  }
 }
 } // namespace kinDS
