@@ -105,6 +105,25 @@ std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, d
 void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t section, double schedule_t,
   const std::array<size_t, 3>& strand_ids, const std::array<Trajectory<2>, 3>& trajectories)
 {
+  for (size_t vertex_index = 0; vertex_index < 3; ++vertex_index)
+  {
+    if (!kd.isDiagnosticsStrandIdValid(strand_ids[vertex_index]))
+    {
+      return;
+    }
+  }
+
+  const StrandTree& tree = kd.getStrandTree();
+  for (size_t vertex_index = 0; vertex_index < 3; ++vertex_index)
+  {
+    const size_t strand_id = strand_ids[vertex_index];
+    const auto& support_points = tree.getSupportPoints(strand_id);
+    if (section >= support_points.size())
+    {
+      return;
+    }
+  }
+
   const std::vector<size_t> event_strand_ids = { strand_ids[0], strand_ids[1], strand_ids[2] };
   const double event_interval_upper_bound = eventIntervalUpperBound(schedule_t);
   const size_t branch_section_index = kd.inputBranchSectionIndexAtIntervalUpperBound(event_interval_upper_bound);
@@ -134,13 +153,14 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
   branch_summary << " frame_policy=" << (use_shared_transformed_frame ? "shared_transformed" : "local_support");
   KINDS_INFO(branch_summary.str());
 
-  const StrandTree& tree = kd.getStrandTree();
   for (size_t vertex_index = 0; vertex_index < 3; ++vertex_index)
   {
     const size_t strand_id = strand_ids[vertex_index];
+    const auto& support_points = tree.getSupportPoints(strand_id);
     const size_t input_branch_at_section = tree.getBranchIndex(strand_id, section);
-    const glm::dvec2 raw_section_start = tree.getSupportPoints(strand_id)[section];
-    const glm::dvec2 raw_section_end = tree.getSupportPoints(strand_id)[section + 1];
+    const glm::dvec2 raw_section_start = support_points[section];
+    const glm::dvec2 raw_section_end
+      = (section + 1 < support_points.size()) ? support_points[section + 1] : support_points[section];
     KINDS_INFO("  trajectory[" << vertex_index << "] strand=" << strand_id << " input_branch_at_section="
                                << input_branch_at_section << " raw_support_at_section=(" << raw_section_start.x
                                << "," << raw_section_start.y << ") raw_support_at_section_end=(" << raw_section_end.x
@@ -148,6 +168,10 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
 
     for (double eval_t : { static_cast<double>(section), static_cast<double>(section) + 1.0 })
     {
+      if (eval_t > static_cast<double>(section) && section + 1 >= support_points.size())
+      {
+        continue;
+      }
       const double fraction = eval_t - static_cast<double>(section);
       const double x = trajectories[vertex_index][0](fraction);
       const double y = trajectories[vertex_index][1](fraction);
@@ -164,6 +188,10 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
   const std::array<Trajectory<2>, 3>& trajectories)
 {
   if (!kd.diagnosticsEnabled() || face_id != KineticDelaunay::kDiagnosticsMonitoredFaceId)
+  {
+    return;
+  }
+  if (!kd.isDiagnosticsFaceIdValid(face_id))
   {
     return;
   }
@@ -251,6 +279,26 @@ void KineticDelaunay::setDiagnosticsEnabled(bool enabled) { diagnostics_enabled_
 
 bool KineticDelaunay::diagnosticsEnabled() const { return diagnostics_enabled_; }
 
+bool KineticDelaunay::isDiagnosticsStrandIdValid(size_t strand_id) const
+{
+  return strand_id < graph.getVertexCount();
+}
+
+bool KineticDelaunay::isDiagnosticsFaceIdValid(size_t face_id) const
+{
+  return face_id < graph.faceSlotCount();
+}
+
+bool KineticDelaunay::isDiagnosticsHalfEdgeIdValid(size_t half_edge_id) const
+{
+  return graph.isLiveHalfEdge(half_edge_id);
+}
+
+bool KineticDelaunay::isDiagnosticsMonitoredFaceValid() const
+{
+  return isDiagnosticsFaceIdValid(kDiagnosticsMonitoredFaceId);
+}
+
 void KineticDelaunay::logRadiusEventTriggerRoots(size_t face_id, size_t he_id, double t, double min_fraction,
   Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
   const std::array<Trajectory<2>, 3>& trajectories) const
@@ -306,7 +354,8 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     = circumradiusEquals(
       trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], kd->cutoff);
 
-  if (kd->diagnosticsEnabled() && face_id == KineticDelaunay::kDiagnosticsMonitoredFaceId)
+  if (kd->diagnosticsEnabled() && face_id == KineticDelaunay::kDiagnosticsMonitoredFaceId
+    && kd->isDiagnosticsFaceIdValid(face_id))
   {
     kd->logRadiusEventTriggerRoots(face_id, he_id, t, fraction, event_trigger,
       { static_cast<size_t>(u), static_cast<size_t>(v), static_cast<size_t>(w) },

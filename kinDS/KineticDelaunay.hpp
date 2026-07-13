@@ -716,6 +716,11 @@ class KineticDelaunay
   static constexpr size_t kDiagnosticsMonitoredFaceId = 54;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
+  /// Bounds-checked diagnostic id queries; invalid ids are ignored by monitor logging.
+  bool isDiagnosticsStrandIdValid(size_t strand_id) const;
+  bool isDiagnosticsFaceIdValid(size_t face_id) const;
+  bool isDiagnosticsHalfEdgeIdValid(size_t half_edge_id) const;
+  bool isDiagnosticsMonitoredFaceValid() const;
   void validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const;
   void validateAllFaceInsideStatesAtTime(double t, const char* context) const;
   void logFaceInsideStateAtTime(size_t face_id, double t, const char* context) const;

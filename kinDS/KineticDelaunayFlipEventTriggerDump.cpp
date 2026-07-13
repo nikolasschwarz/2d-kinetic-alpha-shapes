@@ -360,9 +360,16 @@ bool shouldDumpFlipPolynomialsForEvent(
     return false;
   }
 
-  if (target_half_edge.has_value() && half_edge_id != target_half_edge.value())
+  if (target_half_edge.has_value())
   {
-    return false;
+    if (!kd.isDiagnosticsHalfEdgeIdValid(target_half_edge.value()))
+    {
+      return false;
+    }
+    if (half_edge_id != target_half_edge.value())
+    {
+      return false;
+    }
   }
 
   return true;

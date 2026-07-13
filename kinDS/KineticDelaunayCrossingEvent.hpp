@@ -429,7 +429,7 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
   // Re-compute crossing events for this Voronoi vertex
   kd->crossing_event_manager_->computeEvents(occurrence_time, voronoi_vertex_id);
 
-  if (kd->diagnosticsEnabled())
+  if (kd->diagnosticsEnabled() && kd->isDiagnosticsMonitoredFaceValid())
   {
     kd->logFaceInsideStateAtTime(kDiagnosticsMonitoredFaceId, occurrence_time, "crossing_event");
   }

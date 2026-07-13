@@ -1949,6 +1949,12 @@ bool edgeConnectsSites(const HalfEdgeDelaunayGraph& graph, size_t even_he, size_
 void KineticDelaunay::debugSeparationTrackedFlipProbe(
   size_t parent_component_id, double t, const char* phase, size_t even_half_edge_id) const
 {
+  if (!isDiagnosticsHalfEdgeIdValid(even_half_edge_id) || !isDiagnosticsHalfEdgeIdValid(even_half_edge_id ^ 1)
+    || !isDiagnosticsStrandIdValid(kSeparationDebugSiteA) || !isDiagnosticsStrandIdValid(kSeparationDebugSiteB))
+  {
+    return;
+  }
+
   const size_t he_id = even_half_edge_id;
   const size_t quad_id = he_id / 2;
   const size_t section = static_cast<size_t>(t);
@@ -5289,6 +5295,13 @@ FiniteFaceInsideExpectation computeFiniteFaceInsideExpectation(
   {
     return out;
   }
+  for (int vertex : out.vertices)
+  {
+    if (!kd.isDiagnosticsStrandIdValid(static_cast<size_t>(vertex)))
+    {
+      return out;
+    }
+  }
 
   const glm::dvec2 p0 = kd.getPointAt(static_cast<size_t>(out.vertices[0]), t);
   const glm::dvec2 p1 = kd.getPointAt(static_cast<size_t>(out.vertices[1]), t);
@@ -5374,6 +5387,11 @@ void validateStoredFaceInsideAgainstExpectation(const KineticDelaunay& kd, size_
 
 void KineticDelaunay::validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const
 {
+  if (!isDiagnosticsHalfEdgeIdValid(half_edge_id) || !isDiagnosticsHalfEdgeIdValid(half_edge_id ^ 1))
+  {
+    return;
+  }
+
   const size_t face_a = graph.halfEdge(half_edge_id).face;
   const size_t face_b = graph.halfEdge(half_edge_id ^ 1).face;
   if (face_a >= face_inside.size() || face_b >= face_inside.size())
@@ -5436,6 +5454,11 @@ void KineticDelaunay::validateAllFaceInsideStatesAtTime(double t, const char* co
 
 void KineticDelaunay::logFaceInsideStateAtTime(size_t face_id, double t, const char* context) const
 {
+  if (!isDiagnosticsFaceIdValid(face_id))
+  {
+    return;
+  }
+
   std::ostringstream oss;
   oss << "Face inside/outside sanity check monitor";
   if (context != nullptr && context[0] != '\0')

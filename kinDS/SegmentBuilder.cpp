@@ -1190,7 +1190,7 @@ bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
 
 void kinDS::SegmentBuilder::logDiagnosticsMonitoredFaceInsideState(double t, const char* event_context) const
 {
-  if (!diagnostics)
+  if (!diagnostics || !kin_del.isDiagnosticsMonitoredFaceValid())
   {
     return;
   }
