@@ -30,6 +30,20 @@ struct RadiusBoundaryTransitionShiftContext
   std::optional<size_t> interior_voronoi_vertex_id {};
 };
 
+/// Conceptual crossing (topology / mesh-pair links) vs profile position source during a radius boundary transition.
+struct RadiusBoundaryTransitionCrossingPlacement
+{
+  KineticDelaunay::CrossingData::EdgeIntersectionRef conceptual_intersection {};
+  KineticDelaunay::CrossingData::EdgeIntersectionRef position_intersection {};
+  /// When set, profile XY comes from this value instead of @c position_intersection (interior-vv synthetic shifts).
+  std::optional<glm::dvec3> explicit_profile_position {};
+
+  bool positionDiffersFromConceptual() const
+  {
+    return explicit_profile_position.has_value() || position_intersection != conceptual_intersection;
+  }
+};
+
 class SegmentBuilderSectionCallback;
 class SegmentBuilderFlipCallback;
 class SegmentBuilderRadiusCallback;
@@ -100,7 +114,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
     BoundarySegmentAction segment_action,
     const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing, const char* pos,
-    const char* op = nullptr, const char* source = nullptr) const;
+    const char* op = nullptr, const char* source = nullptr,
+    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& position_crossing = std::nullopt,
+    bool radius_shift_explicit_profile_position = false) const;
+
+  static std::string intersectionCrossingVertexMetadata(const std::string& base_metadata,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef conceptual_ref,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref, const char* pos_label,
+    bool radius_shift_explicit_profile_position = false);
 
   /// JSON for Voronoi-edge strip meshlet faces (quads emitted as two triangles in @ref finishMesh, etc.).
   std::string composeRegularStripFaceMetadata(double kinetic_time, size_t voronoi_edge_id, size_t even_half_edge_id,
@@ -377,15 +398,20 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
 
-  /// If @p crossing_ref is on a radius transition source Delaunay edge, returns an adjacent crossing on the same
-  /// Voronoi-edge list whose Delaunay edge is the transition target (vertex position only).
+  /// Adjacent crossing on the same Voronoi-edge list whose Delaunay edge is @p target_delaunay_edge.
+  /// Uses @p crossing_ref's cached @c voronoi_ref; caller must only invoke for source-edge intersections.
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> neighborIntersectionOnTargetAlongVoronoiEdge(
-    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, size_t voronoi_edge_id,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, size_t target_delaunay_edge) const;
+
+  RadiusBoundaryTransitionCrossingPlacement resolveRadiusBoundaryTransitionCrossingPlacement(double t,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef conceptual_ref,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
 
-  glm::dvec3 crossingPositionWithRadiusBoundaryTransitionShift(double t,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
+  glm::dvec3 crossingProfilePosition(double t,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef intersection_ref) const;
+
+  glm::dvec3 crossingProfilePositionFromPlacement(
+    double t, const RadiusBoundaryTransitionCrossingPlacement& placement) const;
 
   void logRadiusBoundaryTransitionVertexShift(const char* context, double t,
     KineticDelaunay::CrossingData::EdgeIntersectionRef from_ref,

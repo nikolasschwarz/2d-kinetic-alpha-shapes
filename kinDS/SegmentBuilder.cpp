@@ -992,7 +992,9 @@ std::string makeRegularStripVertexMetadataJson(double kinetic_time, size_t voron
   int strand_even_origin, int strand_odd_origin, SegmentBuilder::BoundaryEventType event_type,
   SegmentBuilder::BoundarySegmentAction segment_action,
   const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing, const char* pos, const char* op,
-  const char* source)
+  const char* source,
+  const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& position_crossing,
+  bool radius_shift_explicit_profile_position)
 {
   (void)kinetic_time;
   (void)voronoi_edge_id;
@@ -1005,10 +1007,22 @@ std::string makeRegularStripVertexMetadataJson(double kinetic_time, size_t voron
   SegmentBuilder::MetadataBuilder builder;
   builder.addString("event_type", boundaryEventTypeToString(event_type))
     .addString("source", source != nullptr ? source : (crossing.has_value() ? "intersection" : "site"));
-  if (crossing.has_value())
+  if (crossing.has_value() || position_crossing.has_value())
   {
-    const auto& ir = *crossing.value();
-    builder.addSize("delaunay_edge_id", ir.delaunay_edge_id).addSize("voronoi_edge_id", ir.voronoi_edge_id);
+    const KineticDelaunay::CrossingData::EdgeIntersectionRef geom_ref
+      = position_crossing.has_value() ? position_crossing.value() : crossing.value();
+    const KineticDelaunay::CrossingData::EdgeIntersectionRef conceptual_ref
+      = crossing.has_value() ? crossing.value() : geom_ref;
+    builder.addSize("delaunay_edge_id", geom_ref->delaunay_edge_id).addSize("voronoi_edge_id", geom_ref->voronoi_edge_id);
+    if (conceptual_ref != geom_ref)
+    {
+      builder.addSize("conceptual_delaunay_edge_id", conceptual_ref->delaunay_edge_id)
+        .addSize("conceptual_voronoi_edge_id", conceptual_ref->voronoi_edge_id);
+    }
+    if (radius_shift_explicit_profile_position)
+    {
+      builder.addBool("radius_shift_explicit_profile_position", true);
+    }
   }
   return builder.build();
 }
@@ -1674,45 +1688,22 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
     if (interval.start_crossing.has_value())
     {
       const KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref = interval.start_crossing.value();
-      const glm::dvec3 old_chord_pos
-        = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
-      KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref = orig_ref;
-      if (auto neighbor_opt
-        = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, voronoi_edge_id, boundary_transition_shift);
-        neighbor_opt.has_value())
+      const RadiusBoundaryTransitionCrossingPlacement placement
+        = resolveRadiusBoundaryTransitionCrossingPlacement(t, orig_ref, boundary_transition_shift);
+      const glm::dvec3 old_chord_pos = crossingProfilePosition(t, placement.conceptual_intersection);
+      const glm::dvec3 p = crossingProfilePositionFromPlacement(t, placement);
+      if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
       {
-        position_ref = neighbor_opt.value();
+        KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt("
+          << endpoint_label << "): degenerate CrossingData endpoint for voronoi_edge=" << voronoi_edge_id << " t=" << t
+          << " -> (" << p.x << ", " << p.y << ", " << p.z << ").");
       }
-      glm::dvec2 xy;
-      if (tryComputeCrossingIntersectionPosition2D(kin_del, position_ref, t, xy, false))
+      if (placement.positionDiffersFromConceptual())
       {
-        const glm::dvec3 p(xy, t);
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0))
-        {
-          KINDS_WARNING("regularMeshStripIntervalEndpointPositionAt("
-            << endpoint_label << "): degenerate CrossingData endpoint for voronoi_edge=" << voronoi_edge_id
-            << " t=" << t << " -> (" << p.x << ", " << p.y << ", " << p.z << ").");
-        }
-        if (position_ref != orig_ref)
-        {
-          logRadiusBoundaryTransitionVertexShift(
-            "finishRegularMeshStripInterval_endpoint", t, orig_ref, position_ref, old_chord_pos, p);
-        }
-        return p;
+        logRadiusBoundaryTransitionVertexShift("finishRegularMeshStripInterval_endpoint", t,
+          placement.conceptual_intersection, placement.position_intersection, old_chord_pos, p);
       }
-      if (boundary_transition_shift != nullptr)
-      {
-        const glm::dvec3 p = closingMeshVoronoiDelaunayCrossingPosition(
-          t, position_ref->voronoi_edge_id, position_ref->delaunay_edge_id);
-        if (position_ref != orig_ref)
-        {
-          logRadiusBoundaryTransitionVertexShift(
-            "finishRegularMeshStripInterval_endpoint", t, orig_ref, position_ref, old_chord_pos, p);
-        }
-        return p;
-      }
-      const size_t delaunay_edge_id = static_cast<size_t>(interval.start_crossed_inside_half_edge_id) / 2;
-      return closingMeshVoronoiDelaunayCrossingPosition(t, voronoi_edge_id, delaunay_edge_id);
+      return p;
     }
   }
   else
@@ -1731,39 +1722,16 @@ glm::dvec3 SegmentBuilder::regularMeshStripIntervalEndpointPositionAt(const Regu
     if (interval.end_crossing.has_value())
     {
       const KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref = interval.end_crossing.value();
-      const glm::dvec3 old_chord_pos
-        = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
-      KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref = orig_ref;
-      if (auto neighbor_opt
-        = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, voronoi_edge_id, boundary_transition_shift);
-        neighbor_opt.has_value())
+      const RadiusBoundaryTransitionCrossingPlacement placement
+        = resolveRadiusBoundaryTransitionCrossingPlacement(t, orig_ref, boundary_transition_shift);
+      const glm::dvec3 old_chord_pos = crossingProfilePosition(t, placement.conceptual_intersection);
+      const glm::dvec3 p = crossingProfilePositionFromPlacement(t, placement);
+      if (placement.positionDiffersFromConceptual())
       {
-        position_ref = neighbor_opt.value();
+        logRadiusBoundaryTransitionVertexShift("finishRegularMeshStripInterval_endpoint", t,
+          placement.conceptual_intersection, placement.position_intersection, old_chord_pos, p);
       }
-      glm::dvec2 xy;
-      if (tryComputeCrossingIntersectionPosition2D(kin_del, position_ref, t, xy, false))
-      {
-        const glm::dvec3 p(xy, t);
-        if (position_ref != orig_ref)
-        {
-          logRadiusBoundaryTransitionVertexShift(
-            "finishRegularMeshStripInterval_endpoint", t, orig_ref, position_ref, old_chord_pos, p);
-        }
-        return p;
-      }
-      if (boundary_transition_shift != nullptr)
-      {
-        const glm::dvec3 p = closingMeshVoronoiDelaunayCrossingPosition(
-          t, position_ref->voronoi_edge_id, position_ref->delaunay_edge_id);
-        if (position_ref != orig_ref)
-        {
-          logRadiusBoundaryTransitionVertexShift(
-            "finishRegularMeshStripInterval_endpoint", t, orig_ref, position_ref, old_chord_pos, p);
-        }
-        return p;
-      }
-      const size_t delaunay_edge_id = static_cast<size_t>(interval.end_crossed_inside_half_edge_id) / 2;
-      return closingMeshVoronoiDelaunayCrossingPosition(t, voronoi_edge_id, delaunay_edge_id);
+      return p;
     }
   }
   return glm::dvec3(0.0);
@@ -2328,25 +2296,19 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
 {
   const auto& graph = kin_del.getGraph();
 
-  auto crossing_position = [&](KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref) -> glm::dvec3
+  auto crossing_endpoint = [&](KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref)
+    -> std::pair<RadiusBoundaryTransitionCrossingPlacement, glm::dvec3>
   {
-    KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref = crossing_ref;
-    const glm::dvec3 old_chord_pos
-      = closingMeshVoronoiDelaunayCrossingPosition(t, crossing_ref->voronoi_edge_id, crossing_ref->delaunay_edge_id);
-    if (auto neighbor_opt
-      = neighborIntersectionOnTargetAlongVoronoiEdge(crossing_ref, voronoi_edge_id, boundary_transition_shift);
-      neighbor_opt.has_value())
+    const RadiusBoundaryTransitionCrossingPlacement placement
+      = resolveRadiusBoundaryTransitionCrossingPlacement(t, crossing_ref, boundary_transition_shift);
+    const glm::dvec3 old_chord_pos = crossingProfilePosition(t, placement.conceptual_intersection);
+    const glm::dvec3 intersection_point = crossingProfilePositionFromPlacement(t, placement);
+    if (placement.positionDiffersFromConceptual())
     {
-      position_ref = neighbor_opt.value();
+      logRadiusBoundaryTransitionVertexShift("meshRegularStripInterval_crossing", t, placement.conceptual_intersection,
+        placement.position_intersection, old_chord_pos, intersection_point);
     }
-    const glm::dvec3 intersection_point
-      = closingMeshVoronoiDelaunayCrossingPosition(t, position_ref->voronoi_edge_id, position_ref->delaunay_edge_id);
-    if (position_ref != crossing_ref)
-    {
-      logRadiusBoundaryTransitionVertexShift(
-        "meshRegularStripInterval_crossing", t, crossing_ref, position_ref, old_chord_pos, intersection_point);
-    }
-    return intersection_point;
+    return { placement, intersection_point };
   };
 
   const auto strand_id_for_inside_half_edge = [&](int inside_half_edge_id) -> size_t
@@ -2372,16 +2334,22 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
 
   int start_half_edge_id = -1;
   size_t start_vertex_index = 0;
+  std::optional<RadiusBoundaryTransitionCrossingPlacement> start_crossing_placement;
   if (interval.start_crossing.has_value())
   {
     start_half_edge_id = interval.start_crossed_inside_half_edge_id;
+    const auto [placement, pos] = crossing_endpoint(interval.start_crossing.value());
+    start_crossing_placement = placement;
+    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> position_crossing
+      = placement.positionDiffersFromConceptual() && !placement.explicit_profile_position.has_value()
+      ? std::make_optional(placement.position_intersection)
+      : std::nullopt;
     const std::string meta_start = composeRegularStripVertexMetadata(t, voronoi_edge_id, even_half_edge_id,
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
       std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(interval.start_crossing), "left", nullptr,
-      "intersection");
-    start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid,
-      crossing_position(interval.start_crossing.value()), strand_id_for_inside_half_edge(start_half_edge_id), t, false,
-      std::nullopt, meta_start);
+      "intersection", position_crossing, placement.explicit_profile_position.has_value());
+    start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, pos,
+      strand_id_for_inside_half_edge(start_half_edge_id), t, false, std::nullopt, meta_start);
   }
   else if (interval.start_open_voronoi_half_edge_id.has_value())
   {
@@ -2398,16 +2366,22 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
 
   int end_half_edge_id = -1;
   size_t end_vertex_index = 0;
+  std::optional<RadiusBoundaryTransitionCrossingPlacement> end_crossing_placement;
   if (interval.end_crossing.has_value())
   {
     end_half_edge_id = interval.end_crossed_inside_half_edge_id;
+    const auto [placement, pos] = crossing_endpoint(interval.end_crossing.value());
+    end_crossing_placement = placement;
+    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> position_crossing
+      = placement.positionDiffersFromConceptual() && !placement.explicit_profile_position.has_value()
+      ? std::make_optional(placement.position_intersection)
+      : std::nullopt;
     const std::string meta_end = composeRegularStripVertexMetadata(t, voronoi_edge_id, even_half_edge_id,
       strand_even_origin_i, strand_odd_origin_i, event_type, segment_action,
       std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>(interval.end_crossing), "right", nullptr,
-      "intersection");
-    end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid,
-      crossing_position(interval.end_crossing.value()), strand_id_for_inside_half_edge(end_half_edge_id), t, false,
-      std::nullopt, meta_end);
+      "intersection", position_crossing, placement.explicit_profile_position.has_value());
+    end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, pos,
+      strand_id_for_inside_half_edge(end_half_edge_id), t, false, std::nullopt, meta_end);
   }
   else if (interval.end_open_voronoi_half_edge_id.has_value())
   {
@@ -2663,15 +2637,41 @@ std::string SegmentBuilder::composeRegularStripVertexMetadata(double kinetic_tim
   size_t even_half_edge_id, int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type,
   BoundarySegmentAction segment_action,
   const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing, const char* pos, const char* op,
-  const char* source)
-  const
+  const char* source,
+  const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& position_crossing,
+  bool radius_shift_explicit_profile_position) const
 {
   if (!store_mesh_metadata)
   {
     return {};
   }
   return makeRegularStripVertexMetadataJson(kinetic_time, voronoi_edge_id, even_half_edge_id, strand_even_origin,
-    strand_odd_origin, event_type, segment_action, crossing, pos, op, source);
+    strand_odd_origin, event_type, segment_action, crossing, pos, op, source, position_crossing,
+    radius_shift_explicit_profile_position);
+}
+
+std::string SegmentBuilder::intersectionCrossingVertexMetadata(const std::string& base_metadata,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef conceptual_ref,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef position_ref, const char* pos_label,
+  bool radius_shift_explicit_profile_position)
+{
+  MetadataBuilder builder = MetadataBuilder::fromObject(base_metadata).ensureString("source", "intersection");
+  builder.addSize("delaunay_edge_id", position_ref->delaunay_edge_id)
+    .addSize("voronoi_edge_id", position_ref->voronoi_edge_id);
+  if (conceptual_ref != position_ref)
+  {
+    builder.addSize("conceptual_delaunay_edge_id", conceptual_ref->delaunay_edge_id)
+      .addSize("conceptual_voronoi_edge_id", conceptual_ref->voronoi_edge_id);
+  }
+  if (pos_label != nullptr)
+  {
+    builder.addString("pos", pos_label);
+  }
+  if (radius_shift_explicit_profile_position)
+  {
+    builder.addBool("radius_shift_explicit_profile_position", true);
+  }
+  return builder.build();
 }
 
 std::string SegmentBuilder::composeRegularStripFaceMetadata(double kinetic_time, size_t voronoi_edge_id,
@@ -2799,29 +2799,14 @@ void SegmentBuilder::logRadiusBoundaryTransitionVertexShift(const char* context,
 
 std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>
 SegmentBuilder::neighborIntersectionOnTargetAlongVoronoiEdge(
-  KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, size_t voronoi_edge_id,
-  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
+  KineticDelaunay::CrossingData::EdgeIntersectionRef crossing_ref, size_t target_delaunay_edge) const
 {
-  if (!radius_boundary_transition_shift_enabled || boundary_transition_shift == nullptr
-    || !boundary_transition_shift->roles_valid)
+  if (!crossing_ref->voronoi_ref.has_value())
   {
     return std::nullopt;
   }
 
-  if (boundary_transition_shift->interior_voronoi_vertex_id.has_value())
-  {
-    return std::nullopt;
-  }
-
-  const size_t d_edge = crossing_ref->delaunay_edge_id;
-  const bool on_source = (d_edge == boundary_transition_shift->source_delaunay_edges[0]
-    || d_edge == boundary_transition_shift->source_delaunay_edges[1]);
-  if (!on_source)
-  {
-    return std::nullopt;
-  }
-
-  const size_t target_d_edge = boundary_transition_shift->target_delaunay_edge;
+  const size_t voronoi_edge_id = crossing_ref->voronoi_edge_id;
   const auto& crossing_data = kin_del.getCrossingData();
   if (voronoi_edge_id >= crossing_data.voronoi_edge_intersections.size())
   {
@@ -2829,33 +2814,29 @@ SegmentBuilder::neighborIntersectionOnTargetAlongVoronoiEdge(
   }
 
   const auto& v_list = crossing_data.voronoi_edge_intersections[voronoi_edge_id];
-  for (auto it = v_list.begin(); it != v_list.end(); ++it)
+  const auto list_it = crossing_ref->voronoi_ref.value();
+  if (list_it == v_list.end() || *list_it != crossing_ref)
   {
-    if (*it != crossing_ref)
-    {
-      continue;
-    }
-    if (it != v_list.begin())
-    {
-      auto pit = std::prev(it);
-      if ((*pit)->delaunay_edge_id == target_d_edge)
-      {
-        return *pit;
-      }
-    }
-    auto nit = std::next(it);
-    if (nit != v_list.end() && (*nit)->delaunay_edge_id == target_d_edge)
-    {
-      return *nit;
-    }
-    /*KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: source crossing has no adjacent crossing on target "
-                  "delaunay_edge="
-      << target_d_edge << " along voronoi_edge=" << voronoi_edge_id << " (source delaunay_edge=" << d_edge << ").");*/
+    KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: voronoi_ref stale for voronoi_edge="
+      << voronoi_edge_id << ".");
     return std::nullopt;
   }
 
-  KINDS_WARNING("neighborIntersectionOnTargetAlongVoronoiEdge: crossing iterator not in voronoi_edge="
-    << voronoi_edge_id << " list.");
+  if (list_it != v_list.begin())
+  {
+    const auto pit = std::prev(list_it);
+    if ((*pit)->delaunay_edge_id == target_delaunay_edge)
+    {
+      return *pit;
+    }
+  }
+
+  const auto nit = std::next(list_it);
+  if (nit != v_list.end() && (*nit)->delaunay_edge_id == target_delaunay_edge)
+  {
+    return *nit;
+  }
+
   return std::nullopt;
 }
 
@@ -3066,10 +3047,33 @@ std::optional<glm::dvec3> SegmentBuilder::interiorVvShiftAlongVoronoiEdgeToCorne
   return std::nullopt;
 }
 
-glm::dvec3 SegmentBuilder::crossingPositionWithRadiusBoundaryTransitionShift(double t,
-  KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref,
+glm::dvec3 SegmentBuilder::crossingProfilePosition(double t,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef intersection_ref) const
+{
+  glm::dvec2 xy;
+  if (tryComputeCrossingIntersectionPosition2D(kin_del, intersection_ref, t, xy, false))
+  {
+    return glm::dvec3(xy, t);
+  }
+  return closingMeshVoronoiDelaunayCrossingPosition(t, intersection_ref->voronoi_edge_id, intersection_ref->delaunay_edge_id);
+}
+
+glm::dvec3 SegmentBuilder::crossingProfilePositionFromPlacement(
+  double t, const RadiusBoundaryTransitionCrossingPlacement& placement) const
+{
+  if (placement.explicit_profile_position.has_value())
+  {
+    return placement.explicit_profile_position.value();
+  }
+  return crossingProfilePosition(t, placement.position_intersection);
+}
+
+RadiusBoundaryTransitionCrossingPlacement SegmentBuilder::resolveRadiusBoundaryTransitionCrossingPlacement(double t,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef conceptual_ref,
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
 {
+  RadiusBoundaryTransitionCrossingPlacement placement { conceptual_ref, conceptual_ref, std::nullopt };
+
   if (radius_boundary_transition_shift_enabled && boundary_transition_shift != nullptr
     && boundary_transition_shift->roles_valid
     && boundary_transition_shift->interior_voronoi_vertex_id.has_value())
@@ -3079,22 +3083,24 @@ glm::dvec3 SegmentBuilder::crossingPositionWithRadiusBoundaryTransitionShift(dou
     const glm::dvec2 vv_xy(vv_pos.x, vv_pos.y);
     const auto anchor_on_target_opt = findInteriorVvAnchorCrossingOnTargetEdge(boundary_transition_shift);
 
-    if (isRadiusTransitionCornerAdjacentSourceIntersection(orig_ref, boundary_transition_shift))
+    if (isRadiusTransitionCornerAdjacentSourceIntersection(conceptual_ref, boundary_transition_shift))
     {
-      KINDS_DEBUG("Radius boundary transition interior-vv corner crossing: d=" << orig_ref->delaunay_edge_id
+      KINDS_DEBUG("Radius boundary transition interior-vv corner crossing: d=" << conceptual_ref->delaunay_edge_id
         << " vv=" << interior_vv << " t=" << t << " out=(" << vv_pos.x << "," << vv_pos.y << ")");
-      return vv_pos;
+      placement.explicit_profile_position = vv_pos;
+      return placement;
     }
 
-    if (anchor_on_target_opt.has_value() && orig_ref == anchor_on_target_opt.value())
+    if (anchor_on_target_opt.has_value() && conceptual_ref == anchor_on_target_opt.value())
     {
-      KINDS_DEBUG("Radius boundary transition interior-vv target anchor: d=" << orig_ref->delaunay_edge_id
-        << " ve=" << orig_ref->voronoi_edge_id << " vv=" << interior_vv << " t=" << t << " out=(" << vv_pos.x << ","
-        << vv_pos.y << ")");
-      return vv_pos;
+      KINDS_DEBUG("Radius boundary transition interior-vv target anchor: d=" << conceptual_ref->delaunay_edge_id
+        << " ve=" << conceptual_ref->voronoi_edge_id << " vv=" << interior_vv << " t=" << t << " out=(" << vv_pos.x
+        << "," << vv_pos.y << ")");
+      placement.explicit_profile_position = vv_pos;
+      return placement;
     }
 
-    const size_t d_edge = orig_ref->delaunay_edge_id;
+    const size_t d_edge = conceptual_ref->delaunay_edge_id;
     const size_t s0 = boundary_transition_shift->source_delaunay_edges[0];
     const size_t s1 = boundary_transition_shift->source_delaunay_edges[1];
     const size_t target_d_edge = boundary_transition_shift->target_delaunay_edge;
@@ -3108,16 +3114,17 @@ glm::dvec3 SegmentBuilder::crossingPositionWithRadiusBoundaryTransitionShift(dou
         if (auto other_opt = oppositeFiniteDelaunayVertexOnUndirectedEdge(graph, d_edge, shared_opt.value());
           other_opt.has_value())
         {
-          if (auto shifted_opt = interiorVvShiftAlongVoronoiEdgeToCornerLine(t, orig_ref, vv_xy, other_opt.value());
+          if (auto shifted_opt
+            = interiorVvShiftAlongVoronoiEdgeToCornerLine(t, conceptual_ref, vv_xy, other_opt.value());
             shifted_opt.has_value())
           {
             KINDS_DEBUG("Radius boundary transition interior-vv source crossing: d=" << d_edge << " vv=" << interior_vv
-              << " ve=" << orig_ref->voronoi_edge_id << " corner_site=" << other_opt.value() << " t=" << t
+              << " ve=" << conceptual_ref->voronoi_edge_id << " corner_site=" << other_opt.value() << " t=" << t
               << " out=(" << shifted_opt->x << "," << shifted_opt->y << ")");
-            return shifted_opt.value();
+            placement.explicit_profile_position = shifted_opt.value();
+            return placement;
           }
-          const glm::dvec3 p_old
-            = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
+          const glm::dvec3 p_old = crossingProfilePosition(t, conceptual_ref);
           const glm::dvec2 other_xy = kin_del.getPointAt(t, other_opt.value(), false);
           const glm::dvec2 shared_xy = kin_del.getPointAt(t, shared_opt.value(), false);
           const glm::dvec2 old_xy(p_old.x, p_old.y);
@@ -3129,7 +3136,8 @@ glm::dvec3 SegmentBuilder::crossingPositionWithRadiusBoundaryTransitionShift(dou
             KINDS_DEBUG("Radius boundary transition interior-vv source crossing (parallel fallback): d=" << d_edge
               << " vv=" << interior_vv << " alpha=" << alpha << " t=" << t << " out=(" << fallback_xy.x << ","
               << fallback_xy.y << ")");
-            return glm::dvec3(fallback_xy, t);
+            placement.explicit_profile_position = glm::dvec3(fallback_xy, t);
+            return placement;
           }
         }
       }
@@ -3137,35 +3145,42 @@ glm::dvec3 SegmentBuilder::crossingPositionWithRadiusBoundaryTransitionShift(dou
     else if (d_edge == target_d_edge && anchor_on_target_opt.has_value())
     {
       if (auto corner_site_opt = interiorVvFictionalCornerSiteForTargetEdgeCrossing(
-            orig_ref, anchor_on_target_opt.value(), boundary_transition_shift);
+            conceptual_ref, anchor_on_target_opt.value(), boundary_transition_shift);
         corner_site_opt.has_value())
       {
         if (auto shifted_opt
-          = interiorVvShiftAlongVoronoiEdgeToCornerLine(t, orig_ref, vv_xy, corner_site_opt.value());
+          = interiorVvShiftAlongVoronoiEdgeToCornerLine(t, conceptual_ref, vv_xy, corner_site_opt.value());
           shifted_opt.has_value())
         {
           KINDS_DEBUG("Radius boundary transition interior-vv target crossing: d=" << d_edge << " vv=" << interior_vv
-            << " ve=" << orig_ref->voronoi_edge_id << " corner_site=" << corner_site_opt.value() << " t=" << t
+            << " ve=" << conceptual_ref->voronoi_edge_id << " corner_site=" << corner_site_opt.value() << " t=" << t
             << " out=(" << shifted_opt->x << "," << shifted_opt->y << ")");
-          return shifted_opt.value();
+          placement.explicit_profile_position = shifted_opt.value();
+          return placement;
         }
+      }
+    }
+    return placement;
+  }
+
+  if (radius_boundary_transition_shift_enabled && boundary_transition_shift != nullptr
+    && boundary_transition_shift->roles_valid
+    && !boundary_transition_shift->interior_voronoi_vertex_id.has_value())
+  {
+    const size_t d_edge = conceptual_ref->delaunay_edge_id;
+    if (d_edge == boundary_transition_shift->source_delaunay_edges[0]
+      || d_edge == boundary_transition_shift->source_delaunay_edges[1])
+    {
+      if (auto neighbor_opt
+        = neighborIntersectionOnTargetAlongVoronoiEdge(conceptual_ref, boundary_transition_shift->target_delaunay_edge);
+        neighbor_opt.has_value())
+      {
+        placement.position_intersection = neighbor_opt.value();
       }
     }
   }
 
-  KineticDelaunay::CrossingData::EdgeIntersectionRef use_ref = orig_ref;
-  if (auto neighbor_opt
-    = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, orig_ref->voronoi_edge_id, boundary_transition_shift);
-    neighbor_opt.has_value())
-  {
-    use_ref = neighbor_opt.value();
-  }
-  glm::dvec2 xy;
-  if (tryComputeCrossingIntersectionPosition2D(kin_del, use_ref, t, xy, false))
-  {
-    return glm::dvec3(xy, t);
-  }
-  return closingMeshVoronoiDelaunayCrossingPosition(t, use_ref->voronoi_edge_id, use_ref->delaunay_edge_id);
+  return placement;
 }
 
 bool SegmentBuilder::delaunayUndirectedEdgeHasVertex(
@@ -3274,10 +3289,9 @@ std::optional<glm::dvec3> SegmentBuilder::radiusTransitionInterpolatedSitePositi
       {
         return std::nullopt;
       }
-      const glm::dvec3 p_old
-        = closingMeshVoronoiDelaunayCrossingPosition(t, ref.value()->voronoi_edge_id, ref.value()->delaunay_edge_id);
-      const glm::dvec3 p_new
-        = crossingPositionWithRadiusBoundaryTransitionShift(t, ref.value(), boundary_transition_shift);
+      const glm::dvec3 p_old = crossingProfilePosition(t, ref.value());
+      const glm::dvec3 p_new = crossingProfilePositionFromPlacement(
+        t, resolveRadiusBoundaryTransitionCrossingPlacement(t, ref.value(), boundary_transition_shift));
       return std::make_pair(p_old, p_new);
     }
     if (!delaunayUndirectedEdgeHasVertex(graph, delaunay_edge_id, site_vertex_id))
@@ -3574,28 +3588,24 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
   configureMeshletStorage(mesh_local);
     VoronoiMesh& mesh = reuse_in_place ? intersection_meshes[intersection_pair_index] : mesh_local;
 
-    auto intersection_or_cell_position = [&](std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> ref)
+    const std::string base_boundary_meta = composeBoundaryMetadata(event_type, segment_action);
+
+    auto crossing_or_site_endpoint
+      = [&](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& ref)
+      -> std::pair<glm::dvec3, std::optional<RadiusBoundaryTransitionCrossingPlacement>>
     {
       if (ref.has_value())
       {
-        const KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref = ref.value();
-        const glm::dvec3 old_pos
-          = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
-        const glm::dvec3 new_pos
-          = crossingPositionWithRadiusBoundaryTransitionShift(t, orig_ref, boundary_transition_shift);
-        if (boundary_transition_shift != nullptr && new_pos != old_pos)
+        const RadiusBoundaryTransitionCrossingPlacement placement
+          = resolveRadiusBoundaryTransitionCrossingPlacement(t, ref.value(), boundary_transition_shift);
+        const glm::dvec3 old_pos = crossingProfilePosition(t, placement.conceptual_intersection);
+        const glm::dvec3 pos = crossingProfilePositionFromPlacement(t, placement);
+        if (placement.positionDiffersFromConceptual())
         {
-          KineticDelaunay::CrossingData::EdgeIntersectionRef use_ref = orig_ref;
-          if (auto neighbor_opt = neighborIntersectionOnTargetAlongVoronoiEdge(
-                orig_ref, orig_ref->voronoi_edge_id, boundary_transition_shift);
-            neighbor_opt.has_value())
-          {
-            use_ref = neighbor_opt.value();
-            logRadiusBoundaryTransitionVertexShift(
-              "startNewMeshFromIntersections_interval", t, orig_ref, use_ref, old_pos, new_pos);
-          }
+          logRadiusBoundaryTransitionVertexShift("startNewMeshFromIntersections_interval", t,
+            placement.conceptual_intersection, placement.position_intersection, old_pos, pos);
         }
-        return new_pos;
+        return { pos, placement };
       }
       if (auto site_shifted
         = radiusTransitionInterpolatedSitePosition(t, voronoi_cell_id, delaunay_edge_id, boundary_transition_shift);
@@ -3605,38 +3615,38 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
         KINDS_DEBUG("Radius boundary transition [startNewMeshFromIntersections_site]: cell="
           << voronoi_cell_id << " strip_d=" << delaunay_edge_id << " t=" << t << " old=(" << p_site.x << "," << p_site.y
           << ") new=(" << site_shifted->x << "," << site_shifted->y << ")");
-        return site_shifted.value();
+        return { site_shifted.value(), std::nullopt };
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id, false);
-      return glm::dvec3(p.x, p.y, t);
+      return { glm::dvec3(p.x, p.y, t), std::nullopt };
     };
 
-    const glm::dvec3 start_pos = intersection_or_cell_position(interval_start_crossing);
-    const glm::dvec3 end_pos = intersection_or_cell_position(interval_end_crossing);
+    const auto [start_pos, start_placement_opt] = crossing_or_site_endpoint(interval_start_crossing);
+    const auto [end_pos, end_placement_opt] = crossing_or_site_endpoint(interval_end_crossing);
 
     std::string boundary_start_meta_left;
     std::string boundary_start_meta_right;
     std::string boundary_start_meta_uniform;
     if (store_mesh_metadata)
     {
-      // "left"/"right" label the two mesh strip endpoints in interval order (start of interval vs end), not world L/R.
       const char* start_source = interval_start_crossing.has_value() ? "intersection" : "site";
       const char* end_source = interval_end_crossing.has_value() ? "intersection" : "site";
-      auto make_intersection_meta = [&](const char* source, const char* pos)
+      auto make_endpoint_meta = [&](const char* source, const char* pos,
+                                  const std::optional<RadiusBoundaryTransitionCrossingPlacement>& placement_opt)
       {
         MetadataBuilder builder;
         builder.addString("event_type", boundaryEventTypeToString(event_type)).addString("source", source);
-        const auto ref = pos == std::string("right") ? interval_end_crossing : interval_start_crossing;
-        if (source == std::string("intersection") && ref.has_value())
+        if (source == std::string("intersection") && placement_opt.has_value())
         {
-          builder.addSize("delaunay_edge_id", ref.value()->delaunay_edge_id)
-            .addSize("voronoi_edge_id", ref.value()->voronoi_edge_id);
+          const auto& placement = placement_opt.value();
+          return intersectionCrossingVertexMetadata(builder.build(), placement.conceptual_intersection,
+            placement.position_intersection, pos, placement.explicit_profile_position.has_value());
         }
         return builder.build();
       };
-      boundary_start_meta_left = make_intersection_meta(start_source, "left");
-      boundary_start_meta_right = make_intersection_meta(end_source, "right");
-      boundary_start_meta_uniform = make_intersection_meta(start_source, "uniform");
+      boundary_start_meta_left = make_endpoint_meta(start_source, "left", start_placement_opt);
+      boundary_start_meta_right = make_endpoint_meta(end_source, "right", end_placement_opt);
+      boundary_start_meta_uniform = make_endpoint_meta(start_source, "uniform", start_placement_opt);
     }
     const double dx = start_pos.x - end_pos.x;
     const double dy = start_pos.y - end_pos.y;
@@ -3812,9 +3822,13 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     ? start_intersection.value()->delaunay_edge_id
     : end_intersection.value()->delaunay_edge_id;
 
-  auto endpoint_position_at_t = [&](bool at_start) -> glm::dvec3
+  std::optional<RadiusBoundaryTransitionCrossingPlacement> start_placement_opt;
+  std::optional<RadiusBoundaryTransitionCrossingPlacement> end_placement_opt;
+
+  auto crossing_or_site_endpoint
+    = [&](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& input_ref)
+    -> std::pair<glm::dvec3, std::optional<RadiusBoundaryTransitionCrossingPlacement>>
   {
-    const auto& input_ref = at_start ? start_intersection : end_intersection;
     if (!input_ref.has_value())
     {
       if (auto site_shifted = radiusTransitionInterpolatedSitePosition(
@@ -3825,34 +3839,29 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
         KINDS_DEBUG("Radius boundary transition [finishMeshFromIntersections_site]: cell="
           << voronoi_cell_id << " strip_d=" << strip_delaunay_edge_id_for_site << " t=" << t << " old=(" << p_site.x
           << "," << p_site.y << ") new=(" << site_shifted->x << "," << site_shifted->y << ")");
-        return site_shifted.value();
+        return { site_shifted.value(), std::nullopt };
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id, false);
-      return glm::dvec3(p.x, p.y, t);
+      return { glm::dvec3(p.x, p.y, t), std::nullopt };
     }
 
-    const KineticDelaunay::CrossingData::EdgeIntersectionRef orig_ref = input_ref.value();
-    const glm::dvec3 old_pos
-      = closingMeshVoronoiDelaunayCrossingPosition(t, orig_ref->voronoi_edge_id, orig_ref->delaunay_edge_id);
-    const glm::dvec3 new_pos
-      = crossingPositionWithRadiusBoundaryTransitionShift(t, orig_ref, boundary_transition_shift);
-    if (boundary_transition_shift != nullptr && new_pos != old_pos)
+    const RadiusBoundaryTransitionCrossingPlacement placement
+      = resolveRadiusBoundaryTransitionCrossingPlacement(t, input_ref.value(), boundary_transition_shift);
+    const glm::dvec3 old_pos = crossingProfilePosition(t, placement.conceptual_intersection);
+    const glm::dvec3 pos = crossingProfilePositionFromPlacement(t, placement);
+    if (placement.positionDiffersFromConceptual())
     {
-      KineticDelaunay::CrossingData::EdgeIntersectionRef use_ref = orig_ref;
-      if (auto neighbor_opt
-        = neighborIntersectionOnTargetAlongVoronoiEdge(orig_ref, orig_ref->voronoi_edge_id, boundary_transition_shift);
-        neighbor_opt.has_value())
-      {
-        use_ref = neighbor_opt.value();
-        logRadiusBoundaryTransitionVertexShift(
-          "finishMeshFromIntersections_interval", t, orig_ref, use_ref, old_pos, new_pos);
-      }
+      logRadiusBoundaryTransitionVertexShift("finishMeshFromIntersections_interval", t, placement.conceptual_intersection,
+        placement.position_intersection, old_pos, pos);
     }
-    return new_pos;
+    return { pos, placement };
   };
 
-  const glm::dvec3 new_start_pos = endpoint_position_at_t(true);
-  const glm::dvec3 new_end_pos = endpoint_position_at_t(false);
+  const auto [new_start_pos, start_placement_from_endpoint] = crossing_or_site_endpoint(start_intersection);
+  const auto [new_end_pos, end_placement_from_endpoint] = crossing_or_site_endpoint(end_intersection);
+  start_placement_opt = start_placement_from_endpoint;
+  end_placement_opt = end_placement_from_endpoint;
+
   std::string boundary_finish_meta;
   std::string boundary_finish_meta_left;
   std::string boundary_finish_meta_right;
@@ -3861,21 +3870,22 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   {
     const char* start_source = start_intersection.has_value() ? "intersection" : "site";
     const char* end_source = end_intersection.has_value() ? "intersection" : "site";
-    auto make_intersection_meta = [&](const char* source, const char* pos)
+    auto make_intersection_meta = [&](const char* source, const char* pos,
+                                    const std::optional<RadiusBoundaryTransitionCrossingPlacement>& placement_opt)
     {
       MetadataBuilder builder;
       builder.addString("event_type", boundaryEventTypeToString(event_type)).addString("source", source);
-      const auto ref = pos == std::string("right") ? end_intersection : start_intersection;
-      if (source == std::string("intersection") && ref.has_value())
+      if (source == std::string("intersection") && placement_opt.has_value())
       {
-        builder.addSize("delaunay_edge_id", ref.value()->delaunay_edge_id)
-          .addSize("voronoi_edge_id", ref.value()->voronoi_edge_id);
+        const auto& placement = placement_opt.value();
+        return intersectionCrossingVertexMetadata(builder.build(), placement.conceptual_intersection,
+          placement.position_intersection, pos, placement.explicit_profile_position.has_value());
       }
       return builder.build();
     };
-    boundary_finish_meta = make_intersection_meta(start_source, "uniform");
-    boundary_finish_meta_left = make_intersection_meta(start_source, "left");
-    boundary_finish_meta_right = make_intersection_meta(end_source, "right");
+    boundary_finish_meta = make_intersection_meta(start_source, "uniform", start_placement_opt);
+    boundary_finish_meta_left = make_intersection_meta(start_source, "left", start_placement_opt);
+    boundary_finish_meta_right = make_intersection_meta(end_source, "right", end_placement_opt);
     boundary_finish_meta_uniform = boundary_finish_meta;
   }
   const double fdx = new_start_pos.x - new_end_pos.x;
@@ -4695,6 +4705,8 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   };
 
   const bool is_flexible_placeholder = metadata.find("\"intersection_flexible_placeholder\":true") != std::string::npos;
+  const bool radius_shift_explicit_profile_position
+    = metadata.find("\"radius_shift_explicit_profile_position\":true") != std::string::npos;
   if (!is_flexible_placeholder)
   {
     warn_degenerate_or_non_finite(vertex, "input");
@@ -4719,7 +4731,8 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
       const bool is_intersection = source_field.value_or("") == "intersection"
         || metadataSizeField(metadata, "delaunay_edge_id").has_value()
         || metadataSizeField(metadata, "crossing_delaunay_edge_id").has_value();
-      vertex = is_intersection ? computeMeshIntersectionObjectSpace(metadata, vertex, strand_id, t)
+      vertex = is_intersection && !radius_shift_explicit_profile_position
+        ? computeMeshIntersectionObjectSpace(metadata, vertex, strand_id, t)
                                : transformFromInputBranchToObjectSpace(vertex, strand_id, t);
       if (!vertexPositionFinite(vertex))
       {
@@ -5006,17 +5019,20 @@ void SegmentBuilder::extendIntersectionMeshAtSharedCrossing(size_t neighbor_pair
   const auto neighbor_centroid = polygonCentroid(neighbor_boundary);
 
   auto& mesh = intersection_meshes[neighbor_pair_idx];
-  const glm::dvec3 crossing_pos
-    = crossingPositionWithRadiusBoundaryTransitionShift(t, shared_ref, boundary_transition_shift);
+  const RadiusBoundaryTransitionCrossingPlacement placement
+    = resolveRadiusBoundaryTransitionCrossingPlacement(t, shared_ref, boundary_transition_shift);
+  const glm::dvec3 crossing_pos = crossingProfilePositionFromPlacement(t, placement);
+  if (placement.positionDiffersFromConceptual())
+  {
+    const glm::dvec3 old_pos = crossingProfilePosition(t, placement.conceptual_intersection);
+    logRadiusBoundaryTransitionVertexShift("extendIntersectionMeshAtSharedCrossing", t, placement.conceptual_intersection,
+      placement.position_intersection, old_pos, crossing_pos);
+  }
 
   const std::string base_meta = composeBoundaryMetadata(event_type, segment_action);
   const std::string vertex_meta = store_mesh_metadata
-    ? MetadataBuilder::fromObject(base_meta)
-        .ensureString("source", "intersection")
-        .addSize("delaunay_edge_id", shared_ref->delaunay_edge_id)
-        .addSize("voronoi_edge_id", shared_ref->voronoi_edge_id)
-        .addString("pos", update_start_on_neighbor ? "left" : "right")
-        .build()
+    ? intersectionCrossingVertexMetadata(base_meta, placement.conceptual_intersection, placement.position_intersection,
+        update_start_on_neighbor ? "left" : "right", placement.explicit_profile_position.has_value())
     : std::string {};
   const glm::dvec3 vertex_color = update_start_on_neighbor ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
 
