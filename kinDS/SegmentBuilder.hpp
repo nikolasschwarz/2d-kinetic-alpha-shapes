@@ -30,6 +30,13 @@ struct RadiusBoundaryTransitionShiftContext
   std::optional<size_t> interior_voronoi_vertex_id {};
 };
 
+/// True when radius boundary-transition vertex shift should drive meshing (2↔1 roles and no interior Voronoi vertex).
+inline bool radiusBoundaryTransitionShiftApplicable(
+  bool shift_enabled, const RadiusBoundaryTransitionShiftContext& ctx)
+{
+  return shift_enabled && ctx.roles_valid && !ctx.interior_voronoi_vertex_id.has_value();
+}
+
 /// Conceptual crossing (topology / mesh-pair links) vs profile position source during a radius boundary transition.
 struct RadiusBoundaryTransitionCrossingPlacement
 {
@@ -133,8 +140,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Index into @c intersection_meshes for a boundary-interval meshlet, if @p mesh is one of them.
   std::optional<size_t> intersectionMeshletIndexForMesh(const VoronoiMesh& mesh) const;
 
-  /// When true, radius 2↔1 transitions snap intersection-mesh crossing vertices along the internal Voronoi edge (XY
-  /// only).
+  /// When true, radius 2↔1 transitions use boundary-transition vertex shift when a 2↔1 boundary-edge correspondence
+  /// exists and no interior Voronoi vertex lies in the triangle; otherwise traced Voronoi-cell meshlets are used.
   bool radius_boundary_transition_shift_enabled = true;
   /// When false, skip building/storing per-vertex and per-face JSON metadata on meshlets.
   bool store_mesh_metadata = true;
@@ -768,6 +775,18 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   size_t createClosingMesh(size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals = nullptr);
+
+  /// Top closing cap for one live strand at @p t; wires the new mesh pair to the strand's latest segment.
+  void createClosingCapForStrand(size_t strand_id, double t);
+
+  /// Top closing caps for every live strand in an input branch whose last section is @p t.
+  void createClosingCapsForInputBranchFinishingAtSection(double t, size_t input_branch_id);
+
+  /// Top closing caps for all input branches finishing at kinetic section @p t.
+  void createClosingCapsForInputBranchesFinishingAtSection(double t);
+
+  /// Finishes Voronoi strip meshlets on all half-edges incident to @p strand_id at @p t.
+  void finishIncidentStripMeshesForStrandAtSection(size_t strand_id, double t);
 
   void accumulateSegmentProperties();
 

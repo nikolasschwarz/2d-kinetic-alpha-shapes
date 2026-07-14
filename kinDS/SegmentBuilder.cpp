@@ -6923,6 +6923,85 @@ void kinDS::SegmentBuilder::closingMeshTriangulatePolygons(
   }
 }
 
+void kinDS::SegmentBuilder::createClosingCapForStrand(size_t strand_id, double t)
+{
+  if (kin_del.isDummyBoundary(strand_id) || !kin_del.isStrandLiveInGraph(strand_id))
+  {
+    return;
+  }
+
+  if (strand_id >= kin_del.component_data.component_map.size() || strand_id >= strand_to_segment_indices.size())
+  {
+    return;
+  }
+
+  if (strand_to_segment_indices[strand_id].empty())
+  {
+    return;
+  }
+
+  const size_t component_index = kin_del.component_data.component_map[strand_id];
+  if (component_index >= kin_del.component_data.component_boundaries.size())
+  {
+    return;
+  }
+
+  const auto& boundary_polygon = kin_del.component_data.component_boundaries[component_index][0];
+  const auto& centroid = kin_del.component_data.component_centroids[component_index];
+
+  const size_t closing_mesh_index = createClosingMesh(strand_id, t, boundary_polygon, centroid);
+  if (closing_mesh_index >= segment_mesh_pairs.size())
+  {
+    return;
+  }
+
+  MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[closing_mesh_index];
+  segment_mesh_pair.segment_index0 = static_cast<int>(strand_to_segment_indices[strand_id].back());
+  segment_mesh_pair.segment_index1 = -1;
+}
+
+void kinDS::SegmentBuilder::createClosingCapsForInputBranchFinishingAtSection(double t, size_t input_branch_id)
+{
+  const size_t section = static_cast<size_t>(t);
+  const auto& branch_strands = kin_del.getStrandTree().getStrandsByBranch(section, input_branch_id);
+  for (size_t strand_id : branch_strands)
+  {
+    createClosingCapForStrand(strand_id, t);
+  }
+}
+
+void kinDS::SegmentBuilder::createClosingCapsForInputBranchesFinishingAtSection(double t)
+{
+  for (size_t input_branch_id : kin_del.inputBranchesFinishingAtSection(t))
+  {
+    createClosingCapsForInputBranchFinishingAtSection(t, input_branch_id);
+  }
+}
+
+void kinDS::SegmentBuilder::finishIncidentStripMeshesForStrandAtSection(size_t strand_id, double t)
+{
+  if (kin_del.isDummyBoundary(strand_id) || !kin_del.isStrandLiveInGraph(strand_id))
+  {
+    return;
+  }
+
+  if (strand_id >= kin_del.component_data.component_map.size())
+  {
+    return;
+  }
+
+  auto& graph = kin_del.getGraph();
+  const size_t component_index = kin_del.component_data.component_map[strand_id];
+  auto& boundary_polygon = kin_del.component_data.component_boundaries[component_index][0];
+
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),
+                                                   end = graph.incidentEdgesEnd(strand_id);
+    it != end; ++it)
+  {
+    finishMesh(*it, t, boundary_polygon, BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
+  }
+}
+
 size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid,
   std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals)
@@ -7319,6 +7398,13 @@ void SegmentBuilder::init()
 
   for (size_t input_branch_id : kin_del.inputBranchesFinishingAtSection(t))
   {
+    const auto& branch_strands = kin_del.getStrandTree().getStrandsByBranch(static_cast<size_t>(t), input_branch_id);
+    for (size_t strand_id : branch_strands)
+    {
+      finishIncidentStripMeshesForStrandAtSection(strand_id, t);
+    }
+    createClosingCapsForInputBranchFinishingAtSection(t, input_branch_id);
+
     if (diagnostics)
     {
       std::ostringstream oss;
@@ -7395,17 +7481,10 @@ void SegmentBuilder::finalize(double t)
     }
   }
 
-  // finalize closing meshes
+  // Finalize closing meshes for strands still live in the graph (branches that ended earlier already got caps).
   for (size_t strand_id = 0; strand_id < graph.getVertexCount(); ++strand_id)
   {
-    // create a closing mesh
-    size_t component_index = kin_del.component_data.component_map[strand_id];
-    auto& boundary_points = kin_del.component_data.component_boundaries[component_index][0];
-    auto& centroid = kin_del.component_data.component_centroids[component_index];
-    size_t closing_mesh_index = createClosingMesh(strand_id, t, boundary_points, centroid);
-    MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[closing_mesh_index];
-    segment_mesh_pair.segment_index0 = strand_to_segment_indices[strand_id].back();
-    segment_mesh_pair.segment_index1 = -1;
+    createClosingCapForStrand(strand_id, t);
   }
 
   accumulateSegmentProperties();
