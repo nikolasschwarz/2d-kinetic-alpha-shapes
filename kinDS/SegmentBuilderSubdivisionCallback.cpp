@@ -302,6 +302,16 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
       SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
   }
 
+  for (const auto& interval : traced_boundary_intervals)
+  {
+    const size_t mesh_id = segment_builder_.resolveIntersectionMeshPairIndex(
+      interval.voronoi_cell_id, interval.start_intersection, interval.end_intersection, t);
+    if (mesh_id != static_cast<size_t>(-1))
+    {
+      segment_builder_.markBoundaryMeshletCompleted(mesh_id);
+    }
+  }
+
   MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_builder_.segment_mesh_pairs[closing_mesh_index];
   segment_mesh_pair.segment_index0 = segment_builder_.strand_to_segment_indices[strand_id].back();
   segment_mesh_pair.segment_index1 = new_segment_id;

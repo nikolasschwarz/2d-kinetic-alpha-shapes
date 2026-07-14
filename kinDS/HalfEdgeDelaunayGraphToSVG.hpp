@@ -227,6 +227,15 @@ class HalfEdgeDelaunayGraphToSVG
     return oss.str();
   }
 
+  static std::string formatShortMeshPairIndex(size_t mesh_pair_index)
+  {
+    if (mesh_pair_index == static_cast<size_t>(-1))
+    {
+      return "-";
+    }
+    return std::to_string(mesh_pair_index);
+  }
+
   static bool lineIntersection(
     const glm::dvec2& a0, const glm::dvec2& a1, const glm::dvec2& b0, const glm::dvec2& b1, glm::dvec2& out)
   {
@@ -1131,20 +1140,11 @@ class HalfEdgeDelaunayGraphToSVG
           intersection_group << svg::Text(svg::Point(x0, y2), faces_text,
             svg::Fill(svg::Color(svg::Color::Black)), svg::Font(label_font_size));
 
-          if (!(info.prev_segment_mesh_pair_index == static_cast<size_t>(-1)
-                && info.next_segment_mesh_pair_index == static_cast<size_t>(-1)))
-          {
-            const double y3 = y0 + 3.0 * label_secondary_line_dy;
-            const std::string prev_text = (info.prev_segment_mesh_pair_index == static_cast<size_t>(-1))
-              ? "X"
-              : std::to_string(info.prev_segment_mesh_pair_index);
-            const std::string next_text = (info.next_segment_mesh_pair_index == static_cast<size_t>(-1))
-              ? "X"
-              : std::to_string(info.next_segment_mesh_pair_index);
-            const std::string mesh_pair_text = "m(" + prev_text + "," + next_text + ")";
-            intersection_group << svg::Text(svg::Point(x0, y3), mesh_pair_text,
-              svg::Fill(label_green), svg::Font(label_font_size));
-          }
+          const double y3 = y0 + 3.0 * label_secondary_line_dy;
+          const std::string mesh_pair_text = "p=" + formatShortMeshPairIndex(info.prev_segment_mesh_pair_index) + ",n="
+            + formatShortMeshPairIndex(info.next_segment_mesh_pair_index);
+          intersection_group << svg::Text(svg::Point(x0, y3), mesh_pair_text, svg::Fill(label_green),
+            svg::Font(label_font_size));
         }
 
         doc << intersection_group;

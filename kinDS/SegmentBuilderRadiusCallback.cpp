@@ -537,7 +537,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       const size_t new_vid = segment_builder_.addMeshletVertex(
         mesh, boundary_polygon, centroid, corner_pos, corner_u, t, false, std::nullopt, vertex_meta, vertex_color);
       segment_builder_.addBoundaryIntervalTriangleOriented(
-        mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, radius_corner_meta);
+        mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, radius_corner_meta, pair_idx);
       segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_endpoint, new_vid,
         inside_boundary_he_id, std::nullopt, boundary_polygon, centroid, corner_u, t, true, true);
     }
@@ -1363,6 +1363,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                                .addString("mesh_type", "regular")
                                .addString("segment_action", "new_segment")
                                .addDouble("time", t)
+                               .addDouble("t", t)
                                .addSize("delaunay_face_id", affected_face_id)
                                .addSize("strand_cell_id", cell_id)
                                .addBool("failed_meshlet", failed)
@@ -1372,6 +1373,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                                       .addString("mesh_type", "regular")
                                       .addString("segment_action", "new_segment")
                                       .addDouble("time", t)
+                                      .addDouble("t", t)
                                       .addSize("delaunay_face_id", affected_face_id)
                                       .addSize("strand_cell_id", cell_id)
                                       .addString("op", "radius_strand_cell_triangulation")
@@ -1441,27 +1443,6 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   const size_t updated_face_id = graph.halfEdge(radius->half_edge_id).face;
   const auto& updated_face_he = graph.face(updated_face_id).half_edges;
 
-  auto reset_boundary_mesh_state_for_delaunay_edge = [&](size_t even_half_edge_id)
-  {
-    const size_t odd_half_edge_id = even_half_edge_id ^ 1;
-    if (even_half_edge_id < segment_builder_.boundary_mesh_last_left_and_right_vertex.size())
-    {
-      segment_builder_.boundary_mesh_last_left_and_right_vertex[even_half_edge_id] = std::make_pair(-1, -1);
-    }
-    if (odd_half_edge_id < segment_builder_.boundary_mesh_last_left_and_right_vertex.size())
-    {
-      segment_builder_.boundary_mesh_last_left_and_right_vertex[odd_half_edge_id] = std::make_pair(-1, -1);
-    }
-    if (even_half_edge_id < segment_builder_.half_edge_to_boundary_vertex_index.size())
-    {
-      segment_builder_.half_edge_to_boundary_vertex_index[even_half_edge_id] = -1;
-    }
-    if (odd_half_edge_id < segment_builder_.half_edge_to_boundary_vertex_index.size())
-    {
-      segment_builder_.half_edge_to_boundary_vertex_index[odd_half_edge_id] = -1;
-    }
-  };
-
   std::array<bool, 3> post_is_boundary_edge {};
   size_t post_boundary_edge_count = 0;
   for (size_t i = 0; i < 3; ++i)
@@ -1473,36 +1454,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     }
   }
 
-  for (size_t i = 0; i < 3; ++i)
-  {
-    if (!radius_pre_is_boundary_edge_[i])
-    {
-      continue;
-    }
-    const size_t even_half_edge_id = radius_pre_face_he_[i] & ~static_cast<size_t>(1);
-    if (segment_builder_.kin_del.isOnComponentBoundary(even_half_edge_id))
-    {
-      continue;
-    }
-
-    reset_boundary_mesh_state_for_delaunay_edge(even_half_edge_id);
-
-    // Reset boundary-interval strip linkage on intersections: once the Delaunay edge is no longer a component boundary
-    // edge, any stored mesh-pair link is stale and must not be used for wedge extensions / remaps.
-    auto& crossing_data = segment_builder_.kin_del.getCrossingDataMutable();
-    const size_t d_edge_id = even_half_edge_id / 2;
-    if (d_edge_id < crossing_data.delaunay_edge_intersections.size())
-    {
-      for (auto& inter : crossing_data.delaunay_edge_intersections[d_edge_id])
-      {
-        inter->prev_segment_mesh_pair_index = static_cast<size_t>(-1);
-        inter->next_segment_mesh_pair_index = static_cast<size_t>(-1);
-      }
-    }
-
-    KINDS_DEBUG("Radius: reset boundary mesh state for Delaunay edge " << even_half_edge_id / 2
-                                                                      << " after it became non-boundary at t=" << t);
-  }
+  segment_builder_.invalidateStaleAlphaBoundaryMeshLinksOnTriangleEdgesLeftBoundary(updated_face_he);
 
   RadiusBoundaryTransitionShiftContext radius_boundary_shift_ctx {};
   if (segment_builder_.radius_boundary_transition_shift_enabled)

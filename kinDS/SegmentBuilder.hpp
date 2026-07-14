@@ -51,6 +51,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     MetadataBuilder& addInt(const char* key, int value);
     MetadataBuilder& addDouble(const char* key, double value);
     MetadataBuilder& addBool(const char* key, bool value);
+    MetadataBuilder& ensureSize(const char* key, size_t value);
+    MetadataBuilder& ensureDouble(const char* key, double value);
     MetadataBuilder& addRaw(const char* key, const std::string& raw_json_value);
     MetadataBuilder& ensureString(const char* key, const char* value);
     MetadataBuilder& ensureBool(const char* key, bool value);
@@ -106,6 +108,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const char* op) const;
 
   void configureMeshletStorage(VoronoiMesh& mesh) const;
+
+  /// Index into @c intersection_meshes for a boundary-interval meshlet, if @p mesh is one of them.
+  std::optional<size_t> intersectionMeshletIndexForMesh(const VoronoiMesh& mesh) const;
 
   /// When true, radius 2↔1 transitions snap intersection-mesh crossing vertices along the internal Voronoi edge (XY
   /// only).
@@ -253,6 +258,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<VoronoiMesh> intersection_meshes;
   std::vector<std::string> intersection_meshlet_export_suffixes;
   std::vector<std::list<MeshingData>> intersection_mesh_pair_last_left_and_right_vertex;
+  /// Parallel to @c meshes / @c intersection_meshes; set when a meshlet is retired at subdivision.
+  std::vector<bool> regular_meshlet_completed_;
+  std::vector<bool> boundary_meshlet_completed_;
+
+  std::optional<size_t> regularMeshletIndexForMesh(const VoronoiMesh& mesh) const;
+  bool warnAndSkipIfMeshletCompleted(const VoronoiMesh& mesh, const char* operation, double t) const;
+  void markRegularMeshletCompleted(size_t meshlet_index);
+  void markBoundaryMeshletCompleted(size_t meshlet_index);
   // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no
   // cutoff mesh exists
   std::vector<int> corner_to_cutoff_mesh_indices;
@@ -420,6 +433,19 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> getBoundaryIntersectionsInBoundaryOrder(
     size_t delaunay_edge_id) const;
+  /// Clears @c prev_segment_mesh_pair_index / @c next_segment_mesh_pair_index on all crossings along @p delaunay_edge_id.
+  void clearIntersectionMeshPairLinksOnDelaunayEdge(size_t delaunay_edge_id);
+  /**
+   * When @p even_half_edge_id is no longer on the alpha-shape component boundary, drop crossing mesh-pair links and
+   * boundary-mesh strip anchors for that Delaunay edge only (does not modify open intersection-strip vertex state).
+   */
+  void invalidateStaleAlphaBoundaryMeshLinksOnEvenHalfEdge(size_t even_half_edge_id);
+  /**
+   * When a Delaunay edge of @p triangle_half_edges (post-event triangle) is no longer on the alpha boundary, clear
+   * @c prev_segment_mesh_pair_index / @c next_segment_mesh_pair_index on all crossings along that edge.
+   */
+  void invalidateStaleAlphaBoundaryMeshLinksOnTriangleEdgesLeftBoundary(
+    const std::array<size_t, 3>& triangle_half_edges);
   /**
    * @brief Writes one-null interval links by identifying which endpoint vertex is null.
    *
@@ -434,7 +460,15 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * next_segment_mesh_pair_index.
    */
   bool writeOneNullIntersectionPairLinkByNullVertex(size_t intersection_pair_index, size_t null_vertex_id,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool interval_is_ref_to_null);
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool interval_is_ref_to_null,
+    double t = std::numeric_limits<double>::quiet_NaN());
+  /**
+   * Assign @p new_pair_index to @c prev_segment_mesh_pair_index or @c next_segment_mesh_pair_index on @p ref.
+   * When @ref diagnostics is enabled and @p new_pair_index equals @ref kDiagnosticsMonitoredMeshPairId, emits
+   * @c KINDS_INFO with @p context, crossing coordinates, and optional @p t.
+   */
+  void assignIntersectionMeshPairLink(KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool is_prev_link,
+    size_t new_pair_index, const char* context, double t = std::numeric_limits<double>::quiet_NaN());
   /**
    * @brief Centralized writer for crossing `prev`/`next` mesh-pair links.
    *
@@ -449,7 +483,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   void writeIntersectionPairLinks(size_t intersection_pair_index, size_t voronoi_cell_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
-    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection);
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection,
+    double t = std::numeric_limits<double>::quiet_NaN());
   size_t determineVoronoiCellForBoundaryIntersectionInterval(size_t delaunay_edge_id,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection) const;
@@ -476,7 +511,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * Apex order relative to strip `(u,v)` is chosen from that outside half-edge index alone (no vertex cross products).
    */
   size_t addBoundaryIntervalTriangleOriented(VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id,
-    double t, const std::string& metadata = "{}");
+    double t, const std::string& metadata = "{}", std::optional<size_t> boundary_meshlet_id = std::nullopt);
 
   /// @p strand_id Delaunay site id for transform frame lookup; may be a Voronoi vertex id when it matches
   /// @p meshlet_voronoi_vertex_for_alpha_check (resolved to an adjacent site automatically).
@@ -722,6 +757,21 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /// When @ref diagnostics is enabled, log @ref KineticDelaunay::kDiagnosticsMonitoredFaceId inside state at @p t.
   void logDiagnosticsMonitoredFaceInsideState(double t, const char* event_context) const;
+
+  /// Debug target: Delaunay edge whose crossing @c prev/@c next mesh-pair links are traced.
+  static constexpr size_t kDiagnosticsMonitoredDelaunayEdgeId = 26;
+  /// Debug target: boundary-interval mesh pair id suspected of incorrect wiring.
+  static constexpr size_t kDiagnosticsMonitoredMeshPairId = 11;
+  /// Suspected flip event time (log monitored edge state when @p t is near this value).
+  static constexpr double kDiagnosticsMonitoredFlipTime = 5.078627;
+  static constexpr double kDiagnosticsMonitoredTimeEpsilon = 1e-4;
+
+  /// Full snapshot of crossings on @ref kDiagnosticsMonitoredDelaunayEdgeId and mesh-pair metadata they reference.
+  void logDiagnosticsMonitoredDelaunayEdgeState(double t, const char* event_context) const;
+
+  /// Log monitored-edge snapshot when @p delaunay_edge_id / @p mesh_pair_index / @p t matches debug targets.
+  void maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(double t, const char* event_context,
+    std::optional<size_t> delaunay_edge_id = std::nullopt, std::optional<size_t> mesh_pair_index = std::nullopt) const;
 
   /// After @ref startNewMesh strip build: warn if topology/metadata suggests a non-empty mesh but vertices are missing.
   void meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewMesh(size_t half_edge_even, double t,

@@ -74,6 +74,8 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
     s.next_pair_idx = ref->next_segment_mesh_pair_index;
     crossing_edge_snapshot_.push_back(s);
   }
+  segment_builder_.maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(crossing->occurrence_time, "crossing_before_snapshot",
+    crossing_edge_snapshot_delaunay_edge_id_, std::nullopt);
 }
 
 void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
@@ -250,7 +252,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       const size_t new_vid = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid_local, event_pos,
         graph.destination(crossing->half_edge_id), crossing->occurrence_time, false, std::nullopt, vertex_meta, vertex_color);
       segment_builder_.addBoundaryIntervalTriangleOriented(
-        mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, crossing->occurrence_time, metadata);
+        mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, crossing->occurrence_time, metadata, pair_idx);
 
       if (use_uniform_pos)
       {
@@ -320,8 +322,10 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       // Adjacent intervals get a new vertex and become delimited by the newly inserted intersection.
       update_pair_endpoint(update_end_of_strip_pair, false, inserted_ref, false, crossing_update_meta_case);
       update_pair_endpoint(update_start_of_strip_pair, true, inserted_ref, false, crossing_update_meta_case);
-      inserted_ref->prev_segment_mesh_pair_index = outer_prev_mesh;
-      inserted_ref->next_segment_mesh_pair_index = outer_next_mesh;
+      segment_builder_.assignIntersectionMeshPairLink(inserted_ref, true, outer_prev_mesh,
+        "crossing_merge_2_to_1:inserted_prev", crossing->occurrence_time);
+      segment_builder_.assignIntersectionMeshPairLink(inserted_ref, false, outer_next_mesh,
+        "crossing_merge_2_to_1:inserted_next", crossing->occurrence_time);
     }
     else if (removed.size() == 1 && inserted.size() == 2)
     {
@@ -366,8 +370,10 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       const CrossingEdgeSnapshotEntry& old = removed[0].snapshot;
 
       // Outer topology: strips that met the old crossing keep the same mesh-pair ids on the open sides of the split.
-      start_ref->prev_segment_mesh_pair_index = old.prev_pair_idx;
-      end_ref->next_segment_mesh_pair_index = old.next_pair_idx;
+      segment_builder_.assignIntersectionMeshPairLink(start_ref, true, old.prev_pair_idx,
+        "crossing_split_1_to_2:start_prev", crossing->occurrence_time);
+      segment_builder_.assignIntersectionMeshPairLink(end_ref, false, old.next_pair_idx,
+        "crossing_split_1_to_2:end_next", crossing->occurrence_time);
 
       // Old adjacent intervals are advanced to event position and retargeted to the new delimiters.
       update_pair_endpoint(old.prev_pair_idx, false, start_ref, false, crossing_update_meta_case);
@@ -388,6 +394,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
                                                                     << " inserted=" << inserted.size() << " t="
                                                                     << crossing->occurrence_time);
     }
+    segment_builder_.maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(
+      crossing->occurrence_time, "crossing_after_boundary_interval", crossed_d_edge, std::nullopt);
   }
 
   size_t inside_he_id = crossing->half_edge_id;

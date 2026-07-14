@@ -532,6 +532,9 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
       intersection.delaunay_edge_id = inner_he_id / 2;
       intersection.delaunay_edge_param
         = delaunayVoronoiEdgeIntersection(intersection.delaunay_edge_id, intersection.voronoi_edge_id, t).first;
+      // Copied intersections move to a new boundary Delaunay edge; mesh-pair links from the source edge are invalid.
+      intersection.prev_segment_mesh_pair_index = static_cast<size_t>(-1);
+      intersection.next_segment_mesh_pair_index = static_cast<size_t>(-1);
 
       auto& v_intersections = crossing_data.voronoi_edge_intersections[intersection.voronoi_edge_id];
 

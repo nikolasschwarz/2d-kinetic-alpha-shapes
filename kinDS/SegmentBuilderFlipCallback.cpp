@@ -2,6 +2,7 @@
 
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "Logger.hpp"
 #include "SegmentBuilderVisualDebug.hpp"
 
 #include <cmath>
@@ -29,6 +30,63 @@ glm::dvec3 unshiftedFlipEventPoint(const KineticDelaunay& kin_del, const HalfEdg
   center /= static_cast<double>(strand_ids.size());
   return glm::dvec3(center, t);
 }
+
+bool flipTouchesMonitoredDelaunayEdge(const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id)
+{
+  const auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(flip_half_edge_id / 2);
+  for (size_t he_id : quad_he_ids)
+  {
+    if ((he_id / 2) == SegmentBuilder::kDiagnosticsMonitoredDelaunayEdgeId)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const HalfEdgeDelaunayGraph& graph,
+  const KineticDelaunay::FlipEvent& flip, const char* phase)
+{
+  if (!segment_builder.diagnostics)
+  {
+    return;
+  }
+  const bool near_time = std::isfinite(flip.occurrence_time)
+    && std::abs(flip.occurrence_time - SegmentBuilder::kDiagnosticsMonitoredFlipTime)
+      <= SegmentBuilder::kDiagnosticsMonitoredTimeEpsilon;
+  const bool touches_edge = flipTouchesMonitoredDelaunayEdge(graph, flip.half_edge_id);
+  if (!near_time && !touches_edge)
+  {
+    return;
+  }
+
+  std::ostringstream ctx;
+  ctx << "flip_" << phase << "_he" << flip.half_edge_id;
+  if (near_time)
+  {
+    ctx << "_near_t";
+  }
+  if (touches_edge)
+  {
+    ctx << "_d" << SegmentBuilder::kDiagnosticsMonitoredDelaunayEdgeId;
+  }
+  segment_builder.logDiagnosticsMonitoredDelaunayEdgeState(flip.occurrence_time, ctx.str().c_str());
+
+  std::ostringstream quad_oss;
+  quad_oss << "flip monitored-edge context " << phase << " flip_he=" << flip.half_edge_id << " t="
+           << flip.occurrence_time << " quad_edges=[";
+  const auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(flip.half_edge_id / 2);
+  for (size_t i = 0; i < quad_he_ids.size(); ++i)
+  {
+    if (i > 0)
+    {
+      quad_oss << ", ";
+    }
+    quad_oss << (quad_he_ids[i] / 2);
+  }
+  quad_oss << "]";
+  KINDS_INFO(quad_oss.str());
+}
 } // namespace
 
 void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
@@ -52,6 +110,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     flip->occurrence_time, "before", "flip_he" + std::to_string(flip->half_edge_id),
     VisualDebugHighlight::forFlip(graph, flip->half_edge_id), runtime_branch_id);
+  logFlipMonitoredEdgeDiagnostics(segment_builder_, graph, *flip, "before");
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
 
@@ -76,6 +135,12 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
         .addSize("voronoi_vertex_id", voronoi_vertex_id)
         .build();
     };
+    const std::string flip_face_metadata = segment_builder_.store_mesh_metadata
+      ? SegmentBuilder::MetadataBuilder()
+          .addString("event_type", "flip_event")
+          .addDouble("t", flip->occurrence_time)
+          .build()
+      : std::string {};
     if (!last_segments.empty())
     {
       const size_t pre_even_flip_he = flip->half_edge_id & ~1;
@@ -88,7 +153,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
       // create one triangle to the event point
       {
         const size_t tris_before = mesh.getTriangleCount();
-        segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index);
+        segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index, flip_face_metadata);
         if (segment_builder_.diagnostics)
         {
           std::ostringstream note;
@@ -163,6 +228,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     segment_builder_.kin_del.validateFlipAdjacentFaceInsideConsistency(flip->half_edge_id, flip->occurrence_time);
     segment_builder_.logDiagnosticsMonitoredFaceInsideState(flip->occurrence_time, "flip_event");
   }
+  logFlipMonitoredEdgeDiagnostics(segment_builder_, graph, *flip, "after_pre_refresh");
 
   int vertex = graph.halfEdge(flip->half_edge_id).origin;
   if (vertex == -1)
@@ -209,6 +275,12 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
                                                      .addString("event_type", "flip_event")
                                                      .addString("source", "site")
                                                      .build();
+  const std::string flip_face_metadata = segment_builder_.store_mesh_metadata
+    ? SegmentBuilder::MetadataBuilder()
+        .addString("event_type", "flip_event")
+        .addDouble("t", flip->occurrence_time)
+        .build()
+    : std::string {};
 
   // For now also create a mesh, but this might be changed later
   VoronoiMesh mesh;
@@ -260,7 +332,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       size_t last_right = segments.front().mesh_end_vertex_id;
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
-        segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
+        segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index, flip_face_metadata);
         if (segment_builder_.diagnostics)
         {
           std::ostringstream note;
@@ -277,7 +349,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       size_t last_right = segments.back().mesh_end_vertex_id;
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
-        segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index);
+        segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index, flip_face_metadata);
         if (segment_builder_.diagnostics)
         {
           std::ostringstream note;
@@ -349,6 +421,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   }
 
   segment_builder_.refreshCrossingRefsForAllStrips();
+  logFlipMonitoredEdgeDiagnostics(segment_builder_, graph, *flip, "after_post_refresh");
 }
 } // namespace kinDS
 
