@@ -6,6 +6,7 @@
 #include "kinDS/SegmentBuilder.hpp"
 #include "kinDS/StrandTree.hpp"
 #include "kinDS/TreeMesher.hpp"
+#include "kinDS/Validator.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -63,7 +64,8 @@ std::vector<std::pair<size_t, double>> merge_sorted_vectors(const std::vector<st
   return result;
 }
 
-static void kinetic_delaunay_example()
+static bool kinetic_delaunay_example(bool validate_mesh_vertex_sources, const std::string& validate_log_path,
+  bool alternate_section_shading)
 {
 #define TEST_TRAJECTORIES
 #ifdef TEST_TRAJECTORIES
@@ -276,6 +278,8 @@ static void kinetic_delaunay_example()
 
   kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);
   mesh_builder.radius_boundary_transition_shift_enabled = true;
+  mesh_builder.store_mesh_metadata = validate_mesh_vertex_sources;
+  mesh_builder.validate_mesh_vertex_sources = validate_mesh_vertex_sources;
   kinetic_delaunay.init(&mesh_builder);
   auto points = kinetic_delaunay.getPointsAt(0.0);
 
@@ -303,12 +307,27 @@ static void kinetic_delaunay_example()
   auto mesh_suffixes = mesh_builder.extractSegmentMeshletExportSuffixes(merge_by_segment);
   //(0.1, 0.01, subdivisions);
 
+  bool validation_passed = true;
+  if (validate_mesh_vertex_sources)
+  {
+    kinDS::Validator::setLogFile(validate_log_path);
+    validation_passed
+      = kinDS::Validator::validateAndReportMeshVertexSources(meshes.first, "demo segment meshlets", &mesh_suffixes);
+    std::cout << "Validation report written to: " << kinDS::Validator::logFilePath() << std::endl;
+    if (!validation_passed)
+    {
+      std::cerr << "Mesh vertex source validation failed. See " << kinDS::Validator::logFilePath() << std::endl;
+    }
+  }
+
   for (size_t i = 0; i < meshes.first.size(); ++i)
   {
     const std::string suffix = (i < mesh_suffixes.size()) ? mesh_suffixes[i] : "";
     std::string filename = "mesh_" + std::to_string(i) + suffix + meshes.first[i].creationKineticTimeFilenameSuffix()
       + ".obj";
-    kinDS::ObjExporter::writeMesh(meshes.first[i], filename, 1.0, 1.0, {}, true);
+    const bool include_vertex_colors = kinDS::Validator::meshUsesValidationErrorMaterial(meshes.first[i]);
+    kinDS::ObjExporter::writeMesh(meshes.first[i], filename, 1.0, 1.0, {}, true, include_vertex_colors,
+      alternate_section_shading);
     std::cout << "Mesh saved to " << filename << std::endl;
   }
 
@@ -319,7 +338,8 @@ static void kinetic_delaunay_example()
     const std::string suffix = (i < boundary_interval_suffixes.size()) ? boundary_interval_suffixes[i] : "";
     std::string filename = "mesh_bound_" + std::to_string(i) + suffix
       + boundary_interval_meshes[i].creationKineticTimeFilenameSuffix() + ".obj";
-    kinDS::ObjExporter::writeMesh(boundary_interval_meshes[i], filename, 1.0, 1.0, {}, true);
+    kinDS::ObjExporter::writeMesh(boundary_interval_meshes[i], filename, 1.0, 1.0, {}, true, false,
+      alternate_section_shading);
     std::cout << "Boundary interval mesh saved to " << filename << std::endl;
   }
 
@@ -327,6 +347,12 @@ static void kinetic_delaunay_example()
   kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, true);
 
   boundary_mesh.checkForDegenerateTriangles();
+
+  if (validate_mesh_vertex_sources)
+  {
+    return validation_passed;
+  }
+  return true;
 }
 
 // Helper: enable/disable specific log levels (relative to current)
@@ -455,6 +481,9 @@ static void print_usage(const char* program_name)
             << "  --untransformed           Export meshlets in profile/local space (default: world space)\n"
             << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
             << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
+            << "  --validate                After meshing, check that vertices with the same metadata source agree in world space\n"
+            << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
+            << "  --section-shading         Alternate light/dark yellow and brown materials by even/odd section\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -464,6 +493,7 @@ static void print_usage(const char* program_name)
             << "Examples:\n"
             << "  " << program_name << " --demo\n"
             << "  " << program_name << " --mesh strandtree.txt\n"
+            << "  " << program_name << " --validate --mesh strandtree.txt\n"
             << "  " << program_name << " --log-file output.log --demo\n"
             << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
             << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
@@ -509,9 +539,10 @@ static std::filesystem::path mesh_export_base_directory(const std::optional<std:
   return path;
 }
 
-static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
+static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
-  bool transform_mesh_at_construction)
+  bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, const std::string& validate_log_path,
+  bool alternate_section_shading)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -546,6 +577,9 @@ static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     std::cout << "Running TreeMesher..." << std::endl;
     kinDS::TreeMesher mesher(strand_tree);
     mesher.getSettings().transform_mesh_at_construction = transform_mesh_at_construction;
+    mesher.getSettings().validate_mesh_vertex_sources = validate_mesh_vertex_sources;
+    mesher.getSettings().validate_mesh_vertex_sources_log_path = validate_log_path;
+    mesher.getSettings().alternate_section_shading = alternate_section_shading;
     const auto& meshes = mesher.runMeshingAlgorithm(true);
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
@@ -591,11 +625,22 @@ static void mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     std::cout << "Boundary mesh exported to: boundary_mesh.obj" << std::endl;
 
     std::cout << "Meshing complete!" << std::endl;
+
+    if (validate_mesh_vertex_sources)
+    {
+      std::cout << "Validation report written to: " << kinDS::Validator::logFilePath() << std::endl;
+      if (!mesher.meshVertexSourceValidationPassed())
+      {
+        std::cerr << "Mesh vertex source validation failed. See " << kinDS::Validator::logFilePath() << std::endl;
+        return false;
+      }
+    }
+    return true;
   }
   catch (const std::exception& e)
   {
     std::cerr << "Error: " << e.what() << std::endl;
-    std::exit(1);
+    return false;
   }
 }
 
@@ -622,6 +667,9 @@ int main(int argc, char* argv[])
   std::optional<std::filesystem::path> mesh_export_path;
   bool mesh_export_profile_space = false;
   bool mesh_transform_at_construction = true;
+  bool mesh_validate_vertex_sources = false;
+  std::string mesh_validate_log_path = kinDS::Validator::defaultLogFilePath();
+  bool mesh_alternate_section_shading = false;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -732,6 +780,28 @@ int main(int argc, char* argv[])
       mesh_transform_at_construction = false;
       ++arg_idx;
     }
+    else if (arg == "--validate")
+    {
+      mesh_validate_vertex_sources = true;
+      ++arg_idx;
+    }
+    else if (arg == "--validate-log")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --validate-log requires a file path." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      mesh_validate_log_path = argv[arg_idx + 1];
+      ++arg_idx;
+      ++arg_idx;
+    }
+    else if (arg == "--section-shading")
+    {
+      mesh_alternate_section_shading = true;
+      ++arg_idx;
+    }
     else if (arg == "--help" || arg == "-h")
     {
       if (!command.empty() && command != "help")
@@ -796,14 +866,21 @@ int main(int argc, char* argv[])
   else if (command == "demo")
   {
     std::cout << "Running demo (kinetic_delaunay_example)..." << std::endl;
-    kinetic_delaunay_example();
+    if (!kinetic_delaunay_example(mesh_validate_vertex_sources, mesh_validate_log_path, mesh_alternate_section_shading))
+    {
+      return 1;
+    }
     return 0;
   }
   else if (command == "mesh")
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
-    mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
-      mesh_transform_at_construction);
+    if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
+          mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_validate_log_path,
+          mesh_alternate_section_shading))
+    {
+      return 1;
+    }
     return 0;
   }
 

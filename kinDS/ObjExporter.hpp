@@ -1,8 +1,13 @@
 #pragma once
 
 #include "VoronoiMesh.hpp"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -178,7 +183,125 @@ class ObjExporter
     }
   }
 
-  static void writeFaces(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub, bool include_metadata)
+  static std::optional<double> parseMetadataDoubleField(const std::string& metadata, const char* key)
+  {
+    std::string needle = std::string("\"") + key + "\":";
+    const size_t key_pos = metadata.find(needle);
+    if (key_pos == std::string::npos)
+    {
+      return std::nullopt;
+    }
+    size_t value_pos = key_pos + needle.size();
+    while (value_pos < metadata.size() && std::isspace(static_cast<unsigned char>(metadata[value_pos])))
+    {
+      ++value_pos;
+    }
+    if (value_pos >= metadata.size())
+    {
+      return std::nullopt;
+    }
+
+    const char* start = metadata.c_str() + value_pos;
+    char* end = nullptr;
+    const double value = std::strtod(start, &end);
+    if (end == start || !std::isfinite(value))
+    {
+      return std::nullopt;
+    }
+    return value;
+  }
+
+  static std::optional<double> kineticTimeForVertex(const VoronoiMesh& mesh, size_t vertex_index)
+  {
+    if (vertex_index >= mesh.getVertexCount())
+    {
+      return std::nullopt;
+    }
+
+    const auto& vertex_metadata = mesh.getVertexMetadata();
+    if (vertex_index < vertex_metadata.size())
+    {
+      if (const std::optional<double> metadata_time = parseMetadataDoubleField(vertex_metadata[vertex_index], "t"))
+      {
+        return metadata_time;
+      }
+    }
+
+    const double stored_time = mesh.vertexKineticTime(vertex_index);
+    if (std::isfinite(stored_time))
+    {
+      return stored_time;
+    }
+
+    return std::nullopt;
+  }
+
+  static std::optional<std::pair<double, double>> kineticTimeRangeForTriangle(
+    const VoronoiMesh& mesh, size_t triangle_index)
+  {
+    const auto& triangles = mesh.getTriangles();
+    const size_t corner_base = triangle_index * 3;
+    if (corner_base + 2 >= triangles.size())
+    {
+      return std::nullopt;
+    }
+
+    double min_t = std::numeric_limits<double>::infinity();
+    double max_t = -std::numeric_limits<double>::infinity();
+    size_t valid_vertex_count = 0;
+    for (size_t corner = 0; corner < 3; ++corner)
+    {
+      const size_t vertex_index = triangles[corner_base + corner];
+      const std::optional<double> vertex_time = kineticTimeForVertex(mesh, vertex_index);
+      if (!vertex_time.has_value())
+      {
+        continue;
+      }
+      min_t = std::min(min_t, vertex_time.value());
+      max_t = std::max(max_t, vertex_time.value());
+      ++valid_vertex_count;
+    }
+
+    if (valid_vertex_count == 0 || !std::isfinite(min_t) || !std::isfinite(max_t))
+    {
+      return std::nullopt;
+    }
+    return std::make_pair(min_t, max_t);
+  }
+
+  static size_t kineticSectionIndexFromMinTime(double min_t)
+  {
+    return static_cast<size_t>(std::floor(min_t));
+  }
+
+  static std::optional<size_t> kineticSectionForTriangle(const VoronoiMesh& mesh, size_t triangle_index)
+  {
+    const std::optional<std::pair<double, double>> time_range = kineticTimeRangeForTriangle(mesh, triangle_index);
+    if (!time_range.has_value())
+    {
+      return std::nullopt;
+    }
+    return kineticSectionIndexFromMinTime(time_range->first);
+  }
+
+  static bool kineticSectionIsEven(size_t section_index) { return (section_index % 2) == 0; }
+
+  static std::string sectionShadedMaterialName(const std::string& base_material_name, size_t section_index)
+  {
+    const bool even_section = kineticSectionIsEven(section_index);
+    if (base_material_name == "yellow")
+    {
+      return even_section ? "yellow_light" : "yellow_dark";
+    }
+    if (base_material_name == "brown")
+    {
+      return even_section ? "brown_light" : "brown_dark";
+    }
+    return base_material_name;
+  }
+
+  static void writeFaces(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub, bool include_metadata,
+    bool alternate_section_shading)
   {
     validateFaceWriteRange(mesh, lb, ub, "writeFaces");
 
@@ -199,6 +322,13 @@ class ObjExporter
         if (current_material_id >= 0 && static_cast<size_t>(current_material_id) < material_names.size())
         {
           desired_material_name = material_names[static_cast<size_t>(current_material_id)];
+        }
+      }
+      if (alternate_section_shading && !desired_material_name.empty())
+      {
+        if (const std::optional<size_t> section_index = kineticSectionForTriangle(mesh, i / 3))
+        {
+          desired_material_name = sectionShadedMaterialName(desired_material_name, section_index.value());
         }
       }
       if (!desired_material_name.empty() && desired_material_name != active_material_name)
@@ -272,6 +402,31 @@ class ObjExporter
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
+    // Section-alternating shades (even sections = light, odd sections = dark).
+    file << "newmtl yellow_light\n";
+    file << "Ka 0.6 0.6 0.1\n";
+    file << "Kd 0.9 0.85 0.2\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    file << "newmtl yellow_dark\n";
+    file << "Ka 0.35 0.35 0.05\n";
+    file << "Kd 0.55 0.5 0.1\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    file << "newmtl brown_light\n";
+    file << "Ka 0.2 0.1 0.05\n";
+    file << "Kd 0.4 0.25 0.1\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    file << "newmtl brown_dark\n";
+    file << "Ka 0.1 0.05 0.02\n";
+    file << "Kd 0.22 0.12 0.05\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
     // Component boundary shell (bark / interior).
     file << "newmtl bark\n";
     file << "Ka 0.3 0.2 0.1\n";
@@ -282,6 +437,13 @@ class ObjExporter
     file << "newmtl interior\n";
     file << "Ka 0.8 0.8 0.8\n";
     file << "Kd 0.8 0.8 0.8\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    // Validation error highlight (inconsistent keyed vertex sources).
+    file << "newmtl red\n";
+    file << "Ka 0.3 0.0 0.0\n";
+    file << "Kd 0.95 0.1 0.1\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n";
 
@@ -332,7 +494,7 @@ class ObjExporter
   }
   static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, double uv_height_factor = 1.0,
     double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {},
-    bool include_metadata = false, bool include_vertex_colors = false)
+    bool include_metadata = false, bool include_vertex_colors = false, bool alternate_section_shading = false)
   {
     mesh.validateNormalCount("ObjExporter::writeMesh(" + obj_path.string() + ")");
 
@@ -431,7 +593,7 @@ class ObjExporter
         size_t lb = mesh.getGroupOffsets()[group_index];
         size_t ub = mesh.getGroupOffsets()[group_index + 1];
         validateFaceWriteRange(mesh, lb, ub, mesh_context + " group " + std::to_string(group_index));
-        writeFaces(file, mesh, lb, ub, include_metadata);
+        writeFaces(file, mesh, lb, ub, include_metadata, alternate_section_shading);
       }
 
       // Write the last group
@@ -440,14 +602,14 @@ class ObjExporter
       size_t lb = mesh.getGroupOffsets().back();
       size_t ub = mesh.getTriangles().size() / 3;
       validateFaceWriteRange(mesh, lb, ub, mesh_context + " last group");
-      writeFaces(file, mesh, lb, ub, include_metadata);
+      writeFaces(file, mesh, lb, ub, include_metadata, alternate_section_shading);
     }
     else
     {
       // No groups defined, write all faces
       const size_t ub = mesh.getTriangles().size() / 3;
       validateFaceWriteRange(mesh, 0, ub, mesh_context);
-      writeFaces(file, mesh, 0, ub, include_metadata);
+      writeFaces(file, mesh, 0, ub, include_metadata, alternate_section_shading);
     }
 
     file.close();

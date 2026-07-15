@@ -135,6 +135,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     int strand_even_origin, int strand_odd_origin, BoundaryEventType event_type, BoundarySegmentAction segment_action,
     const char* op) const;
 
+  /// JSON for boundary-mesh (bark/interior) triangles.
+  std::string composeBoundaryMeshFaceMetadata(double kinetic_time, const char* mesh_type,
+    size_t half_edge_id = static_cast<size_t>(-1), size_t delaunay_face_id = static_cast<size_t>(-1),
+    size_t input_branch_id = static_cast<size_t>(-1)) const;
+
+  /// JSON for closing-cap meshlet triangles.
+  std::string composeClosingMeshFaceMetadata(double kinetic_time, size_t strand_id) const;
+
   void configureMeshletStorage(VoronoiMesh& mesh) const;
 
   /// Index into @c intersection_meshes for a boundary-interval meshlet, if @p mesh is one of them.
@@ -145,6 +153,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool radius_boundary_transition_shift_enabled = true;
   /// When false, skip building/storing per-vertex and per-face JSON metadata on meshlets.
   bool store_mesh_metadata = true;
+  /// When true (e.g. via @c --validate), run mesh vertex source consistency checks in @ref finalize.
+  bool validate_mesh_vertex_sources = false;
   /// When false, skip meshlet diagnostic logging and related string assembly.
   bool diagnostics = false;
 
@@ -522,7 +532,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection) const;
 
-  void completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right);
+  void completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right, double t);
 
   /**
    * Add a triangle to the boundary mesh. Automatically takes the raw UVs and adjusts them to avoid seams.
@@ -530,7 +540,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @param v second vertex index
    * @param w third vertex index
    */
-  size_t addBoundaryTriangle(size_t u, size_t v, size_t w);
+  size_t addBoundaryTriangle(size_t u, size_t v, size_t w, const std::string& metadata = "{}");
 
   size_t addBoundaryVertex(
     glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift);
@@ -771,7 +781,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @param mesh Cap mesh (triangles appended).
    * @param polygons Vertex index rings.
    */
-  void closingMeshTriangulatePolygons(VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons);
+  void closingMeshTriangulatePolygons(VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons, double t,
+    size_t strand_id);
 
   size_t createClosingMesh(size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals = nullptr);

@@ -1,6 +1,7 @@
 #pragma once
 #include "MeshIntersection.hpp"
 #include "StrandTree.hpp"
+#include "Validator.hpp"
 #include "VoronoiMesh.hpp"
 #include <filesystem>
 #include <glm/glm.hpp>
@@ -46,11 +47,17 @@ class TreeMesher
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
     /// When false, skip JSON vertex/face metadata on meshlets (material_ids still stored for OBJ export).
     bool store_mesh_metadata = true;
+    /// When true, run @ref Validator::validateAndReportMeshVertexSources after meshing.
+    bool validate_mesh_vertex_sources = false;
+    /// Output path for @ref Validator when validation is enabled (@ref Validator::defaultLogFilePath by default).
+    std::string validate_mesh_vertex_sources_log_path = Validator::defaultLogFilePath();
     /// When false, skip meshlet diagnostic logging and related string assembly (@ref meshletDiagnosticLogLine).
     bool diagnostics = true;
     /// When true, mesh vertices are stored in object space during meshing (@ref SegmentBuilder::create_transformed_mesh).
     /// Export skips a second transform; polygon triangulation still uses profile-plane xy.
     bool transform_mesh_at_construction = true;
+    /// When true, OBJ export alternates light/dark yellow and brown materials by even/odd kinetic section.
+    bool alternate_section_shading = false;
 
     // for debugging purposes:
     bool debug_export_meshes = false;
@@ -72,6 +79,7 @@ class TreeMesher
   std::vector<size_t> meshing_to_physics_segment_indices;
   Settings settings;
   std::function<void(size_t, std::function<void(size_t)>)> parallel_for;
+  bool mesh_vertex_source_validation_passed_ = true;
 
  public:
   TreeMesher(StrandTree& strand_tree);
@@ -90,6 +98,7 @@ class TreeMesher
   Settings& getSettings() { return settings; }
   const Settings& getSettings() const { return settings; }
   void setSettings(const Settings& new_settings) { settings = new_settings; }
+  bool meshVertexSourceValidationPassed() const { return mesh_vertex_source_validation_passed_; }
 
   /// Export meshlets under @p export_path.
   /// @param export_mode How meshlets are grouped into output file(s).

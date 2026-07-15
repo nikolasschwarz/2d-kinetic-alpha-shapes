@@ -5,6 +5,7 @@
 #include "ObjExporter.hpp"
 #include "SegmentBuilder.hpp"
 #include "TreeMesher.hpp"
+#include "Validator.hpp"
 #include <execution>
 #include <filesystem>
 #include <stdexcept>
@@ -124,6 +125,13 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     return mesh;
   };
 
+  auto write_meshlet_obj = [&](const VoronoiMesh& mesh, const std::filesystem::path& path)
+  {
+    const bool include_vertex_colors = Validator::meshUsesValidationErrorMaterial(mesh);
+    kinDS::ObjExporter::writeMesh(mesh, path, 1.0, 1.0, {}, include_metadata, include_vertex_colors,
+      settings.alternate_section_shading);
+  };
+
   auto meshlet_filename = [&](size_t i) -> std::filesystem::path
   {
     const std::string suffix = (i < export_suffixes.size()) ? export_suffixes[i] : "";
@@ -139,7 +147,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     std::filesystem::create_directories(export_path);
     for (size_t i = 0; i < export_count; ++i)
     {
-      kinDS::ObjExporter::writeMesh(meshlet_for_export(i), export_path / meshlet_filename(i), 1.0, 1.0, {}, include_metadata);
+      write_meshlet_obj(meshlet_for_export(i), export_path / meshlet_filename(i));
     }
     KINDS_DEBUG("Exported " << export_count << " meshlet OBJ file(s) (mode=" << meshletExportModeToString(export_mode)
                             << ", transformed=" << apply_export_transform << ") to " << export_path.string() << ".");
@@ -193,7 +201,8 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     return;
   }
 
-  kinDS::ObjExporter::writeMesh(combined_mesh, obj_path, 1.0, 1.0, {}, include_metadata);
+  kinDS::ObjExporter::writeMesh(combined_mesh, obj_path, 1.0, 1.0, {}, include_metadata,
+    Validator::meshUsesValidationErrorMaterial(combined_mesh), settings.alternate_section_shading);
   const size_t group_count = combined_mesh.getGroupOffsets().size();
   KINDS_DEBUG("Exported combined mesh (" << group_count << " group(s) from " << export_count
                                        << " meshlet(s), mode=combined, transformed=" << apply_export_transform
@@ -475,7 +484,12 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   mesh_builder
     = std::make_shared<SegmentBuilder>(
       *kinetic_delaunay, subdivisions, settings.transform_mesh_at_construction, visual_debug, parallel_for);
-  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata || visual_debug;
+  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata || visual_debug || settings.validate_mesh_vertex_sources;
+  mesh_builder->validate_mesh_vertex_sources = settings.validate_mesh_vertex_sources;
+  if (settings.validate_mesh_vertex_sources)
+  {
+    Validator::setLogFile(settings.validate_mesh_vertex_sources_log_path);
+  }
   mesh_builder->diagnostics = settings.diagnostics;
   kinetic_delaunay->setDiagnosticsEnabled(settings.diagnostics);
 
@@ -545,6 +559,16 @@ const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm(bool visu
   // truncateToBoundary(boundary_mesh);
 
   mapMeshingToPhysicsSegmentIndices();
+
+  if (mesh_builder && mesh_builder->store_mesh_metadata && settings.validate_mesh_vertex_sources)
+  {
+    mesh_vertex_source_validation_passed_ = Validator::validateAndReportMeshVertexSources(
+      segment_meshlets, "segment meshlets", &segment_meshlet_export_suffixes);
+  }
+  else
+  {
+    mesh_vertex_source_validation_passed_ = true;
+  }
 
   return segment_meshlets;
 }

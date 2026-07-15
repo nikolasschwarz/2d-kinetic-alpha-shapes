@@ -10,7 +10,9 @@
         "--mesh",
         "input_examples/test_oak_5.txt",
         "--export-mode",
-        "combined"
+        "combined",
+        "--validate",
+        "--section-shading"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

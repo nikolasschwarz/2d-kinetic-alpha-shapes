@@ -100,6 +100,11 @@ class VoronoiMesh
   void startNewGroup();
   void setGroupOffsets(const std::vector<size_t>& offsets);
   void setMaterialNames(std::vector<std::string> names) { material_names = std::move(names); }
+  /// Returns the material index, appending @p name when it is not already present.
+  int ensureMaterialName(const std::string& name);
+  void ensureMaterialIdsSize(int fill_material_id = -1);
+  void setTriangleMaterialId(size_t triangle_index, int material_id);
+  void setVertexColor(size_t vertex_index, const glm::dvec3& color);
   VoronoiMesh& operator+=(const VoronoiMesh& other);
   void flipOrientation();
 
@@ -165,6 +170,9 @@ class VoronoiMesh
 
   void setStoreMetadata(bool enabled) { store_metadata_ = enabled; }
   bool storeMetadata() const { return store_metadata_; }
+
+  /// When @ref storeMetadata is true, resize @c face_metadata to match @c triangles.size()/3.
+  void ensureFaceMetadataSize(const std::string& fill_value = "{}");
 
   void setProfilePlanePosition(size_t vertex_index, glm::dvec2 xy);
   glm::dvec2 triangulationPlaneXY(size_t vertex_index) const;

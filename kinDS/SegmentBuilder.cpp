@@ -9,6 +9,7 @@
 #include "SegmentBuilderSectionCallback.hpp"
 #include "SegmentBuilderSubdivisionCallback.hpp"
 #include "SegmentBuilderSeparationCallback.hpp"
+#include "Validator.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1042,6 +1043,40 @@ std::string makeRegularStripFaceMetadataJson(double kinetic_time, size_t voronoi
     .addInt("strand_even_origin", strand_even_origin)
     .addInt("strand_odd_origin", strand_odd_origin)
     .addString("op", op)
+    .build();
+}
+
+std::string makeBoundaryMeshFaceMetadataJson(double kinetic_time, const char* mesh_type, size_t half_edge_id,
+  size_t delaunay_face_id, size_t input_branch_id)
+{
+  SegmentBuilder::MetadataBuilder builder;
+  builder.addString("event_type", "boundary_mesh")
+    .addString("mesh_type", mesh_type)
+    .addDouble("time", kinetic_time)
+    .addDouble("t", kinetic_time);
+  if (half_edge_id != static_cast<size_t>(-1))
+  {
+    builder.addSize("half_edge_id", half_edge_id);
+  }
+  if (delaunay_face_id != static_cast<size_t>(-1))
+  {
+    builder.addSize("delaunay_face_id", delaunay_face_id);
+  }
+  if (input_branch_id != static_cast<size_t>(-1))
+  {
+    builder.addSize("input_branch_id", input_branch_id);
+  }
+  return builder.build();
+}
+
+std::string makeClosingMeshFaceMetadataJson(double kinetic_time, size_t strand_id)
+{
+  return SegmentBuilder::MetadataBuilder()
+    .addString("event_type", "closing_mesh")
+    .addString("mesh_type", "closing_cap")
+    .addDouble("time", kinetic_time)
+    .addDouble("t", kinetic_time)
+    .addSize("strand_id", strand_id)
     .build();
 }
 } // namespace
@@ -2684,6 +2719,26 @@ std::string SegmentBuilder::composeRegularStripFaceMetadata(double kinetic_time,
   }
   return makeRegularStripFaceMetadataJson(kinetic_time, voronoi_edge_id, even_half_edge_id, strand_even_origin,
     strand_odd_origin, event_type, segment_action, op);
+}
+
+std::string SegmentBuilder::composeBoundaryMeshFaceMetadata(double kinetic_time, const char* mesh_type,
+  size_t half_edge_id, size_t delaunay_face_id, size_t input_branch_id) const
+{
+  if (!store_mesh_metadata)
+  {
+    return {};
+  }
+  return makeBoundaryMeshFaceMetadataJson(
+    kinetic_time, mesh_type, half_edge_id, delaunay_face_id, input_branch_id);
+}
+
+std::string SegmentBuilder::composeClosingMeshFaceMetadata(double kinetic_time, size_t strand_id) const
+{
+  if (!store_mesh_metadata)
+  {
+    return {};
+  }
+  return makeClosingMeshFaceMetadataJson(kinetic_time, strand_id);
 }
 
 void SegmentBuilder::configureMeshletStorage(VoronoiMesh& mesh) const
@@ -4358,8 +4413,10 @@ size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(
   return index;
 }
 
-void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right)
+void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right, double t)
 {
+  const std::string face_metadata
+    = composeBoundaryMeshFaceMetadata(t, "boundary_section", he_id);
   const auto& last_left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
   if (last_left_and_right.first != -1)
   {
@@ -4367,19 +4424,19 @@ void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new
     if (half_edge_to_boundary_vertex_index[he_id] == -1)
     {
       // no edge flip
-      addBoundaryTriangle(last_left_and_right.first, new_right, new_left);
+      addBoundaryTriangle(last_left_and_right.first, new_right, new_left, face_metadata);
       if (last_left_and_right.second != -1)
       {
-        addBoundaryTriangle(last_left_and_right.second, new_right, last_left_and_right.first);
+        addBoundaryTriangle(last_left_and_right.second, new_right, last_left_and_right.first, face_metadata);
       }
     }
     else
     {
       assert(last_left_and_right.second != -1);
       // he_id was previously flipped, it's corresponding vertex is no longer part of the boundary
-      addBoundaryTriangle(last_left_and_right.second, new_right, half_edge_to_boundary_vertex_index[he_id]);
-      addBoundaryTriangle(new_left, last_left_and_right.first, half_edge_to_boundary_vertex_index[he_id]);
-      addBoundaryTriangle(new_left, half_edge_to_boundary_vertex_index[he_id], new_right);
+      addBoundaryTriangle(last_left_and_right.second, new_right, half_edge_to_boundary_vertex_index[he_id], face_metadata);
+      addBoundaryTriangle(new_left, last_left_and_right.first, half_edge_to_boundary_vertex_index[he_id], face_metadata);
+      addBoundaryTriangle(new_left, half_edge_to_boundary_vertex_index[he_id], new_right, face_metadata);
 
       // reset the half-edge to boundary vertex index
       half_edge_to_boundary_vertex_index[he_id] = -1;
@@ -4391,7 +4448,7 @@ void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new
   }
 }
 
-size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w)
+size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w, const std::string& metadata)
 {
   // check bounds
   if (u >= boundary_mesh.getVertexCount() || v >= boundary_mesh.getVertexCount() || w >= boundary_mesh.getVertexCount())
@@ -4446,7 +4503,7 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w)
                 std::to_string(uv_v[0]) + ", " + std::to_string(uv_v[1]) + "), w(" + std::to_string(uv_w[0]) + ", " +
                 std::to_string(uv_w[1]) + ")");*/
   // warnIfTriangleKineticTimesNotInUnitSection(u, v, w, boundary_mesh.getVertices(), "boundary_mesh", 0);
-  return boundary_mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, 0);
+  return boundary_mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, 0, metadata);
 }
 
 size_t kinDS::SegmentBuilder::addBoundaryVertex(
@@ -5300,7 +5357,7 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
       if (kin_del.isOnComponentBoundaryOutside(he_ids[i]))
       {
         completeBoundaryMeshSection(
-          he_ids[i], static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex));
+          he_ids[i], static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex), t);
         boundary_mesh_last_left_and_right_vertex[he_ids[i]]
           = std::make_pair(static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex));
       }
@@ -5341,7 +5398,10 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
     const size_t tri_v0 = static_cast<size_t>(strand_to_mesh_vertex[vertices[0]]);
     const size_t tri_v1 = static_cast<size_t>(strand_to_mesh_vertex[vertices[1]]);
     const size_t tri_v2 = static_cast<size_t>(strand_to_mesh_vertex[vertices[2]]);
-    boundary_mesh.addTriangle(tri_v0, tri_v1, tri_v2, uv_indices[0], uv_indices[1], uv_indices[2], 1);
+    const std::string face_metadata = composeBoundaryMeshFaceMetadata(
+      t, "boundary_delaunay", static_cast<size_t>(-1), face_index, input_branch_id);
+    boundary_mesh.addTriangle(
+      tri_v0, tri_v1, tri_v2, uv_indices[0], uv_indices[1], uv_indices[2], 1, face_metadata);
     ++triangles_added;
   }
 
@@ -5403,7 +5463,7 @@ void kinDS::SegmentBuilder::advanceBoundaryMesh(
     size_t left_vertex_index = new_vertex_indices[i];
     size_t right_vertex_index = new_vertex_indices[(i + 1) % boundary_points.size()];
     auto& left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
-    completeBoundaryMeshSection(he_id, left_vertex_index, right_vertex_index);
+    completeBoundaryMeshSection(he_id, left_vertex_index, right_vertex_index, t);
 
     // KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_id);
     left_and_right.first = left_vertex_index;
@@ -6915,11 +6975,12 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
 }
 
 void kinDS::SegmentBuilder::closingMeshTriangulatePolygons(
-  VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons)
+  VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons, double t, size_t strand_id)
 {
+  const std::string face_metadata = composeClosingMeshFaceMetadata(t, strand_id);
   for (const auto& polygon : polygons)
   {
-    triangulateSimplePolygon(mesh, polygon);
+    triangulateSimplePolygon(mesh, polygon, face_metadata);
   }
 }
 
@@ -7027,6 +7088,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   segment_mesh_pairs.push_back(MeshStructure::SegmentMeshPair {});
 
   VoronoiMesh mesh;
+  configureMeshletStorage(mesh);
   std::vector<size_t> mesh_vertex_ids;
   mesh_vertex_ids.reserve(32);
   auto track_vertex = [&](const glm::dvec3& pos, std::optional<size_t> vv, const std::string& metadata) -> int
@@ -7091,7 +7153,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   closingMeshLogUnmatchedOrderedSegments(strand_id, t, index_data.ordered_segments, trace.segment_used);
 
   const size_t cap_vertices_before_tri = mesh.getVertexCount();
-  closingMeshTriangulatePolygons(mesh, trace.polygons);
+  closingMeshTriangulatePolygons(mesh, trace.polygons, t, strand_id);
   const size_t cap_vertices_after_tri = mesh.getVertexCount();
   const size_t cap_triangles_after_tri = mesh.getTriangleCount();
 
@@ -7494,16 +7556,19 @@ void SegmentBuilder::finalize(double t)
   // compute normals
   for (auto& meshlet : meshes)
   {
+    meshlet.ensureFaceMetadataSize();
     meshlet.computeNormals(NormalMode::PerTriangleCorner);
   }
   for (auto& meshlet : intersection_meshes)
   {
+    meshlet.ensureFaceMetadataSize();
     meshlet.computeNormals(NormalMode::PerTriangleCorner);
   }
 
   auto remap1 = boundary_mesh.mergeDuplicateVertices();
   boundary_mesh.removeDegenerateTriangles();
   auto remap2 = boundary_mesh.removeIsolatedVertices();
+  boundary_mesh.ensureFaceMetadataSize();
   boundary_mesh.computeNormals(NormalMode::PerTriangleCorner);
 
   // Update boundary vertex to strand id mapping
@@ -7519,6 +7584,27 @@ void SegmentBuilder::finalize(double t)
   }
 
   boundary_vertex_to_strand_id.swap(new_boundary_vertex_to_strand_id);
+
+  if (store_mesh_metadata && validate_mesh_vertex_sources)
+  {
+    std::vector<VoronoiMesh*> all_meshlet_ptrs;
+    all_meshlet_ptrs.reserve(meshes.size() + intersection_meshes.size());
+    std::vector<std::string> labels;
+    labels.reserve(all_meshlet_ptrs.capacity());
+
+    for (size_t mesh_index = 0; mesh_index < meshes.size(); ++mesh_index)
+    {
+      all_meshlet_ptrs.push_back(&meshes[mesh_index]);
+      labels.push_back("mesh_" + std::to_string(mesh_index));
+    }
+    for (size_t mesh_index = 0; mesh_index < intersection_meshes.size(); ++mesh_index)
+    {
+      all_meshlet_ptrs.push_back(&intersection_meshes[mesh_index]);
+      labels.push_back("intersection_mesh_" + std::to_string(mesh_index));
+    }
+
+    Validator::validateAndReportMeshVertexSources(all_meshlet_ptrs, "segment builder finalize", &labels);
+  }
 
   finalized = true; // Set the finalized flag to true
 }
@@ -7536,6 +7622,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
 
     for (size_t meshlet_index = 0; meshlet_index < raw_meshlets.size(); ++meshlet_index)
     {
+      raw_meshlets[meshlet_index].ensureFaceMetadataSize();
       std::vector<int> neighbors_for_meshlet;
       neighbors_for_meshlet.assign(raw_meshlets[meshlet_index].getTriangleCount(), -1);
       raw_neighbors.push_back(std::move(neighbors_for_meshlet));
@@ -7549,6 +7636,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
   for (size_t segment_id = 0; segment_id < segment_properties.size(); ++segment_id)
   {
     VoronoiMesh segment_mesh(MeshletExportMaterialNames);
+    segment_mesh.setStoreMetadata(store_mesh_metadata);
     bool segment_mesh_initialized = false;
     std::vector<int> neighbor_segments_for_meshlet;
     const auto& properties = segment_properties[segment_id];
@@ -7572,6 +7660,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       if (!segment_mesh_initialized)
       {
         segment_mesh = VoronoiMesh(MeshletExportMaterialNames, mesh.getNormalMode());
+        segment_mesh.setStoreMetadata(store_mesh_metadata);
         segment_mesh_initialized = true;
       }
       segment_mesh += mesh;
@@ -7619,6 +7708,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       if (!segment_mesh_initialized)
       {
         segment_mesh = VoronoiMesh(MeshletExportMaterialNames, mesh.getNormalMode());
+        segment_mesh.setStoreMetadata(store_mesh_metadata);
         segment_mesh_initialized = true;
       }
       segment_mesh += mesh;
@@ -7629,6 +7719,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     }
     neighbor_segments.push_back(neighbor_segments_for_meshlet);
     segment_mesh.mergeDuplicateVertices(1e-4);
+    segment_mesh.ensureFaceMetadataSize();
     meshlets.push_back(segment_mesh);
 
     if (diagnostics && segment_id == 0)
