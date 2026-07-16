@@ -131,6 +131,10 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   const auto& face_half_edges = graph.face(face_id).half_edges;
   const double t = radius->occurrence_time;
 
+  // Intersection dParams are only refreshed on crossing/flip topology updates; recompute them at event time
+  // in kinetic space before boundary-interval finishing uses stale ordering or shift interpolation.
+  segment_builder_.kin_del.refreshTriangleDelaunayEdgeIntersectionParams(face_id, t);
+
   std::array<bool, 3> is_boundary_edge {};
   size_t boundary_edge_count = 0;
   for (size_t i = 0; i < 3; ++i)
@@ -262,9 +266,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
         break;
       }
     }
-    glm::dvec2 p0 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[0], false);
-    glm::dvec2 p1 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[1], false);
-    glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[2], false);
+    glm::dvec2 p0 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[0], false, false);
+    glm::dvec2 p1 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[1], false, false);
+    glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[2], false, false);
     glm::dvec2 new_point = (p0 + p1 + p2) / 3.0;
 
     size_t new_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
@@ -307,11 +311,11 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t outer_he_id = inner_he_id ^ 1;
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
 
-    glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex, false);
+    glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex, false, false);
     size_t u = graph.halfEdge(inner_he_id).origin;
-    glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u, false);
+    glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u, false, false);
     size_t v = graph.halfEdge(outer_he_id).origin;
-    glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v, false);
+    glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v, false, false);
 
     glm::dvec2 new_boundary_vertex = (opposite_point + p_u + p_v) / 3.0;
 
@@ -377,11 +381,11 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
 
-    glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex, false);
+    glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex, false, false);
     size_t u = graph.halfEdge(inner_he_id).origin;
-    glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u, false);
+    glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u, false, false);
     size_t v = graph.halfEdge(outer_he_id).origin;
-    glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v, false);
+    glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v, false, false);
     glm::dvec2 old_boundary_vertex = (opposite_point + p_u + p_v) / 3.0;
 
     size_t component_id = segment_builder_.kin_del.component_data.component_map[v];
@@ -450,9 +454,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       vertices[i] = graph.halfEdge(face_half_edges[i]).origin;
     }
-    glm::dvec2 p0 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[0], false);
-    glm::dvec2 p1 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[1], false);
-    glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[2], false);
+    glm::dvec2 p0 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[0], false, false);
+    glm::dvec2 p1 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[1], false, false);
+    glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[2], false, false);
     glm::dvec2 new_point = (p0 + p1 + p2) / 3.0;
 
     size_t new_vertex_index = segment_builder_.addBoundaryVertex(glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time },
@@ -490,7 +494,6 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       continue;
     }
     const size_t corner_u = static_cast<size_t>(corner);
-    const glm::dvec2 p_corner = segment_builder_.kin_del.getPointAt(t, corner_u, false);
     const size_t corner_component = segment_builder_.kin_del.component_data.component_map[corner_u];
 
     for (auto it = graph.incidentEdgesBegin(corner_u); it != graph.incidentEdgesEnd(corner_u); ++it)
@@ -579,14 +582,22 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       const auto centroid = polygonCentroid(boundary_polygon);
 
       auto& mesh = segment_builder_.intersection_meshes[pair_idx];
-      glm::dvec3 corner_pos { p_corner[0], p_corner[1], t };
+      // Mesh site placement must never use getPointAt / radiusTransitionInterpolatedSitePosition XY:
+      // those are profile/local (and the latter may return a synthetic blend or VV circumcenter).
+      // Unshifted Delaunay-frame site comes only from computeMeshSiteVertexPosition.
+      // If the corner is the radius-transition junction with an interior VV, snap to that VV instead.
+      glm::dvec3 corner_pos
+        = segment_builder_.computeMeshSiteVertexPosition(glm::dvec3(0.0, 0.0, t), corner_u, t);
+      std::optional<size_t> corner_snap_voronoi_vertex_id;
       if (radius_finish_shift_arg != nullptr)
       {
         if (auto site_shifted = segment_builder_.radiusTransitionInterpolatedSitePosition(
               t, corner_u, d_edge_id, radius_finish_shift_arg);
-          site_shifted.has_value())
+          site_shifted.has_value() && site_shifted->snap_voronoi_vertex_id.has_value())
         {
-          corner_pos = site_shifted.value();
+          corner_snap_voronoi_vertex_id = site_shifted->snap_voronoi_vertex_id;
+          // Intentionally ignore site_shifted->position (local VV / blend). addMeshletVertex places
+          // via barycentric transfer when snap_voronoi_vertex_id is set.
         }
       }
       const std::string radius_corner_meta = segment_builder_.composeBoundaryMetadata(
@@ -610,7 +621,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       const size_t eff_l = segment_builder_.intersectionStripEffectiveVertexIndex(seg, true);
       const size_t eff_r = segment_builder_.intersectionStripEffectiveVertexIndex(seg, false);
       const size_t new_vid = segment_builder_.addMeshletVertex(
-        mesh, boundary_polygon, centroid, corner_pos, corner_u, t, false, std::nullopt, vertex_meta, vertex_color);
+        mesh, boundary_polygon, centroid, corner_pos, corner_u, t, false, corner_snap_voronoi_vertex_id, vertex_meta,
+        vertex_color);
       segment_builder_.addBoundaryIntervalTriangleOriented(
         mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, radius_corner_meta, pair_idx);
       segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_endpoint, new_vid,
@@ -706,7 +718,6 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                 << (radius_boundary_shift_ctx.interior_voronoi_vertex_id.has_value()
                      ? std::to_string(radius_boundary_shift_ctx.interior_voronoi_vertex_id.value())
                      : std::string("none"))
-                << " require_no_interior_vv=" << (radius_boundary_shift_ctx.interior_voronoi_vertex_id.has_value() ? "false" : "true")
                 << " pre_boundary_edges=" << radius_pre_boundary_edge_count_
                 << " post_boundary_edges=" << post_boundary_edge_count << " face=" << affected_face_id << " t=" << t);
   }
@@ -726,6 +737,27 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   auto intersection_position = [&](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> glm::dvec3
   {
     return segment_builder_.closingMeshVoronoiDelaunayCrossingPosition(t, ref->voronoi_edge_id, ref->delaunay_edge_id);
+  };
+
+  struct RadiusTraceVertex
+  {
+    glm::dvec3 position {};
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection {};
+    std::optional<size_t> voronoi_vertex_id {};
+    std::optional<size_t> site_strand_id {};
+  };
+
+  auto make_intersection_trace_vertex = [&](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> RadiusTraceVertex
+  {
+    return RadiusTraceVertex { intersection_position(ref), ref, std::nullopt, std::nullopt };
+  };
+  auto make_voronoi_trace_vertex = [&](size_t vv, const glm::dvec3& pos) -> RadiusTraceVertex
+  {
+    return RadiusTraceVertex { pos, std::nullopt, vv, std::nullopt };
+  };
+  auto make_site_trace_vertex = [&](size_t site_id, const glm::dvec3& pos) -> RadiusTraceVertex
+  {
+    return RadiusTraceVertex { pos, std::nullopt, std::nullopt, site_id };
   };
 
   auto dual_triangle_edges = [&](size_t voronoi_vertex_id) -> std::array<size_t, 3>
@@ -1071,7 +1103,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     auto seed_ref = entry.second;
     std::unordered_set<size_t> encountered_voronoi_edges;
     encountered_voronoi_edges.insert(seed_ref->voronoi_edge_id);
-    std::vector<glm::dvec3> polygon;
+    std::vector<RadiusTraceVertex> polygon;
     bool success = false;
     const size_t max_steps = 128;
     std::string terminal_fail_reason;
@@ -1079,9 +1111,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     std::string fail_reason;
     polygon.clear();
     KINDS_DEBUG("Starting new trace for cell " << cell_id << ":");
-    polygon.push_back(intersection_position(seed_ref));
+    polygon.push_back(make_intersection_trace_vertex(seed_ref));
     {
-      const auto& p = polygon.back();
+      const auto& p = polygon.back().position;
       const auto& d_refs = crossing_data.delaunay_edge_intersections[seed_ref->delaunay_edge_id];
       const auto& v_refs = crossing_data.voronoi_edge_intersections[seed_ref->voronoi_edge_id];
       const size_t rel_d = relative_intersection_id(d_refs, seed_ref);
@@ -1160,11 +1192,11 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
             break;
           }
 
-          const glm::dvec3 vv_h = segment_builder_.kin_del.getVoronoiVertexHomogeneous(vv, t, false);
+          const glm::dvec3 vv_h = segment_builder_.kin_del.getVoronoiVertexHomogeneous(vv, t, false, false);
           if (std::isfinite(vv_h.z) && std::abs(vv_h.z) > 1e-12)
           {
-            polygon.push_back(glm::dvec3 { vv_h.x / vv_h.z, vv_h.y / vv_h.z, t });
-            const auto& p = polygon.back();
+            polygon.push_back(make_voronoi_trace_vertex(vv, glm::dvec3 { vv_h.x / vv_h.z, vv_h.y / vv_h.z, t }));
+            const auto& p = polygon.back().position;
             KINDS_DEBUG("Added point: phase1-voronoi-vertex dual_vv=" << vv << " via_ve=" << current_d_edge << " x=" << p.x
                                                                        << " y=" << p.y << " t=" << p.z);
           }
@@ -1242,10 +1274,10 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         closed_to_seed = true;
         break;
       }
-      polygon.push_back(intersection_position(end_ref.value()));
+      polygon.push_back(make_intersection_trace_vertex(end_ref.value()));
       {
         const auto added_ref = end_ref.value();
-        const auto& p = polygon.back();
+        const auto& p = polygon.back().position;
         const auto& d_refs = crossing_data.delaunay_edge_intersections[added_ref->delaunay_edge_id];
         const auto& v_refs = crossing_data.voronoi_edge_intersections[added_ref->voronoi_edge_id];
         const size_t rel_d = relative_intersection_id(d_refs, added_ref);
@@ -1285,7 +1317,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         size_t idx = end_idx_opt.value();
         bool local_wrong_direction = false;
         std::string local_fail_reason;
-        std::vector<glm::dvec3> local_polygon = polygon;
+        std::vector<RadiusTraceVertex> local_polygon = polygon;
         auto phase2_current_ref = end_ref.value();
 
         while (true)
@@ -1331,9 +1363,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
               break;
             }
 
-            local_polygon.push_back(intersection_position(boundary_ref));
+            local_polygon.push_back(make_intersection_trace_vertex(boundary_ref));
             {
-              const auto& p = local_polygon.back();
+              const auto& p = local_polygon.back().position;
               const auto& d_refs = crossing_data.delaunay_edge_intersections[boundary_ref->delaunay_edge_id];
               const auto& v_refs = crossing_data.voronoi_edge_intersections[boundary_ref->voronoi_edge_id];
               const size_t rel_d = relative_intersection_id(d_refs, boundary_ref);
@@ -1367,10 +1399,10 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                 + std::to_string(cell_id) + " (wrong direction)";
               break;
             }
-            const glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(t, tri_vertex_id, false);
-            local_polygon.push_back(glm::dvec3 { p2.x, p2.y, t });
+            const glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(t, tri_vertex_id, false, false);
+            local_polygon.push_back(make_site_trace_vertex(tri_vertex_id, glm::dvec3 { p2.x, p2.y, t }));
             {
-              const auto& p = local_polygon.back();
+              const auto& p = local_polygon.back().position;
               KINDS_DEBUG("Added point: phase2-triangle-vertex site=" << tri_vertex_id << " on_he="
                                                                        << affected_face_he[idx] << " on_de=" << d_edge_id
                                                                        << " x=" << p.x << " y=" << p.y << " t=" << p.z);
@@ -1462,27 +1494,15 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         << " t=" << t << " reason=" << terminal_fail_reason);
     }
 
-    auto emit_radius_cell_mesh = [&](const std::vector<glm::dvec3>& poly, bool failed)
+    auto emit_radius_cell_mesh = [&](const std::vector<RadiusTraceVertex>& poly, bool failed)
     {
       if (poly.empty())
       {
         return;
       }
-      std::string radius_vertex_meta;
       std::string radius_triangulation_meta;
       if (segment_builder_.store_mesh_metadata)
       {
-        radius_vertex_meta = SegmentBuilder::MetadataBuilder()
-                               .addString("event_type", "radius_event")
-                               .addString("source", "site")
-                               .addString("mesh_type", "regular")
-                               .addString("segment_action", "new_segment")
-                               .addDouble("time", t)
-                               .addDouble("t", t)
-                               .addSize("delaunay_face_id", affected_face_id)
-                               .addSize("strand_cell_id", cell_id)
-                               .addBool("failed_meshlet", failed)
-                               .build();
         radius_triangulation_meta = SegmentBuilder::MetadataBuilder()
                                       .addString("event_type", "radius_event")
                                       .addString("mesh_type", "regular")
@@ -1499,11 +1519,41 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       segment_builder_.configureMeshletStorage(mesh);
       std::vector<size_t> ids;
       ids.reserve(poly.size());
-      for (const auto& p : poly)
+      const auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
+      const auto& centroid = segment_builder_.kin_del.component_data.component_centroids[component_id];
+      for (const auto& vert : poly)
       {
-        ids.push_back(segment_builder_.addMeshletVertex(mesh, segment_builder_.kin_del.component_data.component_boundaries[component_id][0],
-          segment_builder_.kin_del.component_data.component_centroids[component_id], p, cell_id, t, false, std::nullopt,
-          radius_vertex_meta));
+        const char* source = vert.voronoi_vertex_id.has_value()
+          ? "Voronoi vertex"
+          : (vert.intersection.has_value() ? "intersection" : "site");
+        std::string radius_vertex_meta;
+        if (segment_builder_.store_mesh_metadata)
+        {
+          SegmentBuilder::MetadataBuilder builder;
+          builder.addString("event_type", "radius_event")
+            .addString("source", source)
+            .addString("mesh_type", "regular")
+            .addString("segment_action", "new_segment")
+            .addDouble("time", t)
+            .addDouble("t", t)
+            .addSize("delaunay_face_id", affected_face_id)
+            .addSize("strand_cell_id", cell_id)
+            .addBool("failed_meshlet", failed);
+          if (vert.voronoi_vertex_id.has_value())
+          {
+            builder.addSize("voronoi_vertex_id", vert.voronoi_vertex_id.value());
+          }
+          radius_vertex_meta = builder.build();
+        }
+        const size_t strand_for_vertex = vert.site_strand_id.value_or(cell_id);
+        SegmentBuilder::MeshletVertexRuntimeInfo runtime_info {};
+        if (vert.intersection.has_value())
+        {
+          runtime_info.position_intersection = vert.intersection;
+          runtime_info.conceptual_intersection = vert.intersection;
+        }
+        ids.push_back(segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, vert.position, strand_for_vertex,
+          t, false, vert.voronoi_vertex_id, radius_vertex_meta, std::nullopt, runtime_info));
       }
       segment_builder_.triangulateSimplePolygon(
         mesh, ids, radius_triangulation_meta, SegmentBuilder::RegularMeshletMaterialId, orient_upwards);

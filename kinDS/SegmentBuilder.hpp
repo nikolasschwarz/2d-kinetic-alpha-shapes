@@ -30,12 +30,29 @@ struct RadiusBoundaryTransitionShiftContext
   std::optional<size_t> interior_voronoi_vertex_id {};
 };
 
-/// True when radius boundary-transition vertex shift should drive meshing (2↔1 roles and no interior Voronoi vertex).
+/// True when radius boundary-transition vertex shift should drive meshing (2↔1 roles valid).
+/// Interior-VV snaps and no-VV neighbor remaps are both handled inside placement helpers.
 inline bool radiusBoundaryTransitionShiftApplicable(
   bool shift_enabled, const RadiusBoundaryTransitionShiftContext& ctx)
 {
-  return shift_enabled && ctx.roles_valid && !ctx.interior_voronoi_vertex_id.has_value();
+  return shift_enabled && ctx.roles_valid;
 }
+
+/// Mesh-space segment used to place an intersection vertex:
+/// @c endpoint0 + @c param * (@c endpoint1 - @c endpoint0), where each endpoint is placed like @c source @c site.
+struct IntersectionInterpolationDebug
+{
+  glm::dvec3 endpoint0 {};
+  glm::dvec3 endpoint1 {};
+  double param = std::numeric_limits<double>::quiet_NaN();
+
+  bool valid() const
+  {
+    return std::isfinite(param) && std::isfinite(endpoint0.x) && std::isfinite(endpoint0.y)
+      && std::isfinite(endpoint0.z) && std::isfinite(endpoint1.x) && std::isfinite(endpoint1.y)
+      && std::isfinite(endpoint1.z);
+  }
+};
 
 /// Conceptual crossing (topology / mesh-pair links) vs profile position source during a radius boundary transition.
 struct RadiusBoundaryTransitionCrossingPlacement
@@ -44,6 +61,8 @@ struct RadiusBoundaryTransitionCrossingPlacement
   KineticDelaunay::CrossingData::EdgeIntersectionRef position_intersection {};
   /// When set, profile XY comes from this value instead of @c position_intersection (interior-vv synthetic shifts).
   std::optional<glm::dvec3> explicit_profile_position {};
+  /// When set, mesh placement should use Voronoi barycentric transfer for this vertex (unshifted mesh sites).
+  std::optional<size_t> snap_voronoi_vertex_id {};
 
   bool positionDiffersFromConceptual() const
   {
@@ -343,10 +362,50 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool intersection_strip_flexible_vertices_enabled = true;
 
   glm::dvec3 transformFromInputBranchToObjectSpace(glm::dvec3 vertex, size_t strand_id, double t) const;
-  glm::dvec3 computeMeshIntersectionObjectSpace(
-    const std::string& metadata, glm::dvec3 fallback_profile_vertex, size_t fallback_strand_id, double t) const;
-  glm::dvec3 computeMeshVoronoiVertexObjectSpace(size_t voronoi_vertex_id, glm::dvec3 fallback_profile_vertex,
-    size_t fallback_strand_id, double t) const;
+  /// Site position for meshing: never includes kinetic separation.
+  /// When @c create_transformed_mesh is false (CLI @c --untransformed), local profile coordinates (no
+  /// reference-branch remapping); when true, object space. Prefer this over raw
+  /// @ref KineticDelaunay::getPointAt for mesh vertices. Kinetic SVG / event geometry still uses
+  /// @ref KineticDelaunay::getPointInDelaunaySpace (reference-branch frame + separation).
+  glm::dvec3 getPointInMeshSpace(size_t strand_id, double t) const;
+  /// Site → stored mesh coordinate, matching @c addMeshletVertex for @c source @c site (@ref getPointInMeshSpace).
+  glm::dvec3 computeMeshSiteVertexPosition(glm::dvec3 profile_vertex, size_t strand_id, double t) const;
+  struct MeshletVertexRuntimeInfo
+  {
+    bool is_flexible_placeholder = false;
+    bool radius_shift_explicit_profile_position = false;
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> position_intersection;
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> conceptual_intersection;
+
+    bool isIntersectionVertex() const { return position_intersection.has_value(); }
+  };
+  struct MeshIntersectionObjectSpaceResult
+  {
+    glm::dvec3 position {};
+    std::optional<IntersectionInterpolationDebug> mesh_interpolation {};
+  };
+
+  MeshIntersectionObjectSpaceResult computeMeshIntersectionObjectSpace(
+    const MeshletVertexRuntimeInfo& runtime_info, glm::dvec3 fallback_profile_vertex, size_t fallback_strand_id,
+    double t) const;
+  struct MeshVoronoiVertexObjectSpaceResult
+  {
+    glm::dvec3 position {};
+    /// Mesh-space positions of the three *containing* triangle sites (not necessarily the dual triangle).
+    std::array<std::pair<size_t, glm::dvec3>, 3> site_mesh_positions {};
+    size_t site_count = 0;
+    std::optional<size_t> containing_tri_id {};
+    std::optional<std::array<double, 3>> barycentric {};
+  };
+  /// Place a Voronoi vertex by barycentric transfer: compute it and the containing triangle in Delaunay space
+  /// *with* kinetic separation shifts, then interpolate the same three sites in mesh space *without* those shifts.
+  MeshVoronoiVertexObjectSpaceResult computeMeshVoronoiVertexObjectSpace(size_t voronoi_vertex_id,
+    glm::dvec3 fallback_profile_vertex, size_t fallback_strand_id, double t) const;
+  glm::dvec2 meshVirtualShiftForStrand(size_t strand_id, double t) const;
+  void applyMeshVirtualShiftToProfileVertex(
+    glm::dvec3& vertex, glm::dvec2& profile_xy, size_t strand_id, double t, bool& includes_virtual_shift) const;
+  /// Y/Z swap so profile-space meshes view with the same XY layout as SVG.
+  void applyUntransformedMeshViewTransform();
 
   glm::dvec3 computeVoronoiVertex(size_t half_edge_id, double t) const;
 
@@ -441,9 +500,16 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   static std::optional<size_t> oppositeFiniteDelaunayVertexOnUndirectedEdge(
     const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t site_vertex_id);
 
-  /// When @p site_vertex_id is the junction of the two transition source edges, blends shifted corner crossings
-  /// (inverse-distance weights from the unshifted site in XY). Otherwise returns @c nullopt.
-  std::optional<glm::dvec3> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
+  /// When @p site_vertex_id is the junction of the two transition source edges, either snaps to the interior
+  /// Voronoi vertex (@c snap_voronoi_vertex_id set) or returns a profile-space blend of shifted corner crossings.
+  /// Mesh callers must not store @c position for an unshifted site: use @ref computeMeshSiteVertexPosition, and only
+  /// honor @c snap_voronoi_vertex_id (barycentric VV placement). The blend path is profile-space only.
+  struct RadiusTransitionSitePlacement
+  {
+    glm::dvec3 position {};
+    std::optional<size_t> snap_voronoi_vertex_id {};
+  };
+  std::optional<RadiusTransitionSitePlacement> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
     size_t strip_delaunay_edge_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
 
   std::optional<size_t> radiusTransitionSharedCornerSiteVertex(
@@ -466,6 +532,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   std::optional<glm::dvec3> interiorVvShiftAlongVoronoiEdgeToCornerLine(double t,
     KineticDelaunay::CrossingData::EdgeIntersectionRef ref, const glm::dvec2& vv_xy, size_t corner_site_id) const;
+
+  static void appendIntersectionInterpolationDebugToMetadata(
+    MetadataBuilder& builder, const IntersectionInterpolationDebug& debug);
 
   /**
    * @brief Returns Delaunay-edge intersections in component-boundary traversal order.
@@ -561,7 +630,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
-    const std::optional<glm::dvec3>& debug_color = std::nullopt);
+    const std::optional<glm::dvec3>& debug_color = std::nullopt,
+    const MeshletVertexRuntimeInfo& runtime_info = {});
 
   /// Effective strip corner for triangles: latest flexible on @p left_side, else fixed @c mesh_start / @c mesh_end.
   size_t intersectionStripEffectiveVertexIndex(const MeshingData& seg, bool left_side) const;
@@ -651,7 +721,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   int closingMeshAppendVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position,
     bool includes_virtual_shift, std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt,
-    const std::string& metadata = "{}");
+    const std::string& metadata = "{}", const MeshletVertexRuntimeInfo& runtime_info = {});
 
   /**
    * @brief Finds the CrossingData intersection record for a Voronoi/Delaunay edge pair.
@@ -852,6 +922,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) override;
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) override;
+  void onBeforeComponentGraphSplit(double t) override;
 
   void finalize(double t) override;
 

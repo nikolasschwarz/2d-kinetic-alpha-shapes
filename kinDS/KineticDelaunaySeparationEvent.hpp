@@ -15,6 +15,10 @@ namespace kinDS
 class KineticDelaunay::SeparationEvent final : public KineticDelaunay::Event
 {
  public:
+  static constexpr uint32_t scheduled_iteration_dispatch_order = 15u;
+  /// Runs after @ref RadiusEvent (30) at the same occurrence time when enqueued from @ref notePendingBranchSplit.
+  static constexpr uint32_t after_radius_dispatch_order = 35u;
+
   static double scheduledOccurrenceTime(double split_time)
   {
     return 0.5 * (split_time + std::floor(split_time) + 1.0);
@@ -24,9 +28,9 @@ class KineticDelaunay::SeparationEvent final : public KineticDelaunay::Event
   size_t parent_component_id = static_cast<size_t>(-1);
   double split_time = 0.0;
 
-  SeparationEvent(
-    KineticDelaunay* kd, double occurrence_time, size_t parent_component_id, double split_time, double creation_time)
-    : KineticDelaunay::Event(occurrence_time, creation_time, 15u)
+  SeparationEvent(KineticDelaunay* kd, double occurrence_time, size_t parent_component_id, double split_time,
+    double creation_time, uint32_t dispatch_order = scheduled_iteration_dispatch_order)
+    : KineticDelaunay::Event(occurrence_time, creation_time, dispatch_order)
     , kd_(kd)
     , parent_component_id(parent_component_id)
     , split_time(split_time)

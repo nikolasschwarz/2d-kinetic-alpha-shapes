@@ -8,6 +8,7 @@
 #include "StrandTree.hpp"
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <map>
@@ -139,6 +140,8 @@ class KineticDelaunay
     virtual void finalize(double t) { }
     virtual void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
     virtual void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
+    /// Invoked immediately before pending branch splits are cleared during @ref applyPendingComponentGraphSplit.
+    virtual void onBeforeComponentGraphSplit(double t) { (void)t; }
   };
 
   class FlipEvent;
@@ -381,8 +384,8 @@ class KineticDelaunay
   // code can keep using the name `crossing_data`.
   CrossingData& crossing_data;
 
-  glm::dvec3 computeVoronoiVertexHomogenous(
-    size_t voronoi_vertex_id, double t, bool include_virtual_offset = true) const;
+  glm::dvec3 computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t,
+    bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
   void reassignVoronoiVerticesOnBoundary(size_t he_id, double t);
 
@@ -412,7 +415,6 @@ class KineticDelaunay
   void collectSeparationRecomputeTargets(size_t parent_component_id, std::unordered_set<size_t>& affected_quads,
     std::unordered_set<size_t>& affected_faces) const;
   const PendingBranchSplit* activeSeparationForStrand(size_t strand_id) const;
-  glm::dvec2 separationOffsetAt(size_t strand_id, double t) const;
   Trajectory<2> addSeparationOffsetToPiecePolynomial(
     const Trajectory<2>& base, size_t strand_id, size_t section, double schedule_time) const;
   void debugSeparationTrackedFlipProbe(
@@ -463,9 +465,18 @@ class KineticDelaunay
 
   bool computeBoundaryOnTheFly() const;
 
-  glm::dvec2 getPointAt(size_t v, double t, bool include_virtual_offset = true) const;
+  /// Site position with independent frame / separation controls.
+  /// @param apply_reference_transform Map into the component reference-branch frame (@ref StrandTree::evaluateTransformed).
+  /// @param include_virtual_offset Add @ref separationOffsetAt.
+  glm::dvec2 getPointAt(size_t v, double t, bool apply_reference_transform = true,
+    bool include_virtual_offset = true) const;
 
-  glm::dvec2 getPointAt(double t, size_t v, bool include_virtual_offset = true) const;
+  glm::dvec2 getPointAt(double t, size_t v, bool apply_reference_transform = true,
+    bool include_virtual_offset = true) const;
+
+  /// Kinetic Delaunay / SVG coordinates: reference-branch frame with virtual separation (never object-space).
+  glm::dvec2 getPointInDelaunaySpace(size_t v, double t) const;
+  glm::dvec2 getPointInDelaunaySpace(size_t v, double t, size_t reference_branch) const;
 
   /** Branch frame used by getPointAt for sites in the same component as @p strand_id. */
   size_t getReferenceBranch(size_t strand_id, double t) const;
@@ -498,13 +509,20 @@ class KineticDelaunay
   /// Parameter of the Voronoi/Delaunay crossing along the Delaunay edge, computed in Delaunay profile space.
   double delaunayVoronoiEdgeIntersectionParameter(size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
 
-  glm::dvec2 getPointAtWithReferenceBranch(
-    size_t v, double t, size_t reference_branch, bool include_virtual_offset = true) const;
+  /// Recompute stored @c delaunay_edge_param for all intersections on one Delaunay edge at @p t (kinetic space).
+  void refreshDelaunayEdgeIntersectionParams(size_t delaunay_edge_id, double t);
+
+  /// Recompute @c delaunay_edge_param for intersections on all three edges of Delaunay face @p face_id.
+  void refreshTriangleDelaunayEdgeIntersectionParams(size_t face_id, double t);
+
+  glm::dvec2 getPointAtWithReferenceBranch(size_t v, double t, size_t reference_branch,
+    bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
   Trajectory<2> getSitePiecePolynomialWithReferenceBranch(
     size_t strand_id, size_t section, size_t reference_branch, double schedule_time) const;
 
-  std::vector<glm::dvec2> getPointsAt(double t, bool include_virtual_offset = true) const;
+  std::vector<glm::dvec2> getPointsAt(double t, bool apply_reference_transform = true,
+    bool include_virtual_offset = true) const;
 
   glm::dvec3 getPointInObjectSpace(size_t v, double t) const;
 
@@ -538,6 +556,9 @@ class KineticDelaunay
   /// Section fraction in [0,1] where the active separation ramp ends, if it ends inside the section.
   std::optional<double> separationRampEndSectionFraction(size_t strand_id, size_t section) const;
 
+  /// Virtual separation offset for @p strand_id at @p t (added when @c include_virtual_offset is true).
+  glm::dvec2 separationOffsetAt(size_t strand_id, double t) const;
+
   /// Record a pending branch split until the next graph cut/retriangulation.
   void notePendingBranchSplit(size_t parent_component_id, double split_time,
     const std::vector<size_t>& pre_split_parent_strands, const std::vector<std::vector<size_t>>& new_components,
@@ -545,6 +566,10 @@ class KineticDelaunay
 
   /// Pending split data keyed by the parent component id, if recorded.
   std::optional<PendingBranchSplit> getPendingBranchSplit(size_t parent_component_id) const;
+
+  /// Calls @p visitor for each pending branch split (parent component id, split data).
+  void visitPendingBranchSplits(
+    const std::function<void(size_t parent_component_id, const PendingBranchSplit& split)>& visitor) const;
 
   /**
    * Best (largest-area) seam outline loop walked from the precomputed @p start_edges (see
@@ -609,15 +634,14 @@ class KineticDelaunay
 
   std::vector<std::vector<size_t>> extractConnectedComponents() const;
 
-  std::vector<BoundaryPoint> traverseBoundary(
-    size_t start_he_id, double t, bool include_virtual_offset = true) const;
+  std::vector<BoundaryPoint> traverseBoundary(size_t start_he_id, double t,
+    bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
-  std::vector<std::vector<BoundaryPoint>> extractComponentBoundaries(
-    const std::vector<size_t>& component, double t, std::vector<bool>& he_visited,
-    bool include_virtual_offset = true) const;
+  std::vector<std::vector<BoundaryPoint>> extractComponentBoundaries(const std::vector<size_t>& component, double t,
+    std::vector<bool>& he_visited, bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
-  std::vector<BoundaryPoint> extractComponentBoundary(
-    const std::vector<size_t>& component, double t, bool include_virtual_offset = true) const;
+  std::vector<BoundaryPoint> extractComponentBoundary(const std::vector<size_t>& component, double t,
+    bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
   const std::vector<bool>& getFacesInside() const;
 
@@ -694,8 +718,8 @@ class KineticDelaunay
   void requireLiveRegisteredVoronoiVertex(size_t voronoi_vertex_id, const char* context) const;
   size_t getCrossingDataContainingTriId(size_t voronoi_vertex_id) const;
   std::vector<size_t> getCrossingDataVoronoiVerticesInTri(size_t tri_id) const;
-  glm::dvec3 getVoronoiVertexHomogeneous(
-    size_t voronoi_vertex_id, double t, bool include_virtual_offset = true) const;
+  glm::dvec3 getVoronoiVertexHomogeneous(size_t voronoi_vertex_id, double t,
+    bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
   /**
    * \brief Compute the (possibly clamped) Voronoi vertex position for the Delaunay edge represented by half_edge_id.
@@ -704,10 +728,10 @@ class KineticDelaunay
    * by moving a neighboring circumcenter along a perpendicular direction so it can be used for meshing and
    * intersection computations.
    */
-  glm::dvec3 computeVoronoiVertexClampedInfinity(
-    size_t half_edge_id, double t, bool include_virtual_offset = true) const;
-  glm::dvec3 computeVoronoiVertexClampedInfinityWithReferenceBranch(
-    size_t half_edge_id, double t, size_t reference_branch, bool include_virtual_offset = true) const;
+  glm::dvec3 computeVoronoiVertexClampedInfinity(size_t half_edge_id, double t,
+    bool apply_reference_transform = true, bool include_virtual_offset = true) const;
+  glm::dvec3 computeVoronoiVertexClampedInfinityWithReferenceBranch(size_t half_edge_id, double t,
+    size_t reference_branch, bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
   /**
    * Debug sanity checks: compare @ref face_inside against circumradius and @ref cutoff (and @ref mustRemainInside).

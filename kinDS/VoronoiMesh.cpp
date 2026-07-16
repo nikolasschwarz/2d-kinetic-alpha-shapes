@@ -2,6 +2,7 @@
 #include "Logger.hpp"
 #include "VoronoiMesh.hpp"
 #include "glm/gtx/norm.hpp"
+#include <glm/gtc/matrix_inverse.hpp>
 #include <algorithm>
 #include <array>
 #include <iomanip>
@@ -444,6 +445,43 @@ void VoronoiMesh::flipOrientation()
   for (size_t i = 0; i < normals.size(); i++)
   {
     normals[i] = -normals[i];
+  }
+}
+
+glm::dmat4 VoronoiMesh::profileSpaceSwapYAndZTransform()
+{
+  glm::dmat4 transform(1.0);
+  transform[1][1] = 0.0;
+  transform[2][1] = 1.0;
+  transform[1][2] = 1.0;
+  transform[2][2] = 0.0;
+  return transform;
+}
+
+void VoronoiMesh::applyTransform(const glm::dmat4& transform)
+{
+  for (glm::dvec3& vertex : vertices)
+  {
+    vertex = glm::dvec3(transform * glm::dvec4(vertex, 1.0));
+  }
+
+  if (normal_mode != NoNormals && !normals.empty())
+  {
+    const glm::dmat3 linear = glm::dmat3(transform);
+    const glm::dmat3 normal_matrix = glm::transpose(glm::inverse(linear));
+    for (glm::dvec3& normal : normals)
+    {
+      normal = glm::normalize(normal_matrix * normal);
+    }
+  }
+
+  if (glm::determinant(glm::dmat3(transform)) < 0.0)
+  {
+    for (size_t i = 0; i < triangles.size(); i += 3)
+    {
+      std::swap(triangles[i + 1], triangles[i + 2]);
+      std::swap(uv_indices[i + 1], uv_indices[i + 2]);
+    }
   }
 }
 

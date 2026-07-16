@@ -994,39 +994,38 @@ class HalfEdgeDelaunayGraphToSVG
 
           if (!selective || highlight->affectsVoronoiVertex(i))
           {
-            std::string label_text;
+            std::ostringstream label_text;
+            label_text.setf(std::ios::fixed);
+            label_text.precision(6);
             if (voronoi_vertex_to_tri && i < voronoi_vertex_to_tri->size())
             {
               size_t tri_id = (*voronoi_vertex_to_tri)[i];
               if (tri_id != invalid_id)
               {
-                label_text = std::to_string(i) + "/" + std::to_string(tri_id);
+                label_text << i << "/" << tri_id;
               }
               else
               {
-                label_text = std::to_string(i);
+                label_text << i;
               }
             }
             else
             {
-              label_text = std::to_string(i);
+              label_text << i;
             }
+            label_text << " (" << cc.first[0] << "," << cc.first[1] << ")";
 
             if (voronoi_vertex_world_positions != nullptr)
             {
               const auto world_it = voronoi_vertex_world_positions->find(i);
               if (world_it != voronoi_vertex_world_positions->end())
               {
-                std::ostringstream world_text;
-                world_text.setf(std::ios::fixed);
-                world_text.precision(6);
-                world_text << " world=(" << world_it->second.x << "," << world_it->second.y << ","
+                label_text << " world=(" << world_it->second.x << "," << world_it->second.y << ","
                            << world_it->second.z << ")";
-                label_text += world_text.str();
               }
             }
 
-            labels.push_back(Label(cc.first[0] - label_pad_sm, cc.first[1] - label_pad_sm, label_text,
+            labels.push_back(Label(cc.first[0] - label_pad_sm, cc.first[1] - label_pad_sm, label_text.str(),
               svg::Color(svg::Color::White), label_font_size));
           }
         }
@@ -1313,10 +1312,13 @@ class HalfEdgeDelaunayGraphToSVG
         doc << svg::Circle(svg::Point(circumcenter.first[0], circumcenter.first[1]), 0.02, svg::Fill(purple),
           svg::Stroke(0.0, svg::Color::Black));
 
-        // Label Voronoi vertex with "id/triId". For the generic Voronoi writer, we label with "i/i".
-        std::string label_text = std::to_string(i) + "/" + std::to_string(i);
+        // Label Voronoi vertex with "id/triId" plus local coordinates, matching site labels.
+        std::ostringstream label_text;
+        label_text.setf(std::ios::fixed);
+        label_text.precision(6);
+        label_text << i << "/" << i << " (" << circumcenter.first[0] << "," << circumcenter.first[1] << ")";
         doc << svg::Text(svg::Point(circumcenter.first[0] - label_pad_sm, circumcenter.first[1] - label_pad_sm),
-          label_text, svg::Fill(svg::Color::White), svg::Font(label_font_size));
+          label_text.str(), svg::Fill(svg::Color::White), svg::Font(label_font_size));
       }
     }
 

@@ -478,7 +478,8 @@ static void print_usage(const char* program_name)
             << "  --log-file <path>         Write logs to file (default: no log file, console only)\n"
             << "  --export-mode <mode>      Also export combined mesh when set to combined (default: raw)\n"
             << "  --export-path <path>      Base output directory; writes segment_meshlets/ and raw_meshlets/ beneath it\n"
-            << "  --untransformed           Export meshlets in profile/local space (default: world space)\n"
+            << "  --untransformed           Profile-space mesh (no object-space transform, no kinetic separation);\n"
+            << "                            applies Y/Z swap for viewing alongside SVG (default: world space)\n"
             << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
             << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
             << "  --validate                After meshing, check that vertices with the same metadata source agree in world space\n"
@@ -541,8 +542,8 @@ static std::filesystem::path mesh_export_base_directory(const std::optional<std:
 
 static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
-  bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, const std::string& validate_log_path,
-  bool alternate_section_shading)
+  bool transform_mesh_at_construction, bool validate_mesh_vertex_sources,
+  const std::string& validate_log_path, bool alternate_section_shading)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -768,6 +769,7 @@ int main(int argc, char* argv[])
     else if (arg == "--untransformed")
     {
       mesh_export_profile_space = true;
+      mesh_transform_at_construction = false;
       ++arg_idx;
     }
     else if (arg == "--transform-at-construction")
@@ -876,8 +878,8 @@ int main(int argc, char* argv[])
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
-          mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_validate_log_path,
-          mesh_alternate_section_shading))
+          mesh_transform_at_construction, mesh_validate_vertex_sources,
+          mesh_validate_log_path, mesh_alternate_section_shading))
     {
       return 1;
     }

@@ -225,11 +225,12 @@ size_t branchLookupHeightForTime(const StrandTree& tree, double t)
 } // namespace
 
 glm::dvec3 kinDS::KineticDelaunay::computeVoronoiVertexHomogenous(
-  size_t voronoi_vertex_id, double t, bool include_virtual_offset) const
+  size_t voronoi_vertex_id, double t, bool apply_reference_transform, bool include_virtual_offset) const
 {
   requireLiveRegisteredVoronoiVertex(voronoi_vertex_id, "computeVoronoiVertexHomogenous");
-  const auto vertex_at
-    = [&](int vertex_index) { return getPointAt(static_cast<size_t>(vertex_index), t, include_virtual_offset); };
+  const auto vertex_at = [&](int vertex_index) {
+    return getPointAt(static_cast<size_t>(vertex_index), t, apply_reference_transform, include_virtual_offset);
+  };
   if (const std::optional<glm::dvec2> infinite_dir = graph.infiniteVoronoiRayDirection(voronoi_vertex_id, vertex_at))
   {
     return glm::dvec3(normalizeOrFallback(*infinite_dir), 0.0);
@@ -245,7 +246,7 @@ glm::dvec3 kinDS::KineticDelaunay::computeVoronoiVertexHomogenous(
 }
 
 glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinity(
-  size_t half_edge_id, double t, bool include_virtual_offset) const
+  size_t half_edge_id, double t, bool apply_reference_transform, bool include_virtual_offset) const
 {
   const auto& graph = getGraph();
   const int face_id = graph.halfEdge(half_edge_id).face;
@@ -266,11 +267,12 @@ glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinity(
   }
 
   return computeVoronoiVertexClampedInfinityWithReferenceBranch(
-    half_edge_id, t, getReferenceBranch(reference_strand, t), include_virtual_offset);
+    half_edge_id, t, getReferenceBranch(reference_strand, t), apply_reference_transform, include_virtual_offset);
 }
 
 glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinityWithReferenceBranch(
-  size_t half_edge_id, double t, size_t reference_branch, bool include_virtual_offset) const
+  size_t half_edge_id, double t, size_t reference_branch, bool apply_reference_transform,
+  bool include_virtual_offset) const
 {
   const auto& graph = getGraph();
   const int face_id = graph.halfEdge(half_edge_id).face;
@@ -281,8 +283,10 @@ glm::dvec3 KineticDelaunay::computeVoronoiVertexClampedInfinityWithReferenceBran
 
   requireLiveRegisteredVoronoiVertex(static_cast<size_t>(face_id), "computeVoronoiVertexClampedInfinity");
 
-  const auto vertex_at = [&](int vertex_index)
-  { return getPointAtWithReferenceBranch(static_cast<size_t>(vertex_index), t, reference_branch, include_virtual_offset); };
+  const auto vertex_at = [&](int vertex_index) {
+    return getPointAtWithReferenceBranch(
+      static_cast<size_t>(vertex_index), t, reference_branch, apply_reference_transform, include_virtual_offset);
+  };
 
   const VoronoiVertexPosition2D endpoint
     = computeVoronoiVertexPosition2D(*this, graph, static_cast<size_t>(face_id), t, vertex_at);
@@ -361,9 +365,9 @@ std::vector<size_t> KineticDelaunay::getCrossingDataVoronoiVerticesInTri(size_t 
 }
 
 glm::dvec3 KineticDelaunay::getVoronoiVertexHomogeneous(
-  size_t voronoi_vertex_id, double t, bool include_virtual_offset) const
+  size_t voronoi_vertex_id, double t, bool apply_reference_transform, bool include_virtual_offset) const
 {
-  return computeVoronoiVertexHomogenous(voronoi_vertex_id, t, include_virtual_offset);
+  return computeVoronoiVertexHomogenous(voronoi_vertex_id, t, apply_reference_transform, include_virtual_offset);
 }
 
 std::vector<double> KineticDelaunay::findEvents(
@@ -1564,8 +1568,8 @@ Trajectory<2> KineticDelaunay::getSitePiecePolynomialForEventStrands(size_t stra
   return addSeparationOffsetToPiecePolynomial(base, strand_id, section, schedule_time);
 }
 
-glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(
-  size_t v, double t, size_t reference_branch, bool include_virtual_offset) const
+glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, size_t reference_branch,
+  bool apply_reference_transform, bool include_virtual_offset) const
 {
   const std::vector<glm::dvec2>& support = branch_trajs.getSupportPoints(v);
   if (support.empty())
@@ -1583,13 +1587,12 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(
   const size_t section = static_cast<size_t>(std::floor(query_t));
   const double frac = query_t - static_cast<double>(section);
 
-  if (!include_virtual_offset)
-  {
-    return branch_trajs.evaluate(v, query_t);
-  }
-
   glm::dvec2 position;
-  if (frac < std::numeric_limits<double>::epsilon())
+  if (!apply_reference_transform)
+  {
+    position = branch_trajs.evaluate(v, query_t);
+  }
+  else if (frac < std::numeric_limits<double>::epsilon())
   {
     position = branch_trajs.getPointTransformed(v, section, reference_branch);
   }
@@ -1599,17 +1602,35 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(
     position = glm::dvec2(piece[0](frac), piece[1](frac));
   }
 
-  return position + separationOffsetAt(v, t);
+  if (include_virtual_offset)
+  {
+    position += separationOffsetAt(v, t);
+  }
+  return position;
 }
 
-glm::dvec2 KineticDelaunay::getPointAt(size_t v, double t, bool include_virtual_offset) const
+glm::dvec2 KineticDelaunay::getPointAt(
+  size_t v, double t, bool apply_reference_transform, bool include_virtual_offset) const
 {
-  return getPointAtWithReferenceBranch(v, t, getReferenceBranch(v, t), include_virtual_offset);
+  return getPointAtWithReferenceBranch(
+    v, t, getReferenceBranch(v, t), apply_reference_transform, include_virtual_offset);
 }
 
-glm::dvec2 KineticDelaunay::getPointAt(double t, size_t v, bool include_virtual_offset) const
+glm::dvec2 KineticDelaunay::getPointAt(
+  double t, size_t v, bool apply_reference_transform, bool include_virtual_offset) const
 {
-  return getPointAt(v, t, include_virtual_offset);
+  return getPointAt(v, t, apply_reference_transform, include_virtual_offset);
+}
+
+glm::dvec2 KineticDelaunay::getPointInDelaunaySpace(size_t v, double t) const
+{
+  return getPointAt(v, t, /*apply_reference_transform=*/true, /*include_virtual_offset=*/true);
+}
+
+glm::dvec2 KineticDelaunay::getPointInDelaunaySpace(size_t v, double t, size_t reference_branch) const
+{
+  return getPointAtWithReferenceBranch(
+    v, t, reference_branch, /*apply_reference_transform=*/true, /*include_virtual_offset=*/true);
 }
 
 Trajectory<2> KineticDelaunay::getSitePiecePolynomialWithReferenceBranch(
@@ -1626,14 +1647,15 @@ Trajectory<2> KineticDelaunay::getSitePiecePolynomial(size_t strand_id, size_t s
   return getSitePiecePolynomialWithReferenceBranch(strand_id, section, reference_branch, schedule_time);
 }
 
-std::vector<glm::dvec2> KineticDelaunay::getPointsAt(double t, bool include_virtual_offset) const
+std::vector<glm::dvec2> KineticDelaunay::getPointsAt(
+  double t, bool apply_reference_transform, bool include_virtual_offset) const
 {
   size_t vertex_count = graph.getVertexCount();
   std::vector<glm::dvec2> points;
   points.reserve(vertex_count);
   for (size_t v = 0; v < vertex_count; v++)
   {
-    points.push_back(getPointAt(v, t, include_virtual_offset));
+    points.push_back(getPointAt(v, t, apply_reference_transform, include_virtual_offset));
   }
   return points;
 }
@@ -1874,10 +1896,21 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
   maybeScheduleSeparationOrApplyPendingSplit(parent_component_id, split_time);
 }
 
+// Enqueue separation at split_time (after any remaining radius events at that time) instead of handling
+// inline — the radius callback may still be mutating mesh/graph state that the split depends on.
 void KineticDelaunay::maybeScheduleSeparationOrApplyPendingSplit(
   size_t parent_component_id, double split_time)
 {
-  handleSeparationEventAtTime(parent_component_id, split_time);
+  const PendingBranchSplit* split = pending_branch_splits_.findByParent(parent_component_id);
+  if (split == nullptr || split->split_component_ids.size() < 2)
+  {
+    return;
+  }
+
+  KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
+                                                   << " enqueueing separation at t=" << split_time);
+  kinetic_algorithm_->enqueueEvent(std::make_shared<SeparationEvent>(this, split_time, parent_component_id,
+    split_time, split_time, SeparationEvent::after_radius_dispatch_order));
 }
 
 namespace
@@ -2168,18 +2201,10 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
 
   if (pendingSplitSeamsAreConvex(parent_component_id, t))
   {
-    // TEMPORARY (diagnostic): the seams are convex and no further separation iteration is needed, but instead of
-    // applying the split now we defer it to the next section event (the pre-existing behavior). The section event
-    // applies the pending split because component_data already has more components than prev_component_count. This is
-    // to confirm a suspected post-split transform regression; restore applyPendingComponentGraphSplit(t) here to
-    // re-enable immediate splitting.
     KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
                                                    << " has convex seam outlines at t=" << t
-                                                   << "; deferring graph split to next section (temporary)");
-    // Separation flips are normally scheduled for (t, section_end] on each continue iteration via a post-ramp pass
-    // at separation_te. The final separation event does not call continueSeparationSchedule, so without this pass
-    // events in [separation_te, ceil(t)] are never enqueued (full virtual shift at schedule_time >= separation_te).
-    recomputeEventsAfterSeparationTrajectory(parent_component_id, t);
+                                                   << "; applying graph split");
+    applyPendingComponentGraphSplit(t);
     debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
     return;
   }
@@ -2205,6 +2230,11 @@ void KineticDelaunay::applyPendingComponentGraphSplit(double t)
   if (component_data.components.size() <= prev_component_count)
   {
     return;
+  }
+
+  if (callback_manager_)
+  {
+    callback_manager_->onBeforeComponentGraphSplit(t);
   }
 
   const size_t prev_face_slots = face_inside.size();
@@ -2534,6 +2564,15 @@ std::optional<PendingBranchSplit> KineticDelaunay::getPendingBranchSplit(size_t 
     return std::nullopt;
   }
   return *split;
+}
+
+void KineticDelaunay::visitPendingBranchSplits(
+  const std::function<void(size_t parent_component_id, const PendingBranchSplit& split)>& visitor) const
+{
+  for (const auto& entry : pending_branch_splits_.by_parent_)
+  {
+    visitor(entry.first, entry.second);
+  }
 }
 
 std::vector<BoundaryPoint> KineticDelaunay::collectFutureRuntimeBranchOutline(
@@ -3240,7 +3279,7 @@ std::string kinDS::formatCrossingIntersectionForLog(
 
 bool kinDS::tryComputeCrossingIntersectionPosition2D(const KineticDelaunay& kd,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection, double t, glm::dvec2& out_xy,
-  bool include_virtual_offset)
+  bool apply_reference_transform, bool include_virtual_offset)
 {
   if (!intersection.has_value())
   {
@@ -3248,8 +3287,10 @@ bool kinDS::tryComputeCrossingIntersectionPosition2D(const KineticDelaunay& kd,
   }
   const auto& ir = *intersection.value();
   const size_t v_edge = ir.voronoi_edge_id;
-  const glm::dvec3 L3 = kd.computeVoronoiVertexClampedInfinity(2 * v_edge, t, include_virtual_offset);
-  const glm::dvec3 R3 = kd.computeVoronoiVertexClampedInfinity(2 * v_edge + 1, t, include_virtual_offset);
+  const glm::dvec3 L3
+    = kd.computeVoronoiVertexClampedInfinity(2 * v_edge, t, apply_reference_transform, include_virtual_offset);
+  const glm::dvec3 R3
+    = kd.computeVoronoiVertexClampedInfinity(2 * v_edge + 1, t, apply_reference_transform, include_virtual_offset);
   const glm::dvec2 left2(L3.x, L3.y);
   const glm::dvec2 right2(R3.x, R3.y);
   const size_t d_he0 = 2 * ir.delaunay_edge_id;
@@ -3265,8 +3306,10 @@ bool kinDS::tryComputeCrossingIntersectionPosition2D(const KineticDelaunay& kd,
   {
     return false;
   }
-  const glm::dvec2 d0 = kd.getPointAt(t, static_cast<size_t>(oa), include_virtual_offset);
-  const glm::dvec2 d1 = kd.getPointAt(t, static_cast<size_t>(ob), include_virtual_offset);
+  const glm::dvec2 d0
+    = kd.getPointAt(t, static_cast<size_t>(oa), apply_reference_transform, include_virtual_offset);
+  const glm::dvec2 d1
+    = kd.getPointAt(t, static_cast<size_t>(ob), apply_reference_transform, include_virtual_offset);
   const glm::dvec2 p = intersect_segments_2d_closing(left2, right2, d0, d1);
   if (!std::isfinite(p.x) || !std::isfinite(p.y))
   {
@@ -3447,6 +3490,42 @@ double KineticDelaunay::delaunayVoronoiEdgeIntersectionParameter(
   size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const
 {
   return delaunayVoronoiEdgeIntersection(delaunay_edge_id, voronoi_edge_id, t).first;
+}
+
+void KineticDelaunay::refreshDelaunayEdgeIntersectionParams(size_t delaunay_edge_id, double t)
+{
+  if (delaunay_edge_id >= crossing_data.delaunay_edge_intersections.size())
+  {
+    return;
+  }
+
+  auto& d_list = crossing_data.delaunay_edge_intersections[delaunay_edge_id];
+  for (auto ref : d_list)
+  {
+    ref->delaunay_edge_param
+      = delaunayVoronoiEdgeIntersection(delaunay_edge_id, ref->voronoi_edge_id, t).first;
+  }
+
+  d_list.sort([&](const CrossingData::EdgeIntersectionRef& a, const CrossingData::EdgeIntersectionRef& b)
+    { return a->delaunay_edge_param < b->delaunay_edge_param; });
+  for (auto it = d_list.begin(); it != d_list.end(); ++it)
+  {
+    (*it)->delaunay_ref = it;
+  }
+}
+
+void KineticDelaunay::refreshTriangleDelaunayEdgeIntersectionParams(size_t face_id, double t)
+{
+  const auto& face_half_edges = graph.face(face_id).half_edges;
+  std::unordered_set<size_t> visited_delaunay_edges;
+  for (size_t he_id : face_half_edges)
+  {
+    const size_t d_edge_id = he_id / 2;
+    if (visited_delaunay_edges.insert(d_edge_id).second)
+    {
+      refreshDelaunayEdgeIntersectionParams(d_edge_id, t);
+    }
+  }
 }
 
 std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCrossedHalfEdges(
@@ -4533,7 +4612,8 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
       VoronoiDelaunayEdgeIntersection new_int;
       new_int.delaunay_edge_id = crossed_delaunay_edge_id;
       new_int.voronoi_edge_id = voronoi_edge_id;
-      new_int.delaunay_edge_param = 0.0;
+      new_int.delaunay_edge_param
+        = kd.delaunayVoronoiEdgeIntersection(crossed_delaunay_edge_id, voronoi_edge_id, e.occurrence_time).first;
 
       // Insert into main list
       edge_intersections.push_back(new_int);
@@ -4584,15 +4664,6 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
         }
       }
 
-      if (inserted_it == d_intersections.begin())
-      {
-        main_iter->delaunay_edge_param = 0.0;
-      }
-      else if (std::next(inserted_it) == d_intersections.end())
-      {
-        main_iter->delaunay_edge_param = 1.0;
-      }
-
       // Insert into Voronoi list (either at front or back depending on which end this Voronoi vertex corresponds to).
       if (e.voronoi_vertex_id == graph.halfEdge(2 * voronoi_edge_id).face)
       {
@@ -4606,6 +4677,10 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
       }
     }
   }
+
+  // No need to sort, we already insert correctly
+  /*d_intersections.sort([&](const EdgeIntersectionRef& a, const EdgeIntersectionRef& b)
+    { return a->delaunay_edge_param < b->delaunay_edge_param; });*/
 }
 
 const HalfEdgeDelaunayGraph& KineticDelaunay::getGraph() const { return graph; }
@@ -4803,7 +4878,7 @@ bool KineticDelaunay::isStrandLiveInGraph(size_t strand_id) const
 }
 
 std::vector<BoundaryPoint> KineticDelaunay::traverseBoundary(
-  size_t start_he_id, double t, bool include_virtual_offset) const
+  size_t start_he_id, double t, bool apply_reference_transform, bool include_virtual_offset) const
 {
   // Walk the boundary to extract the boundary half-edges
   std::vector<BoundaryPoint> boundary_points;
@@ -4815,7 +4890,7 @@ std::vector<BoundaryPoint> KineticDelaunay::traverseBoundary(
     {
       KINDS_ERROR("Followed infinite edge.");
     }
-    glm::dvec2 pos = getPointAt(origin, t, include_virtual_offset);
+    glm::dvec2 pos = getPointAt(origin, t, apply_reference_transform, include_virtual_offset);
     boundary_points.emplace_back(BoundaryPoint { origin, he_id, pos });
     he_id = nextOnComponentBoundaryId(he_id);
   } while (he_id != start_he_id);
@@ -4823,8 +4898,8 @@ std::vector<BoundaryPoint> KineticDelaunay::traverseBoundary(
   return boundary_points;
 }
 
-std::vector<std::vector<BoundaryPoint>> KineticDelaunay::extractComponentBoundaries(
-  const std::vector<size_t>& component, double t, std::vector<bool>& he_visited, bool include_virtual_offset) const
+std::vector<std::vector<BoundaryPoint>> KineticDelaunay::extractComponentBoundaries(const std::vector<size_t>& component,
+  double t, std::vector<bool>& he_visited, bool apply_reference_transform, bool include_virtual_offset) const
 {
   // KINDS_DEBUG("Extracting component boundaries at t = " << t);
   if (component.size() < 3)
@@ -4858,7 +4933,7 @@ std::vector<std::vector<BoundaryPoint>> KineticDelaunay::extractComponentBoundar
         KINDS_ERROR("Origin of half-edge is invalid");
       }
 
-      auto boundary_points = traverseBoundary(he_id, t, include_virtual_offset);
+      auto boundary_points = traverseBoundary(he_id, t, apply_reference_transform, include_virtual_offset);
 
       for (auto& bp : boundary_points)
       {
@@ -4884,7 +4959,7 @@ std::vector<std::vector<BoundaryPoint>> KineticDelaunay::extractComponentBoundar
 }
 
 std::vector<BoundaryPoint> KineticDelaunay::extractComponentBoundary(
-  const std::vector<size_t>& component, double t, bool include_virtual_offset) const
+  const std::vector<size_t>& component, double t, bool apply_reference_transform, bool include_virtual_offset) const
 {
   // Find an extreme point to start the boundary walk as it must be on the boundary
   // Note that merely being on the outside of the boundary is not sufficent as there can also be holes inside the
@@ -4897,7 +4972,7 @@ std::vector<BoundaryPoint> KineticDelaunay::extractComponentBoundary(
     const size_t& v = component[i];
 
     // Get position and check if it's the minimum x
-    glm::dvec2 pos = getPointAt(v, t, include_virtual_offset);
+    glm::dvec2 pos = getPointAt(v, t, apply_reference_transform, include_virtual_offset);
     if (pos[0] < min_x)
     {
       min_x = pos[0];
@@ -4916,7 +4991,7 @@ std::vector<BoundaryPoint> KineticDelaunay::extractComponentBoundary(
     }
   }
 
-  return traverseBoundary(start_he_id, t, include_virtual_offset);
+  return traverseBoundary(start_he_id, t, apply_reference_transform, include_virtual_offset);
 }
 
 const std::vector<bool>& KineticDelaunay::getFacesInside() const { return face_inside; }

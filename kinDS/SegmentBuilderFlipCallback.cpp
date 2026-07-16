@@ -25,7 +25,7 @@ glm::dvec3 unshiftedFlipEventPoint(const KineticDelaunay& kin_del, const HalfEdg
   glm::dvec2 center(0.0);
   for (size_t strand_id : strand_ids)
   {
-    center += kin_del.getPointAt(strand_id, t, false);
+    center += kin_del.getPointAt(strand_id, t, false, false);
   }
   center /= static_cast<double>(strand_ids.size());
   return glm::dvec3(center, t);
@@ -189,7 +189,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
     const auto& boundary_last_vertices = segment_builder_.boundary_mesh_last_left_and_right_vertex[outer_he_id];
 
-    glm::dvec2 new_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex, false);
+    glm::dvec2 new_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex, false, false);
 
     size_t new_boundary_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
     // TODO: raw UVs
@@ -376,7 +376,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
     const auto& boundary_last_vertices = segment_builder_.boundary_mesh_last_left_and_right_vertex[outer_he_id];
 
-    glm::dvec2 old_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex, false);
+    glm::dvec2 old_boundary_vertex = segment_builder_.kin_del.getPointAt(flip->occurrence_time, opposite_vertex, false, false);
 
     size_t old_boundary_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
     segment_builder_.addBoundaryVertex(

@@ -481,9 +481,10 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
       ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
       : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
 
-  mesh_builder
-    = std::make_shared<SegmentBuilder>(
-      *kinetic_delaunay, subdivisions, settings.transform_mesh_at_construction, visual_debug, parallel_for);
+  const bool transform_mesh_at_construction = settings.transform_mesh_at_construction;
+
+  mesh_builder = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction,
+    visual_debug, parallel_for);
   mesh_builder->store_mesh_metadata = settings.store_mesh_metadata || visual_debug || settings.validate_mesh_vertex_sources;
   mesh_builder->validate_mesh_vertex_sources = settings.validate_mesh_vertex_sources;
   if (settings.validate_mesh_vertex_sources)
@@ -496,7 +497,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
                                                                                       << ", visual_debug=" << visual_debug
                                                                                       << ", transform_mesh_at_construction="
-                                                                                      << settings.transform_mesh_at_construction
+                                                                                      << transform_mesh_at_construction
                                                                                       << ", debug_export_meshes="
                                                                                       << settings.debug_export_meshes
                                                                                       << ", max_meshlet_export="

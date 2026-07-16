@@ -108,6 +108,13 @@ class VoronoiMesh
   VoronoiMesh& operator+=(const VoronoiMesh& other);
   void flipOrientation();
 
+  /// Applies @p transform to vertex positions. Normals use the inverse-transpose of the linear part.
+  /// When that 3×3 determinant is negative (reflection), triangle winding is reversed.
+  void applyTransform(const glm::dmat4& transform);
+
+  /// Maps profile-space coordinates (x, y, t) to (x, t, y) for Blender-oriented export.
+  static glm::dmat4 profileSpaceSwapYAndZTransform();
+
   // Merge duplicate vertices (within epsilon) and update triangle indices
   std::vector<size_t> mergeDuplicateVertices(double epsilon = 0.0);
   void patchHoles(std::function<void(size_t)> tri_callback, std::function<void(size_t, size_t)> vertex_callback,

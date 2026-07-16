@@ -417,6 +417,9 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
   // Update Voronoi–Delaunay edge intersections stored in crossing_data in response to this crossing.
   kd->crossing_data.updateAfterCrossingEvent(*kd, *this);
 
+  // Recompute params on all three Delaunay edges of this Voronoi vertex (Delaunay face) before callbacks mesh.
+  kd->refreshTriangleDelaunayEdgeIntersectionParams(voronoi_vertex_id, occurrence_time);
+
   if (event_handler)
   {
     event_handler->afterEvent(*this);
@@ -441,7 +444,7 @@ std::string formatCrossingIntersectionForLog(const KineticDelaunay& kd,
 
 bool tryComputeCrossingIntersectionPosition2D(const KineticDelaunay& kd,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection, double t, glm::dvec2& out_xy,
-  bool include_virtual_offset = true);
+  bool apply_reference_transform = true, bool include_virtual_offset = true);
 
 /** No-op if @p intersection is empty; otherwise log KINDS_ERROR on mismatch with expected dual edge / half-edge. */
 void validateClosingCapCrossingRef(const KineticDelaunay& kd, const char* context_msg,

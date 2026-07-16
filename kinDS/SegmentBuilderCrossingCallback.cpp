@@ -115,7 +115,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
   const size_t voronoi_vertex_id = crossing->voronoi_vertex_id;
   const glm::dvec3 voronoi_vertex_position
     = segment_builder_.kin_del.computeVoronoiVertexClampedInfinity(
-      graph.face(voronoi_vertex_id).half_edges[0], crossing->occurrence_time, false);
+      graph.face(voronoi_vertex_id).half_edges[0], crossing->occurrence_time, false, false);
   const std::array<size_t, 3> half_edges = graph.face(voronoi_vertex_id).half_edges;
   if (!segment_builder_.kin_del.isOnComponentBoundary(crossing->half_edge_id))
   {
@@ -422,13 +422,13 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     const int strand_odd_origin_i = static_cast<int>(he_odd.origin);
 
     const auto strip_vertex_meta = [&](const char* pos, const char* op,
-                                      SegmentBuilder::BoundarySegmentAction segment_action,
-                                      const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing_ref)
-      -> std::string
+                                      SegmentBuilder::BoundarySegmentAction segment_action) -> std::string
     {
+      // These vertices are the event circumcenter (Voronoi vertex), not a Delaunay–Voronoi path intersection.
+      // Boundary crossing refs are stored on MeshingData for strip topology only.
       return segment_builder_.composeRegularStripVertexMetadata(crossing->occurrence_time, strip_voronoi_edge_id, even_id,
         strand_even_origin_i, strand_odd_origin_i, SegmentBuilder::BoundaryEventType::Crossing, segment_action,
-        crossing_ref, pos, op);
+        std::nullopt, pos, op, "Voronoi vertex");
     };
 
     const auto strip_face_meta = [&](const char* op, SegmentBuilder::BoundarySegmentAction segment_action) -> std::string
@@ -481,7 +481,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       if (!entering_boundary)
       {
         const std::string vertex_meta = strip_vertex_meta("circumcenter", "erase_strip",
-          SegmentBuilder::BoundarySegmentAction::SegmentRemoved, std::nullopt);
+          SegmentBuilder::BoundarySegmentAction::SegmentRemoved);
         const std::string face_meta = strip_face_meta("erase_strip", SegmentBuilder::BoundarySegmentAction::SegmentRemoved);
         size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
           voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
@@ -502,7 +502,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           it->start_half_edge_id = -1;
           it->start_crossing.reset();
           const std::string vertex_meta = strip_vertex_meta("left", "enter_boundary_start",
-            SegmentBuilder::BoundarySegmentAction::SegmentRemapped, std::nullopt);
+            SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           const std::string face_meta
             = strip_face_meta("enter_boundary_start", SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
@@ -524,7 +524,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           it->end_half_edge_id = -1;
           it->end_crossing.reset();
           const std::string vertex_meta = strip_vertex_meta("right", "enter_boundary_end",
-            SegmentBuilder::BoundarySegmentAction::SegmentRemapped, std::nullopt);
+            SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           const std::string face_meta
             = strip_face_meta("enter_boundary_end", SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
@@ -553,7 +553,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("left", "enter_boundary_tail_seed",
-            SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
+            SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
             voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
             vertex_meta);
@@ -568,7 +568,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("right", "tail_close",
-            SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
+            SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           const std::string face_meta
             = strip_face_meta("tail_close", SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
@@ -594,7 +594,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("right", "enter_boundary_head_seed",
-            SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
+            SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
             voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
             vertex_meta);
@@ -609,7 +609,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> boundary_crossing
             = segment_builder_.closingMeshFindVoronoiEdgeIntersection(strip_voronoi_edge_id, inside_he_id);
           const std::string vertex_meta = strip_vertex_meta("left", "head_close",
-            SegmentBuilder::BoundarySegmentAction::SegmentRemapped, boundary_crossing);
+            SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           const std::string face_meta
             = strip_face_meta("head_close", SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,

@@ -211,7 +211,7 @@ std::pair<std::vector<glm::dvec2>, std::unordered_set<size_t>> buildVisualDebugS
     {
       continue;
     }
-    points[strand_id] = kin_del.getPointAt(strand_id, occurrence_time);
+    points[strand_id] = kin_del.getPointInDelaunaySpace(strand_id, occurrence_time);
     positioned_strands.insert(strand_id);
   }
 
@@ -231,7 +231,7 @@ std::unordered_map<size_t, glm::dvec3> buildSiteWorldPositions(
       continue;
     }
 
-    const glm::dvec2 profile_pos = kin_del.getPointAt(strand_id, occurrence_time);
+    const glm::dvec2 profile_pos = kin_del.getPointInDelaunaySpace(strand_id, occurrence_time);
     const size_t representative_strand_id = kin_del.representativeStrandIdForRuntimeBranch(strand_id);
     glm::dvec3 profile_pos_3d(profile_pos, occurrence_time);
     world_positions[strand_id]
