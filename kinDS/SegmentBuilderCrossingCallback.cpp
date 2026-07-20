@@ -326,6 +326,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         "crossing_merge_2_to_1:inserted_prev", crossing->occurrence_time);
       segment_builder_.assignIntersectionMeshPairLink(inserted_ref, false, outer_next_mesh,
         "crossing_merge_2_to_1:inserted_next", crossing->occurrence_time);
+
+      segment_builder_.validateDelaunayEdgeIntersectionMeshPairLinks(
+        crossed_d_edge, crossing->occurrence_time, "crossing_merge_2_to_1");
     }
     else if (removed.size() == 1 && inserted.size() == 2)
     {
@@ -347,17 +350,17 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
             << "] at t=" << crossing->occurrence_time << ".";
         throw std::runtime_error(oss.str());
       }
-      KineticDelaunay::CrossingData::EdgeIntersectionRef start_ref;
-      KineticDelaunay::CrossingData::EdgeIntersectionRef end_ref;
+      KineticDelaunay::CrossingData::EdgeIntersectionRef list_first;
+      KineticDelaunay::CrossingData::EdgeIntersectionRef list_second;
       if (std::next(it0) == it1)
       {
-        start_ref = r0;
-        end_ref = r1;
+        list_first = r0;
+        list_second = r1;
       }
       else if (std::next(it1) == it0)
       {
-        start_ref = r1;
-        end_ref = r0;
+        list_first = r1;
+        list_second = r0;
       }
       else
       {
@@ -369,24 +372,27 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
       const CrossingEdgeSnapshotEntry& old = removed[0].snapshot;
 
-      // Outer topology: strips that met the old crossing keep the same mesh-pair ids on the open sides of the split.
-      segment_builder_.assignIntersectionMeshPairLink(start_ref, true, old.prev_pair_idx,
-        "crossing_split_1_to_2:start_prev", crossing->occurrence_time);
-      segment_builder_.assignIntersectionMeshPairLink(end_ref, false, old.next_pair_idx,
-        "crossing_split_1_to_2:end_next", crossing->occurrence_time);
+      // Outer topology: list-first keeps the prev-side link; list-second keeps the next-side link.
+      segment_builder_.assignIntersectionMeshPairLink(list_first, true, old.prev_pair_idx,
+        "crossing_split_1_to_2:list_first_prev", crossing->occurrence_time);
+      segment_builder_.assignIntersectionMeshPairLink(list_second, false, old.next_pair_idx,
+        "crossing_split_1_to_2:list_second_next", crossing->occurrence_time);
 
       // Old adjacent intervals are advanced to event position and retargeted to the new delimiters.
-      update_pair_endpoint(old.prev_pair_idx, false, start_ref, false, crossing_update_meta_case);
-      update_pair_endpoint(old.next_pair_idx, true, end_ref, false, crossing_update_meta_case);
+      update_pair_endpoint(old.prev_pair_idx, false, list_first, false, crossing_update_meta_case);
+      update_pair_endpoint(old.next_pair_idx, true, list_second, false, crossing_update_meta_case);
 
-      // Middle strip between start and end; startNewMeshFromIntersections + writeIntersectionPairLinks set
-      // start_ref->next_segment_mesh_pair_index and end_ref->prev_segment_mesh_pair_index to mid_pair.
+      // Middle strip between list-first and list-second; writeIntersectionPairLinks sets
+      // list_first->next_segment_mesh_pair_index and list_second->prev_segment_mesh_pair_index to mid_pair.
       const size_t mid_cell
-        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(crossed_d_edge, start_ref, end_ref);
-      const size_t mid_pair = segment_builder_.startNewMeshFromIntersections(mid_cell, crossing->occurrence_time, start_ref,
-        end_ref, false, SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::NewSegment,
+        = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(crossed_d_edge, list_first, list_second);
+      const size_t mid_pair = segment_builder_.startNewMeshFromIntersections(mid_cell, crossing->occurrence_time, list_first,
+        list_second, false, SegmentBuilder::BoundaryEventType::Crossing, SegmentBuilder::BoundarySegmentAction::NewSegment,
         true);
       (void)mid_pair;
+
+      segment_builder_.validateDelaunayEdgeIntersectionMeshPairLinks(
+        crossed_d_edge, crossing->occurrence_time, "crossing_split_1_to_2");
     }
     else
     {

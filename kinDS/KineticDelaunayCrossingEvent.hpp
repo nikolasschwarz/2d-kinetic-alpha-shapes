@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <glm/glm.hpp>
+#include <limits>
 #include <list>
 #include <memory>
 #include <optional>
@@ -119,6 +120,8 @@ struct KineticDelaunay::CrossingData
     size_t delaunay_edge_id;
     size_t voronoi_edge_id;
     double delaunay_edge_param;
+    /// Kinetic time @c delaunay_edge_param was last computed for; @c -inf until first update.
+    double param_last_updated = -std::numeric_limits<double>::infinity();
     // SegmentBuilder boundary-interval mesh linkage along one Delaunay edge.
     size_t prev_segment_mesh_pair_index = static_cast<size_t>(-1);
     size_t next_segment_mesh_pair_index = static_cast<size_t>(-1);
@@ -363,6 +366,18 @@ class KineticDelaunay::CrossingEventManager final : public KineticDelaunay::Even
   CrossingData crossing_data_;
 };
 
+/// Recompute stored @c delaunay_edge_param for one crossing at @p t and stamp @c param_last_updated.
+void updateCrossingIntersectionParam(KineticDelaunay& kd, KineticDelaunay::CrossingData::EdgeIntersectionRef intersection,
+  double t);
+
+/// Recompute @c delaunay_edge_param when @c param_last_updated != @p t.
+void ensureCrossingIntersectionParamUpToDate(KineticDelaunay& kd,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef intersection, double t);
+
+/// Crossing position in kinetic Delaunay space (reference-branch frame + separation), via Delaunay-edge interpolation.
+glm::dvec3 getCrossingCoordsInDelaunaySpace(KineticDelaunay& kd,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef intersection, double t);
+
 inline void KineticDelaunay::CrossingEvent::handleEvent()
 {
   auto* kd = kd_;
@@ -442,6 +457,7 @@ inline void KineticDelaunay::CrossingEvent::handleEvent()
 std::string formatCrossingIntersectionForLog(const KineticDelaunay& kd,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection);
 
+/** Prefer @ref KineticDelaunay::getCrossingCoordsInDelaunaySpace for placement; retained for 2D logging. */
 bool tryComputeCrossingIntersectionPosition2D(const KineticDelaunay& kd,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection, double t, glm::dvec2& out_xy,
   bool apply_reference_transform = true, bool include_virtual_offset = true);

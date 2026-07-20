@@ -2,6 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // Break on thrown C++ exceptions: in the Run and Debug view → BREAKPOINTS,
+      // enable "All Exceptions" (appears after the first cppvsdbg session in this folder).
+      // That stops at the throw site. main.cpp also rethrows under an attached debugger
+      // so a user-unhandled stop still happens if All Exceptions is off.
       "name": "Debug kinDS-demo (mesh)",
       "type": "cppvsdbg",
       "request": "launch",
@@ -17,6 +21,11 @@
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
+      "stopAtEntry": false,
+      "logging": {
+        "exceptions": true,
+        "programOutput": true
+      },
       "preLaunchTask": "Build kinDS-demo if needed"
     }
   ]

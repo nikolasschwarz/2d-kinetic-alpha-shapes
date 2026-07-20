@@ -370,6 +370,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   glm::dvec3 getPointInMeshSpace(size_t strand_id, double t) const;
   /// Site → stored mesh coordinate, matching @c addMeshletVertex for @c source @c site (@ref getPointInMeshSpace).
   glm::dvec3 computeMeshSiteVertexPosition(glm::dvec3 profile_vertex, size_t strand_id, double t) const;
+  /// Crossing position for meshing: never includes kinetic separation; refreshes stale @c delaunay_edge_param at @p t.
+  glm::dvec3 getCrossingCoordsInMeshSpace(KineticDelaunay::CrossingData::EdgeIntersectionRef intersection,
+    double t) const;
   struct MeshletVertexRuntimeInfo
   {
     bool is_flexible_placeholder = false;
@@ -395,10 +398,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::array<std::pair<size_t, glm::dvec3>, 3> site_mesh_positions {};
     size_t site_count = 0;
     std::optional<size_t> containing_tri_id {};
+    /// True when the containing Delaunay triangle has an infinite vertex (barycentric transfer is ill-defined).
+    std::optional<bool> containing_tri_infinite {};
     std::optional<std::array<double, 3>> barycentric {};
   };
   /// Place a Voronoi vertex by barycentric transfer: compute it and the containing triangle in Delaunay space
-  /// *with* kinetic separation shifts, then interpolate the same three sites in mesh space *without* those shifts.
+  /// *with* kinetic separation shifts, then interpolate the same sites in mesh space *without* those shifts.
+  /// If the containing triangle is infinite, the vertex lies on the finite edge and is interpolated from those
+  /// two sites (same as an intersection), with barycentric weight 0 on the infinite vertex.
   MeshVoronoiVertexObjectSpaceResult computeMeshVoronoiVertexObjectSpace(size_t voronoi_vertex_id,
     glm::dvec3 fallback_profile_vertex, size_t fallback_strand_id, double t) const;
   glm::dvec2 meshVirtualShiftForStrand(size_t strand_id, double t) const;
@@ -581,6 +588,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   void assignIntersectionMeshPairLink(KineticDelaunay::CrossingData::EdgeIntersectionRef ref, bool is_prev_link,
     size_t new_pair_index, const char* context, double t = std::numeric_limits<double>::quiet_NaN());
+  /**
+   * @brief Verifies that adjacent crossings on @p delaunay_edge_id share mesh-pair links:
+   * `crossing[i].next_segment_mesh_pair_index == crossing[i+1].prev_segment_mesh_pair_index`.
+   *
+   * @throws std::runtime_error with every crossing's prev/next indices when the invariant fails.
+   */
+  void validateDelaunayEdgeIntersectionMeshPairLinks(
+    size_t delaunay_edge_id, double event_time, const char* context) const;
   /**
    * @brief Centralized writer for crossing `prev`/`next` mesh-pair links.
    *
@@ -770,7 +785,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * boundary crossing points.
    */
   std::vector<MeshingData> extractSegmentsForVoronoiEdge(double t, int incident_edge_index, size_t voronoi_edge_id,
-    const std::function<int(const glm::dvec3&, std::optional<size_t>, const std::string&)>& track_vertex,
+    const std::function<int(
+      const glm::dvec3&, std::optional<size_t>, const std::string&, const MeshletVertexRuntimeInfo&)>& track_vertex,
     bool reverse = false);
 
   /**
@@ -784,7 +800,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<MeshingData> closingMeshExtractRawSegmentsForVoronoiEdge(size_t strand_id, double t, VoronoiMesh& mesh,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, int incident_edge_index,
     size_t incident_he,
-    const std::function<int(const glm::dvec3&, std::optional<size_t>, const std::string&)>& track_vertex);
+    const std::function<int(
+      const glm::dvec3&, std::optional<size_t>, const std::string&, const MeshletVertexRuntimeInfo&)>& track_vertex);
 
   /**
    * @brief Builds ordered segment pointers and a start-ref map from a raw segment list.
