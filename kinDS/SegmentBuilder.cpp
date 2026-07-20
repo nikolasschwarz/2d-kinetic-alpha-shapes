@@ -7379,6 +7379,57 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
 
     if (polygon.size() >= 3 && exited_closed_loop && !exited_fail)
     {
+      const auto consecutive_delaunay_duplicate = [&](size_t a_id, size_t b_id)
+      {
+        const auto a_it = outline_vertex_info.find(a_id);
+        const auto b_it = outline_vertex_info.find(b_id);
+        if (a_it == outline_vertex_info.end() || b_it == outline_vertex_info.end())
+        {
+          return false;
+        }
+        const glm::dvec2& a = a_it->second.delaunay_xy;
+        const glm::dvec2& b = b_it->second.delaunay_xy;
+        if (!std::isfinite(a.x) || !std::isfinite(a.y) || !std::isfinite(b.x) || !std::isfinite(b.y))
+        {
+          return false;
+        }
+        const double scale = std::max({ 1.0, glm::length(a), glm::length(b) });
+        return glm::distance(a, b) <= 1e-12 * scale;
+      };
+
+      // Filter only consecutive duplicates in the cyclic Delaunay-space outline. Deliberately do not use a set:
+      // the same point appearing at non-adjacent positions can encode meaningful polygon topology.
+      std::vector<size_t> filtered_polygon;
+      filtered_polygon.reserve(polygon.size());
+      for (size_t vertex_id : polygon)
+      {
+        if (filtered_polygon.empty()
+          || !consecutive_delaunay_duplicate(filtered_polygon.back(), vertex_id))
+        {
+          filtered_polygon.push_back(vertex_id);
+        }
+      }
+      // The outline is cyclic, so its last and first entries are consecutive as well.
+      if (filtered_polygon.size() > 1
+        && consecutive_delaunay_duplicate(filtered_polygon.back(), filtered_polygon.front()))
+      {
+        filtered_polygon.pop_back();
+      }
+      if (filtered_polygon.size() != polygon.size())
+      {
+        KINDS_INFO("Closing cap outline removed "
+          << (polygon.size() - filtered_polygon.size()) << " consecutive Delaunay-space duplicate(s) for strand "
+          << strand_id << " at t=" << t);
+      }
+      polygon = std::move(filtered_polygon);
+      if (polygon.size() < 3)
+      {
+        KINDS_WARNING("Closing cap outline has fewer than three vertices after consecutive Delaunay-space duplicate "
+                      "filtering for strand "
+          << strand_id << " at t=" << t << "; skipping triangulation.");
+        continue;
+      }
+
       double area2 = 0.0;
       for (size_t i = 0; i < polygon.size(); ++i)
       {

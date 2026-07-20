@@ -352,7 +352,8 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     const auto& adj_twin = graph.halfEdge(adj_even ^ size_t(1));
     const std::string adj_vertex_meta = segment_builder_.composeRegularStripVertexMetadata(t, adj_even / 2, adj_even,
       static_cast<int>(adj_he.origin), static_cast<int>(adj_twin.origin), SegmentBuilder::BoundaryEventType::Subdivision,
-      SegmentBuilder::BoundarySegmentAction::SegmentRemapped, std::nullopt, "cross", "subdivision_adjacent_incident");
+      SegmentBuilder::BoundarySegmentAction::SegmentRemapped, std::nullopt, "cross",
+      "subdivision_adjacent_incident", "Voronoi vertex");
     const std::string adj_face_meta = segment_builder_.composeRegularStripFaceMetadata(t, adj_even / 2, adj_even,
       static_cast<int>(adj_he.origin), static_cast<int>(adj_twin.origin), SegmentBuilder::BoundaryEventType::Subdivision,
       SegmentBuilder::BoundarySegmentAction::SegmentRemapped, "subdivision_adjacent_extend");
