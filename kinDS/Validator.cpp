@@ -503,6 +503,7 @@ size_t Validator::markMeshVertexSourceDiscrepancies(const std::vector<VoronoiMes
   }
 
   static const glm::dvec3 kRed(1.0, 0.0, 0.0);
+  static const glm::dvec3 kNeonYellow(1.0, 1.0, 0.0);
   size_t marked_triangle_count = 0;
 
   std::unordered_map<size_t, std::vector<size_t>> vertices_by_meshlet;
@@ -525,22 +526,45 @@ size_t Validator::markMeshVertexSourceDiscrepancies(const std::vector<VoronoiMes
     }
 
     const int red_material_id = mesh->ensureMaterialName(validationErrorMaterialName());
+    const int neon_yellow_material_id = mesh->ensureMaterialName(validationGreenErrorMaterialName());
+    const auto& material_names = mesh->getMaterialNames();
+    const auto& material_ids = mesh->getMaterialIDs();
     std::unordered_set<size_t> triangle_indices;
     triangle_indices.reserve(vertex_indices.size() * 2);
+    std::unordered_set<size_t> yellow_vertex_indices;
 
     for (size_t vertex_index : vertex_indices)
     {
-      mesh->setVertexColor(vertex_index, kRed);
       const std::vector<size_t> corner_indices = mesh->findTriangleCorners(vertex_index, false);
       for (size_t corner_index : corner_indices)
       {
-        triangle_indices.insert(corner_index / 3);
+        const size_t triangle_index = corner_index / 3;
+        triangle_indices.insert(triangle_index);
+        if (triangle_index < material_ids.size())
+        {
+          const int material_id = material_ids[triangle_index];
+          if (material_id >= 0 && static_cast<size_t>(material_id) < material_names.size()
+            && material_names[static_cast<size_t>(material_id)] == "green")
+          {
+            yellow_vertex_indices.insert(vertex_index);
+          }
+        }
       }
+      mesh->setVertexColor(
+        vertex_index, yellow_vertex_indices.count(vertex_index) != 0u ? kNeonYellow : kRed);
     }
 
     for (size_t triangle_index : triangle_indices)
     {
-      mesh->setTriangleMaterialId(triangle_index, red_material_id);
+      bool from_green_material = false;
+      if (triangle_index < material_ids.size())
+      {
+        const int material_id = material_ids[triangle_index];
+        from_green_material = material_id >= 0 && static_cast<size_t>(material_id) < material_names.size()
+          && material_names[static_cast<size_t>(material_id)] == "green";
+      }
+      mesh->setTriangleMaterialId(
+        triangle_index, from_green_material ? neon_yellow_material_id : red_material_id);
       ++marked_triangle_count;
     }
   }
@@ -551,16 +575,20 @@ size_t Validator::markMeshVertexSourceDiscrepancies(const std::vector<VoronoiMes
 bool Validator::meshUsesValidationErrorMaterial(const VoronoiMesh& mesh)
 {
   const auto& material_names = mesh.getMaterialNames();
-  const auto material_it = std::find(material_names.begin(), material_names.end(), validationErrorMaterialName());
-  if (material_it == material_names.end())
+  const auto red_it = std::find(material_names.begin(), material_names.end(), validationErrorMaterialName());
+  const auto yellow_it = std::find(material_names.begin(), material_names.end(), validationGreenErrorMaterialName());
+  if (red_it == material_names.end() && yellow_it == material_names.end())
   {
     return false;
   }
 
-  const int red_material_id = static_cast<int>(std::distance(material_names.begin(), material_it));
+  const int red_material_id
+    = red_it == material_names.end() ? -1 : static_cast<int>(std::distance(material_names.begin(), red_it));
+  const int yellow_material_id
+    = yellow_it == material_names.end() ? -1 : static_cast<int>(std::distance(material_names.begin(), yellow_it));
   for (int material_id : mesh.getMaterialIDs())
   {
-    if (material_id == red_material_id)
+    if (material_id == red_material_id || material_id == yellow_material_id)
     {
       return true;
     }
@@ -577,8 +605,7 @@ void Validator::logMeshVertexSourceValidationResult(const MeshVertexSourceValida
         << result.keyed_vertex_count << " keyed vertices (" << result.unique_source_count << " unique sources)";
     if (result.marked_triangle_count > 0)
     {
-      oss << "; marked " << result.marked_triangle_count << " triangle(s) with material '" << validationErrorMaterialName()
-          << "'";
+      oss << "; marked " << result.marked_triangle_count << " triangle(s) with validation error materials";
     }
     writeValidationLog("WARNING", oss.str());
     return;

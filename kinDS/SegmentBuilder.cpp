@@ -1842,6 +1842,16 @@ std::tuple<size_t, size_t> SegmentBuilder::finishRegularMeshStripInterval(Vorono
     interval, true, even_half_edge_id, odd_half_edge_id, voronoi_edge_id, t, boundary_transition_shift);
   const glm::dvec3 new_end_pos = regularMeshStripIntervalEndpointPositionAt(
     interval, false, even_half_edge_id, odd_half_edge_id, voronoi_edge_id, t, boundary_transition_shift);
+  const std::optional<RadiusBoundaryTransitionCrossingPlacement> start_placement
+    = interval.start_crossing.has_value()
+    ? std::make_optional(
+        resolveRadiusBoundaryTransitionCrossingPlacement(t, interval.start_crossing.value(), boundary_transition_shift))
+    : std::nullopt;
+  const std::optional<RadiusBoundaryTransitionCrossingPlacement> end_placement
+    = interval.end_crossing.has_value()
+    ? std::make_optional(
+        resolveRadiusBoundaryTransitionCrossingPlacement(t, interval.end_crossing.value(), boundary_transition_shift))
+    : std::nullopt;
 
   const auto& graph = kin_del.getGraph();
   const std::optional<size_t> start_vv = interval.start_open_voronoi_half_edge_id.has_value()
@@ -1868,8 +1878,7 @@ std::tuple<size_t, size_t> SegmentBuilder::finishRegularMeshStripInterval(Vorono
     }
     if (source == std::string("intersection") && crossing.has_value())
     {
-      const RadiusBoundaryTransitionCrossingPlacement placement
-        = resolveRadiusBoundaryTransitionCrossingPlacement(t, crossing.value(), boundary_transition_shift);
+      const auto& placement = (at_start ? start_placement : end_placement).value();
       MetadataBuilder builder;
       builder.addString("event_type", boundaryEventTypeToString(event_type))
         .addString("segment_action", boundarySegmentActionToString(segment_action));
@@ -1882,18 +1891,30 @@ std::tuple<size_t, size_t> SegmentBuilder::finishRegularMeshStripInterval(Vorono
 
   const std::string meta_start = interval_endpoint_metadata(true);
   const std::string meta_end = interval_endpoint_metadata(false);
+  const std::optional<size_t> start_placement_vv
+    = start_placement.has_value() && start_placement->snap_voronoi_vertex_id.has_value()
+    ? start_placement->snap_voronoi_vertex_id
+    : start_vv;
+  const std::optional<size_t> end_placement_vv
+    = end_placement.has_value() && end_placement->snap_voronoi_vertex_id.has_value()
+    ? end_placement->snap_voronoi_vertex_id
+    : end_vv;
 
   const size_t new_start_vertex_index
-    = addMeshletVertex(mesh, boundary_polygon, centroid, new_start_pos, strand_vertex_id, t, false, start_vv, meta_start,
-      std::nullopt,
-      interval.start_crossing.has_value()
-        ? MeshletVertexRuntimeInfo { false, false, interval.start_crossing, interval.start_crossing }
+    = addMeshletVertex(mesh, boundary_polygon, centroid, new_start_pos, strand_vertex_id, t, false, start_placement_vv,
+      meta_start, std::nullopt,
+      start_placement.has_value()
+        ? MeshletVertexRuntimeInfo { false, start_placement->explicit_profile_position.has_value(),
+            start_placement->position_intersection, start_placement->conceptual_intersection,
+            start_placement->projection }
         : MeshletVertexRuntimeInfo {});
   const size_t new_end_vertex_index
-    = addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, strand_vertex_id, t, false, end_vv, meta_end,
-      std::nullopt,
-      interval.end_crossing.has_value()
-        ? MeshletVertexRuntimeInfo { false, false, interval.end_crossing, interval.end_crossing }
+    = addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, strand_vertex_id, t, false, end_placement_vv,
+      meta_end, std::nullopt,
+      end_placement.has_value()
+        ? MeshletVertexRuntimeInfo { false, end_placement->explicit_profile_position.has_value(),
+            end_placement->position_intersection, end_placement->conceptual_intersection,
+            end_placement->projection }
         : MeshletVertexRuntimeInfo {});
 
   if (last_start_vertex_index == last_end_vertex_index)
@@ -2470,9 +2491,10 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
           placement.explicit_profile_position.has_value())
       : std::string {};
     start_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, pos,
-      strand_id_for_inside_half_edge(start_half_edge_id), t, false, std::nullopt, meta_start, std::nullopt,
+      strand_id_for_inside_half_edge(start_half_edge_id), t, false, placement.snap_voronoi_vertex_id, meta_start,
+      std::nullopt,
       MeshletVertexRuntimeInfo { false, placement.explicit_profile_position.has_value(),
-        placement.position_intersection, placement.conceptual_intersection });
+        placement.position_intersection, placement.conceptual_intersection, placement.projection });
   }
   else if (interval.start_open_voronoi_half_edge_id.has_value())
   {
@@ -2503,9 +2525,10 @@ SegmentBuilder::MeshingData SegmentBuilder::meshRegularStripInterval(VoronoiMesh
           placement.explicit_profile_position.has_value())
       : std::string {};
     end_vertex_index = addMeshletVertex(mesh, boundary_polygon, centroid, pos,
-      strand_id_for_inside_half_edge(end_half_edge_id), t, false, std::nullopt, meta_end, std::nullopt,
+      strand_id_for_inside_half_edge(end_half_edge_id), t, false, placement.snap_voronoi_vertex_id, meta_end,
+      std::nullopt,
       MeshletVertexRuntimeInfo { false, placement.explicit_profile_position.has_value(),
-        placement.position_intersection, placement.conceptual_intersection });
+        placement.position_intersection, placement.conceptual_intersection, placement.projection });
   }
   else if (interval.end_open_voronoi_half_edge_id.has_value())
   {
@@ -3217,6 +3240,10 @@ glm::dvec3 SegmentBuilder::crossingProfilePosition(double t,
 glm::dvec3 SegmentBuilder::crossingProfilePositionFromPlacement(
   double t, const RadiusBoundaryTransitionCrossingPlacement& placement) const
 {
+  if (placement.projection.has_value())
+  {
+    return radiusTransitionProjectionPosition(placement.projection.value(), t, false);
+  }
   if (placement.explicit_profile_position.has_value())
   {
     return placement.explicit_profile_position.value();
@@ -3237,6 +3264,23 @@ RadiusBoundaryTransitionCrossingPlacement SegmentBuilder::resolveRadiusBoundaryT
     const size_t interior_vv = boundary_transition_shift->interior_voronoi_vertex_id.value();
     const glm::dvec3 vv_pos = computeVoronoiVertex(kin_del.getGraph().face(interior_vv).half_edges[0], t);
     const glm::dvec2 vv_xy(vv_pos.x, vv_pos.y);
+    const auto projection_from_vv_to_site
+      = [&](size_t site_id, const glm::dvec3& projected_position) -> std::optional<RadiusTransitionProjection>
+    {
+      const glm::dvec2 site_xy = kin_del.getPointAt(t, site_id, false, false);
+      const glm::dvec2 axis = site_xy - vv_xy;
+      const double axis_len2 = glm::dot(axis, axis);
+      if (!(axis_len2 > 1e-30))
+      {
+        return std::nullopt;
+      }
+      RadiusTransitionProjection projection;
+      projection.endpoints[0].voronoi_vertex_id = interior_vv;
+      projection.endpoints[1].site_vertex_id = site_id;
+      projection.param
+        = glm::dot(glm::dvec2(projected_position) - vv_xy, axis) / axis_len2;
+      return projection;
+    };
     const auto anchor_on_target_opt = findInteriorVvAnchorCrossingOnTargetEdge(boundary_transition_shift);
 
     if (isRadiusTransitionCornerAdjacentSourceIntersection(conceptual_ref, boundary_transition_shift))
@@ -3279,7 +3323,11 @@ RadiusBoundaryTransitionCrossingPlacement SegmentBuilder::resolveRadiusBoundaryT
             KINDS_DEBUG("Radius boundary transition interior-vv source crossing: d=" << d_edge << " vv=" << interior_vv
               << " ve=" << conceptual_ref->voronoi_edge_id << " corner_site=" << other_opt.value() << " t=" << t
               << " out=(" << shifted_opt->x << "," << shifted_opt->y << ")");
-            placement.explicit_profile_position = shifted_opt.value();
+            placement.projection = projection_from_vv_to_site(other_opt.value(), shifted_opt.value());
+            if (!placement.projection.has_value())
+            {
+              placement.explicit_profile_position = shifted_opt.value();
+            }
             return placement;
           }
           const glm::dvec3 p_old = crossingProfilePosition(t, conceptual_ref);
@@ -3294,7 +3342,12 @@ RadiusBoundaryTransitionCrossingPlacement SegmentBuilder::resolveRadiusBoundaryT
             KINDS_DEBUG("Radius boundary transition interior-vv source crossing (parallel fallback): d=" << d_edge
               << " vv=" << interior_vv << " alpha=" << alpha << " t=" << t << " out=(" << fallback_xy.x << ","
               << fallback_xy.y << ")");
-            placement.explicit_profile_position = glm::dvec3(fallback_xy, t);
+            placement.projection
+              = projection_from_vv_to_site(other_opt.value(), glm::dvec3(fallback_xy, t));
+            if (!placement.projection.has_value())
+            {
+              placement.explicit_profile_position = glm::dvec3(fallback_xy, t);
+            }
             return placement;
           }
         }
@@ -3313,7 +3366,11 @@ RadiusBoundaryTransitionCrossingPlacement SegmentBuilder::resolveRadiusBoundaryT
           KINDS_DEBUG("Radius boundary transition interior-vv target crossing: d=" << d_edge << " vv=" << interior_vv
             << " ve=" << conceptual_ref->voronoi_edge_id << " corner_site=" << corner_site_opt.value() << " t=" << t
             << " out=(" << shifted_opt->x << "," << shifted_opt->y << ")");
-          placement.explicit_profile_position = shifted_opt.value();
+          placement.projection = projection_from_vv_to_site(corner_site_opt.value(), shifted_opt.value());
+          if (!placement.projection.has_value())
+          {
+            placement.explicit_profile_position = shifted_opt.value();
+          }
           return placement;
         }
       }
@@ -3383,6 +3440,66 @@ std::optional<size_t> SegmentBuilder::oppositeFiniteDelaunayVertexOnUndirectedEd
   return std::nullopt;
 }
 
+glm::dvec3 SegmentBuilder::radiusTransitionProjectionPosition(
+  const RadiusTransitionProjection& projection, double t, bool mesh_space) const
+{
+  const auto endpoint_position = [&](const RadiusTransitionProjectionEndpoint& endpoint) -> glm::dvec3
+  {
+    if (endpoint.intersection.has_value())
+    {
+      const auto ref = endpoint.intersection.value();
+      if (mesh_space)
+      {
+        return getCrossingCoordsInMeshSpace(ref, t);
+      }
+
+      kinDS::ensureCrossingIntersectionParamUpToDate(const_cast<KineticDelaunay&>(kin_del), ref, t);
+      const auto& graph = kin_del.getGraph();
+      const size_t he_even = 2 * ref->delaunay_edge_id;
+      if (he_even + 1 < graph.halfEdgeSlotCount())
+      {
+        const int a = graph.halfEdge(he_even).origin;
+        const int b = graph.halfEdge(he_even + 1).origin;
+        if (a >= 0 && b >= 0 && std::isfinite(ref->delaunay_edge_param))
+        {
+          const glm::dvec2 pa = kin_del.getPointAt(t, static_cast<size_t>(a), false, false);
+          const glm::dvec2 pb = kin_del.getPointAt(t, static_cast<size_t>(b), false, false);
+          const glm::dvec2 p = pa * (1.0 - ref->delaunay_edge_param) + pb * ref->delaunay_edge_param;
+          return glm::dvec3(p, t);
+        }
+      }
+    }
+    else if (endpoint.site_vertex_id.has_value())
+    {
+      if (mesh_space)
+      {
+        return getPointInMeshSpace(endpoint.site_vertex_id.value(), t);
+      }
+      const glm::dvec2 p = kin_del.getPointAt(t, endpoint.site_vertex_id.value(), false, false);
+      return glm::dvec3(p, t);
+    }
+    else if (endpoint.voronoi_vertex_id.has_value())
+    {
+      const size_t vv = endpoint.voronoi_vertex_id.value();
+      if (mesh_space)
+      {
+        return computeMeshVoronoiVertexObjectSpace(vv, glm::dvec3(0.0, 0.0, t), 0, t).position;
+      }
+      const auto& graph = kin_del.getGraph();
+      if (vv < graph.faceSlotCount() && graph.isLiveFace(vv))
+      {
+        return computeVoronoiVertex(graph.face(vv).half_edges[0], t);
+      }
+    }
+    return glm::dvec3(
+      std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), t);
+  };
+
+  const glm::dvec3 p0 = endpoint_position(projection.endpoints[0]);
+  const glm::dvec3 p1 = endpoint_position(projection.endpoints[1]);
+  return glm::dvec3(p0 * (1.0 - projection.param) + p1 * projection.param);
+}
+
 std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::radiusTransitionInterpolatedSitePosition(
   double t, size_t site_vertex_id, size_t strip_delaunay_edge_id,
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const
@@ -3422,7 +3539,12 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
   }
   const size_t d_other = (d_strip == s0) ? s1 : s0;
 
-  const auto anchor_old_and_new = [&](size_t delaunay_edge_id) -> std::optional<std::pair<glm::dvec3, glm::dvec3>>
+  struct ProjectionAnchor
+  {
+    glm::dvec3 old_profile_position {};
+    RadiusTransitionProjectionEndpoint shifted_endpoint {};
+  };
+  const auto anchor = [&](size_t delaunay_edge_id) -> std::optional<ProjectionAnchor>
   {
     const size_t he_even = 2 * delaunay_edge_id;
     if (he_even + 1 >= graph.halfEdgeSlotCount())
@@ -3448,10 +3570,19 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
       {
         return std::nullopt;
       }
-      const glm::dvec3 p_old = crossingProfilePosition(t, ref.value());
-      const glm::dvec3 p_new = crossingProfilePositionFromPlacement(
-        t, resolveRadiusBoundaryTransitionCrossingPlacement(t, ref.value(), boundary_transition_shift));
-      return std::make_pair(p_old, p_new);
+      const RadiusBoundaryTransitionCrossingPlacement placement
+        = resolveRadiusBoundaryTransitionCrossingPlacement(t, ref.value(), boundary_transition_shift);
+      if (placement.explicit_profile_position.has_value() || placement.snap_voronoi_vertex_id.has_value())
+      {
+        return std::nullopt;
+      }
+      RadiusTransitionProjectionEndpoint conceptual_endpoint;
+      conceptual_endpoint.intersection = ref.value();
+      const RadiusTransitionProjection conceptual_projection { { conceptual_endpoint, conceptual_endpoint }, 0.0 };
+      ProjectionAnchor out;
+      out.old_profile_position = radiusTransitionProjectionPosition(conceptual_projection, t, false);
+      out.shifted_endpoint.intersection = placement.position_intersection;
+      return out;
     }
     if (!delaunayUndirectedEdgeHasVertex(graph, delaunay_edge_id, site_vertex_id))
     {
@@ -3461,40 +3592,39 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
       v_opp.has_value())
     {
       const glm::dvec2 xy = kin_del.getPointAt(t, v_opp.value(), false, false);
-      const glm::dvec3 p(xy, t);
-      return std::make_pair(p, p);
+      ProjectionAnchor out;
+      out.old_profile_position = glm::dvec3(xy, t);
+      out.shifted_endpoint.site_vertex_id = v_opp.value();
+      return out;
     }
     return std::nullopt;
   };
 
-  const auto a0 = anchor_old_and_new(d_strip);
-  const auto a1 = anchor_old_and_new(d_other);
+  const auto a0 = anchor(d_strip);
+  const auto a1 = anchor(d_other);
   if (!a0.has_value() || !a1.has_value())
   {
     return std::nullopt;
   }
 
-  const glm::dvec3 p0_old = a0.value().first;
-  const glm::dvec3 p1_old = a1.value().first;
+  const glm::dvec3 p0_old = a0->old_profile_position;
+  const glm::dvec3 p1_old = a1->old_profile_position;
   const glm::dvec2 site_xy = kin_del.getPointAt(t, site_vertex_id, false, false);
-  const double d0 = glm::length(glm::dvec2(p0_old.x, p0_old.y) - site_xy);
-  const double d1 = glm::length(glm::dvec2(p1_old.x, p1_old.y) - site_xy);
-  const double sum = d0 + d1;
-  if (!(sum > 1e-30))
+  const glm::dvec2 projection_axis = glm::dvec2(p1_old) - glm::dvec2(p0_old);
+  const double projection_axis_len2 = glm::dot(projection_axis, projection_axis);
+  if (!(projection_axis_len2 > 1e-30))
   {
     return std::nullopt;
   }
 
-  const glm::dvec3 p0_new = a0.value().second;
-  const glm::dvec3 p1_new = a1.value().second;
-
-  const double w0 = d1 / sum;
-  const double w1 = d0 / sum;
-  const glm::dvec3 out(w0 * p0_new.x + w1 * p1_new.x, w0 * p0_new.y + w1 * p1_new.y, t);
+  RadiusTransitionProjection projection;
+  projection.endpoints = { a0->shifted_endpoint, a1->shifted_endpoint };
+  projection.param = glm::dot(site_xy - glm::dvec2(p0_old), projection_axis) / projection_axis_len2;
+  const glm::dvec3 out = radiusTransitionProjectionPosition(projection, t, false);
   KINDS_DEBUG("Radius boundary transition corner site: cell="
-    << site_vertex_id << " strip_d=" << d_strip << " other_d=" << d_other << " w0=" << w0 << " w1=" << w1
-    << " d0=" << d0 << " d1=" << d1 << " t=" << t << " out=(" << out.x << "," << out.y << ")");
-  return RadiusTransitionSitePlacement { out, std::nullopt };
+    << site_vertex_id << " strip_d=" << d_strip << " other_d=" << d_other
+    << " projection_param=" << projection.param << " t=" << t << " out=(" << out.x << "," << out.y << ")");
+  return RadiusTransitionSitePlacement { out, std::nullopt, projection };
 }
 
 size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
@@ -3796,6 +3926,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       glm::dvec3 position {};
       std::optional<RadiusBoundaryTransitionCrossingPlacement> placement {};
       std::optional<size_t> snap_voronoi_vertex_id {};
+      bool explicit_profile_position = false;
+      std::optional<RadiusTransitionProjection> projection {};
     };
 
     auto crossing_or_site_endpoint
@@ -3812,7 +3944,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
           logRadiusBoundaryTransitionVertexShift("startNewMeshFromIntersections_interval", t,
             placement.conceptual_intersection, placement.position_intersection, old_pos, pos);
         }
-        return { pos, placement, placement.snap_voronoi_vertex_id };
+        return { pos, placement, placement.snap_voronoi_vertex_id, placement.explicit_profile_position.has_value(),
+          placement.projection };
       }
       if (auto site_shifted
         = radiusTransitionInterpolatedSitePosition(t, voronoi_cell_id, delaunay_edge_id, boundary_transition_shift);
@@ -3822,10 +3955,11 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
         KINDS_DEBUG("Radius boundary transition [startNewMeshFromIntersections_site]: cell="
           << voronoi_cell_id << " strip_d=" << delaunay_edge_id << " t=" << t << " old=(" << p_site.x << "," << p_site.y
           << ") new=(" << site_shifted->position.x << "," << site_shifted->position.y << ")");
-        return { site_shifted->position, std::nullopt, site_shifted->snap_voronoi_vertex_id };
+        return { site_shifted->position, std::nullopt, site_shifted->snap_voronoi_vertex_id, false,
+          site_shifted->projection };
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id, false, false);
-      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt };
+      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt, false, std::nullopt };
     };
 
     const CrossingOrSiteEndpoint start_endpoint = crossing_or_site_endpoint(interval_start_crossing);
@@ -3834,6 +3968,18 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     const glm::dvec3& end_pos = end_endpoint.position;
     const auto& start_placement_opt = start_endpoint.placement;
     const auto& end_placement_opt = end_endpoint.placement;
+    const auto endpoint_runtime_info = [](const CrossingOrSiteEndpoint& endpoint)
+    {
+      MeshletVertexRuntimeInfo info;
+      info.radius_shift_explicit_profile_position = endpoint.explicit_profile_position;
+      info.radius_transition_projection = endpoint.projection;
+      if (endpoint.placement.has_value())
+      {
+        info.position_intersection = endpoint.placement->position_intersection;
+        info.conceptual_intersection = endpoint.placement->conceptual_intersection;
+      }
+      return info;
+    };
 
     std::string boundary_start_meta_left;
     std::string boundary_start_meta_right;
@@ -3871,18 +4017,12 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       false, start_endpoint.snap_voronoi_vertex_id, start_vertex_meta,
       same_endpoint ? std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 1.0))
                     : std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 0.0)),
-      start_placement_opt.has_value()
-        ? MeshletVertexRuntimeInfo { false, start_placement_opt.value().explicit_profile_position.has_value(),
-            start_placement_opt.value().position_intersection, start_placement_opt.value().conceptual_intersection }
-        : MeshletVertexRuntimeInfo {});
+      endpoint_runtime_info(start_endpoint));
     const size_t end_vertex_index = same_endpoint
       ? start_vertex_index
       : addMeshletVertex(mesh, boundary_polygon, centroid, end_pos, voronoi_cell_id, t, false,
           end_endpoint.snap_voronoi_vertex_id, boundary_start_meta_right, glm::dvec3(0.0, 0.0, 1.0),
-          end_placement_opt.has_value()
-            ? MeshletVertexRuntimeInfo { false, end_placement_opt.value().explicit_profile_position.has_value(),
-                end_placement_opt.value().position_intersection, end_placement_opt.value().conceptual_intersection }
-            : MeshletVertexRuntimeInfo {});
+          endpoint_runtime_info(end_endpoint));
 
     std::list<MeshingData> local_segments;
     MeshingData seg { static_cast<int>(start_vertex_index), static_cast<int>(end_vertex_index),
@@ -4051,6 +4191,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     glm::dvec3 position {};
     std::optional<RadiusBoundaryTransitionCrossingPlacement> placement {};
     std::optional<size_t> snap_voronoi_vertex_id {};
+    bool explicit_profile_position = false;
+    std::optional<RadiusTransitionProjection> projection {};
   };
 
   auto crossing_or_site_endpoint
@@ -4066,10 +4208,11 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
         KINDS_DEBUG("Radius boundary transition [finishMeshFromIntersections_site]: cell="
           << voronoi_cell_id << " strip_d=" << strip_delaunay_edge_id_for_site << " t=" << t << " old=(" << p_site.x
           << "," << p_site.y << ") new=(" << site_shifted->position.x << "," << site_shifted->position.y << ")");
-        return { site_shifted->position, std::nullopt, site_shifted->snap_voronoi_vertex_id };
+        return { site_shifted->position, std::nullopt, site_shifted->snap_voronoi_vertex_id, false,
+          site_shifted->projection };
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id, false, false);
-      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt };
+      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt, false, std::nullopt };
     }
 
     const RadiusBoundaryTransitionCrossingPlacement placement
@@ -4081,7 +4224,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
       logRadiusBoundaryTransitionVertexShift("finishMeshFromIntersections_interval", t, placement.conceptual_intersection,
         placement.position_intersection, old_pos, pos);
     }
-    return { pos, placement, placement.snap_voronoi_vertex_id };
+    return { pos, placement, placement.snap_voronoi_vertex_id, placement.explicit_profile_position.has_value(),
+      placement.projection };
   };
 
   const CrossingOrSiteEndpoint start_endpoint = crossing_or_site_endpoint(start_intersection);
@@ -4092,6 +4236,18 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   end_placement_opt = end_endpoint.placement;
   start_snap_voronoi_vertex_id = start_endpoint.snap_voronoi_vertex_id;
   end_snap_voronoi_vertex_id = end_endpoint.snap_voronoi_vertex_id;
+  const auto endpoint_runtime_info = [](const CrossingOrSiteEndpoint& endpoint)
+  {
+    MeshletVertexRuntimeInfo info;
+    info.radius_shift_explicit_profile_position = endpoint.explicit_profile_position;
+    info.radius_transition_projection = endpoint.projection;
+    if (endpoint.placement.has_value())
+    {
+      info.position_intersection = endpoint.placement->position_intersection;
+      info.conceptual_intersection = endpoint.placement->conceptual_intersection;
+    }
+    return info;
+  };
 
   std::string boundary_finish_meta;
   std::string boundary_finish_meta_left;
@@ -4128,18 +4284,12 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     collapsed_finish_endpoints ? boundary_finish_meta_uniform : boundary_finish_meta_left,
     collapsed_finish_endpoints ? std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 1.0))
                                : std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 0.0)),
-    start_placement_opt.has_value()
-      ? MeshletVertexRuntimeInfo { false, start_placement_opt.value().explicit_profile_position.has_value(),
-          start_placement_opt.value().position_intersection, start_placement_opt.value().conceptual_intersection }
-      : MeshletVertexRuntimeInfo {});
+    endpoint_runtime_info(start_endpoint));
   const size_t new_end_vertex_index = collapsed_finish_endpoints
     ? new_start_vertex_index
     : addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, voronoi_cell_id, t, false,
         end_snap_voronoi_vertex_id, boundary_finish_meta_right, glm::dvec3(0.0, 0.0, 1.0),
-        end_placement_opt.has_value()
-          ? MeshletVertexRuntimeInfo { false, end_placement_opt.value().explicit_profile_position.has_value(),
-              end_placement_opt.value().position_intersection, end_placement_opt.value().conceptual_intersection }
-          : MeshletVertexRuntimeInfo {});
+        endpoint_runtime_info(end_endpoint));
 
   size_t ordered_new_start_vertex_index = new_start_vertex_index;
   size_t ordered_new_end_vertex_index = new_end_vertex_index;
@@ -5262,6 +5412,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
 
   const bool is_flexible_placeholder = runtime_info.is_flexible_placeholder;
   const bool radius_shift_explicit_profile_position = runtime_info.radius_shift_explicit_profile_position;
+  const bool radius_transition_projection = runtime_info.radius_transition_projection.has_value();
   if (!is_flexible_placeholder)
   {
     warn_degenerate_or_non_finite(vertex, "input");
@@ -5271,7 +5422,8 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   includes_virtual_shift = false;
 
   const bool is_intersection_vertex = runtime_info.isIntersectionVertex();
-  const bool skip_world_intersection_interp = is_flexible_placeholder || radius_shift_explicit_profile_position;
+  const bool skip_world_intersection_interp
+    = is_flexible_placeholder || radius_shift_explicit_profile_position || radius_transition_projection;
   std::optional<MeshIntersectionObjectSpaceResult> intersection_object_space;
   if (is_intersection_vertex && !skip_world_intersection_interp)
   {
@@ -5280,7 +5432,17 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   }
 
   std::optional<MeshVoronoiVertexObjectSpaceResult> voronoi_object_space;
-  if (!is_flexible_placeholder && is_intersection_vertex && !radius_shift_explicit_profile_position
+  if (!is_flexible_placeholder && radius_transition_projection)
+  {
+    vertex = radiusTransitionProjectionPosition(runtime_info.radius_transition_projection.value(), t, true);
+    if (!vertexPositionFinite(vertex))
+    {
+      KINDS_WARNING("addMeshletVertex: non-finite radius-transition projection for strand " << strand_id << " at t="
+        << t << "; falling back to site placement.");
+      vertex = computeMeshSiteVertexPosition(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
+    }
+  }
+  else if (!is_flexible_placeholder && is_intersection_vertex && !radius_shift_explicit_profile_position
     && intersection_object_space.has_value())
   {
     vertex = intersection_object_space.value().position;
@@ -5304,10 +5466,10 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
       vertex = computeMeshSiteVertexPosition(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
     }
   }
-  else if (!is_flexible_placeholder && !is_intersection_vertex)
+  else if (!is_flexible_placeholder && !is_intersection_vertex && !radius_shift_explicit_profile_position)
   {
-    // True sites always use unshifted mesh placement (never keep a kinetically shifted profile,
-    // including radius-transition synthetic site positions).
+    // Ordinary sites use their unshifted mesh placement. Radius-transition sites explicitly carry
+    // a synthetic profile position and continue to the transform/preserve branch below.
     vertex = computeMeshSiteVertexPosition(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
     profile_xy = glm::dvec2(vertex.x, vertex.y);
     includes_virtual_shift = false;
@@ -5659,7 +5821,7 @@ void SegmentBuilder::extendIntersectionMeshAtSharedCrossing(size_t neighbor_pair
   const size_t new_vid = addMeshletVertex(mesh, neighbor_boundary, neighbor_centroid, crossing_pos, neighbor_cell, t,
     false, placement.snap_voronoi_vertex_id, vertex_meta, vertex_color,
     MeshletVertexRuntimeInfo { false, placement.explicit_profile_position.has_value(), placement.position_intersection,
-      placement.conceptual_intersection });
+      placement.conceptual_intersection, placement.projection });
   addBoundaryIntervalTriangleOriented(mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, base_meta, neighbor_pair_idx);
   applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_on_neighbor, new_vid, inside_boundary_he_id,
     std::make_optional(shared_ref), neighbor_boundary, neighbor_centroid, neighbor_cell, t, true,

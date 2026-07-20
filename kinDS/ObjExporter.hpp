@@ -289,9 +289,9 @@ class ObjExporter
   static std::string sectionShadedMaterialName(const std::string& base_material_name, size_t section_index)
   {
     const bool even_section = kineticSectionIsEven(section_index);
-    if (base_material_name == "yellow")
+    if (base_material_name == "green")
     {
-      return even_section ? "yellow_light" : "yellow_dark";
+      return even_section ? "green_light" : "green_dark";
     }
     if (base_material_name == "brown")
     {
@@ -395,21 +395,21 @@ class ObjExporter
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    // Yellow material (regular meshes emitted by radius events).
-    file << "newmtl yellow\n";
+    // Green material (regular meshes emitted by radius events).
+    file << "newmtl green\n";
     file << "Ka 0.6 0.6 0.1\n";
     file << "Kd 0.9 0.85 0.2\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
     // Section-alternating shades (even sections = light, odd sections = dark).
-    file << "newmtl yellow_light\n";
+    file << "newmtl green_light\n";
     file << "Ka 0.6 0.6 0.1\n";
     file << "Kd 0.9 0.85 0.2\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    file << "newmtl yellow_dark\n";
+    file << "newmtl green_dark\n";
     file << "Ka 0.35 0.35 0.05\n";
     file << "Kd 0.55 0.5 0.1\n";
     file << "Ks 0.0 0.0 0.0\n";
@@ -444,6 +444,14 @@ class ObjExporter
     file << "newmtl red\n";
     file << "Ka 0.3 0.0 0.0\n";
     file << "Kd 0.95 0.1 0.1\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    // Validation error highlight for triangles whose original material was green.
+    file << "newmtl neon_yellow\n";
+    file << "Ka 0.6 0.6 0.0\n";
+    file << "Kd 1.0 1.0 0.0\n";
+    file << "Ke 0.2 0.2 0.0\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n";
 

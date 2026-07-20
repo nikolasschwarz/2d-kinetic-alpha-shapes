@@ -30,8 +30,10 @@ class Validator
 {
  public:
   static constexpr const char* defaultLogFilePath() { return "mesh_vertex_validation.log"; }
-  /// OBJ/MTL material name used for triangles incident to inconsistent keyed vertices.
+  /// OBJ/MTL material used for errors on non-green source triangles.
   static constexpr const char* validationErrorMaterialName() { return "red"; }
+  /// OBJ/MTL material used for errors on green source triangles.
+  static constexpr const char* validationGreenErrorMaterialName() { return "neon_yellow"; }
 
   /// Route validation output to @p path (append mode). Reopens the file when the path changes.
   static void setLogFile(const std::string& path);
@@ -45,11 +47,11 @@ class Validator
     const std::vector<VoronoiMesh*>& meshlets, const std::vector<std::string>* meshlet_labels = nullptr,
     double position_tolerance = 1e-5);
 
-  /// Apply @ref validationErrorMaterialName and red vertex colors to triangles incident to @p discrepancies.
+  /// Mark triangles incident to discrepancies red, or neon yellow when their original material was green.
   static size_t markMeshVertexSourceDiscrepancies(const std::vector<VoronoiMesh*>& meshlets,
     const std::vector<MeshVertexSourceDiscrepancy>& discrepancies);
 
-  /// @return true when @p mesh uses @ref validationErrorMaterialName on at least one triangle.
+  /// @return true when @p mesh uses either validation-error material on at least one triangle.
   static bool meshUsesValidationErrorMaterial(const VoronoiMesh& mesh);
 
   /// Write a summary of @p result to the validation log file.

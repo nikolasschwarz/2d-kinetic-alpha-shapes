@@ -54,19 +54,37 @@ struct IntersectionInterpolationDebug
   }
 };
 
+/// One endpoint of a radius-transition projection segment. Exactly one source should be set.
+struct RadiusTransitionProjectionEndpoint
+{
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> intersection {};
+  std::optional<size_t> site_vertex_id {};
+  std::optional<size_t> voronoi_vertex_id {};
+};
+
+/// Semantic segment plus parameter used to reconstruct the same projected point in profile or mesh space.
+struct RadiusTransitionProjection
+{
+  std::array<RadiusTransitionProjectionEndpoint, 2> endpoints {};
+  double param = std::numeric_limits<double>::quiet_NaN();
+};
+
 /// Conceptual crossing (topology / mesh-pair links) vs profile position source during a radius boundary transition.
 struct RadiusBoundaryTransitionCrossingPlacement
 {
   KineticDelaunay::CrossingData::EdgeIntersectionRef conceptual_intersection {};
   KineticDelaunay::CrossingData::EdgeIntersectionRef position_intersection {};
-  /// When set, profile XY comes from this value instead of @c position_intersection (interior-vv synthetic shifts).
+  /// Legacy fallback for synthetic shifts that cannot be represented semantically.
   std::optional<glm::dvec3> explicit_profile_position {};
   /// When set, mesh placement should use Voronoi barycentric transfer for this vertex (unshifted mesh sites).
   std::optional<size_t> snap_voronoi_vertex_id {};
+  /// Semantic projection used to reconstruct synthetic shifts in either profile or mesh space.
+  std::optional<RadiusTransitionProjection> projection {};
 
   bool positionDiffersFromConceptual() const
   {
-    return explicit_profile_position.has_value() || position_intersection != conceptual_intersection;
+    return explicit_profile_position.has_value() || projection.has_value()
+      || position_intersection != conceptual_intersection;
   }
 };
 
@@ -180,7 +198,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Material table for meshlet OBJ export (`material_ids` index into this list).
   static constexpr int RegularMeshletMaterialId = 0;
   static constexpr int BoundaryIntervalMeshletMaterialId = 1;
-  static inline const std::vector<std::string> MeshletExportMaterialNames = { "yellow", "brown" };
+  static inline const std::vector<std::string> MeshletExportMaterialNames = { "green", "brown" };
 
  private:
   friend class SegmentBuilderSectionCallback;
@@ -379,6 +397,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     bool radius_shift_explicit_profile_position = false;
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> position_intersection;
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> conceptual_intersection;
+    std::optional<RadiusTransitionProjection> radius_transition_projection;
 
     bool isIntersectionVertex() const { return position_intersection.has_value(); }
   };
@@ -508,14 +527,16 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const HalfEdgeDelaunayGraph& graph, size_t delaunay_edge_id, size_t site_vertex_id);
 
   /// When @p site_vertex_id is the junction of the two transition source edges, either snaps to the interior
-  /// Voronoi vertex (@c snap_voronoi_vertex_id set) or returns a profile-space blend of shifted corner crossings.
-  /// Mesh callers must not store @c position for an unshifted site: use @ref computeMeshSiteVertexPosition, and only
-  /// honor @c snap_voronoi_vertex_id (barycentric VV placement). The blend path is profile-space only.
+  /// Voronoi vertex or projects the site onto the segment between the two unshifted anchors. The returned semantic
+  /// endpoints and parameter reconstruct the shifted point independently in profile and mesh space.
   struct RadiusTransitionSitePlacement
   {
     glm::dvec3 position {};
     std::optional<size_t> snap_voronoi_vertex_id {};
+    std::optional<RadiusTransitionProjection> projection {};
   };
+  glm::dvec3 radiusTransitionProjectionPosition(
+    const RadiusTransitionProjection& projection, double t, bool mesh_space) const;
   std::optional<RadiusTransitionSitePlacement> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
     size_t strip_delaunay_edge_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
 

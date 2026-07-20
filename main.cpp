@@ -484,7 +484,7 @@ static void print_usage(const char* program_name)
             << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
             << "  --validate                After meshing, check that vertices with the same metadata source agree in world space\n"
             << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
-            << "  --section-shading         Alternate light/dark yellow and brown materials by even/odd section\n"
+            << "  --section-shading         Alternate light/dark green and brown materials by even/odd section\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"

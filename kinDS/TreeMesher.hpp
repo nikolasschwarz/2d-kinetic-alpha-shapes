@@ -58,7 +58,7 @@ class TreeMesher
     /// When false (@c --untransformed), vertices stay in local profile space (no reference-branch remap, no
     /// kinetic separation), with a final Y/Z swap for viewing alongside SVG.
     bool transform_mesh_at_construction = true;
-    /// When true, OBJ export alternates light/dark yellow and brown materials by even/odd kinetic section.
+    /// When true, OBJ export alternates light/dark green and brown materials by even/odd kinetic section.
     bool alternate_section_shading = false;
 
     // for debugging purposes:

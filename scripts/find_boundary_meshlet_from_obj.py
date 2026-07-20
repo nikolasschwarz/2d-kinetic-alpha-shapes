@@ -256,7 +256,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if unique_meshlets:
         print(f"\nUnique boundary_meshlet_id values among matches: {unique_meshlets}")
     else:
-        print("\nNo boundary_meshlet_id found on matching faces (yellow/regular meshlets, or metadata disabled).")
+        print("\nNo boundary_meshlet_id found on matching faces (green/regular meshlets, or metadata disabled).")
 
     return 0
 
