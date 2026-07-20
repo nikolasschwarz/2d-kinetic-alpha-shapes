@@ -250,7 +250,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       const size_t eff_l = segment_builder_.intersectionStripEffectiveVertexIndex(seg, true);
       const size_t eff_r = segment_builder_.intersectionStripEffectiveVertexIndex(seg, false);
       const size_t new_vid = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid_local, event_pos,
-        graph.destination(crossing->half_edge_id), crossing->occurrence_time, false, std::nullopt, vertex_meta, vertex_color);
+        graph.destination(crossing->half_edge_id), crossing->occurrence_time, false,
+        std::make_optional(crossing->voronoi_vertex_id), vertex_meta, vertex_color);
       segment_builder_.addBoundaryIntervalTriangleOriented(
         mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, crossing->occurrence_time, metadata, pair_idx);
 

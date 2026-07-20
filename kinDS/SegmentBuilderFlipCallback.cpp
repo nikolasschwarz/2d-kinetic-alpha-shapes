@@ -271,10 +271,6 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       .addSize("voronoi_vertex_id", voronoi_vertex_id)
       .build();
   };
-  const std::string generic_flip_vertex_metadata = SegmentBuilder::MetadataBuilder()
-                                                     .addString("event_type", "flip_event")
-                                                     .addString("source", "site")
-                                                     .build();
   const std::string flip_face_metadata = segment_builder_.store_mesh_metadata
     ? SegmentBuilder::MetadataBuilder()
         .addString("event_type", "flip_event")
@@ -318,10 +314,22 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       continue;
     }
 
-    // Same geometric seed as above; alpha warning already emitted from addMeshletVertex for the new meshlet.
+    // This extends the open endpoint represented by this directed half-edge. Its face is the corresponding
+    // Voronoi vertex; at the flip instant all involved circumcenters coincide geometrically, but mesh-space
+    // placement must still use that specific Voronoi vertex's barycentric transfer rather than site placement.
+    const int neighbor_voronoi_vertex_i = graph.halfEdge(he_id).face;
+    if (neighbor_voronoi_vertex_i < 0)
+    {
+      KINDS_WARNING("Flip neighbor extension: half-edge " << he_id
+                                                           << " has no incident Voronoi vertex at t="
+                                                           << flip->occurrence_time << "; skipping.");
+      continue;
+    }
+    const size_t neighbor_voronoi_vertex_id = static_cast<size_t>(neighbor_voronoi_vertex_i);
     size_t new_vertex_index
       = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid, event_point, vertex,
-        flip->occurrence_time, false, std::nullopt, generic_flip_vertex_metadata);
+        flip->occurrence_time, false, std::make_optional(neighbor_voronoi_vertex_id),
+        flip_vertex_metadata(neighbor_voronoi_vertex_id));
 
     int he_id_left = segments.front().start_half_edge_id;
     int he_id_right = segments.back().end_half_edge_id;
