@@ -631,6 +631,9 @@ class KineticDelaunay
   const std::vector<glm::dvec2>& getDummyBoundary() const;
 
   std::vector<std::vector<size_t>> checkForSplit(const std::array<int, 3>& tri_vertices) const;
+  /// Same split check using an explicit face-inside state, allowing callbacks to predict a radius event's target state.
+  std::vector<std::vector<size_t>> checkForSplit(
+    const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state) const;
 
   std::vector<std::vector<size_t>> extractConnectedComponents() const;
 

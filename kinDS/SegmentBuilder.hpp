@@ -188,6 +188,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// When true, radius 2↔1 transitions use boundary-transition vertex shift when a 2↔1 boundary-edge correspondence
   /// exists and no interior Voronoi vertex lies in the triangle; otherwise traced Voronoi-cell meshlets are used.
   bool radius_boundary_transition_shift_enabled = true;
+  /// When true, reject radius shifting and use the triangle-closing fallback if a pending split's triangle spans
+  /// multiple future runtime branches.
+  bool radius_pending_split_triangle_fallback_enabled = true;
   /// When false, skip building/storing per-vertex and per-face JSON metadata on meshlets.
   bool store_mesh_metadata = true;
   /// When true (e.g. via @c --validate), run mesh vertex source consistency checks in @ref finalize.
@@ -198,7 +201,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Material table for meshlet OBJ export (`material_ids` index into this list).
   static constexpr int RegularMeshletMaterialId = 0;
   static constexpr int BoundaryIntervalMeshletMaterialId = 1;
-  static inline const std::vector<std::string> MeshletExportMaterialNames = { "green", "brown" };
+  static constexpr int PendingSplitFallbackMeshletMaterialId = 2;
+  static inline const std::vector<std::string> MeshletExportMaterialNames = { "green", "brown", "light_blue" };
 
  private:
   friend class SegmentBuilderSectionCallback;
@@ -447,10 +451,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   static RegularMeshStripIntervalEndpoints regularMeshStripIntervalFromMeshingData(
     const MeshingData& segment, size_t even_half_edge_id, size_t odd_half_edge_id);
 
-  glm::dvec3 regularMeshStripIntervalEndpointPositionAt(const RegularMeshStripIntervalEndpoints& interval,
-    bool at_start, size_t even_half_edge_id, size_t odd_half_edge_id, size_t voronoi_edge_id, double t,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr) const;
-
   /// @return `{ new_start_vertex_index, new_end_vertex_index }` — use structured binding, e.g. `auto [left, right] =
   /// ...`.
   std::tuple<size_t, size_t> finishRegularMeshStripInterval(VoronoiMesh& mesh,
@@ -539,27 +539,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const RadiusTransitionProjection& projection, double t, bool mesh_space) const;
   std::optional<RadiusTransitionSitePlacement> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,
     size_t strip_delaunay_edge_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-
-  std::optional<size_t> radiusTransitionSharedCornerSiteVertex(
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-
-  /// Delaunay-edge crossing on a transition source edge at the shared-corner end (boundary-order front/back).
-  bool isRadiusTransitionCornerAdjacentSourceIntersection(
-    KineticDelaunay::CrossingData::EdgeIntersectionRef ref,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-
-  bool voronoiEdgeHasEndpointFace(size_t voronoi_edge_id, size_t voronoi_vertex_id) const;
-
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> findInteriorVvAnchorCrossingOnTargetEdge(
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-
-  std::optional<size_t> interiorVvFictionalCornerSiteForTargetEdgeCrossing(
-    KineticDelaunay::CrossingData::EdgeIntersectionRef ref,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef anchor_ref,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift) const;
-
-  std::optional<glm::dvec3> interiorVvShiftAlongVoronoiEdgeToCornerLine(double t,
-    KineticDelaunay::CrossingData::EdgeIntersectionRef ref, const glm::dvec2& vv_xy, size_t corner_site_id) const;
 
   static void appendIntersectionInterpolationDebugToMetadata(
     MetadataBuilder& builder, const IntersectionInterpolationDebug& debug);

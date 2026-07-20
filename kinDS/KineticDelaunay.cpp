@@ -4925,55 +4925,51 @@ const std::vector<glm::dvec2>& KineticDelaunay::getDummyBoundary() const { retur
 
 std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(const std::array<int, 3>& tri_vertices) const
 {
+  return checkForSplit(tri_vertices, face_inside);
+}
+
+std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
+  const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state) const
+{
   std::vector<std::vector<size_t>> components;
   std::vector<bool> visited(graph.getVertexCount(), false);
 
-  size_t u = tri_vertices[0];
-
-  std::vector<size_t> component;
-
-  std::vector<size_t> queue;
-  queue.push_back(u);
-  visited[u] = true;
-
-  size_t head = 0;
-
-  while (head < queue.size())
+  const auto extract_component = [&](size_t seed)
   {
-    size_t v = queue[head++];
-    component.push_back(v);
-
-    const auto nbrs = graph.inducedNeighbors(v, face_inside);
-
-    for (size_t w : nbrs)
+    std::vector<size_t> component;
+    std::vector<size_t> queue { seed };
+    visited[seed] = true;
+    size_t head = 0;
+    while (head < queue.size())
     {
-      if (!visited[w])
+      const size_t v = queue[head++];
+      component.push_back(v);
+      for (size_t w : graph.inducedNeighbors(v, inside_state))
       {
-        visited[w] = true;
-
-        // quit early if we found all triangle vertices
-        if (visited[tri_vertices[1]] && visited[tri_vertices[2]])
+        if (!visited[w])
         {
-          return {}; // return empty to indicate no split
+          visited[w] = true;
+          queue.push_back(w);
         }
-
-        queue.push_back(w);
       }
     }
+    return component;
+  };
+
+  components.push_back(extract_component(static_cast<size_t>(tri_vertices[0])));
+  if (visited[static_cast<size_t>(tri_vertices[1])] && visited[static_cast<size_t>(tri_vertices[2])])
+  {
+    return {};
   }
 
-  components.push_back(component);
-
-  if (!visited[tri_vertices[1]])
+  if (!visited[static_cast<size_t>(tri_vertices[1])])
   {
-    auto component2 = extractConnectedComponent(tri_vertices[1], visited);
-    components.push_back(component2);
+    components.push_back(extract_component(static_cast<size_t>(tri_vertices[1])));
   }
 
-  if (!visited[tri_vertices[2]])
+  if (!visited[static_cast<size_t>(tri_vertices[2])])
   {
-    auto component3 = extractConnectedComponent(tri_vertices[2], visited);
-    components.push_back(component3);
+    components.push_back(extract_component(static_cast<size_t>(tri_vertices[2])));
   }
 
   return components;

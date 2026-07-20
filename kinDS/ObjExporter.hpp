@@ -402,6 +402,13 @@ class ObjExporter
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
+    // Pending-split mixed-branch radius fallback.
+    file << "newmtl light_blue\n";
+    file << "Ka 0.15 0.35 0.5\n";
+    file << "Kd 0.35 0.75 1.0\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
     // Section-alternating shades (even sections = light, odd sections = dark).
     file << "newmtl green_light\n";
     file << "Ka 0.6 0.6 0.1\n";

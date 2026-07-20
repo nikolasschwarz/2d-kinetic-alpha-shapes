@@ -35,6 +35,60 @@ void trySetOwnedInteriorVoronoiVertexForRadiusShift(RadiusBoundaryTransitionShif
   }
 }
 
+bool triangleSpansFutureBranchesOfPendingSplit(const KineticDelaunay& kin_del, size_t triangle_face_id)
+{
+  const auto& graph = kin_del.getGraph();
+  if (!graph.isLiveFace(triangle_face_id))
+  {
+    return false;
+  }
+
+  const std::array<int, 3> triangle_vertices = graph.getTriangleVertexIndices(triangle_face_id);
+  std::array<size_t, 3> finite_vertices {};
+  size_t finite_vertex_count = 0;
+  for (int vertex : triangle_vertices)
+  {
+    if (vertex < 0 || kin_del.isDummyBoundary(static_cast<size_t>(vertex)))
+    {
+      return false;
+    }
+    finite_vertices[finite_vertex_count++] = static_cast<size_t>(vertex);
+  }
+  if (finite_vertex_count != 3)
+  {
+    return false;
+  }
+
+  bool spans_pending_split = false;
+  kin_del.visitPendingBranchSplits(
+    [&](size_t, const PendingBranchSplit& split)
+    {
+      if (spans_pending_split || split.frozen_parent_strands.empty())
+      {
+        return;
+      }
+
+      const auto belongs_to_split = [&](size_t strand_id)
+      {
+        return std::find(split.frozen_parent_strands.begin(), split.frozen_parent_strands.end(), strand_id)
+          != split.frozen_parent_strands.end();
+      };
+      if (!belongs_to_split(finite_vertices[0]) || !belongs_to_split(finite_vertices[1])
+        || !belongs_to_split(finite_vertices[2]))
+      {
+        return;
+      }
+
+      // notePendingBranchSplit assigns split-off strands their child runtime branch ids immediately,
+      // before the graph cut. These are therefore the branch ids the vertices will retain after the split.
+      const size_t branch0 = kin_del.getRuntimeBranchIdForStrand(finite_vertices[0]);
+      const size_t branch1 = kin_del.getRuntimeBranchIdForStrand(finite_vertices[1]);
+      const size_t branch2 = kin_del.getRuntimeBranchIdForStrand(finite_vertices[2]);
+      spans_pending_split = branch0 != branch1 || branch0 != branch2;
+    });
+  return spans_pending_split;
+}
+
 void classifyRadiusBoundaryTransitionShiftContext(RadiusBoundaryTransitionShiftContext& ctx,
   size_t pre_boundary_edge_count, const std::array<bool, 3>& pre_is_boundary_edge,
   const std::array<size_t, 3>& pre_face_he, size_t post_boundary_edge_count,
@@ -151,6 +205,23 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   // uses the third (internal) Delaunay edge as target — same as post-flip 2->1 classification after topology updates.
   RadiusBoundaryTransitionShiftContext radius_pre_finish_shift_ctx {};
   const RadiusBoundaryTransitionShiftContext* radius_finish_shift_arg = nullptr;
+  bool radius_event_will_create_mixed_branch_split = false;
+  if (segment_builder_.radius_pending_split_triangle_fallback_enabled
+    && segment_builder_.radius_boundary_transition_shift_enabled)
+  {
+    std::vector<bool> target_face_inside = segment_builder_.kin_del.getFacesInside();
+    if (face_id < target_face_inside.size())
+    {
+      target_face_inside[face_id] = radius->target_inside;
+      radius_event_will_create_mixed_branch_split
+        = !segment_builder_.kin_del.checkForSplit(radius_vertices, target_face_inside).empty();
+    }
+  }
+  const bool pre_triangle_spans_pending_split
+    = segment_builder_.radius_pending_split_triangle_fallback_enabled
+    && segment_builder_.radius_boundary_transition_shift_enabled
+    && (triangleSpansFutureBranchesOfPendingSplit(segment_builder_.kin_del, face_id)
+      || radius_event_will_create_mixed_branch_split);
   if (segment_builder_.radius_boundary_transition_shift_enabled && boundary_edge_count == 2)
   {
     size_t out = 0;
@@ -171,8 +242,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       radius_pre_finish_shift_ctx.target_delaunay_edge = face_half_edges[internal_corner_i] / 2;
       radius_pre_finish_shift_ctx.roles_valid = true;
       trySetOwnedInteriorVoronoiVertexForRadiusShift(radius_pre_finish_shift_ctx, segment_builder_.kin_del, face_id);
-      if (radiusBoundaryTransitionShiftApplicable(
-            segment_builder_.radius_boundary_transition_shift_enabled, radius_pre_finish_shift_ctx))
+      if (!pre_triangle_spans_pending_split
+        && radiusBoundaryTransitionShiftApplicable(
+          segment_builder_.radius_boundary_transition_shift_enabled, radius_pre_finish_shift_ctx))
       {
         radius_finish_shift_arg = &radius_pre_finish_shift_ctx;
       }
@@ -185,7 +257,12 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
                        ? std::to_string(radius_pre_finish_shift_ctx.interior_voronoi_vertex_id.value())
                        : std::string("none"))
                   << " shift_applicable="
-                  << (radius_finish_shift_arg != nullptr ? "true" : "false") << " face=" << face_id << " t=" << t);
+                  << (radius_finish_shift_arg != nullptr ? "true" : "false")
+                  << " pending_split_mixed_future_branches="
+                  << (pre_triangle_spans_pending_split ? "true" : "false")
+                  << " radius_event_creates_split="
+                  << (radius_event_will_create_mixed_branch_split ? "true" : "false")
+                  << " face=" << face_id << " t=" << t);
     }
   }
 
@@ -704,8 +781,13 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       affected_face_he, segment_builder_.kin_del, radius_pre_face_id_, affected_face_id, t);
   }
 
-  const bool use_radius_boundary_shift = radiusBoundaryTransitionShiftApplicable(
-    segment_builder_.radius_boundary_transition_shift_enabled, radius_boundary_shift_ctx);
+  const bool triangle_spans_pending_split
+    = segment_builder_.radius_pending_split_triangle_fallback_enabled
+    && triangleSpansFutureBranchesOfPendingSplit(segment_builder_.kin_del, affected_face_id);
+  const bool use_radius_boundary_shift
+    = !triangle_spans_pending_split
+    && radiusBoundaryTransitionShiftApplicable(
+      segment_builder_.radius_boundary_transition_shift_enabled, radius_boundary_shift_ctx);
   const RadiusBoundaryTransitionShiftContext* radius_boundary_shift_arg
     = use_radius_boundary_shift ? &radius_boundary_shift_ctx : nullptr;
   // only_adjacent_segment filters strips by crossing topology; requires shift context for neighbor remap.
@@ -719,7 +801,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                      ? std::to_string(radius_boundary_shift_ctx.interior_voronoi_vertex_id.value())
                      : std::string("none"))
                 << " pre_boundary_edges=" << radius_pre_boundary_edge_count_
-                << " post_boundary_edges=" << post_boundary_edge_count << " face=" << affected_face_id << " t=" << t);
+                << " post_boundary_edges=" << post_boundary_edge_count
+                << " pending_split_mixed_future_branches="
+                << (triangle_spans_pending_split ? "true" : "false") << " face=" << affected_face_id << " t=" << t);
   }
 
   auto edge_endpoints = [&](size_t d_edge_id) -> std::array<int, 2>
@@ -1555,8 +1639,11 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         ids.push_back(segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, vert.position, strand_for_vertex,
           t, false, vert.voronoi_vertex_id, radius_vertex_meta, std::nullopt, runtime_info));
       }
+      const int fallback_material_id = triangle_spans_pending_split
+        ? SegmentBuilder::PendingSplitFallbackMeshletMaterialId
+        : SegmentBuilder::RegularMeshletMaterialId;
       segment_builder_.triangulateSimplePolygon(
-        mesh, ids, radius_triangulation_meta, SegmentBuilder::RegularMeshletMaterialId, orient_upwards);
+        mesh, ids, radius_triangulation_meta, fallback_material_id, orient_upwards);
       if (ids.size() < 3)
       {
         KINDS_WARNING("Radius: traced cell polygon has fewer than three vertices; no triangles emitted for cell "
