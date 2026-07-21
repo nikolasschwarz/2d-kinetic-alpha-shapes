@@ -4,6 +4,7 @@
 #include <functional>
 #include <glm/glm.hpp>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,8 @@ class VoronoiMesh
   std::vector<glm::dvec2> profile_plane_xy_;
   /// Kinetic time per vertex. This stays separate from stored vertex.z because transformed meshes use object-space z.
   std::vector<double> vertex_kinetic_times_;
+  /// Per-vertex semantic UV at build time (disk coords + height). Separate from @c uvs, which is only the corner pool.
+  std::vector<glm::dvec3> vertex_semantic_uvs_;
 
   NormalMode normal_mode;
 
@@ -188,6 +191,8 @@ class VoronoiMesh
   glm::dvec2 triangulationPlaneXY(size_t vertex_index) const;
   void setVertexKineticTime(size_t vertex_index, double t);
   double vertexKineticTime(size_t vertex_index) const;
+  void setVertexSemanticUv(size_t vertex_index, const glm::dvec3& uv);
+  std::optional<glm::dvec3> vertexSemanticUv(size_t vertex_index) const;
   void setVertexMetadata(size_t vertex_index, const std::string& metadata);
 
   /// Empty string if unset; otherwise a stable fragment for filenames, e.g. `_t0.000000` or `_t3.500000`.

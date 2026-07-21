@@ -164,6 +164,33 @@ double VoronoiMesh::vertexKineticTime(size_t vertex_index) const
   return vertices[vertex_index].z;
 }
 
+void VoronoiMesh::setVertexSemanticUv(size_t vertex_index, const glm::dvec3& uv)
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("setVertexSemanticUv: vertex index out of range.");
+  }
+  if (vertex_semantic_uvs_.size() < vertices.size())
+  {
+    vertex_semantic_uvs_.resize(vertices.size(), glm::dvec3(std::numeric_limits<double>::quiet_NaN()));
+  }
+  vertex_semantic_uvs_[vertex_index] = uv;
+}
+
+std::optional<glm::dvec3> VoronoiMesh::vertexSemanticUv(size_t vertex_index) const
+{
+  if (vertex_index >= vertex_semantic_uvs_.size())
+  {
+    return std::nullopt;
+  }
+  const glm::dvec3& uv = vertex_semantic_uvs_[vertex_index];
+  if (!std::isfinite(uv.x) || !std::isfinite(uv.y) || !std::isfinite(uv.z))
+  {
+    return std::nullopt;
+  }
+  return uv;
+}
+
 void VoronoiMesh::setVertexMetadata(size_t vertex_index, const std::string& metadata)
 {
   if (vertex_index >= vertices.size())
@@ -345,6 +372,15 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
     vertex_kinetic_times_.insert(
       vertex_kinetic_times_.end(), other.vertices.size(), std::numeric_limits<double>::quiet_NaN());
   }
+  if (other.vertex_semantic_uvs_.size() == other.vertices.size())
+  {
+    vertex_semantic_uvs_.insert(vertex_semantic_uvs_.end(), other.vertex_semantic_uvs_.begin(), other.vertex_semantic_uvs_.end());
+  }
+  else
+  {
+    vertex_semantic_uvs_.insert(
+      vertex_semantic_uvs_.end(), other.vertices.size(), glm::dvec3(std::numeric_limits<double>::quiet_NaN()));
+  }
 
   size_t old_vertex_indices_size = triangles.size();
   const size_t old_triangle_count = old_vertex_indices_size / 3;
@@ -501,6 +537,8 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   new_vertex_colors.reserve(vertices.size());
   std::vector<double> new_vertex_kinetic_times;
   new_vertex_kinetic_times.reserve(vertices.size());
+  std::vector<glm::dvec3> new_vertex_semantic_uvs;
+  new_vertex_semantic_uvs.reserve(vertices.size());
 
   std::vector<size_t> remap(vertices.size(), size_t(-1));
 
@@ -553,6 +591,14 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
       {
         new_vertex_kinetic_times.push_back(std::numeric_limits<double>::quiet_NaN());
       }
+      if (i < vertex_semantic_uvs_.size())
+      {
+        new_vertex_semantic_uvs.push_back(vertex_semantic_uvs_[i]);
+      }
+      else
+      {
+        new_vertex_semantic_uvs.push_back(glm::dvec3(std::numeric_limits<double>::quiet_NaN()));
+      }
       remap[i] = newIndex;
     }
     else
@@ -572,6 +618,7 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   vertex_metadata.swap(new_vertex_metadata);
   vertex_colors.swap(new_vertex_colors);
   vertex_kinetic_times_.swap(new_vertex_kinetic_times);
+  vertex_semantic_uvs_.swap(new_vertex_semantic_uvs);
   if (!store_metadata_)
   {
     vertex_metadata.clear();
@@ -843,6 +890,8 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
   new_vertex_colors.reserve(new_count);
   std::vector<double> new_vertex_kinetic_times;
   new_vertex_kinetic_times.reserve(new_count);
+  std::vector<glm::dvec3> new_vertex_semantic_uvs;
+  new_vertex_semantic_uvs.reserve(new_count);
 
   for (size_t i = 0; i < n_vertices; ++i)
   {
@@ -873,12 +922,21 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
       {
         new_vertex_kinetic_times.push_back(std::numeric_limits<double>::quiet_NaN());
       }
+      if (i < vertex_semantic_uvs_.size())
+      {
+        new_vertex_semantic_uvs.push_back(vertex_semantic_uvs_[i]);
+      }
+      else
+      {
+        new_vertex_semantic_uvs.push_back(glm::dvec3(std::numeric_limits<double>::quiet_NaN()));
+      }
     }
   }
   vertices.swap(new_vertices);
   vertex_metadata.swap(new_vertex_metadata);
   vertex_colors.swap(new_vertex_colors);
   vertex_kinetic_times_.swap(new_vertex_kinetic_times);
+  vertex_semantic_uvs_.swap(new_vertex_semantic_uvs);
   if (!store_metadata_)
   {
     vertex_metadata.clear();

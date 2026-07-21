@@ -648,6 +648,10 @@ namespace
 {
 std::optional<glm::dvec3> meshVertexUv(const VoronoiMesh& mesh, size_t vertex_index)
 {
+  if (const std::optional<glm::dvec3> semantic_uv = mesh.vertexSemanticUv(vertex_index); semantic_uv.has_value())
+  {
+    return semantic_uv;
+  }
   const std::vector<glm::dvec3>& uvs = mesh.getUVs();
   if (vertex_index < uvs.size())
   {
@@ -687,12 +691,7 @@ void warnIfTriangleKineticTimesNotInUnitSection(
 
 void setMeshVertexUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec3& uv)
 {
-  std::vector<glm::dvec3>& uvs = mesh.getUVs();
-  if (vertex_index >= uvs.size())
-  {
-    uvs.resize(vertex_index + 1, glm::dvec3(0.0));
-  }
-  uvs[vertex_index] = uv;
+  mesh.setVertexSemanticUv(vertex_index, uv);
 
   for (size_t triangle_corner : mesh.findTriangleCorners(vertex_index))
   {
@@ -4781,10 +4780,13 @@ size_t kinDS::SegmentBuilder::addMeshletTriangle(
     mesh.setMaterialNames(MeshletExportMaterialNames);
   }
   // warnIfTriangleKineticTimesNotInUnitSection(u, v, w, mesh.getVertices(), "meshlet", material_id);
-  const auto& vertex_uvs = mesh.getUVs();
   const auto vertex_uv = [&](size_t vertex_index) -> glm::dvec3
   {
-    return vertex_index < vertex_uvs.size() ? vertex_uvs[vertex_index] : glm::dvec3(0.0);
+    if (const std::optional<glm::dvec3> semantic_uv = mesh.vertexSemanticUv(vertex_index); semantic_uv.has_value())
+    {
+      return semantic_uv.value();
+    }
+    return glm::dvec3(0.0);
   };
   const size_t uv_index_u = mesh.addUV(vertex_uv(u));
   const size_t uv_index_v = mesh.addUV(vertex_uv(v));
@@ -5499,7 +5501,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   else if (is_flexible_placeholder)
   {
     // Placeholder UV is filled when the flex vertex is interpolated along its anchor edge.
-    mesh.addUV(glm::dvec3(0.0, 0.0, t * uv_height_factor));
+    mesh.setVertexSemanticUv(index, glm::dvec3(0.0, 0.0, t * uv_height_factor));
   }
   else
   {
@@ -5507,7 +5509,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     {
       delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
     }
-    mesh.addUV(interiorMeshUv(boundary_polygon, centroid, delaunay_xy, t));
+    mesh.setVertexSemanticUv(index, interiorMeshUv(boundary_polygon, centroid, delaunay_xy, t));
   }
   return index;
 }
