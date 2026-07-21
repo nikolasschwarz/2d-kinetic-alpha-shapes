@@ -1692,8 +1692,349 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
   }
 
+  struct RadiusNoShiftSubdivisionEndpoint
+  {
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> crossing {};
+    std::optional<size_t> voronoi_vertex_id {};
+  };
+  struct RadiusNoShiftStripSubdivision
+  {
+    size_t voronoi_edge_id = static_cast<size_t>(-1);
+    std::array<RadiusNoShiftSubdivisionEndpoint, 2> affected_pair {};
+    std::vector<RadiusNoShiftSubdivisionEndpoint> endpoints_in_voronoi_order {};
+  };
+  std::unordered_map<size_t, RadiusNoShiftStripSubdivision> radius_no_shift_strip_subdivisions;
+
+  if (!use_radius_boundary_shift)
+  {
+    const auto endpoint_string = [](const RadiusNoShiftSubdivisionEndpoint& endpoint)
+    {
+      std::ostringstream out;
+      if (endpoint.crossing.has_value())
+      {
+        const auto ref = endpoint.crossing.value();
+        out << "crossing(de=" << ref->delaunay_edge_id << ",ve=" << ref->voronoi_edge_id
+            << ",dparam=" << ref->delaunay_edge_param << ")";
+      }
+      else if (endpoint.voronoi_vertex_id.has_value())
+      {
+        out << "voronoi_vertex(" << endpoint.voronoi_vertex_id.value() << ")";
+      }
+      else
+      {
+        out << "invalid";
+      }
+      return out.str();
+    };
+
+    for (size_t voronoi_edge_id : encountered_voronoi_edges_all)
+    {
+      const size_t he_even = 2 * voronoi_edge_id;
+      const size_t he_odd = he_even + 1;
+      if (he_odd >= graph.halfEdgeSlotCount() || graph.isInfinite(he_even))
+      {
+        continue;
+      }
+
+      const size_t left_voronoi_vertex_id = graph.halfEdge(he_even).face;
+      const size_t right_voronoi_vertex_id = graph.halfEdge(he_odd).face;
+      if (!crossing_data.isVoronoiVertexRegistered(left_voronoi_vertex_id)
+        || !crossing_data.isVoronoiVertexRegistered(right_voronoi_vertex_id))
+      {
+        continue;
+      }
+
+      const size_t left_containing_face_id = crossing_data.getContainingTriId(left_voronoi_vertex_id);
+      const std::vector<SegmentBuilder::DirectedVoronoiEdgeCrossing> directed_crossings
+        = segment_builder_.orientCrossingsAlongVoronoiEdge(
+          voronoi_edge_id, left_containing_face_id, false, he_even);
+      const auto& stored_crossings = crossing_data.voronoi_edge_intersections[voronoi_edge_id];
+      if (directed_crossings.size() != stored_crossings.size())
+      {
+        KINDS_WARNING("Radius no-shift subdivision: could not orient every crossing on voronoi_edge="
+          << voronoi_edge_id << " at t=" << t << " (oriented=" << directed_crossings.size()
+          << ", stored=" << stored_crossings.size() << ").");
+        continue;
+      }
+
+      std::vector<RadiusNoShiftSubdivisionEndpoint> ordered_nodes;
+      ordered_nodes.reserve(directed_crossings.size() + 2);
+      ordered_nodes.push_back({ std::nullopt, left_voronoi_vertex_id });
+
+      std::vector<size_t> interval_face_ids;
+      interval_face_ids.reserve(directed_crossings.size() + 1);
+      interval_face_ids.push_back(left_containing_face_id);
+      for (const SegmentBuilder::DirectedVoronoiEdgeCrossing& directed : directed_crossings)
+      {
+        ordered_nodes.push_back({ directed.ref, std::nullopt });
+        interval_face_ids.push_back(graph.halfEdge(directed.crossed_half_edge_id ^ 1).face);
+      }
+      ordered_nodes.push_back({ std::nullopt, right_voronoi_vertex_id });
+
+      std::optional<size_t> affected_interval_index;
+      for (size_t interval_index = 0; interval_index < interval_face_ids.size(); ++interval_index)
+      {
+        if (interval_face_ids[interval_index] != affected_face_id)
+        {
+          continue;
+        }
+        if (affected_interval_index.has_value())
+        {
+          KINDS_WARNING("Radius no-shift subdivision: affected face " << affected_face_id
+            << " occurs more than once along voronoi_edge=" << voronoi_edge_id << " at t=" << t << ".");
+          affected_interval_index.reset();
+          break;
+        }
+        affected_interval_index = interval_index;
+      }
+      if (!affected_interval_index.has_value())
+      {
+        continue;
+      }
+
+      const size_t affected_interval = affected_interval_index.value();
+      RadiusNoShiftStripSubdivision subdivision;
+      subdivision.voronoi_edge_id = voronoi_edge_id;
+      subdivision.affected_pair = { ordered_nodes[affected_interval], ordered_nodes[affected_interval + 1] };
+
+      // Expand left only while the immediately neighboring interval is inside. The added endpoint is the crossing
+      // from the last inside interval back to an outside interval (or the Voronoi endpoint if no crossing remains).
+      size_t expanded_left_node = affected_interval;
+      while (expanded_left_node > 0
+        && segment_builder_.kin_del.getFaceInside(interval_face_ids[expanded_left_node - 1]))
+      {
+        --expanded_left_node;
+      }
+      if (expanded_left_node < affected_interval)
+      {
+        subdivision.endpoints_in_voronoi_order.push_back(ordered_nodes[expanded_left_node]);
+      }
+
+      subdivision.endpoints_in_voronoi_order.push_back(subdivision.affected_pair[0]);
+      subdivision.endpoints_in_voronoi_order.push_back(subdivision.affected_pair[1]);
+
+      // Symmetric expansion towards the odd Voronoi endpoint.
+      size_t expanded_right_node = affected_interval + 1;
+      while (expanded_right_node < interval_face_ids.size()
+        && segment_builder_.kin_del.getFaceInside(interval_face_ids[expanded_right_node]))
+      {
+        ++expanded_right_node;
+      }
+      if (expanded_right_node > affected_interval + 1)
+      {
+        subdivision.endpoints_in_voronoi_order.push_back(ordered_nodes[expanded_right_node]);
+      }
+
+      KINDS_DEBUG("Radius no-shift subdivision: voronoi_edge="
+        << voronoi_edge_id << " face=" << affected_face_id << " t=" << t << " endpoint_count="
+        << subdivision.endpoints_in_voronoi_order.size() << " affected_pair=["
+        << endpoint_string(subdivision.affected_pair[0]) << ", " << endpoint_string(subdivision.affected_pair[1])
+        << "] subdivision=["
+        << [&]()
+        {
+          std::ostringstream list;
+          for (size_t i = 0; i < subdivision.endpoints_in_voronoi_order.size(); ++i)
+          {
+            if (i != 0)
+            {
+              list << ", ";
+            }
+            list << endpoint_string(subdivision.endpoints_in_voronoi_order[i]);
+          }
+          return list.str();
+        }()
+        << "]");
+      radius_no_shift_strip_subdivisions.emplace(voronoi_edge_id, std::move(subdivision));
+    }
+  }
+
   std::vector<SegmentBuilder::MeshingData> radius_operated_finished_strips;
   std::vector<SegmentBuilder::MeshingData> radius_operated_started_strips;
+
+  const auto finish_no_shift_inside_to_outside_subdivision
+    = [&](size_t voronoi_edge_id, const RadiusNoShiftStripSubdivision& subdivision,
+        const std::vector<BoundaryPoint>& boundary_polygon)
+    -> std::optional<std::vector<SegmentBuilder::MeshingData>>
+  {
+    const size_t he_even = 2 * voronoi_edge_id;
+    const size_t he_odd = he_even + 1;
+    if (he_odd >= graph.halfEdgeSlotCount()
+      || he_even >= segment_builder_.half_edge_index_to_segment_mesh_pair_index.size())
+    {
+      return std::nullopt;
+    }
+    const size_t pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[he_even];
+    if (pair_index == static_cast<size_t>(-1) || pair_index >= segment_builder_.meshes.size()
+      || pair_index >= segment_builder_.segment_mesh_pair_last_left_and_right_vertex.size())
+    {
+      return std::nullopt;
+    }
+
+    auto& strips = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[pair_index];
+    const size_t left_voronoi_vertex_id = graph.halfEdge(he_even).face;
+    const size_t right_voronoi_vertex_id = graph.halfEdge(he_odd).face;
+    const auto endpoint_matches_side = [&](const RadiusNoShiftSubdivisionEndpoint& endpoint,
+                                         const SegmentBuilder::MeshingData& strip, bool start_side)
+    {
+      const auto& strip_crossing = start_side ? strip.start_crossing : strip.end_crossing;
+      const int strip_half_edge = start_side ? strip.start_half_edge_id : strip.end_half_edge_id;
+      if (endpoint.crossing.has_value())
+      {
+        return strip_crossing.has_value() && strip_crossing.value() == endpoint.crossing.value();
+      }
+      if (!endpoint.voronoi_vertex_id.has_value() || strip_crossing.has_value() || strip_half_edge >= 0)
+      {
+        return false;
+      }
+      return endpoint.voronoi_vertex_id.value()
+        == (start_side ? left_voronoi_vertex_id : right_voronoi_vertex_id);
+    };
+
+    SegmentBuilder::MeshingData* matched_strip = nullptr;
+    SegmentBuilder::MeshingData* arbitrary_strip = nullptr;
+    size_t exact_match_count = 0;
+    for (SegmentBuilder::MeshingData& strip : strips)
+    {
+      if (strip.mesh_start_vertex_id < 0 || strip.mesh_end_vertex_id < 0)
+      {
+        continue;
+      }
+      segment_builder_.refreshMeshingDataCrossingRefs(strip, voronoi_edge_id);
+      if (arbitrary_strip == nullptr)
+      {
+        arbitrary_strip = &strip;
+      }
+      if (!endpoint_matches_side(subdivision.endpoints_in_voronoi_order.front(), strip, true)
+        || !endpoint_matches_side(subdivision.endpoints_in_voronoi_order.back(), strip, false))
+      {
+        continue;
+      }
+      ++exact_match_count;
+      if (matched_strip == nullptr)
+      {
+        matched_strip = &strip;
+      }
+    }
+    if (exact_match_count > 1)
+    {
+      KINDS_WARNING("Radius no-shift subdivision: " << exact_match_count
+        << " active strips match voronoi_edge=" << voronoi_edge_id << " at t=" << t
+        << "; arbitrarily using the first match.");
+    }
+    if (matched_strip == nullptr)
+    {
+      matched_strip = arbitrary_strip;
+      if (matched_strip != nullptr)
+      {
+        KINDS_WARNING("Radius no-shift subdivision: no active strip matches the outer endpoints on voronoi_edge="
+          << voronoi_edge_id << " at t=" << t << "; arbitrarily using the first active strip.");
+      }
+      else
+      {
+        KINDS_WARNING("Radius no-shift subdivision: no active strip is available on voronoi_edge="
+          << voronoi_edge_id << " at t=" << t << "; skipping subdivision finish without using legacy finish.");
+        return std::vector<SegmentBuilder::MeshingData> {};
+      }
+    }
+
+    VoronoiMesh& mesh = segment_builder_.meshes[pair_index];
+    const int even_origin = graph.halfEdge(he_even).origin;
+    const int odd_origin = graph.halfEdge(he_odd).origin;
+    const int strand_origin = even_origin >= 0 ? even_origin : odd_origin;
+    if (strand_origin < 0)
+    {
+      return std::nullopt;
+    }
+    const size_t strand_id = static_cast<size_t>(strand_origin);
+    const glm::dvec2 centroid = polygonCentroid(boundary_polygon);
+    std::vector<size_t> new_chain;
+    new_chain.reserve(subdivision.endpoints_in_voronoi_order.size());
+
+    for (size_t endpoint_index = 0; endpoint_index < subdivision.endpoints_in_voronoi_order.size(); ++endpoint_index)
+    {
+      const RadiusNoShiftSubdivisionEndpoint& endpoint
+        = subdivision.endpoints_in_voronoi_order[endpoint_index];
+      glm::dvec3 position {};
+      std::optional<size_t> voronoi_vertex_id;
+      SegmentBuilder::MeshletVertexRuntimeInfo runtime_info {};
+      SegmentBuilder::MetadataBuilder metadata_builder;
+      metadata_builder.addString("event_type", "radius_event")
+        .addString("mesh_type", "regular")
+        .addString("segment_action", "segment_completed")
+        .addString("op", "radius_no_shift_strip_subdivision")
+        .addSize("subdivision_endpoint_index", endpoint_index)
+        .addSize("subdivision_endpoint_count", subdivision.endpoints_in_voronoi_order.size());
+
+      if (endpoint.crossing.has_value())
+      {
+        const auto ref = endpoint.crossing.value();
+        position = segment_builder_.getCrossingCoordsInMeshSpace(ref, t);
+        runtime_info.position_intersection = ref;
+        runtime_info.conceptual_intersection = ref;
+        metadata_builder.addString("source", "intersection")
+          .addSize("delaunay_edge_id", ref->delaunay_edge_id)
+          .addSize("voronoi_edge_id", ref->voronoi_edge_id)
+          .addDouble("stored_d_param", ref->delaunay_edge_param);
+      }
+      else if (endpoint.voronoi_vertex_id.has_value())
+      {
+        voronoi_vertex_id = endpoint.voronoi_vertex_id;
+        const size_t endpoint_he
+          = endpoint.voronoi_vertex_id.value() == left_voronoi_vertex_id ? he_even : he_odd;
+        position = segment_builder_.computeVoronoiVertex(endpoint_he, t);
+        metadata_builder.addString("source", "Voronoi vertex")
+          .addSize("voronoi_vertex_id", endpoint.voronoi_vertex_id.value());
+      }
+      else
+      {
+        return std::nullopt;
+      }
+
+      const size_t new_vertex = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, position, strand_id,
+        t, false, voronoi_vertex_id, metadata_builder.build(), std::nullopt, runtime_info);
+      new_chain.push_back(new_vertex);
+    }
+
+    if (new_chain.size() < 2)
+    {
+      return std::nullopt;
+    }
+    const size_t old_start = static_cast<size_t>(matched_strip->mesh_start_vertex_id);
+    const size_t old_end = static_cast<size_t>(matched_strip->mesh_end_vertex_id);
+    const std::string face_metadata
+      = segment_builder_.composeRegularStripFaceMetadata(t, voronoi_edge_id, he_even, even_origin, odd_origin,
+        SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentCompleted,
+        "finish_radius_no_shift_subdivision");
+
+    if (old_start == old_end)
+    {
+      for (size_t i = 0; i + 1 < new_chain.size(); ++i)
+      {
+        segment_builder_.addMeshletTriangle(mesh, new_chain[i], old_start, new_chain[i + 1], face_metadata);
+      }
+    }
+    else if (mesh.vertexKineticTime(old_start) < mesh.vertexKineticTime(old_end))
+    {
+      segment_builder_.addMeshletTriangle(mesh, old_start, old_end, new_chain.front(), face_metadata);
+      for (size_t i = 0; i + 1 < new_chain.size(); ++i)
+      {
+        segment_builder_.addMeshletTriangle(mesh, new_chain[i], old_end, new_chain[i + 1], face_metadata);
+      }
+    }
+    else
+    {
+      segment_builder_.addMeshletTriangle(mesh, old_start, old_end, new_chain.back(), face_metadata);
+      for (size_t i = new_chain.size() - 1; i > 0; --i)
+      {
+        segment_builder_.addMeshletTriangle(mesh, old_start, new_chain[i], new_chain[i - 1], face_metadata);
+      }
+    }
+
+    KINDS_DEBUG("Radius no-shift subdivision: stitched " << new_chain.size()
+      << " event-time endpoints to previous strip vertices (" << old_start << "," << old_end
+      << ") on voronoi_edge=" << voronoi_edge_id << " at t=" << t << ".");
+    return std::vector<SegmentBuilder::MeshingData> { *matched_strip };
+  };
 
   if (segment_builder_.kin_del.computeBoundaryOnTheFly())
   {
@@ -1717,9 +2058,22 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
       segment_builder_.updateBoundary(t, he_visited, component_id);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
-      std::vector<SegmentBuilder::MeshingData> finished_strips = segment_builder_.finishMesh(he_even, t, boundary_polygon,
-        SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentCompleted,
-        radius_boundary_shift_arg, radius_only_adjacent_strips);
+      std::optional<std::vector<SegmentBuilder::MeshingData>> subdivided_strips;
+      if (!new_inside_state && !use_radius_boundary_shift)
+      {
+        const auto subdivision_it = radius_no_shift_strip_subdivisions.find(voronoi_edge_id);
+        if (subdivision_it != radius_no_shift_strip_subdivisions.end())
+        {
+          subdivided_strips
+            = finish_no_shift_inside_to_outside_subdivision(voronoi_edge_id, subdivision_it->second, boundary_polygon);
+        }
+      }
+      std::vector<SegmentBuilder::MeshingData> finished_strips
+        = subdivided_strips.has_value()
+        ? std::move(subdivided_strips.value())
+        : segment_builder_.finishMesh(he_even, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Radius,
+            SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_boundary_shift_arg,
+            radius_only_adjacent_strips);
       radius_operated_finished_strips.insert(radius_operated_finished_strips.end(), finished_strips.begin(), finished_strips.end());
     }
   }
