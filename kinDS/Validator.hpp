@@ -66,5 +66,13 @@ class Validator
   static bool validateAndReportMeshVertexSources(std::vector<VoronoiMesh>& meshlets, const char* scope,
     const std::vector<std::string>* meshlet_labels = nullptr, double position_tolerance = 1e-5,
     bool mark_discrepancies = true);
+
+  /// Check green (interior) triangle corners only: uv.z == vertex kinetic time * @p uv_height_factor.
+  static bool validateAndReportInteriorMeshletUvHeights(const std::vector<VoronoiMesh*>& meshlets, const char* scope,
+    double uv_height_factor, const std::vector<std::string>* meshlet_labels = nullptr, double tolerance = 1e-9);
+
+  /// Check bark/boundary triangle corners only: uv.y == vertex kinetic time * @p uv_height_factor.
+  static bool validateAndReportBarkMeshletUvHeights(const std::vector<VoronoiMesh*>& meshlets, const char* scope,
+    double uv_height_factor, const std::vector<std::string>* meshlet_labels = nullptr, double tolerance = 1e-9);
 };
 } // namespace kinDS

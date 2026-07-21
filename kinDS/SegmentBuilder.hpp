@@ -364,6 +364,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   // UVs must be adjusted to avoid seams, these are the raw UVs before adjustment
   std::vector<glm::dvec2> boundary_mesh_raw_uvs;
+  /// Parallel to @ref intersection_meshes: unscaled polar raw UV per boundary-interval vertex (angle/2pi, t).
+  std::vector<std::vector<glm::dvec2>> intersection_mesh_raw_uvs;
 
   // Map half-edges to a vertex index in the boundary mesh if a flip created a new boundary edge
   std::vector<int> half_edge_to_boundary_vertex_index;
@@ -624,8 +626,23 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @param v second vertex index
    * @param w third vertex index
    */
-  size_t addBoundaryTriangle(size_t u, size_t v, size_t w, const std::string& metadata = "{}");
+  size_t addBoundaryTriangle(
+    size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 0);
+  /// Per-corner bark UV for boundary-interval meshlets (same pipeline as @ref addBoundaryTriangle).
+  size_t addBoundaryIntervalTriangle(
+    VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 1);
+  std::vector<glm::dvec2>& boundaryIntervalRawUvs(VoronoiMesh& mesh);
+  const std::vector<glm::dvec2>& boundaryIntervalRawUvs(const VoronoiMesh& mesh) const;
+  std::optional<glm::dvec2> boundaryIntervalRawUvAtVertex(const VoronoiMesh& mesh, size_t vertex_index) const;
+  void setBoundaryIntervalRawUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec2& raw_uv);
+  void refreshBoundaryIntervalTrianglesIncidentToVertex(VoronoiMesh& mesh, size_t vertex_index);
 
+  /// Unscaled boundary UV in Delaunay space: normalized polar angle and kinetic height.
+  static glm::dvec2 boundaryRawUv(const glm::dvec2& delaunay_xy, const glm::dvec2& centroid, double t);
+  /// Interior UV from Delaunay space: radial distance normalized by the component boundary, converted back to Cartesian
+  /// disk coordinates, plus kinetic height.
+  glm::dvec3 interiorMeshUv(const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid,
+    const glm::dvec2& delaunay_xy, double t) const;
   size_t addBoundaryVertex(
     glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift);
 
@@ -689,6 +706,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   void applyIntersectionStripUniformClosureVertex(VoronoiMesh& mesh, MeshingData& seg, size_t closure_vertex_index);
   void resolveRemainingFlexibleVertices(VoronoiMesh& mesh, MeshingData& seg, const char* context);
+  bool interpolateFlexibleVerticesAlongEdge(VoronoiMesh& mesh, std::vector<int>& flex, size_t anchor_old_vertex,
+    size_t anchor_new_vertex);
+  void snapFlexibleVerticesToAnchor(VoronoiMesh& mesh, const std::vector<int>& flex, size_t anchor_vertex);
   void resolveAllIntersectionFlexibleVertices(const char* context);
 
   /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p

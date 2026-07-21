@@ -16,7 +16,6 @@
         "--export-mode",
         "combined",
         "--validate",
-        "--section-shading"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

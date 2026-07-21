@@ -362,7 +362,9 @@ class ObjExporter
         }
         if (has_uv)
         {
-          file << std::to_string(uv_indices[i + j] + 1);
+          // writeMesh emits one vt record per triangle corner, after applying material-specific scaling. Therefore
+          // OBJ faces must reference that emitted corner stream, not the mesh's internal shared UV-pool index.
+          file << std::to_string(i + j + 1);
         }
         if (has_normal)
         {
@@ -512,6 +514,7 @@ class ObjExporter
     bool include_metadata = false, bool include_vertex_colors = false, bool alternate_section_shading = false)
   {
     mesh.validateNormalCount("ObjExporter::writeMesh(" + obj_path.string() + ")");
+    mesh.validateUVLayout("ObjExporter::writeMesh(" + obj_path.string() + ")");
 
     std::ofstream file(obj_path);
     if (!file.is_open())
@@ -574,7 +577,8 @@ class ObjExporter
 
       for (size_t j = 0; j < 3; j++)
       {
-        auto uv = mesh.getUV(3 * i + j);
+        const size_t corner_index = 3 * i + j;
+        auto uv = mesh.hasValidUVIndex(corner_index) ? mesh.getUV(corner_index) : glm::dvec3(0.0);
 
         if (material != -1)
         {

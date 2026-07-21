@@ -275,7 +275,7 @@ void interpolateProperties(
     old_tri[i] = original_mesh.getTriangles()[3 * original_face_id + i];
     old_normals[i] = original_mesh.getNormal(3 * original_face_id + i);
     // KINDS_DEBUG("Old tri id " << i << ": " << old_tri[i]);
-    if (original_mesh.getUVIndices()[old_tri[i]] >= original_mesh.getUVs().size())
+    if (!original_mesh.hasValidUVIndex(3 * original_face_id + i))
     {
       interpolate_uv = false;
     }

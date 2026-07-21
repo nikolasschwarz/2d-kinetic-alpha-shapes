@@ -362,7 +362,10 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   uv_indices.insert(uv_indices.end(), other.uv_indices.begin(), other.uv_indices.end());
 
   std::transform(uv_indices.begin() + old_uv_indices_size, uv_indices.end(), uv_indices.begin() + old_uv_indices_size,
-    [&](size_t index) { return index + old_uvs_size; });
+    [&](size_t index)
+    {
+      return index == std::numeric_limits<size_t>::max() ? index : index + old_uvs_size;
+    });
 
   size_t old_group_count = group_offsets.size();
   group_offsets.insert(group_offsets.end(), other.group_offsets.begin(), other.group_offsets.end());
@@ -429,6 +432,7 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   }
 
   validateNormalCount("combined mesh after combine");
+  validateUVLayout("combined mesh after combine");
   return *this;
 }
 
@@ -557,7 +561,8 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
     }
   }
 
-  // Remap triangle indices
+  // Remap triangle vertex indices only. uv_indices are per triangle corner and must keep pointing at their own UV-pool
+  // entries so merged shared vertices can retain distinct corner UVs (e.g. interior vs bark on the same position).
   for (size_t& idx : triangles)
   {
     idx = remap[idx];
@@ -1040,15 +1045,32 @@ void kinDS::VoronoiMesh::setNormal(const glm::dvec3& normal, size_t triangle_ver
 
 void kinDS::VoronoiMesh::setUV(const glm::dvec3& uv, size_t triangle_vertex_index)
 {
-  size_t uv_index = uv_indices[triangle_vertex_index];
-  if (uv_index >= uvs.size())
+  if (triangle_vertex_index >= uv_indices.size())
   {
-    uv_index = uvs.size();
-    uvs.emplace_back(uv);
-    uv_indices[triangle_vertex_index] = uv_index;
-    return;
+    throw std::out_of_range("Triangle corner index out of range when setting UV.");
   }
-  uvs[uv_index] = uv;
+  // UV references belong to corners. Always detach the edited corner so seam correction or hole patching cannot
+  // accidentally mutate another corner that happens to share the same UV-pool entry.
+  uv_indices[triangle_vertex_index] = addUV(uv);
+}
+
+void kinDS::VoronoiMesh::validateUVLayout(const std::string& context) const
+{
+  const std::string prefix = context.empty() ? std::string {} : context + ": ";
+  if (uv_indices.size() != triangles.size())
+  {
+    throw std::runtime_error(prefix + "UV-index count " + std::to_string(uv_indices.size())
+      + " does not match triangle-corner count " + std::to_string(triangles.size()) + ".");
+  }
+  for (size_t corner = 0; corner < uv_indices.size(); ++corner)
+  {
+    const size_t uv_index = uv_indices[corner];
+    if (uv_index != std::numeric_limits<size_t>::max() && uv_index >= uvs.size())
+    {
+      throw std::runtime_error(prefix + "UV index " + std::to_string(uv_index) + " at triangle corner "
+        + std::to_string(corner) + " is out of range for " + std::to_string(uvs.size()) + " UV coordinates.");
+    }
+  }
 }
 
 NormalMode kinDS::VoronoiMesh::getNormalMode() const { return normal_mode; }

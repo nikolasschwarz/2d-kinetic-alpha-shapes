@@ -331,7 +331,7 @@ void TreeMesher::fixFailedSegments(const MeshIntersection& boundary_intersector)
           size_t new_t2_index = neighbor_mesh.addUV(t2);
 
           // invert order to maintain consistent orientation
-          neighbor_mesh.addTriangle(new_v1_index, new_v0_index, new_v2_index, new_t0_index, new_t1_index, new_t2_index);
+          neighbor_mesh.addTriangle(new_v1_index, new_v0_index, new_v2_index, new_t1_index, new_t0_index, new_t2_index);
           meshing_neighbor_indices[neighbor_mesh_index].push_back(mesh_index);
         }
       }

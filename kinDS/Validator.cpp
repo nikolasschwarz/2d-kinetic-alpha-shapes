@@ -6,6 +6,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <functional>
 #include <glm/gtx/norm.hpp>
 #include <iomanip>
 #include <iostream>
@@ -649,4 +650,141 @@ bool Validator::validateAndReportMeshVertexSources(std::vector<VoronoiMesh>& mes
   }
   return validateAndReportMeshVertexSources(
     meshlet_ptrs, scope, meshlet_labels, position_tolerance, mark_discrepancies);
+}
+
+bool triangleUsesInteriorHeightUvInZ(const VoronoiMesh& mesh, size_t triangle_index)
+{
+  const auto& material_ids = mesh.getMaterialIDs();
+  const auto& material_names = mesh.getMaterialNames();
+  if (triangle_index >= material_ids.size())
+  {
+    return true;
+  }
+  const int material_id = material_ids[triangle_index];
+  if (material_id < 0 || static_cast<size_t>(material_id) >= material_names.size())
+  {
+    return true;
+  }
+  return material_names[static_cast<size_t>(material_id)] == "green";
+}
+
+bool triangleUsesBarkHeightUvInY(const VoronoiMesh& mesh, size_t triangle_index)
+{
+  const auto& material_ids = mesh.getMaterialIDs();
+  const auto& material_names = mesh.getMaterialNames();
+  if (triangle_index >= material_ids.size())
+  {
+    return false;
+  }
+  const int material_id = material_ids[triangle_index];
+  if (material_id < 0 || static_cast<size_t>(material_id) >= material_names.size())
+  {
+    return false;
+  }
+  const std::string& material_name = material_names[static_cast<size_t>(material_id)];
+  return material_name == "brown" || material_name == "bark";
+}
+
+bool validateMeshletUvHeights(const std::vector<VoronoiMesh*>& meshlets, const char* scope, const char* mesh_kind,
+  double uv_height_factor, const std::vector<std::string>* meshlet_labels, double tolerance,
+  const std::function<bool(const VoronoiMesh&, size_t)>& include_triangle, size_t height_component_index,
+  const char* height_component_name)
+{
+  size_t checked_corner_count = 0;
+  size_t skipped_corner_count = 0;
+  size_t mismatch_count = 0;
+  constexpr size_t max_detail_count = 100;
+
+  writeValidationLog("INFO", std::string("=== ") + mesh_kind + " meshlet UV-height validation: " + scope + " ===");
+  for (size_t meshlet_index = 0; meshlet_index < meshlets.size(); ++meshlet_index)
+  {
+    const VoronoiMesh* mesh = meshlets[meshlet_index];
+    if (mesh == nullptr)
+    {
+      ++mismatch_count;
+      writeValidationLog("WARNING", std::string("null ") + mesh_kind + " meshlet pointer at index "
+          + std::to_string(meshlet_index));
+      continue;
+    }
+
+    const std::string label
+      = meshlet_labels != nullptr && meshlet_index < meshlet_labels->size()
+      ? (*meshlet_labels)[meshlet_index]
+      : "mesh_" + std::to_string(meshlet_index);
+    const auto& triangles = mesh->getTriangles();
+    const auto& uv_indices = mesh->getUVIndices();
+    const auto& uvs = mesh->getUVs();
+
+    if (uv_indices.size() != triangles.size())
+    {
+      ++mismatch_count;
+      writeValidationLog("WARNING", label + ": UV-index count " + std::to_string(uv_indices.size())
+          + " differs from triangle-corner count " + std::to_string(triangles.size()));
+    }
+
+    const size_t corner_count = std::min(triangles.size(), uv_indices.size());
+    for (size_t corner = 0; corner < corner_count; ++corner)
+    {
+      const size_t triangle_index = corner / 3;
+      if (!include_triangle(*mesh, triangle_index))
+      {
+        ++skipped_corner_count;
+        continue;
+      }
+
+      ++checked_corner_count;
+      const size_t vertex_index = triangles[corner];
+      const size_t uv_index = uv_indices[corner];
+      const bool references_valid
+        = vertex_index < mesh->getVertexCount() && uv_index != std::numeric_limits<size_t>::max()
+        && uv_index < uvs.size();
+      const double kinetic_time
+        = vertex_index < mesh->getVertexCount() ? mesh->vertexKineticTime(vertex_index)
+                                                : std::numeric_limits<double>::quiet_NaN();
+      const double expected = kinetic_time * uv_height_factor;
+      const double actual = references_valid ? uvs[uv_index][height_component_index]
+                                             : std::numeric_limits<double>::quiet_NaN();
+      const bool matches = references_valid && std::isfinite(expected) && std::isfinite(actual)
+        && std::abs(actual - expected) <= tolerance;
+      if (matches)
+      {
+        continue;
+      }
+
+      ++mismatch_count;
+      if (mismatch_count <= max_detail_count)
+      {
+        std::ostringstream oss;
+        oss << label << ": triangle=" << triangle_index << " corner=" << (corner % 3) << " vertex=" << vertex_index
+            << " uv_index=" << uv_index << " kinetic_t=" << kinetic_time << " factor=" << uv_height_factor
+            << " expected_uv_" << height_component_name << "=" << expected << " actual_uv_" << height_component_name
+            << "=" << actual;
+        writeValidationLog("WARNING", oss.str());
+      }
+    }
+  }
+
+  std::ostringstream summary;
+  summary << scope << ": checked " << checked_corner_count << " " << mesh_kind << " triangle corner(s), skipped "
+          << skipped_corner_count << " other corner(s); " << mismatch_count << " UV-height mismatch(es)";
+  if (mismatch_count > max_detail_count)
+  {
+    summary << " (details limited to first " << max_detail_count << ")";
+  }
+  writeValidationLog(mismatch_count == 0 ? "INFO" : "WARNING", summary.str());
+  return mismatch_count == 0;
+}
+
+bool Validator::validateAndReportInteriorMeshletUvHeights(const std::vector<VoronoiMesh*>& meshlets,
+  const char* scope, double uv_height_factor, const std::vector<std::string>* meshlet_labels, double tolerance)
+{
+  return validateMeshletUvHeights(meshlets, scope, "interior", uv_height_factor, meshlet_labels, tolerance,
+    triangleUsesInteriorHeightUvInZ, 2, "z");
+}
+
+bool Validator::validateAndReportBarkMeshletUvHeights(const std::vector<VoronoiMesh*>& meshlets, const char* scope,
+  double uv_height_factor, const std::vector<std::string>* meshlet_labels, double tolerance)
+{
+  return validateMeshletUvHeights(meshlets, scope, "bark", uv_height_factor, meshlet_labels, tolerance,
+    triangleUsesBarkHeightUvInY, 1, "y");
 }

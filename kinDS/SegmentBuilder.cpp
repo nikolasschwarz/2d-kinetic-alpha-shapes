@@ -651,7 +651,11 @@ std::optional<glm::dvec3> meshVertexUv(const VoronoiMesh& mesh, size_t vertex_in
   const std::vector<glm::dvec3>& uvs = mesh.getUVs();
   if (vertex_index < uvs.size())
   {
-    return uvs[vertex_index];
+    const glm::dvec3& pooled_uv = uvs[vertex_index];
+    if (std::isfinite(pooled_uv.x) && std::isfinite(pooled_uv.y) && std::isfinite(pooled_uv.z))
+    {
+      return pooled_uv;
+    }
   }
   for (size_t triangle_corner : mesh.findTriangleCorners(vertex_index, true))
   {
@@ -684,17 +688,53 @@ void warnIfTriangleKineticTimesNotInUnitSection(
 void setMeshVertexUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec3& uv)
 {
   std::vector<glm::dvec3>& uvs = mesh.getUVs();
-  if (vertex_index < uvs.size())
+  if (vertex_index >= uvs.size())
   {
-    uvs[vertex_index] = uv;
+    uvs.resize(vertex_index + 1, glm::dvec3(0.0));
   }
+  uvs[vertex_index] = uv;
+
   for (size_t triangle_corner : mesh.findTriangleCorners(vertex_index))
   {
     if (mesh.hasValidUVIndex(triangle_corner))
     {
       mesh.setUV(uv, triangle_corner);
     }
+    else if (triangle_corner < mesh.getUVIndices().size())
+    {
+      mesh.getUVIndices()[triangle_corner] = mesh.addUV(uv);
+    }
   }
+}
+
+struct AdjustedBoundaryTriangleUvs
+{
+  glm::dvec3 u {};
+  glm::dvec3 v {};
+  glm::dvec3 w {};
+};
+
+AdjustedBoundaryTriangleUvs adjustedBoundaryTriangleUvs(const glm::dvec2& raw_u, const glm::dvec2& raw_v,
+  const glm::dvec2& raw_w, double uv_circum_factor, double uv_height_factor)
+{
+  AdjustedBoundaryTriangleUvs adjusted;
+  adjusted.u = glm::dvec3(raw_u.x, raw_u.y, 0.0);
+  adjusted.v = glm::dvec3(raw_v.x, raw_v.y, 0.0);
+  adjusted.w = glm::dvec3(raw_w.x, raw_w.y, 0.0);
+
+  const double base_angle = adjusted.u.x;
+  double& angle_v = adjusted.v.x;
+  angle_v -= std::round(angle_v - base_angle);
+  double& angle_w = adjusted.w.x;
+  angle_w -= std::round(angle_w - base_angle);
+
+  adjusted.u.x *= uv_circum_factor;
+  adjusted.v.x *= uv_circum_factor;
+  adjusted.w.x *= uv_circum_factor;
+  adjusted.u.y *= uv_height_factor;
+  adjusted.v.y *= uv_height_factor;
+  adjusted.w.y *= uv_height_factor;
+  return adjusted;
 }
 
 bool vertexPositionFinite(const glm::dvec3& p)
@@ -731,125 +771,6 @@ void syncResolvedFlexibleVertexMetadata(VoronoiMesh& mesh, size_t vertex_index)
     builder.addSize("strand_id", strand_id.value());
   }
   mesh.setVertexMetadata(vertex_index, builder.build());
-}
-
-bool interpolateFlexibleVerticesAlongEdge(
-  VoronoiMesh& mesh, std::vector<int>& flex, size_t anchor_old_vertex, size_t anchor_new_vertex)
-{
-  if (flex.empty())
-  {
-    return true;
-  }
-  auto& verts = mesh.getVertices();
-  if (anchor_old_vertex >= verts.size() || anchor_new_vertex >= verts.size())
-  {
-    KINDS_WARNING("interpolateFlexibleVerticesAlongEdge: anchor index out of range (old=" << anchor_old_vertex
-                                                                                         << " new="
-                                                                                         << anchor_new_vertex
-                                                                                         << " verts=" << verts.size()
-                                                                                         << ").");
-    return false;
-  }
-  const glm::dvec3 p0 = verts[anchor_old_vertex];
-  const glm::dvec3 p1 = verts[anchor_new_vertex];
-  if (!vertexPositionFinite(p0) || !vertexPositionFinite(p1))
-  {
-    KINDS_WARNING("interpolateFlexibleVerticesAlongEdge: non-finite anchor position (old=" << anchor_old_vertex
-                                                                                           << " new="
-                                                                                           << anchor_new_vertex
-                                                                                           << ").");
-    return false;
-  }
-  const double z0 = mesh.vertexKineticTime(anchor_old_vertex);
-  const double z1 = mesh.vertexKineticTime(anchor_new_vertex);
-  const double denom = z1 - z0;
-  const std::optional<glm::dvec3> uv0 = meshVertexUv(mesh, anchor_old_vertex);
-  const std::optional<glm::dvec3> uv1 = meshVertexUv(mesh, anchor_new_vertex);
-  const bool interpolate_uv = uv0.has_value() && uv1.has_value();
-  const glm::dvec2 profile0 = mesh.triangulationPlaneXY(anchor_old_vertex);
-  const glm::dvec2 profile1 = mesh.triangulationPlaneXY(anchor_new_vertex);
-  const size_t k = flex.size();
-  for (size_t j = 0; j < k; ++j)
-  {
-    const int fj = flex[j];
-    if (fj < 0)
-    {
-      continue;
-    }
-    const size_t fju = static_cast<size_t>(fj);
-    if (fju >= verts.size())
-    {
-      continue;
-    }
-    const double fz = mesh.vertexKineticTime(fju);
-    double s = 0.0;
-    if (std::abs(denom) > 1e-18)
-    {
-      s = (fz - z0) / denom;
-      if (s < 0.0)
-      {
-        s = 0.0;
-      }
-      else if (s > 1.0)
-      {
-        s = 1.0;
-      }
-    }
-    else
-    {
-      // Anchors share kinetic time: cannot parameterize by t; fall back to uniform spacing along the segment.
-      s = static_cast<double>(j + 1) / static_cast<double>(k + 1);
-    }
-    glm::dvec3 resolved = p0 + s * (p1 - p0);
-    if (!vertexPositionFinite(resolved))
-    {
-      resolved = (s < 0.5) ? p0 : p1;
-      KINDS_WARNING("interpolateFlexibleVerticesAlongEdge: non-finite interpolation result for flex vertex "
-        << fj << "; snapping to nearest anchor.");
-    }
-    mesh.replaceVertex(fju, resolved);
-    mesh.setVertexKineticTime(fju, fz);
-    mesh.setProfilePlanePosition(fju, profile0 + s * (profile1 - profile0));
-    syncResolvedFlexibleVertexMetadata(mesh, fju);
-    if (interpolate_uv)
-    {
-      const glm::dvec3 uv_interp = *uv0 + s * (*uv1 - *uv0);
-      setMeshVertexUv(mesh, fju, uv_interp);
-    }
-  }
-  return true;
-}
-
-void snapFlexibleVerticesToAnchor(VoronoiMesh& mesh, const std::vector<int>& flex, size_t anchor_vertex)
-{
-  if (flex.empty() || anchor_vertex >= mesh.getVertices().size())
-  {
-    return;
-  }
-  const glm::dvec3 anchor_position = mesh.getVertices()[anchor_vertex];
-  if (!vertexPositionFinite(anchor_position))
-  {
-    KINDS_WARNING("snapFlexibleVerticesToAnchor: anchor " << anchor_vertex << " is non-finite.");
-    return;
-  }
-  const glm::dvec2 anchor_profile = mesh.triangulationPlaneXY(anchor_vertex);
-  const double anchor_time = mesh.vertexKineticTime(anchor_vertex);
-  for (int flex_vertex_id : flex)
-  {
-    if (flex_vertex_id < 0)
-    {
-      continue;
-    }
-    const size_t flex_index = static_cast<size_t>(flex_vertex_id);
-    if (flex_index >= mesh.getVertices().size())
-    {
-      continue;
-    }
-    mesh.replaceVertex(flex_index, anchor_position);
-    mesh.setVertexKineticTime(flex_index, anchor_time);
-    mesh.setProfilePlanePosition(flex_index, anchor_profile);
-    syncResolvedFlexibleVertexMetadata(mesh, flex_index);
-  }
 }
 
 const char* boundaryEventTypeToString(SegmentBuilder::BoundaryEventType event_type)
@@ -1138,6 +1059,156 @@ std::string makeClosingMeshFaceMetadataJson(double kinetic_time, size_t strand_i
     .build();
 }
 } // namespace
+
+bool SegmentBuilder::interpolateFlexibleVerticesAlongEdge(VoronoiMesh& mesh, std::vector<int>& flex,
+  size_t anchor_old_vertex, size_t anchor_new_vertex)
+{
+  if (flex.empty())
+  {
+    return true;
+  }
+  auto& verts = mesh.getVertices();
+  if (anchor_old_vertex >= verts.size() || anchor_new_vertex >= verts.size())
+  {
+    KINDS_WARNING("interpolateFlexibleVerticesAlongEdge: anchor index out of range (old=" << anchor_old_vertex
+                                                                                         << " new="
+                                                                                         << anchor_new_vertex
+                                                                                         << " verts=" << verts.size()
+                                                                                         << ").");
+    return false;
+  }
+  const glm::dvec3 p0 = verts[anchor_old_vertex];
+  const glm::dvec3 p1 = verts[anchor_new_vertex];
+  if (!vertexPositionFinite(p0) || !vertexPositionFinite(p1))
+  {
+    KINDS_WARNING("interpolateFlexibleVerticesAlongEdge: non-finite anchor position (old=" << anchor_old_vertex
+                                                                                           << " new="
+                                                                                           << anchor_new_vertex
+                                                                                           << ").");
+    return false;
+  }
+  const double z0 = mesh.vertexKineticTime(anchor_old_vertex);
+  const double z1 = mesh.vertexKineticTime(anchor_new_vertex);
+  const double denom = z1 - z0;
+  const bool is_boundary_interval_meshlet = intersectionMeshletIndexForMesh(mesh).has_value();
+  const std::optional<glm::dvec2> raw_uv0 = is_boundary_interval_meshlet
+    ? boundaryIntervalRawUvAtVertex(mesh, anchor_old_vertex)
+    : std::nullopt;
+  const std::optional<glm::dvec2> raw_uv1 = is_boundary_interval_meshlet
+    ? boundaryIntervalRawUvAtVertex(mesh, anchor_new_vertex)
+    : std::nullopt;
+  const std::optional<glm::dvec3> uv0
+    = is_boundary_interval_meshlet ? std::nullopt : meshVertexUv(mesh, anchor_old_vertex);
+  const std::optional<glm::dvec3> uv1
+    = is_boundary_interval_meshlet ? std::nullopt : meshVertexUv(mesh, anchor_new_vertex);
+  const bool interpolate_boundary_raw_uv = raw_uv0.has_value() && raw_uv1.has_value();
+  const bool interpolate_interior_uv = uv0.has_value() && uv1.has_value();
+  const glm::dvec2 profile0 = mesh.triangulationPlaneXY(anchor_old_vertex);
+  const glm::dvec2 profile1 = mesh.triangulationPlaneXY(anchor_new_vertex);
+  const size_t k = flex.size();
+  for (size_t j = 0; j < k; ++j)
+  {
+    const int fj = flex[j];
+    if (fj < 0)
+    {
+      continue;
+    }
+    const size_t fju = static_cast<size_t>(fj);
+    if (fju >= verts.size())
+    {
+      continue;
+    }
+    const double fz = mesh.vertexKineticTime(fju);
+    double s = 0.0;
+    if (std::abs(denom) > 1e-18)
+    {
+      s = (fz - z0) / denom;
+      if (s < 0.0)
+      {
+        s = 0.0;
+      }
+      else if (s > 1.0)
+      {
+        s = 1.0;
+      }
+    }
+    else
+    {
+      s = static_cast<double>(j + 1) / static_cast<double>(k + 1);
+    }
+    glm::dvec3 resolved = p0 + s * (p1 - p0);
+    if (!vertexPositionFinite(resolved))
+    {
+      resolved = (s < 0.5) ? p0 : p1;
+      KINDS_WARNING("interpolateFlexibleVerticesAlongEdge: non-finite interpolation result for flex vertex "
+        << fj << "; snapping to nearest anchor.");
+    }
+    mesh.replaceVertex(fju, resolved);
+    mesh.setVertexKineticTime(fju, fz);
+    mesh.setProfilePlanePosition(fju, profile0 + s * (profile1 - profile0));
+    syncResolvedFlexibleVertexMetadata(mesh, fju);
+    if (interpolate_boundary_raw_uv)
+    {
+      const glm::dvec2 raw_interp = *raw_uv0 + s * (*raw_uv1 - *raw_uv0);
+      setBoundaryIntervalRawUv(mesh, fju, raw_interp);
+      refreshBoundaryIntervalTrianglesIncidentToVertex(mesh, fju);
+    }
+    else if (interpolate_interior_uv)
+    {
+      const glm::dvec3 uv_interp = *uv0 + s * (*uv1 - *uv0);
+      setMeshVertexUv(mesh, fju, uv_interp);
+    }
+  }
+  return true;
+}
+
+void SegmentBuilder::snapFlexibleVerticesToAnchor(
+  VoronoiMesh& mesh, const std::vector<int>& flex, size_t anchor_vertex)
+{
+  if (flex.empty() || anchor_vertex >= mesh.getVertices().size())
+  {
+    return;
+  }
+  const glm::dvec3 anchor_position = mesh.getVertices()[anchor_vertex];
+  if (!vertexPositionFinite(anchor_position))
+  {
+    KINDS_WARNING("snapFlexibleVerticesToAnchor: anchor " << anchor_vertex << " is non-finite.");
+    return;
+  }
+  const glm::dvec2 anchor_profile = mesh.triangulationPlaneXY(anchor_vertex);
+  const double anchor_time = mesh.vertexKineticTime(anchor_vertex);
+  const bool is_boundary_interval_meshlet = intersectionMeshletIndexForMesh(mesh).has_value();
+  const std::optional<glm::dvec2> anchor_raw_uv = is_boundary_interval_meshlet
+    ? boundaryIntervalRawUvAtVertex(mesh, anchor_vertex)
+    : std::nullopt;
+  const std::optional<glm::dvec3> anchor_uv
+    = is_boundary_interval_meshlet ? std::nullopt : meshVertexUv(mesh, anchor_vertex);
+  for (int flex_vertex_id : flex)
+  {
+    if (flex_vertex_id < 0)
+    {
+      continue;
+    }
+    const size_t flex_index = static_cast<size_t>(flex_vertex_id);
+    if (flex_index >= mesh.getVertices().size())
+    {
+      continue;
+    }
+    mesh.replaceVertex(flex_index, anchor_position);
+    mesh.setVertexKineticTime(flex_index, anchor_time);
+    mesh.setProfilePlanePosition(flex_index, anchor_profile);
+    syncResolvedFlexibleVertexMetadata(mesh, flex_index);
+    if (anchor_raw_uv.has_value())
+    {
+      setBoundaryIntervalRawUv(mesh, flex_index, anchor_raw_uv.value());
+      refreshBoundaryIntervalTrianglesIncidentToVertex(mesh, flex_index);
+    }
+    else if (anchor_uv.has_value())
+    {
+      setMeshVertexUv(mesh, flex_index, anchor_uv.value());
+    }
+  }
+}
 
 static bool raySegmentIntersection(
   const glm::dvec2& C, const glm::dvec2& D, const glm::dvec2& A, const glm::dvec2& B, double& t_out)
@@ -3534,9 +3605,16 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     auto& centroid = kin_del.component_data.component_centroids[component_id];
 
     const bool reuse_in_place = !created_new_pair && intersection_pair_index < intersection_meshes.size();
-    VoronoiMesh mesh_local(MeshletExportMaterialNames);
-  configureMeshletStorage(mesh_local);
-    VoronoiMesh& mesh = reuse_in_place ? intersection_meshes[intersection_pair_index] : mesh_local;
+    if (!reuse_in_place)
+    {
+      VoronoiMesh mesh_local(MeshletExportMaterialNames);
+      configureMeshletStorage(mesh_local);
+      intersection_meshes.push_back(std::move(mesh_local));
+      intersection_mesh_raw_uvs.emplace_back();
+      boundary_meshlet_completed_.push_back(false);
+      intersection_meshlet_export_suffixes.push_back(std::string("_intersection_d") + std::to_string(delaunay_edge_id));
+    }
+    VoronoiMesh& mesh = intersection_meshes[intersection_pair_index];
 
     const std::string base_boundary_meta = composeBoundaryMetadata(event_type, segment_action);
 
@@ -3676,11 +3754,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     }
     else
     {
-      intersection_meshes.push_back(std::move(mesh_local));
-      boundary_meshlet_completed_.push_back(false);
-      intersection_meshlet_export_suffixes.push_back(std::string("_intersection_d") + std::to_string(delaunay_edge_id));
       intersection_mesh_pair_last_left_and_right_vertex.emplace_back(std::move(local_segments));
-      intersection_meshes.back().setCreationKineticTime(t);
+      mesh.setCreationKineticTime(t);
     }
 
     return intersection_pair_index;
@@ -4461,7 +4536,8 @@ void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new
   }
 }
 
-size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w, const std::string& metadata)
+size_t kinDS::SegmentBuilder::addBoundaryTriangle(
+  size_t u, size_t v, size_t w, const std::string& metadata, int material_id)
 {
   // check bounds
   if (u >= boundary_mesh.getVertexCount() || v >= boundary_mesh.getVertexCount() || w >= boundary_mesh.getVertexCount())
@@ -4476,47 +4552,141 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(size_t u, size_t v, size_t w, 
     return -1;
   }
 
-  // get raw UVs
-  glm::dvec3 uv_u = { boundary_mesh_raw_uvs[u][0], boundary_mesh_raw_uvs[u][1], 0.0 };
-  glm::dvec3 uv_v = { boundary_mesh_raw_uvs[v][0], boundary_mesh_raw_uvs[v][1], 0.0 };
-  glm::dvec3 uv_w = { boundary_mesh_raw_uvs[w][0], boundary_mesh_raw_uvs[w][1], 0.0 };
+  const AdjustedBoundaryTriangleUvs adjusted = adjustedBoundaryTriangleUvs(
+    boundary_mesh_raw_uvs[u], boundary_mesh_raw_uvs[v], boundary_mesh_raw_uvs[w], uv_circum_factor, uv_height_factor);
 
-  // output UVs
-  /*KINDS_DEBUG("Adding boundary triangle with raw UVs: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1])
-     +
-                "), v(" + std::to_string(uv_v[0]) + ", " + std::to_string(uv_v[1]) + "), w(" + std::to_string(uv_w[0]) +
-                ", " + std::to_string(uv_w[1]) + ")");*/
-
-  // adjust UVs to avoid seams, first coordinate is the angle normalized to [-0.5, 0.5]
-  // As a heuristic, we take the first angle and adjust the others such that they have less than 0.5 difference
-  double base_angle = uv_u[0];
-  double& angle_v = uv_v[0];
-  double diff_v = angle_v - base_angle;
-  double adjustment = std::round(diff_v);
-  angle_v -= adjustment;
-
-  double& angle_w = uv_w[0];
-  double diff_w = angle_w - base_angle;
-  adjustment = std::round(diff_w);
-  angle_w -= adjustment;
-
-  uv_u[0] *= uv_circum_factor;
-  uv_v[0] *= uv_circum_factor;
-  uv_w[0] *= uv_circum_factor;
-  uv_u[1] *= uv_height_factor;
-  uv_v[1] *= uv_height_factor;
-  uv_w[1] *= uv_height_factor;
-
-  // add adjusted UVs
-  size_t uv_index_u = boundary_mesh.addUV(uv_u);
-  size_t uv_index_v = boundary_mesh.addUV(uv_v);
-  size_t uv_index_w = boundary_mesh.addUV(uv_w);
+  size_t uv_index_u = boundary_mesh.addUV(adjusted.u);
+  size_t uv_index_v = boundary_mesh.addUV(adjusted.v);
+  size_t uv_index_w = boundary_mesh.addUV(adjusted.w);
 
   /*KINDS_DEBUG("UVs after adjustment: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1]) + "), v(" +
                 std::to_string(uv_v[0]) + ", " + std::to_string(uv_v[1]) + "), w(" + std::to_string(uv_w[0]) + ", " +
                 std::to_string(uv_w[1]) + ")");*/
   // warnIfTriangleKineticTimesNotInUnitSection(u, v, w, boundary_mesh.getVertices(), "boundary_mesh", 0);
-  return boundary_mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, 0, metadata);
+  return boundary_mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, material_id, metadata);
+}
+
+size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangle(
+  VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata, int material_id)
+{
+  if (u >= mesh.getVertexCount() || v >= mesh.getVertexCount() || w >= mesh.getVertexCount())
+  {
+    KINDS_ERROR("Vertex index out of boundary-interval mesh range.");
+    return static_cast<size_t>(-1);
+  }
+
+  const std::vector<glm::dvec2>& raw_uvs = boundaryIntervalRawUvs(mesh);
+  if (u >= raw_uvs.size() || v >= raw_uvs.size() || w >= raw_uvs.size())
+  {
+    KINDS_ERROR("Vertex index out of boundary-interval raw uv range.");
+    return static_cast<size_t>(-1);
+  }
+
+  const AdjustedBoundaryTriangleUvs adjusted = adjustedBoundaryTriangleUvs(
+    raw_uvs[u], raw_uvs[v], raw_uvs[w], uv_circum_factor, uv_height_factor);
+  const size_t uv_index_u = mesh.addUV(adjusted.u);
+  const size_t uv_index_v = mesh.addUV(adjusted.v);
+  const size_t uv_index_w = mesh.addUV(adjusted.w);
+  return mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, material_id, metadata);
+}
+
+std::vector<glm::dvec2>& SegmentBuilder::boundaryIntervalRawUvs(VoronoiMesh& mesh)
+{
+  const std::optional<size_t> mesh_index = intersectionMeshletIndexForMesh(mesh);
+  if (!mesh_index.has_value())
+  {
+    throw std::runtime_error("boundaryIntervalRawUvs: mesh is not a boundary-interval meshlet.");
+  }
+  if (intersection_mesh_raw_uvs.size() <= mesh_index.value())
+  {
+    intersection_mesh_raw_uvs.resize(mesh_index.value() + 1);
+  }
+  return intersection_mesh_raw_uvs[mesh_index.value()];
+}
+
+const std::vector<glm::dvec2>& SegmentBuilder::boundaryIntervalRawUvs(const VoronoiMesh& mesh) const
+{
+  const std::optional<size_t> mesh_index = intersectionMeshletIndexForMesh(mesh);
+  if (!mesh_index.has_value() || mesh_index.value() >= intersection_mesh_raw_uvs.size())
+  {
+    throw std::runtime_error("boundaryIntervalRawUvs: mesh is not a boundary-interval meshlet.");
+  }
+  return intersection_mesh_raw_uvs[mesh_index.value()];
+}
+
+std::optional<glm::dvec2> SegmentBuilder::boundaryIntervalRawUvAtVertex(
+  const VoronoiMesh& mesh, size_t vertex_index) const
+{
+  const std::optional<size_t> mesh_index = intersectionMeshletIndexForMesh(mesh);
+  if (!mesh_index.has_value() || mesh_index.value() >= intersection_mesh_raw_uvs.size())
+  {
+    return std::nullopt;
+  }
+  const std::vector<glm::dvec2>& raw_uvs = intersection_mesh_raw_uvs[mesh_index.value()];
+  if (vertex_index >= raw_uvs.size())
+  {
+    return std::nullopt;
+  }
+  const glm::dvec2& raw_uv = raw_uvs[vertex_index];
+  if (!std::isfinite(raw_uv.x) || !std::isfinite(raw_uv.y))
+  {
+    return std::nullopt;
+  }
+  return raw_uv;
+}
+
+void SegmentBuilder::setBoundaryIntervalRawUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec2& raw_uv)
+{
+  std::vector<glm::dvec2>& raw_uvs = boundaryIntervalRawUvs(mesh);
+  if (vertex_index >= raw_uvs.size())
+  {
+    raw_uvs.resize(vertex_index + 1, glm::dvec2(0.0));
+  }
+  raw_uvs[vertex_index] = raw_uv;
+}
+
+void SegmentBuilder::refreshBoundaryIntervalTrianglesIncidentToVertex(VoronoiMesh& mesh, size_t vertex_index)
+{
+  const std::vector<glm::dvec2>& raw_uvs = boundaryIntervalRawUvs(mesh);
+  const auto raw_uv_at_vertex = [&](size_t vi) -> glm::dvec2
+  {
+    return vi < raw_uvs.size() ? raw_uvs[vi] : glm::dvec2(0.0);
+  };
+
+  const std::vector<size_t>& flat_triangles = mesh.getTriangles();
+  for (const size_t corner : mesh.findTriangleCorners(vertex_index, true))
+  {
+    const size_t tri_base = corner - (corner % 3);
+    if (tri_base + 2 >= flat_triangles.size())
+    {
+      continue;
+    }
+    const size_t u = flat_triangles[tri_base];
+    const size_t v = flat_triangles[tri_base + 1];
+    const size_t w = flat_triangles[tri_base + 2];
+    const AdjustedBoundaryTriangleUvs adjusted = adjustedBoundaryTriangleUvs(
+      raw_uv_at_vertex(u), raw_uv_at_vertex(v), raw_uv_at_vertex(w), uv_circum_factor, uv_height_factor);
+    mesh.setUV(adjusted.u, tri_base);
+    mesh.setUV(adjusted.v, tri_base + 1);
+    mesh.setUV(adjusted.w, tri_base + 2);
+  }
+}
+
+glm::dvec2 SegmentBuilder::boundaryRawUv(
+  const glm::dvec2& delaunay_xy, const glm::dvec2& centroid, double t)
+{
+  const double angle = std::atan2(centroid.y - delaunay_xy.y, centroid.x - delaunay_xy.x);
+  return glm::dvec2(angle / (2.0 * glm::pi<double>()), t);
+}
+
+glm::dvec3 SegmentBuilder::interiorMeshUv(const std::vector<BoundaryPoint>& boundary_polygon,
+  const glm::dvec2& centroid, const glm::dvec2& delaunay_xy, double t) const
+{
+  const double relative_distance = relativeDistanceFromCenter(boundary_polygon, centroid, delaunay_xy);
+  const double angle = std::atan2(centroid.y - delaunay_xy.y, centroid.x - delaunay_xy.x);
+  const double radial_scale = texture_diameter * relative_distance * 0.5;
+  return glm::dvec3(
+    0.5 + radial_scale * std::cos(angle), 0.5 + radial_scale * std::sin(angle), t * uv_height_factor);
 }
 
 glm::dvec2 SegmentBuilder::meshVirtualShiftForStrand(size_t strand_id, double t) const
@@ -4559,6 +4729,7 @@ void SegmentBuilder::applyUntransformedMeshViewTransform()
 size_t kinDS::SegmentBuilder::addBoundaryVertex(
   glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift)
 {
+  const glm::dvec2 delaunay_xy(vertex.x, vertex.y);
   glm::dvec2 profile_xy(vertex.x, vertex.y);
   if (!create_transformed_mesh)
   {
@@ -4571,9 +4742,7 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(
     applyMeshVirtualShiftToProfileVertex(vertex, profile_xy, strand_id, t, includes_virtual_shift);
     vertex = transformFromInputBranchToObjectSpace(vertex, strand_id, t);
   }
-  double angle = std::atan2(centroid.y - profile_xy.y, centroid.x - profile_xy.x);
-
-  glm::dvec2 raw_uv { angle / (2.0 * glm::pi<double>()), t };
+  const glm::dvec2 raw_uv = boundaryRawUv(delaunay_xy, centroid, t);
 
   const std::string metadata = store_mesh_metadata
     ? [&]()
@@ -4612,7 +4781,15 @@ size_t kinDS::SegmentBuilder::addMeshletTriangle(
     mesh.setMaterialNames(MeshletExportMaterialNames);
   }
   // warnIfTriangleKineticTimesNotInUnitSection(u, v, w, mesh.getVertices(), "meshlet", material_id);
-  return mesh.addTriangle(u, v, w, u, v, w, material_id, metadata);
+  const auto& vertex_uvs = mesh.getUVs();
+  const auto vertex_uv = [&](size_t vertex_index) -> glm::dvec3
+  {
+    return vertex_index < vertex_uvs.size() ? vertex_uvs[vertex_index] : glm::dvec3(0.0);
+  };
+  const size_t uv_index_u = mesh.addUV(vertex_uv(u));
+  const size_t uv_index_v = mesh.addUV(vertex_uv(v));
+  const size_t uv_index_w = mesh.addUV(vertex_uv(w));
+  return mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, material_id, metadata);
 }
 
 size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(VoronoiMesh& mesh, size_t u, size_t v, size_t w,
@@ -4642,7 +4819,7 @@ size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(VoronoiMesh& m
   if (inside_boundary_he_id < 0
     || static_cast<size_t>(inside_boundary_he_id) >= kin_del.getGraph().halfEdgeSlotCount())
   {
-    return addMeshletTriangle(mesh, u, v, w, triangle_metadata, boundary_material_id);
+    return addBoundaryIntervalTriangle(mesh, u, v, w, triangle_metadata, boundary_material_id);
   }
 
   // `inside_boundary_he_id` is the inside-directed boundary half-edge; its twin is the outside one on the same Delaunay
@@ -4650,14 +4827,14 @@ size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangleOriented(VoronoiMesh& m
   const size_t outside_he = static_cast<size_t>(inside_boundary_he_id) ^ 1u;
   if (outside_he >= kin_del.getGraph().halfEdgeSlotCount())
   {
-    return addMeshletTriangle(mesh, u, v, w, triangle_metadata, boundary_material_id);
+    return addBoundaryIntervalTriangle(mesh, u, v, w, triangle_metadata, boundary_material_id);
   }
 
   if ((outside_he & 1u) != 0u)
   {
     std::swap(v, w);
   }
-  return addMeshletTriangle(mesh, u, v, w, triangle_metadata, boundary_material_id);
+  return addBoundaryIntervalTriangle(mesh, u, v, w, triangle_metadata, boundary_material_id);
 }
 
 void kinDS::SegmentBuilder::requireLiveRegisteredVoronoiEdgeEndpoints(size_t voronoi_edge_id, const char* context) const
@@ -5045,6 +5222,34 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   includes_virtual_shift = false;
 
   const bool is_intersection_vertex = runtime_info.isIntersectionVertex();
+  glm::dvec2 delaunay_xy(std::numeric_limits<double>::quiet_NaN());
+  if (!is_flexible_placeholder)
+  {
+    if (meshlet_voronoi_vertex_for_alpha_check.has_value())
+    {
+      const size_t voronoi_vertex_id = meshlet_voronoi_vertex_for_alpha_check.value();
+      const auto& graph = kin_del.getGraph();
+      if (voronoi_vertex_id < graph.faceSlotCount() && graph.isLiveFace(voronoi_vertex_id))
+      {
+        delaunay_xy = glm::dvec2(computeVoronoiVertex(graph.face(voronoi_vertex_id).half_edges[0], t));
+      }
+    }
+    else if (radius_transition_projection)
+    {
+      delaunay_xy
+        = glm::dvec2(radiusTransitionProjectionPosition(runtime_info.radius_transition_projection.value(), t, false));
+    }
+    else if (is_intersection_vertex)
+    {
+      delaunay_xy
+        = glm::dvec2(getCrossingCoordsInDelaunaySpace(kin_del, runtime_info.position_intersection.value(), t));
+    }
+    else
+    {
+      delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+    }
+  }
+
   std::optional<MeshIntersectionObjectSpaceResult> intersection_object_space;
   if (!is_flexible_placeholder && is_intersection_vertex && !radius_transition_projection
     && !meshlet_voronoi_vertex_for_alpha_check.has_value())
@@ -5269,17 +5474,41 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   {
     mesh.setProfilePlanePosition(index, profile_xy);
   }
-  double rel_dist = relativeDistanceFromCenter(boundary_polygon, centroid, profile_xy);
-
-  /*if (rel_dist > 1.0 + std::numeric_limits<double>::epsilon()) {
-    KINDS_WARNING("Adding vertex that is too far outside, relative distance: " << rel_dist);
-  }*/
-
-  // TODO: this can be simplified to not use trigonometric functions
-  double angle = std::atan2(centroid.y - profile_xy.y, centroid.x - profile_xy.x);
-  double u = 0.5 + texture_diameter * rel_dist * 0.5 * std::cos(angle);
-  double v = 0.5 + texture_diameter * rel_dist * 0.5 * std::sin(angle);
-  mesh.addUV(u, v, t * uv_height_factor);
+  const bool is_boundary_interval_meshlet = intersectionMeshletIndexForMesh(mesh).has_value();
+  if (is_boundary_interval_meshlet)
+  {
+    std::vector<glm::dvec2>& raw_uvs = boundaryIntervalRawUvs(mesh);
+    if (raw_uvs.size() <= index)
+    {
+      raw_uvs.resize(index + 1, glm::dvec2(0.0));
+    }
+    if (is_flexible_placeholder)
+    {
+      // Placeholder raw UV is filled when the flex vertex is interpolated along its anchor edge.
+      raw_uvs[index] = glm::dvec2(0.0, t);
+    }
+    else
+    {
+      if (!std::isfinite(delaunay_xy.x) || !std::isfinite(delaunay_xy.y))
+      {
+        delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+      }
+      raw_uvs[index] = boundaryRawUv(delaunay_xy, centroid, t);
+    }
+  }
+  else if (is_flexible_placeholder)
+  {
+    // Placeholder UV is filled when the flex vertex is interpolated along its anchor edge.
+    mesh.addUV(glm::dvec3(0.0, 0.0, t * uv_height_factor));
+  }
+  else
+  {
+    if (!std::isfinite(delaunay_xy.x) || !std::isfinite(delaunay_xy.y))
+    {
+      delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+    }
+    mesh.addUV(interiorMeshUv(boundary_polygon, centroid, delaunay_xy, t));
+  }
   return index;
 }
 
@@ -5526,13 +5755,13 @@ void SegmentBuilder::applyIntersectionStripUniformClosureVertex(
   {
     return;
   }
-  if (interpolateFlexibleVerticesAlongEdge(
-        mesh, seg.flexible_left_vertex_ids, static_cast<size_t>(seg.mesh_start_vertex_id), closure_vertex_index))
+  if (interpolateFlexibleVerticesAlongEdge(mesh, seg.flexible_left_vertex_ids,
+        static_cast<size_t>(seg.mesh_start_vertex_id), closure_vertex_index))
   {
     seg.flexible_left_vertex_ids.clear();
   }
-  if (interpolateFlexibleVerticesAlongEdge(
-        mesh, seg.flexible_right_vertex_ids, static_cast<size_t>(seg.mesh_end_vertex_id), closure_vertex_index))
+  if (interpolateFlexibleVerticesAlongEdge(mesh, seg.flexible_right_vertex_ids,
+        static_cast<size_t>(seg.mesh_end_vertex_id), closure_vertex_index))
   {
     seg.flexible_right_vertex_ids.clear();
   }
@@ -5560,8 +5789,7 @@ void SegmentBuilder::resolveRemainingFlexibleVertices(VoronoiMesh& mesh, Meshing
     KINDS_WARNING("Resolving leftover left flexible vertices in " << (context != nullptr ? context : "unknown")
                                                                   << ": count="
                                                                   << seg.flexible_left_vertex_ids.size() << ".");
-    if (!interpolateFlexibleVerticesAlongEdge(
-          mesh, seg.flexible_left_vertex_ids, start_anchor, end_anchor))
+    if (!interpolateFlexibleVerticesAlongEdge(mesh, seg.flexible_left_vertex_ids, start_anchor, end_anchor))
     {
       snapFlexibleVerticesToAnchor(mesh, seg.flexible_left_vertex_ids, start_anchor);
     }
@@ -5572,8 +5800,7 @@ void SegmentBuilder::resolveRemainingFlexibleVertices(VoronoiMesh& mesh, Meshing
     KINDS_WARNING("Resolving leftover right flexible vertices in " << (context != nullptr ? context : "unknown")
                                                                    << ": count="
                                                                    << seg.flexible_right_vertex_ids.size() << ".");
-    if (!interpolateFlexibleVerticesAlongEdge(
-          mesh, seg.flexible_right_vertex_ids, end_anchor, start_anchor))
+    if (!interpolateFlexibleVerticesAlongEdge(mesh, seg.flexible_right_vertex_ids, end_anchor, start_anchor))
     {
       snapFlexibleVerticesToAnchor(mesh, seg.flexible_right_vertex_ids, end_anchor);
     }
@@ -5644,7 +5871,6 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
   size_t triangles_added = 0;
   const size_t boundary_tris_before = diagnostics ? boundary_mesh.getTriangleCount() : 0;
 
-  std::vector<double> relative_center_distances(graph.getVertexCount(), 0.0);
   std::vector<int> strand_to_mesh_vertex(graph.getVertexCount(), -1);
 
   for (size_t strand_id : branch_strands)
@@ -5663,14 +5889,12 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
     glm::dvec2 vertex = kin_del.getPointAt(t, strand_id, false, false);
 
     auto component_index = kin_del.component_data.component_map[strand_id];
-    auto& boundary_polygon = kin_del.component_data.component_boundaries[component_index][0];
     auto& centroid = kin_del.component_data.component_centroids[component_index];
 
     const size_t mesh_vertex_index
       = addBoundaryVertex(glm::dvec3 { vertex[0], vertex[1], t + offset }, centroid, strand_id, t, false);
 
     strand_to_mesh_vertex[strand_id] = static_cast<int>(mesh_vertex_index);
-    relative_center_distances[strand_id] = relativeDistanceFromCenter(boundary_polygon, centroid, vertex);
     ++strands_vertex_added;
 
     if (diagnostics && strand_id == 0)
@@ -5758,25 +5982,12 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
       std::swap(vertices[1], vertices[2]);
     }
 
-    size_t uv_indices[3];
-
-    for (size_t i = 0; i < 3; i++)
-    {
-      const size_t mesh_vertex_index = static_cast<size_t>(strand_to_mesh_vertex[vertices[i]]);
-      double rel_dist = relative_center_distances[vertices[i]];
-      double angle = boundary_mesh_raw_uvs[mesh_vertex_index][0] * 2.0 * glm::pi<double>();
-      double u = 0.5 + texture_diameter * rel_dist * 0.5 * std::cos(angle);
-      double v = 0.5 + texture_diameter * rel_dist * 0.5 * std::sin(angle);
-      uv_indices[i] = boundary_mesh.addUV(u, v, 0.0);
-    }
-
     const size_t tri_v0 = static_cast<size_t>(strand_to_mesh_vertex[vertices[0]]);
     const size_t tri_v1 = static_cast<size_t>(strand_to_mesh_vertex[vertices[1]]);
     const size_t tri_v2 = static_cast<size_t>(strand_to_mesh_vertex[vertices[2]]);
     const std::string face_metadata = composeBoundaryMeshFaceMetadata(
       t, "boundary_delaunay", static_cast<size_t>(-1), face_index, input_branch_id);
-    boundary_mesh.addTriangle(
-      tri_v0, tri_v1, tri_v2, uv_indices[0], uv_indices[1], uv_indices[2], 1, face_metadata);
+    addBoundaryTriangle(tri_v0, tri_v1, tri_v2, face_metadata, 1);
     ++triangles_added;
   }
 
@@ -8126,11 +8337,13 @@ void SegmentBuilder::finalize(double t)
   {
     meshlet.ensureFaceMetadataSize();
     meshlet.computeNormals(NormalMode::PerTriangleCorner);
+    meshlet.validateUVLayout("finalized interior meshlet");
   }
   for (auto& meshlet : intersection_meshes)
   {
     meshlet.ensureFaceMetadataSize();
     meshlet.computeNormals(NormalMode::PerTriangleCorner);
+    meshlet.validateUVLayout("finalized intersection meshlet");
   }
 
   auto remap1 = boundary_mesh.mergeDuplicateVertices();
@@ -8138,6 +8351,7 @@ void SegmentBuilder::finalize(double t)
   auto remap2 = boundary_mesh.removeIsolatedVertices();
   boundary_mesh.ensureFaceMetadataSize();
   boundary_mesh.computeNormals(NormalMode::PerTriangleCorner);
+  boundary_mesh.validateUVLayout("finalized boundary mesh");
 
   // Update boundary vertex to strand id mapping
   std::vector<size_t> new_boundary_vertex_to_strand_id;
@@ -8165,6 +8379,23 @@ void SegmentBuilder::finalize(double t)
       all_meshlet_ptrs.push_back(&meshes[mesh_index]);
       labels.push_back("mesh_" + std::to_string(mesh_index));
     }
+    Validator::validateAndReportInteriorMeshletUvHeights(
+      all_meshlet_ptrs, "segment builder finalize interior", uv_height_factor, &labels);
+
+    std::vector<VoronoiMesh*> bark_meshlet_ptrs;
+    std::vector<std::string> bark_labels;
+    bark_meshlet_ptrs.reserve(intersection_meshes.size() + 1);
+    bark_labels.reserve(intersection_meshes.size() + 1);
+    for (size_t mesh_index = 0; mesh_index < intersection_meshes.size(); ++mesh_index)
+    {
+      bark_meshlet_ptrs.push_back(&intersection_meshes[mesh_index]);
+      bark_labels.push_back("intersection_mesh_" + std::to_string(mesh_index));
+    }
+    bark_meshlet_ptrs.push_back(&boundary_mesh);
+    bark_labels.push_back("boundary_mesh");
+    Validator::validateAndReportBarkMeshletUvHeights(
+      bark_meshlet_ptrs, "segment builder finalize bark", uv_height_factor, &bark_labels);
+
     for (size_t mesh_index = 0; mesh_index < intersection_meshes.size(); ++mesh_index)
     {
       all_meshlet_ptrs.push_back(&intersection_meshes[mesh_index]);
@@ -8292,6 +8523,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     }
     neighbor_segments.push_back(neighbor_segments_for_meshlet);
     segment_mesh.mergeDuplicateVertices(1e-4);
+    segment_mesh.validateUVLayout("extractSegmentMeshlets merged segment mesh");
     segment_mesh.ensureFaceMetadataSize();
     meshlets.push_back(segment_mesh);
 
