@@ -501,6 +501,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   kinetic_delaunay->setComponentSplitPolicy(settings.retriangulate_on_component_split
       ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
       : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
+  kinetic_delaunay->setSectionRange(settings.start_section, settings.end_section);
 
   const bool transform_mesh_at_construction = settings.transform_mesh_at_construction;
 

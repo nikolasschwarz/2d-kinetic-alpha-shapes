@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <queue>
 #include <tuple>
 #include <vector>
@@ -82,6 +83,8 @@ class KineticAlgorithm
   }
   bool empty() const { return events_.empty(); }
   void clear();
-  void processEvents();
+  /// Process queued events in time order. If @p end_time is set, discard the remainder once the next
+  /// event has @c occurrence_time >= @p end_time (that event is not executed).
+  void processEvents(std::optional<double> end_time = std::nullopt);
 };
 } // namespace kinDS

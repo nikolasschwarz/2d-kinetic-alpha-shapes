@@ -3,6 +3,7 @@
 #include "HalfEdgeDelaunayGraph.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "VisualDebugHighlight.hpp"
+#include "DebugExportFormatting.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -21,6 +22,8 @@ inline constexpr const char* kVisualDebugUnresolvedBranchFolder = "branchX";
 /// inference, or a single active branch). When no unique branch is known (e.g. section events), one SVG is written
 /// per active runtime branch. @ref kVisualDebugUnresolvedBranchFolder is used only when a preferred/explicit branch
 /// cannot be positioned, or when no active branch has strands.
+///
+/// Filename times use @ref formatDebugExportTimeToken / @ref kDebugExportTimePrecision.
 ///
 /// If @p explicit_runtime_branch_ids is non-null and non-empty, SVGs are written only for those runtime branch ids
 /// (no fan-out to every other active branch).

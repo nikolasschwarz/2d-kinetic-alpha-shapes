@@ -1,10 +1,12 @@
 #include "VoronoiMesh.hpp"
+#include "DebugExportFormatting.hpp"
 #include "Logger.hpp"
 #include "VoronoiMesh.hpp"
 #include "glm/gtx/norm.hpp"
 #include <glm/gtc/matrix_inverse.hpp>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iomanip>
 #include <stdexcept>
 #include <sstream>
@@ -48,9 +50,7 @@ std::string VoronoiMesh::creationKineticTimeFilenameSuffix() const
   {
     return {};
   }
-  std::ostringstream o;
-  o << "_t" << std::fixed << std::setprecision(6) << creation_kinetic_time_;
-  return o.str();
+  return "_" + formatDebugExportTimeToken(creation_kinetic_time_);
 }
 
 std::array<double, 3> barycentricCoordinates(
@@ -119,7 +119,9 @@ void VoronoiMesh::setProfilePlanePosition(size_t vertex_index, glm::dvec2 xy)
   }
   if (profile_plane_xy_.size() < vertices.size())
   {
-    profile_plane_xy_.resize(vertices.size());
+    // Unset slots must not look like valid (0,0) triangulation samples.
+    profile_plane_xy_.resize(vertices.size(),
+      glm::dvec2(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()));
   }
   profile_plane_xy_[vertex_index] = xy;
 }
@@ -132,7 +134,11 @@ glm::dvec2 VoronoiMesh::triangulationPlaneXY(size_t vertex_index) const
   }
   if (vertex_index < profile_plane_xy_.size())
   {
-    return profile_plane_xy_[vertex_index];
+    const glm::dvec2& xy = profile_plane_xy_[vertex_index];
+    if (std::isfinite(xy.x) && std::isfinite(xy.y))
+    {
+      return xy;
+    }
   }
   const glm::dvec3& v = vertices[vertex_index];
   return glm::dvec2(v.x, v.y);

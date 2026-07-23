@@ -1,98 +1,256 @@
 #include "KineticDelaunaySectionEvent.hpp"
 
+
+
 #include <stdexcept>
+
+
 
 using namespace kinDS;
 
-void KineticDelaunay::SectionEventManager::computeEvents(double t, size_t event_id)
+
+
+void KineticDelaunay::SectionEventManager::computeEvents(double /*t*/, size_t event_id)
+
 {
+
   const size_t section_count = kd_->getSectionCount();
 
+
+
   if (event_id != static_cast<size_t>(-1))
+
   {
+
     KINDS_ERROR("SectionEventManager::computeEvents only supports full scheduling.");
+
     return;
+
   }
+
+
 
   resetProgress();
-  section_count_ = section_count;
 
-  // Ensure the section counter starts from 0 for full compute runs.
-  kd_->sections_advanced = 0;
+
+
+  const size_t start_section = kd_->getStartSection();
+
+  const size_t end_section = kd_->getEndSection();
+
+  if (section_count == 0 || start_section > section_count || end_section < start_section
+
+    || end_section > section_count)
+
+  {
+
+    KINDS_ERROR("SectionEventManager::computeEvents: invalid section range start="
+
+      << start_section << " end=" << end_section << " count=" << section_count);
+
+    return;
+
+  }
+
+
+
+  // Section events open the next kinetic interval. The stop/finalize time is @ref getEndSection, so
+
+  // schedule only [start_section, end_section) — the event at end_section must not run.
+
+  section_count_ = end_section > start_section ? end_section - start_section : 0;
+
+
+
+  // Align the in-order section counter with the first scheduled section.
+
+  kd_->sections_advanced = start_section;
+
+
 
   // Clear any queued events from previous runs.
+
   kd_->kinetic_algorithm_->clear();
 
-  progress_bar_
-    = std::make_unique<ProgressBar>(0, section_count, "Computing Kinetic Voronoi Sections", ProgressBar::Display::Absolute);
 
-  // Create events for every section starting at t=0.0.
-  for (size_t i = 0; i < section_count; ++i)
+
+  if (section_count_ > 0)
+
   {
-    const double time = t + static_cast<double>(i);
-    kd_->kinetic_algorithm_->enqueueEvent(std::make_shared<SectionEvent>(kd_, time, i, time, glm::dvec2 { 0.0, 0.0 }));
+
+    progress_bar_ = std::make_unique<ProgressBar>(
+
+      0, section_count_, "Computing Kinetic Voronoi Sections", ProgressBar::Display::Absolute);
+
   }
+
+
+
+  for (size_t i = start_section; i < end_section; ++i)
+
+  {
+
+    const double time = static_cast<double>(i);
+
+    kd_->kinetic_algorithm_->enqueueEvent(std::make_shared<SectionEvent>(kd_, time, i, time, glm::dvec2 { 0.0, 0.0 }));
+
+  }
+
 }
+
+
 
 void KineticDelaunay::SectionEventManager::updateProgress(size_t section_index)
+
 {
+
   if (!progress_bar_)
+
     return;
-  progress_bar_->Update(section_index);
+
+  const size_t start_section = kd_->getStartSection();
+
+  if (section_index < start_section)
+
+  {
+
+    return;
+
+  }
+
+  progress_bar_->Update(section_index - start_section + 1);
+
 }
+
+
 
 void KineticDelaunay::SectionEventManager::finishProgressIfNeeded(size_t section_index)
+
 {
+
   if (!progress_bar_)
+
     return;
 
-  if (section_index + 1 >= section_count_)
+
+
+  // Last scheduled section event is end_section - 1.
+
+  if (kd_->getEndSection() > 0 && section_index + 1 >= kd_->getEndSection())
+
   {
+
     progress_bar_->Finish();
+
   }
+
 }
 
-void KineticDelaunay::SectionEvent::handleEvent()
+
+
+void KineticDelaunay::SectionEventManager::finishProgress()
+
 {
-  auto* kd = kd_;
-  if (!kd)
+
+  if (progress_bar_)
+
   {
-    throw std::runtime_error("SectionEvent has no KineticDelaunay pointer");
+
+    progress_bar_->Finish();
+
   }
 
+}
+
+
+
+void KineticDelaunay::SectionEvent::handleEvent()
+
+{
+
+  auto* kd = kd_;
+
+  if (!kd)
+
+  {
+
+    throw std::runtime_error("SectionEvent has no KineticDelaunay pointer");
+
+  }
+
+
+
   const size_t section_index = section_id;
+
   const size_t section_count = kd->getSectionCount();
+
+
 
   assert(section_index < section_count);
 
+
+
   // In-order processing is required for correct triangulation state updates.
+
   assert(section_index == kd->sections_advanced);
+
+
 
   auto* event_handler = kd->section_event_manager_->getCallback();
 
-  // This used to happen in KineticDelaunay::compute() / external loops (when section_index != 0).
-  if (section_index != 0 && event_handler)
+
+
+  // Bootstrap section (normally 0, or @ref getStartSection when starting mid-tree): init already set up meshes.
+
+  const bool is_bootstrap_section = section_index == kd->getStartSection();
+
+  if (!is_bootstrap_section && event_handler)
+
   {
+
     event_handler->beforeEvent(*this);
+
   }
+
+
 
   // Retire finished input branches before graph cuts so vertex positions are not queried past strand data.
+
   kd->retireFinishedInputBranches(static_cast<double>(section_index));
 
+
+
   // Replace the old `advanceOneSection()` logic.
+
   if (kd->component_data.components.size() > kd->prev_component_count)
+
   {
+
     kd->applyPendingComponentGraphSplit(static_cast<double>(section_index));
+
   }
+
+
 
   kd->precomputeStep(static_cast<double>(section_index));
 
+
+
   kd->section_event_manager_->updateProgress(section_index);
+
   kd->sections_advanced++;
+
   kd->section_event_manager_->finishProgressIfNeeded(section_index);
 
-  if (section_index != 0 && event_handler)
+
+
+  if (!is_bootstrap_section && event_handler)
+
   {
+
     event_handler->afterEvent(*this);
+
   }
+
 }
+

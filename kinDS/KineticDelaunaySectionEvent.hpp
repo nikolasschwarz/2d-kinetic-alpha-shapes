@@ -35,6 +35,7 @@ class KineticDelaunay::SectionEventManager final : public KineticDelaunay::Event
 
   void updateProgress(size_t section_index);
   void finishProgressIfNeeded(size_t section_index);
+  void finishProgress();
 
   void resetProgress()
   {

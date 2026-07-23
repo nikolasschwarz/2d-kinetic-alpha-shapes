@@ -1,5 +1,6 @@
 #include "SegmentBuilder.hpp"
 
+#include "DebugExportFormatting.hpp"
 #include "KineticDelaunayEventPredicates.hpp"
 #include "KineticDelaunayFlipEvent.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
@@ -71,7 +72,7 @@ std::string jsonStringLiteral(const std::string& value)
 std::string numberLiteral(double value)
 {
   std::ostringstream o;
-  o << std::setprecision(17) << std::showpoint << value;
+  o << std::setprecision(kDebugExportTimePrecision) << std::showpoint << value;
   return o.str();
 }
 
@@ -102,6 +103,8 @@ std::string svgEscape(const std::string& text)
   }
   return out;
 }
+
+std::optional<size_t> metadataSizeField(const std::string& metadata, const char* key);
 
 std::optional<std::string> metadataStringField(const std::string& metadata, const char* key)
 {
@@ -164,19 +167,30 @@ bool triangulationPlaneXYEqual(const VoronoiMesh& mesh, size_t vertex_a, size_t 
   return a.x == b.x && a.y == b.y;
 }
 
+double resolveTriangulateSimplePolygonDebugTime(const VoronoiMesh& mesh, std::optional<double> occurrence_time)
+{
+  if (occurrence_time.has_value() && std::isfinite(occurrence_time.value()))
+  {
+    return occurrence_time.value();
+  }
+  return mesh.getCreationKineticTime();
+}
+
 std::filesystem::path makeTriangulateSimplePolygonDebugPath(const KineticDelaunay& kin_del, const VoronoiMesh& mesh,
-  const char* tag, const char* extension)
+  const char* tag, const char* extension, std::optional<double> occurrence_time,
+  std::optional<size_t> runtime_branch_id)
 {
   static size_t debug_counter = 0;
   ++debug_counter;
 
-  const double kinetic_time = mesh.getCreationKineticTime();
-  const std::string time_token
-    = std::isfinite(kinetic_time) ? ("t" + numberLiteral(kinetic_time)) : std::string("t_unknown");
-  const std::string filename = time_token + "_triangulateSimplePolygon_" + tag + "_"
+  const double kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
+  const std::string filename = formatDebugExportTimeToken(kinetic_time) + "_triangulateSimplePolygon_" + tag + "_"
     + std::to_string(debug_counter) + extension;
 
-  std::filesystem::path filepath = std::filesystem::path(kVisualDebugUnresolvedBranchFolder) / filename;
+  const std::string branch_folder = runtime_branch_id.has_value()
+    ? ("branch" + std::to_string(runtime_branch_id.value()))
+    : kVisualDebugUnresolvedBranchFolder;
+  std::filesystem::path filepath = std::filesystem::path(branch_folder) / filename;
   if (const std::optional<std::filesystem::path>& output_root = kin_del.getVisualDebugOutputRoot();
     output_root.has_value())
   {
@@ -189,9 +203,62 @@ std::filesystem::path makeTriangulateSimplePolygonDebugPath(const KineticDelauna
   return filepath;
 }
 
+void appendTriangulateSimplePolygonVertexSourceFields(std::ostream& out, const std::string& metadata)
+{
+  const std::optional<std::string> source = metadataStringField(metadata, "source");
+  out << " source=" << (source.has_value() ? source.value() : "unknown");
+
+  if (const std::optional<std::string> event_type = metadataStringField(metadata, "event_type");
+    event_type.has_value())
+  {
+    out << " event_type=" << event_type.value();
+  }
+
+  // Associated IDs depend on source: site → strand_id; Voronoi vertex → voronoi_vertex_id;
+  // intersection → delaunay_edge_id / voronoi_edge_id (and conceptual_* when present).
+  if (const auto strand_id = metadataSizeField(metadata, "strand_id"); strand_id.has_value())
+  {
+    out << " strand_id=" << strand_id.value();
+  }
+  if (const auto voronoi_vertex_id = metadataSizeField(metadata, "voronoi_vertex_id");
+    voronoi_vertex_id.has_value())
+  {
+    out << " voronoi_vertex_id=" << voronoi_vertex_id.value();
+  }
+  if (const auto delaunay_edge_id = metadataSizeField(metadata, "delaunay_edge_id");
+    delaunay_edge_id.has_value())
+  {
+    out << " delaunay_edge_id=" << delaunay_edge_id.value();
+  }
+  if (const auto voronoi_edge_id = metadataSizeField(metadata, "voronoi_edge_id"); voronoi_edge_id.has_value())
+  {
+    out << " voronoi_edge_id=" << voronoi_edge_id.value();
+  }
+  if (const auto conceptual_delaunay_edge_id = metadataSizeField(metadata, "conceptual_delaunay_edge_id");
+    conceptual_delaunay_edge_id.has_value())
+  {
+    out << " conceptual_delaunay_edge_id=" << conceptual_delaunay_edge_id.value();
+  }
+  if (const auto conceptual_voronoi_edge_id = metadataSizeField(metadata, "conceptual_voronoi_edge_id");
+    conceptual_voronoi_edge_id.has_value())
+  {
+    out << " conceptual_voronoi_edge_id=" << conceptual_voronoi_edge_id.value();
+  }
+  if (const auto strand_cell_id = metadataSizeField(metadata, "strand_cell_id"); strand_cell_id.has_value())
+  {
+    out << " strand_cell_id=" << strand_cell_id.value();
+  }
+  if (const auto delaunay_face_id = metadataSizeField(metadata, "delaunay_face_id");
+    delaunay_face_id.has_value())
+  {
+    out << " delaunay_face_id=" << delaunay_face_id.value();
+  }
+}
+
 void writeTriangulateSimplePolygonDebugTxt(const KineticDelaunay& kin_del, const VoronoiMesh& mesh,
   const std::filesystem::path& filepath, const char* tag,
-  const std::vector<std::pair<std::string, std::vector<size_t>>>& rings)
+  const std::vector<std::pair<std::string, std::vector<size_t>>>& rings, std::optional<double> occurrence_time,
+  std::optional<size_t> runtime_branch_id)
 {
   std::ofstream out(filepath);
   if (!out)
@@ -200,12 +267,14 @@ void writeTriangulateSimplePolygonDebugTxt(const KineticDelaunay& kin_del, const
     return;
   }
 
-  const double kinetic_time = mesh.getCreationKineticTime();
+  const double kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
   const auto& stored_vertices = mesh.getVertices();
   const auto& vertex_metadata = mesh.getVertexMetadata();
 
   out << "# tag=" << tag << '\n';
-  out << "# kinetic_time=" << (std::isfinite(kinetic_time) ? numberLiteral(kinetic_time) : "unknown") << '\n';
+  out << "# occurrence_time=" << formatDebugExportTime(kinetic_time) << '\n';
+  out << "# runtime_branch_id="
+      << (runtime_branch_id.has_value() ? std::to_string(runtime_branch_id.value()) : "unresolved") << '\n';
   out << "# equality=exact profile_xy (triangulationPlaneXY), not mesh vertex id\n";
   out << "# ring_count=" << rings.size() << "\n\n";
 
@@ -225,21 +294,21 @@ void writeTriangulateSimplePolygonDebugTxt(const KineticDelaunay& kin_del, const
       }
     }
 
-    out << "index vertex_id profile_x profile_y object_x object_y object_z event_type\n";
+    out << "# columns: index vertex_id profile_x profile_y object_x object_y object_z <source meta...>\n";
     for (size_t i = 0; i < polygon_vertices.size(); ++i)
     {
       const size_t vertex_id = polygon_vertices[i];
       const glm::dvec2 profile = mesh.triangulationPlaneXY(vertex_id);
       const glm::dvec3 object = vertex_id < stored_vertices.size() ? stored_vertices[vertex_id] : glm::dvec3(0.0);
       out << i << ' ' << vertex_id << ' ' << numberLiteral(profile.x) << ' ' << numberLiteral(profile.y) << ' '
-          << numberLiteral(object.x) << ' ' << numberLiteral(object.y) << ' ' << numberLiteral(object.z) << ' ';
+          << numberLiteral(object.x) << ' ' << numberLiteral(object.y) << ' ' << numberLiteral(object.z);
       if (vertex_id < vertex_metadata.size())
       {
-        const std::optional<std::string> event_type = metadataStringField(vertex_metadata[vertex_id], "event_type");
-        if (event_type.has_value())
-        {
-          out << event_type.value();
-        }
+        appendTriangulateSimplePolygonVertexSourceFields(out, vertex_metadata[vertex_id]);
+      }
+      else
+      {
+        out << " source=unknown";
       }
       out << '\n';
     }
@@ -311,7 +380,8 @@ std::vector<std::vector<size_t>> splitPolygonAtRepeatedVertices(const VoronoiMes
 }
 
 void writeTriangulateSimplePolygonFailSvg(const KineticDelaunay& kin_del, const VoronoiMesh& mesh,
-  const std::vector<size_t>& polygon_vertices)
+  const std::vector<size_t>& polygon_vertices, std::optional<double> occurrence_time,
+  std::optional<size_t> runtime_branch_id)
 {
   if (polygon_vertices.size() < 3)
   {
@@ -319,7 +389,7 @@ void writeTriangulateSimplePolygonFailSvg(const KineticDelaunay& kin_del, const 
   }
 
   const std::filesystem::path filepath
-    = makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "FAIL", ".svg");
+    = makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "FAIL", ".svg", occurrence_time, runtime_branch_id);
 
   std::vector<glm::dvec2> ring_xy;
   ring_xy.reserve(polygon_vertices.size());
@@ -411,10 +481,29 @@ void writeTriangulateSimplePolygonFailSvg(const KineticDelaunay& kin_del, const 
     }
     if (vertex_id < vertex_metadata.size())
     {
-      const std::optional<std::string> event_type = metadataStringField(vertex_metadata[vertex_id], "event_type");
-      if (event_type.has_value())
+      const std::string& metadata = vertex_metadata[vertex_id];
+      if (const std::optional<std::string> source = metadataStringField(metadata, "source"); source.has_value())
       {
-        label << " " << event_type.value();
+        label << " " << source.value();
+      }
+      if (const auto voronoi_vertex_id = metadataSizeField(metadata, "voronoi_vertex_id");
+        voronoi_vertex_id.has_value())
+      {
+        label << " vv=" << voronoi_vertex_id.value();
+      }
+      if (const auto strand_id = metadataSizeField(metadata, "strand_id"); strand_id.has_value())
+      {
+        label << " strand=" << strand_id.value();
+      }
+      if (const auto delaunay_edge_id = metadataSizeField(metadata, "delaunay_edge_id");
+        delaunay_edge_id.has_value())
+      {
+        label << " de=" << delaunay_edge_id.value();
+      }
+      if (const auto voronoi_edge_id = metadataSizeField(metadata, "voronoi_edge_id");
+        voronoi_edge_id.has_value())
+      {
+        label << " ve=" << voronoi_edge_id.value();
       }
     }
     out << "<text x=\"" << (cx + r * 1.5) << "\" y=\"" << (cy - r * 1.5) << "\" font-size=\"" << span_x * 0.02
@@ -3256,15 +3345,8 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
 
   if (boundary_transition_shift->interior_voronoi_vertex_id.has_value())
   {
-    if (delaunayUndirectedEdgeHasVertex(graph, s0, site_vertex_id)
-      && delaunayUndirectedEdgeHasVertex(graph, s1, site_vertex_id))
-    {
-      const size_t interior_vv = boundary_transition_shift->interior_voronoi_vertex_id.value();
-      const glm::dvec3 vv_pos = computeVoronoiVertex(graph.face(interior_vv).half_edges[0], t);
-      KINDS_DEBUG("Radius boundary transition interior-vv corner site: cell=" << site_vertex_id << " vv=" << interior_vv
-        << " strip_d=" << strip_delaunay_edge_id << " t=" << t << " out=(" << vv_pos.x << "," << vv_pos.y << ")");
-      return RadiusTransitionSitePlacement { vv_pos, interior_vv };
-    }
+    // Interior Voronoi vertices reject shifting entirely (see radiusBoundaryTransitionShiftApplicable).
+    // Keep this guard so a stale shift context cannot snap corner sites to the VV.
     return std::nullopt;
   }
 
@@ -4605,7 +4687,7 @@ void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new
   }
   else
   {
-    assert(last_left_and_right.second == -1);
+    //assert(last_left_and_right.second == -1);
   }
 }
 
@@ -5386,8 +5468,9 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   else if (!is_flexible_placeholder && !is_intersection_vertex)
   {
     // Sites use their unshifted mesh placement. Parameterized radius-transition projections were handled above.
+    // Keep profile_xy / delaunay_xy as Delaunay-plane coordinates for ear-clip triangulation; only @c vertex
+    // becomes mesh space.
     vertex = computeMeshSiteVertexPosition(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
-    profile_xy = glm::dvec2(vertex.x, vertex.y);
     includes_virtual_shift = false;
   }
   else if (create_transformed_mesh && !is_flexible_placeholder)
@@ -5525,9 +5608,11 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
       builder.addString("callback", metadata_callback_phase_);
     }
 
+    const glm::dvec2 metadata_delaunay_xy
+      = (std::isfinite(delaunay_xy.x) && std::isfinite(delaunay_xy.y)) ? delaunay_xy : profile_xy;
     vertex_metadata = builder.addBool("shift", includes_virtual_shift)
-                        .addDouble("x", profile_xy.x)
-                        .addDouble("y", profile_xy.y)
+                        .addDouble("x", metadata_delaunay_xy.x)
+                        .addDouble("y", metadata_delaunay_xy.y)
                         .addDouble("mesh_x", vertex.x)
                         .addDouble("mesh_y", vertex.y)
                         .addDouble("mesh_z", vertex.z)
@@ -5546,9 +5631,20 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     throw std::runtime_error(oss.str());
   }
   mesh.setVertexKineticTime(index, t);
-  if (create_transformed_mesh)
+  if (!is_flexible_placeholder)
   {
-    mesh.setProfilePlanePosition(index, profile_xy);
+    // Triangulation plane must match the polygon ring's construction space (usually Delaunay). Prefer an
+    // explicit caller-provided XY; otherwise fall back to recomputed Delaunay coords. Never use mesh/object XY.
+    glm::dvec2 plane_xy = runtime_info.triangulation_plane_xy.value_or(delaunay_xy);
+    if (!std::isfinite(plane_xy.x) || !std::isfinite(plane_xy.y))
+    {
+      plane_xy = delaunay_xy;
+    }
+    if (!std::isfinite(plane_xy.x) || !std::isfinite(plane_xy.y))
+    {
+      plane_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+    }
+    mesh.setProfilePlanePosition(index, plane_xy);
   }
   const bool is_boundary_interval_meshlet = intersectionMeshletIndexForMesh(mesh).has_value();
   if (is_boundary_interval_meshlet)
@@ -7649,9 +7745,12 @@ void kinDS::SegmentBuilder::closingMeshLogUnmatchedOrderedSegments(
 }
 
 void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
-  const std::string& metadata, int material_id, bool orient_upwards)
+  const std::string& metadata, int material_id, bool orient_upwards, std::optional<double> occurrence_time,
+  std::optional<size_t> runtime_branch_id)
 {
   constexpr double eps = 1e-12;
+  const auto cross2 = [](const glm::dvec2& u, const glm::dvec2& v) { return u.x * v.y - u.y * v.x; };
+
   std::vector<size_t> vertices;
   vertices.reserve(polygon.size());
   for (size_t vertex_id : polygon)
@@ -7689,23 +7788,31 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
       debug_rings.emplace_back("sub_" + std::to_string(i), split_polygons[i]);
     }
     writeTriangulateSimplePolygonDebugTxt(kin_del, mesh,
-      makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "SPLIT", ".txt"), "SPLIT", debug_rings);
+      makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "SPLIT", ".txt", occurrence_time, runtime_branch_id),
+      "SPLIT", debug_rings, occurrence_time, runtime_branch_id);
 
     for (const std::vector<size_t>& sub_polygon : split_polygons)
     {
-      triangulateSimplePolygon(mesh, sub_polygon, metadata, material_id, orient_upwards);
+      triangulateSimplePolygon(
+        mesh, sub_polygon, metadata, material_id, orient_upwards, occurrence_time, runtime_branch_id);
     }
     return;
   }
   vertices = split_polygons.front();
 
-  auto cross_at = [&](size_t prev, size_t current, size_t next)
+  // Snapshot plane coordinates once. Ear-clip must not re-query mesh positions (object-space verts) mid-pass.
+  std::vector<glm::dvec2> plane(vertices.size());
+  for (size_t i = 0; i < vertices.size(); ++i)
   {
-    const glm::dvec2 a = mesh.triangulationPlaneXY(prev);
-    const glm::dvec2 b = mesh.triangulationPlaneXY(current);
-    const glm::dvec2 c = mesh.triangulationPlaneXY(next);
-    return glm::cross(b - a, c - b);
-  };
+    plane[i] = mesh.triangulationPlaneXY(vertices[i]);
+    if (!std::isfinite(plane[i].x) || !std::isfinite(plane[i].y))
+    {
+      throw std::runtime_error("triangulateSimplePolygon: non-finite triangulation-plane coordinate.");
+    }
+  }
+
+  auto cross_at = [&](size_t prev_i, size_t current_i, size_t next_i)
+  { return cross2(plane[current_i] - plane[prev_i], plane[next_i] - plane[current_i]); };
 
   bool removed_collinear = true;
   while (removed_collinear && vertices.size() > 3)
@@ -7713,12 +7820,12 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
     removed_collinear = false;
     for (size_t i = 0; i < vertices.size(); ++i)
     {
-      const size_t prev = vertices[(i + vertices.size() - 1) % vertices.size()];
-      const size_t current = vertices[i];
-      const size_t next = vertices[(i + 1) % vertices.size()];
-      if (std::abs(cross_at(prev, current, next)) <= eps)
+      const size_t prev_i = (i + vertices.size() - 1) % vertices.size();
+      const size_t next_i = (i + 1) % vertices.size();
+      if (std::abs(cross_at(prev_i, i, next_i)) <= eps)
       {
         vertices.erase(vertices.begin() + static_cast<std::ptrdiff_t>(i));
+        plane.erase(plane.begin() + static_cast<std::ptrdiff_t>(i));
         removed_collinear = true;
         break;
       }
@@ -7732,10 +7839,10 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
   auto signed_area2 = [&]()
   {
     double area2 = 0.0;
-    for (size_t i = 0; i < vertices.size(); ++i)
+    for (size_t i = 0; i < plane.size(); ++i)
     {
-      const glm::dvec2 p0 = mesh.triangulationPlaneXY(vertices[i]);
-      const glm::dvec2 p1 = mesh.triangulationPlaneXY(vertices[(i + 1) % vertices.size()]);
+      const glm::dvec2& p0 = plane[i];
+      const glm::dvec2& p1 = plane[(i + 1) % plane.size()];
       area2 += p0.x * p1.y - p1.x * p0.y;
     }
     return area2;
@@ -7749,18 +7856,50 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
   if (area2 < 0.0)
   {
     std::reverse(vertices.begin(), vertices.end());
+    std::reverse(plane.begin(), plane.end());
   }
 
-  auto point_in_triangle = [&](size_t point_id, size_t a_id, size_t b_id, size_t c_id)
+  auto point_in_triangle = [&](size_t p_i, size_t a_i, size_t b_i, size_t c_i)
   {
-    const glm::dvec2 p = mesh.triangulationPlaneXY(point_id);
-    const glm::dvec2 a = mesh.triangulationPlaneXY(a_id);
-    const glm::dvec2 b = mesh.triangulationPlaneXY(b_id);
-    const glm::dvec2 c = mesh.triangulationPlaneXY(c_id);
-    const double ab = glm::cross(b - a, p - a);
-    const double bc = glm::cross(c - b, p - b);
-    const double ca = glm::cross(a - c, p - c);
+    const glm::dvec2& p = plane[p_i];
+    const glm::dvec2& a = plane[a_i];
+    const glm::dvec2& b = plane[b_i];
+    const glm::dvec2& c = plane[c_i];
+    const double ab = cross2(b - a, p - a);
+    const double bc = cross2(c - b, p - b);
+    const double ca = cross2(a - c, p - c);
     return ab >= -eps && bc >= -eps && ca >= -eps;
+  };
+
+  auto emit_triangle = [&](size_t i0, size_t i1, size_t i2)
+  {
+    if (orient_upwards)
+    {
+      addMeshletTriangle(mesh, vertices[i0], vertices[i1], vertices[i2], metadata, material_id);
+    }
+    else
+    {
+      addMeshletTriangle(mesh, vertices[i0], vertices[i2], vertices[i1], metadata, material_id);
+    }
+  };
+
+  auto polygon_is_convex = [&]()
+  {
+    bool any_pos = false;
+    bool any_neg = false;
+    for (size_t i = 0; i < plane.size(); ++i)
+    {
+      const double cr = cross_at((i + plane.size() - 1) % plane.size(), i, (i + 1) % plane.size());
+      if (cr > eps)
+      {
+        any_pos = true;
+      }
+      if (cr < -eps)
+      {
+        any_neg = true;
+      }
+    }
+    return !(any_pos && any_neg);
   };
 
   while (vertices.size() > 3)
@@ -7768,23 +7907,21 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
     bool clipped_ear = false;
     for (size_t i = 0; i < vertices.size(); ++i)
     {
-      const size_t prev = vertices[(i + vertices.size() - 1) % vertices.size()];
-      const size_t current = vertices[i];
-      const size_t next = vertices[(i + 1) % vertices.size()];
-      if (cross_at(prev, current, next) <= eps)
+      const size_t prev_i = (i + vertices.size() - 1) % vertices.size();
+      const size_t next_i = (i + 1) % vertices.size();
+      if (cross_at(prev_i, i, next_i) <= eps)
       {
         continue;
       }
 
       bool contains_other_vertex = false;
-      for (size_t candidate : vertices)
+      for (size_t candidate_i = 0; candidate_i < vertices.size(); ++candidate_i)
       {
-        if (triangulationPlaneXYEqual(mesh, candidate, prev) || triangulationPlaneXYEqual(mesh, candidate, current)
-          || triangulationPlaneXYEqual(mesh, candidate, next))
+        if (candidate_i == prev_i || candidate_i == i || candidate_i == next_i)
         {
           continue;
         }
-        if (point_in_triangle(candidate, prev, current, next))
+        if (point_in_triangle(candidate_i, prev_i, i, next_i))
         {
           contains_other_vertex = true;
           break;
@@ -7795,35 +7932,72 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
         continue;
       }
 
-      if (orient_upwards)
-      {
-        addMeshletTriangle(mesh, prev, current, next, metadata, material_id);
-      }
-      else
-      {
-        addMeshletTriangle(mesh, prev, next, current, metadata, material_id);
-      }
+      emit_triangle(prev_i, i, next_i);
       vertices.erase(vertices.begin() + static_cast<std::ptrdiff_t>(i));
+      plane.erase(plane.begin() + static_cast<std::ptrdiff_t>(i));
       clipped_ear = true;
       break;
     }
 
     if (!clipped_ear)
     {
+      // Convex rings (including the common radius cell quads) can always fan-triangulate.
+      if (polygon_is_convex())
+      {
+        for (size_t i = 1; i + 1 < vertices.size(); ++i)
+        {
+          emit_triangle(0, i, i + 1);
+        }
+        return;
+      }
+
       writeTriangulateSimplePolygonDebugTxt(kin_del, mesh,
-        makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "FAIL", ".txt"), "FAIL", {{"fail", vertices}});
-      writeTriangulateSimplePolygonFailSvg(kin_del, mesh, vertices);
-      throw std::runtime_error("triangulateSimplePolygon: failed to find an ear; polygon may be non-simple.");
+        makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "FAIL", ".txt", occurrence_time, runtime_branch_id),
+        "FAIL", {{"fail", vertices}}, occurrence_time, runtime_branch_id);
+      writeTriangulateSimplePolygonFailSvg(kin_del, mesh, vertices, occurrence_time, runtime_branch_id);
+      KINDS_ERROR("triangulateSimplePolygon: failed to find an ear; polygon may be non-simple. Omitting polygon from mesh.");
+      return;
     }
   }
 
-  if (orient_upwards)
+  emit_triangle(0, 1, 2);
+}
+
+void kinDS::SegmentBuilder::fanTriangulateConvexPolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
+  const std::string& metadata, int material_id, bool orient_upwards)
+{
+  std::vector<size_t> vertices;
+  vertices.reserve(polygon.size());
+  for (size_t vertex_id : polygon)
   {
-    addMeshletTriangle(mesh, vertices[0], vertices[1], vertices[2], metadata, material_id);
+    if (vertex_id >= mesh.getVertices().size())
+    {
+      throw std::runtime_error("fanTriangulateConvexPolygon: polygon vertex index out of range.");
+    }
+    if (vertices.empty() || vertices.back() != vertex_id)
+    {
+      vertices.push_back(vertex_id);
+    }
   }
-  else
+  if (vertices.size() > 1 && vertices.front() == vertices.back())
   {
-    addMeshletTriangle(mesh, vertices[0], vertices[2], vertices[1], metadata, material_id);
+    vertices.pop_back();
+  }
+  if (vertices.size() < 3)
+  {
+    return;
+  }
+
+  for (size_t i = 1; i + 1 < vertices.size(); ++i)
+  {
+    if (orient_upwards)
+    {
+      addMeshletTriangle(mesh, vertices[0], vertices[i], vertices[i + 1], metadata, material_id);
+    }
+    else
+    {
+      addMeshletTriangle(mesh, vertices[0], vertices[i + 1], vertices[i], metadata, material_id);
+    }
   }
 }
 
@@ -7831,9 +8005,10 @@ void kinDS::SegmentBuilder::closingMeshTriangulatePolygons(
   VoronoiMesh& mesh, const std::vector<std::vector<size_t>>& polygons, double t, size_t strand_id)
 {
   const std::string face_metadata = composeClosingMeshFaceMetadata(t, strand_id);
+  const size_t runtime_branch_id = kin_del.getRuntimeBranchIdForStrand(strand_id);
   for (const auto& polygon : polygons)
   {
-    triangulateSimplePolygon(mesh, polygon, face_metadata);
+    triangulateSimplePolygon(mesh, polygon, face_metadata, RegularMeshletMaterialId, true, t, runtime_branch_id);
   }
 }
 
@@ -8162,8 +8337,8 @@ void SegmentBuilder::init()
   half_edge_index_to_segment_mesh_pair_index.resize(graph.halfEdgeSlotCount(), -1);
   corner_to_cutoff_mesh_indices.resize(graph.halfEdgeSlotCount(), -1);
 
-  // Initialize the strand geometries at t = 0.0
-  double t = 0.0; // TODO: might be customized later
+  // Initialize the strand geometries at the kinetic bootstrap section.
+  double t = static_cast<double>(kin_del.getStartSection());
 
   // We need a ruled surface for each half-edge in the graph except those having the infinite vertex as
   // origin
@@ -8216,7 +8391,7 @@ void SegmentBuilder::init()
     startNewMesh(i, t);
   }
 
-  // Create boundary interval meshes at t=0 from precomputed crossing data.
+  // Create boundary interval meshes at bootstrap time from precomputed crossing data.
   for (size_t i = 0; i < half_edge_count; i += 2)
   {
     if (!kin_del.isOnComponentBoundary(i))

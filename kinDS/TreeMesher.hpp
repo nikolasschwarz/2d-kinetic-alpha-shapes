@@ -60,6 +60,11 @@ class TreeMesher
     bool transform_mesh_at_construction = true;
     /// When true, OBJ export alternates light/dark green and brown materials by even/odd kinetic section.
     bool alternate_section_shading = false;
+    /// Inclusive first kinetic section to initialize and process (default 0).
+    size_t start_section = 0;
+    /// Exclusive kinetic stop / finalize time; empty means tree height (@c StrandTree::getHeight()).
+    /// Section events run on `[start_section, end_section)`; events with `t >= end_section` are not processed.
+    std::optional<size_t> end_section;
 
     // for debugging purposes:
     bool debug_export_meshes = false;

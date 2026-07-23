@@ -126,6 +126,24 @@ class HalfEdgeDelaunayGraph
 
   void init(const std::vector<std::vector<glm::dvec2>>& splines);
 
+  /**
+   * Assemble this graph from independently triangulated parts.
+   *
+   * Each part uses a local vertex index space [0, part.getVertexCount()).
+   * @p local_to_global_vertex[part_i][local_v] must be the global strand id for that local vertex.
+   * After combine, every half-edge origin and @ref getVertexCount() use the global strand-id space
+   * [0, global_vertex_count). Parts must be disjoint in the global index space. Twin pairing
+   * (index ^ 1) is preserved because each part's half-edge array is appended contiguously at an
+   * even offset.
+   */
+  void combine(size_t global_vertex_count, const std::vector<HalfEdgeDelaunayGraph>& parts,
+    const std::vector<std::vector<size_t>>& local_to_global_vertex);
+
+  /**
+   * Retriangulate from connected components (used after graph splits): Delaunay each component,
+   * remap local triangle indices through @p components into a shared buffer, then @ref build
+   * and attempt to preserve prior face/half-edge ids via @ref reorder_from_old.
+   */
   void update(
     size_t vertex_count,
     const std::vector<std::vector<size_t>>& components,

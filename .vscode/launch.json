@@ -10,13 +10,39 @@
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build-debug/bin/kinDS-demo.exe",
+      // kinDS-demo CLI (see main.cpp print_usage). Pick one COMMAND; OPTIONS may appear in any order.
+      //
+      // Commands:
+      //   --mesh <file>             Load StrandTree and run TreeMesher
+      //   --demo                    Run the kinetic Delaunay example
+      //   --help / -h               Print usage and exit
+      //
+      // Options:
+      //   --log-level <levels>      Replace log levels (comma-separated: debug,info,warning,error,critical).
+      //                             Default: info,warning,error,critical
+      //   --log-add <levels>        Enable additional log levels
+      //   --log-remove <levels>     Disable specific log levels
+      //   --log-file <path>         Also write logs to a file (console still used)
+      //   --export-mode <mode>      combined | segments | raw  (default: raw).
+      //                             "combined" also writes a single combined OBJ
+      //   --export-path <path>      Base output dir; writes segment_meshlets/ and raw_meshlets/ under it
+      //   --untransformed           Export/build in profile space (no object-space transform / separation);
+      //                             applies Y/Z swap for viewing with SVG. OBJ names get _untransformed
+      //   --transform-at-construction  Store vertices in object space while meshing (default)
+      //   --transform-at-export        Keep profile-space verts until OBJ export
+      //   --validate                After meshing, check same-source vertices agree in world space
+      //   --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)
+      //   --section-shading         Alternate light/dark materials by even/odd kinetic section
+      //   --start <section>         Bootstrap/start kinetic meshing at this section index (default: 0)
+      //   --end <section>           Exclusive stop/finalize time (default: tree height).
+      //                             Section events on [start, end); skip events with t >= end
       "args": [
         "--mesh",
         "input_examples/test_oak_6.txt",
         "--export-mode",
         "combined",
         "--validate",
-        "--untransformed"
+        "--section-shading",
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

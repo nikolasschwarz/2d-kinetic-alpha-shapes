@@ -22,20 +22,16 @@ struct RadiusBoundaryTransitionShiftContext
   bool roles_valid = false;
   std::array<size_t, 2> source_delaunay_edges {};
   size_t target_delaunay_edge = 0;
-  /// When set, the triangle's own circumcenter (vv id == containing tri id) lies inside; corner sites and
-  /// corner-adjacent source crossings shift to this Voronoi vertex; other source crossings move along their
-  /// Voronoi edge to the line from this vertex to the opposite triangle corner on that edge; the target
-  /// (internal) edge uses the vv-anchored Voronoi-edge crossing at the circumcenter and the same fictional
-  /// lines to its endpoints for all other crossings on that edge.
+  /// When set, at least one registered Voronoi vertex lies in the affected triangle. Shift must not run; use the
+  /// no-shift traced cell / triangle-cap path (same outcome as the pending branch-split fallback).
   std::optional<size_t> interior_voronoi_vertex_id {};
 };
 
-/// True when radius boundary-transition vertex shift should drive meshing (2↔1 roles valid).
-/// Interior-VV snaps and no-VV neighbor remaps are both handled inside placement helpers.
+/// True when radius boundary-transition vertex shift should drive meshing (2↔1 roles valid, no interior VV).
 inline bool radiusBoundaryTransitionShiftApplicable(
   bool shift_enabled, const RadiusBoundaryTransitionShiftContext& ctx)
 {
-  return shift_enabled && ctx.roles_valid;
+  return shift_enabled && ctx.roles_valid && !ctx.interior_voronoi_vertex_id.has_value();
 }
 
 /// Mesh-space segment used to place an intersection vertex:
@@ -404,6 +400,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> position_intersection;
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> conceptual_intersection;
     std::optional<RadiusTransitionProjection> radius_transition_projection;
+    /// When set, stored as @ref VoronoiMesh::setProfilePlanePosition for ear-clip triangulation.
+    /// Use the same XY the caller used to build the polygon ring (typically Delaunay space).
+    std::optional<glm::dvec2> triangulation_plane_xy {};
 
     bool isIntersectionVertex() const { return position_intersection.has_value(); }
   };
@@ -881,11 +880,24 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /**
    * @brief Triangulates one simple polygon ring into @p mesh using ear clipping.
-   * Rings that revisit the same profile XY position are split into sub-rings first.
+   * Rings that revisit the same Delaunay-plane XY position are split into sub-rings first.
+   * Uses @ref VoronoiMesh::triangulationPlaneXY (Delaunay space when meshes are object-space transformed).
    * @param polygon Vertex index ring into @p mesh.
    * @param orient_upwards If true, emits CCW XY triangles; otherwise emits CW triangles.
+   * @param occurrence_time Optional kinetic time for failure/split debug dumps (path + TXT header).
+   * @param runtime_branch_id Optional runtime branch for failure/split debug dump folder naming.
    */
   void triangulateSimplePolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
+    const std::string& metadata = "{}", int material_id = RegularMeshletMaterialId, bool orient_upwards = true,
+    std::optional<double> occurrence_time = std::nullopt, std::optional<size_t> runtime_branch_id = std::nullopt);
+
+  /**
+   * @brief Fan-triangulates a convex polygon ring (no geometric tests).
+   * Used by radius traced cell / triangle-cap meshlets. Does not use plane XY or ear clipping.
+   * @param polygon Vertex index ring into @p mesh (assumed convex, correctly ordered).
+   * @param orient_upwards If true, emits (0,i,i+1); otherwise emits (0,i+1,i).
+   */
+  void fanTriangulateConvexPolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
     const std::string& metadata = "{}", int material_id = RegularMeshletMaterialId, bool orient_upwards = true);
 
   /**

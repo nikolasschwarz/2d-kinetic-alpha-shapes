@@ -1,5 +1,6 @@
 #include "SegmentBuilderVisualDebug.hpp"
 
+#include "DebugExportFormatting.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
@@ -136,7 +137,7 @@ std::string chronologicalPhaseToken(const char* phase)
 std::string visualDebugSvgRelativePath(double occurrence_time, const char* phase, const std::string& event_descriptor,
   std::optional<size_t> runtime_branch_id, const std::optional<std::filesystem::path>& output_root)
 {
-  const std::string basename = "t" + std::to_string(occurrence_time) + "_segmentbuilder_"
+  const std::string basename = formatDebugExportTimeToken(occurrence_time) + "_segmentbuilder_"
     + chronologicalPhaseToken(phase) + "_" + event_descriptor + ".svg";
   const std::string branch_folder = runtime_branch_id.has_value()
     ? ("branch" + std::to_string(runtime_branch_id.value()))

@@ -1,11 +1,13 @@
 #include "HalfEdgeDelaunayGraph.hpp"
 
+#include "DebugExportFormatting.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "Logger.hpp"
 #include "simple_svg.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <glm/geometric.hpp>
@@ -1704,6 +1706,113 @@ void HalfEdgeDelaunayGraph::init(const std::vector<std::vector<glm::dvec2>>& spl
   init(site_positions);
 }
 
+void HalfEdgeDelaunayGraph::combine(size_t global_vertex_count, const std::vector<HalfEdgeDelaunayGraph>& parts,
+  const std::vector<std::vector<size_t>>& local_to_global_vertex)
+{
+  if (parts.size() != local_to_global_vertex.size())
+  {
+    throw std::runtime_error("HalfEdgeDelaunayGraph::combine: parts and local_to_global_vertex size mismatch");
+  }
+
+  vertex_count = global_vertex_count;
+  triangles.clear();
+  half_edges.clear();
+  vertex_to_half_edge.assign(vertex_count, static_cast<size_t>(-1));
+
+  std::vector<uint8_t> claimed(global_vertex_count, 0);
+  size_t reserved_faces = 0;
+  size_t reserved_half_edges = 0;
+  for (const auto& part : parts)
+  {
+    reserved_faces += part.triangles.size();
+    reserved_half_edges += part.half_edges.size();
+  }
+  triangles.reserve(reserved_faces);
+  half_edges.reserve(reserved_half_edges);
+
+  for (size_t part_index = 0; part_index < parts.size(); ++part_index)
+  {
+    const HalfEdgeDelaunayGraph& part = parts[part_index];
+    const std::vector<size_t>& local_to_global = local_to_global_vertex[part_index];
+
+    if (local_to_global.size() != part.vertex_count)
+    {
+      throw std::runtime_error("HalfEdgeDelaunayGraph::combine: local_to_global size must equal part vertex_count");
+    }
+    if ((part.half_edges.size() & 1u) != 0u)
+    {
+      throw std::runtime_error("HalfEdgeDelaunayGraph::combine: part half-edge count must be even (twin pairing)");
+    }
+    if ((half_edges.size() & 1u) != 0u)
+    {
+      throw std::runtime_error("HalfEdgeDelaunayGraph::combine: internal half-edge offset must stay even");
+    }
+
+    for (size_t local_v = 0; local_v < local_to_global.size(); ++local_v)
+    {
+      const size_t global_v = local_to_global[local_v];
+      if (global_v >= global_vertex_count)
+      {
+        throw std::runtime_error("HalfEdgeDelaunayGraph::combine: global vertex index out of range");
+      }
+      if (claimed[global_v] != 0)
+      {
+        throw std::runtime_error("HalfEdgeDelaunayGraph::combine: duplicate global vertex index across parts");
+      }
+      claimed[global_v] = 1;
+    }
+
+    const size_t he_offset = half_edges.size();
+    const size_t face_offset = triangles.size();
+
+    for (const HalfEdge& he : part.half_edges)
+    {
+      HalfEdge out = he;
+      if (out.origin >= 0)
+      {
+        const size_t local_origin = static_cast<size_t>(out.origin);
+        if (local_origin >= local_to_global.size())
+        {
+          throw std::runtime_error("HalfEdgeDelaunayGraph::combine: half-edge origin out of local range");
+        }
+        out.origin = static_cast<int>(local_to_global[local_origin]);
+      }
+      if (out.next >= 0)
+      {
+        out.next = static_cast<int>(static_cast<size_t>(out.next) + he_offset);
+      }
+      if (out.face >= 0)
+      {
+        out.face = static_cast<int>(static_cast<size_t>(out.face) + face_offset);
+      }
+      half_edges.push_back(out);
+    }
+
+    for (const Triangle& tri : part.triangles)
+    {
+      Triangle out = tri;
+      for (size_t i = 0; i < 3; ++i)
+      {
+        out.half_edges[i] += he_offset;
+      }
+      triangles.push_back(out);
+    }
+
+    for (size_t local_v = 0; local_v < local_to_global.size(); ++local_v)
+    {
+      const size_t local_he = part.vertex_to_half_edge[local_v];
+      if (local_he == static_cast<size_t>(-1) || local_he >= part.half_edges.size())
+      {
+        continue;
+      }
+      vertex_to_half_edge[local_to_global[local_v]] = local_he + he_offset;
+    }
+  }
+
+  rebuildLiveIndices();
+  validateLiveHalfEdgeFaceReferences();
+}
+
 void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& component_map,
   const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time)
 {
@@ -1725,9 +1834,7 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
   std::string debug_tag = std::to_string(debug_dump_id);
   if (debug_time.has_value())
   {
-    std::ostringstream oss;
-    oss << "_t" << *debug_time;
-    std::string time_suffix = oss.str();
+    std::string time_suffix = "_" + formatDebugExportTimeToken(*debug_time);
     for (char& ch : time_suffix)
     {
       if (!std::isalnum(static_cast<unsigned char>(ch)))

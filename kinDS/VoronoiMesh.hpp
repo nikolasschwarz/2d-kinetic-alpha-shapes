@@ -34,7 +34,8 @@ class VoronoiMesh
   std::vector<std::string> vertex_metadata;
   std::vector<std::string> face_metadata;
 
-  /// Profile-plane (x,y) per vertex when stored positions are object-space (ear clipping).
+  /// Delaunay-plane (x,y) used by ear-clip triangulation when @c vertices may be object-space.
+  /// Unset entries are NaN; @ref triangulationPlaneXY falls back to stored vertex XY only then.
   std::vector<glm::dvec2> profile_plane_xy_;
   /// Kinetic time per vertex. This stays separate from stored vertex.z because transformed meshes use object-space z.
   std::vector<double> vertex_kinetic_times_;

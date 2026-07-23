@@ -11,6 +11,7 @@
 #include "KineticDelaunayFlipEventTriggerDump.hpp"
 #include "KineticDelaunayEventPredicates.hpp"
 #include "Polygon2D.hpp"
+#include "DebugExportFormatting.hpp"
 #include "VisualDebugHighlight.hpp"
 #include <algorithm>
 #include <array>
@@ -1487,7 +1488,10 @@ void KineticDelaunay::precomputeStep(double t)
   }
 }
 
-void KineticDelaunay::handleEvents() { kinetic_algorithm_->processEvents(); }
+void KineticDelaunay::handleEvents()
+{
+  kinetic_algorithm_->processEvents(static_cast<double>(getEndSection()));
+}
 
 size_t KineticDelaunay::getBranchIndex(size_t strand_id, size_t t) const
 {
@@ -3896,12 +3900,13 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
       }
     }
 
-    // Now determine direction of walk
+    // All edges are on the correct side, so we are inside the triangle and can stop.
     if (inside_triangle)
     {
       break;
     }
 
+    // Now determine direction of walk
     size_t max_s_index = -1;
     double max_s = -1.0;
     double crossed_edge_param;
@@ -3966,16 +3971,95 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
 const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_manager)
 {
   callback_manager_ = callback_manager;
-  const size_t vertex_count = branch_trajs.getPoints().size();
-  std::vector<glm::dvec2> initial_sites;
-  initial_sites.reserve(vertex_count);
-  for (size_t v = 0; v < vertex_count; ++v)
+  const size_t section_count = getSectionCount();
+  if (section_count == 0)
   {
-    const size_t reference_branch = branch_trajs.getBranchIndex(v, 0);
-    initial_sites.push_back(branch_trajs.evaluateTransformed(v, 0.0, reference_branch));
+    throw std::runtime_error("KineticDelaunay::init: StrandTree has no sections");
   }
-  graph.init(initial_sites);
-  sections_advanced = 0; // Reset the section counter
+  if (start_section_ >= section_count)
+  {
+    throw std::runtime_error("KineticDelaunay::init: start_section "
+      + std::to_string(start_section_) + " is out of range [0, " + std::to_string(section_count) + ")");
+  }
+  if (end_section_.has_value() && end_section_.value() < start_section_)
+  {
+    throw std::runtime_error("KineticDelaunay::init: end_section < start_section");
+  }
+  if (end_section_.has_value() && end_section_.value() > section_count)
+  {
+    throw std::runtime_error("KineticDelaunay::init: end_section "
+      + std::to_string(end_section_.value()) + " is out of range [0, " + std::to_string(section_count) + "]");
+  }
+
+  const size_t bootstrap_section = start_section_;
+  const double bootstrap_t = static_cast<double>(bootstrap_section);
+
+  const size_t vertex_count = branch_trajs.getPoints().size();
+  // Bootstrap with one HalfEdgeDelaunayGraph per input branch at the start height, then combine into a
+  // single graph whose vertex indices remain global strand ids.
+  const auto& branches_at_bootstrap = branch_trajs.getStrandBranchesByHeight(bootstrap_section);
+  std::vector<HalfEdgeDelaunayGraph> branch_graphs;
+  std::vector<std::vector<size_t>> local_to_global;
+  branch_graphs.reserve(branches_at_bootstrap.size() + (add_dummy_boundary ? 1 : 0));
+  local_to_global.reserve(branches_at_bootstrap.size() + (add_dummy_boundary ? 1 : 0));
+
+  const auto append_branch_graph = [this, bootstrap_t, bootstrap_section, &branch_graphs, &local_to_global](
+                                     std::vector<size_t> strand_ids)
+  {
+    if (strand_ids.size() < 3)
+    {
+      return;
+    }
+
+    std::vector<glm::dvec2> sites;
+    sites.reserve(strand_ids.size());
+    for (size_t strand_id : strand_ids)
+    {
+      const size_t reference_branch
+        = isDummyBoundary(strand_id) ? 0 : branch_trajs.getBranchIndex(strand_id, bootstrap_section);
+      sites.push_back(branch_trajs.evaluateTransformed(strand_id, bootstrap_t, reference_branch));
+    }
+
+    HalfEdgeDelaunayGraph part;
+    part.init(sites);
+    branch_graphs.push_back(std::move(part));
+    local_to_global.push_back(std::move(strand_ids));
+  };
+
+  for (const auto& branch_strands : branches_at_bootstrap)
+  {
+    std::vector<size_t> component;
+    component.reserve(branch_strands.size());
+    for (size_t strand_id : branch_strands)
+    {
+      if (!isDummyBoundary(strand_id))
+      {
+        component.push_back(strand_id);
+      }
+    }
+    append_branch_graph(std::move(component));
+  }
+  if (add_dummy_boundary)
+  {
+    std::vector<size_t> dummy_component;
+    dummy_component.reserve(12);
+    for (size_t v = 0; v < vertex_count; ++v)
+    {
+      if (isDummyBoundary(v))
+      {
+        dummy_component.push_back(v);
+      }
+    }
+    append_branch_graph(std::move(dummy_component));
+  }
+  if (branch_graphs.empty())
+  {
+    throw std::runtime_error("KineticDelaunay::init: no triangulable branch components (>= 3 strands) at start_section "
+      + std::to_string(bootstrap_section));
+  }
+
+  graph.combine(vertex_count, branch_graphs, local_to_global);
+  sections_advanced = bootstrap_section;
   pending_branch_splits_.clear();
   pending_branch_splits_.resetStrandLookup(vertex_count);
 
@@ -3996,22 +4080,25 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
   quadrilateral_last_updated.resize(graph.halfEdgeSlotCount() / 2, 0.0);
   face_last_updated.resize(graph.faceSlotCount(), 0.0);
 
-  // Bootstrap component_map (singleton components) so getPointAt works during face initialization.
-  computeComponentData(0.0);
+  // Bootstrap component_map from the per-branch triangulation so getPointAt works during face initialization.
+  computeComponentData(bootstrap_t);
+  // Branches already start as separate graph components; do not treat this as a pending split.
+  prev_component_count = component_data.components.size();
 
   for (size_t face_index : graph.liveFaces())
   {
-    initializeFaceState(face_index, 0.0);
+    initializeFaceState(face_index, bootstrap_t);
   }
 
-  validateVoronoiVertexIteratorInvariants("init", 0.0);
+  validateVoronoiVertexIteratorInvariants("init", bootstrap_t);
 
-  // initialize components
-  computeComponentData(0.0);
-  updateRuntimeBranchMapFromInputBranches(0.0);
+  // Input branches at the bootstrap height become runtime branches directly.
+  computeComponentData(bootstrap_t);
+  prev_component_count = component_data.components.size();
+  updateRuntimeBranchMapFromInputBranches(bootstrap_t);
 
-  // Precompute Voronoi–Delaunay edge intersections at t = 0 and store them in crossing_data.
-  crossing_data.computeEdgeIntersections(*this, 0.0);
+  // Precompute Voronoi–Delaunay edge intersections at the bootstrap time and store them in crossing_data.
+  crossing_data.computeEdgeIntersections(*this, bootstrap_t);
 
   if (callback_manager)
   {
@@ -4055,8 +4142,14 @@ void KineticDelaunay::setSubdivisionSchedule(std::vector<std::pair<size_t, doubl
 
 void KineticDelaunay::enqueueScheduledSubdivisionEvents()
 {
+  const double min_t = static_cast<double>(getStartSection());
+  const double max_t = static_cast<double>(getEndSection());
   for (const auto& strand_and_t : subdivision_schedule_)
   {
+    if (strand_and_t.second < min_t || !(strand_and_t.second < max_t))
+    {
+      continue;
+    }
     kinetic_algorithm_->enqueueEvent(
       std::make_shared<SubdivisionEvent>(this, strand_and_t.second, strand_and_t.first, strand_and_t.second));
   }
@@ -4316,7 +4409,7 @@ void exportCrossingInvariantFailureDebugSvg(
 
   const std::vector<glm::dvec2> points = kd.getPointsAt(t);
   const std::string filename
-    = "t" + std::to_string(t) + "_crossing_invariant_FAIL_" + sanitizeContextForFilename(context) + ".svg";
+    = formatDebugExportTimeToken(t) + "_crossing_invariant_FAIL_" + sanitizeContextForFilename(context) + ".svg";
   const auto& containing_tri_ids = kd.getCrossingData().getContainingTriIds();
   const auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
 
@@ -4978,15 +5071,36 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::getGraph() const { return graph; }
 
 size_t KineticDelaunay::getSectionCount() const { return branch_trajs.getHeight(); }
 
+void KineticDelaunay::setSectionRange(size_t start_section, std::optional<size_t> end_section)
+{
+  start_section_ = start_section;
+  end_section_ = end_section;
+}
+
+size_t KineticDelaunay::getEndSection() const
+{
+  const size_t section_count = getSectionCount();
+  // Default stop/finalize time is the tree top (height). Section events run on [start, end).
+  const size_t default_end = section_count;
+  if (!end_section_.has_value())
+  {
+    return default_end;
+  }
+  return std::min(end_section_.value(), default_end);
+}
+
 // Computes the Delaunay triangulation of the given splines
 void KineticDelaunay::compute()
 {
-
-  section_event_manager_->computeEvents(0.0, static_cast<size_t>(-1));
+  const size_t start_section = getStartSection();
+  const size_t end_section = getEndSection();
+  section_event_manager_->computeEvents(static_cast<double>(start_section), static_cast<size_t>(-1));
   enqueueScheduledSubdivisionEvents();
   handleEvents();
+  section_event_manager_->finishProgress();
 
-  const double end_time = static_cast<double>(getSectionCount());
+  // Finalize at the exclusive stop time (no section event / kinetic events at this time).
+  const double end_time = static_cast<double>(end_section);
 
   if (callback_manager_)
   {

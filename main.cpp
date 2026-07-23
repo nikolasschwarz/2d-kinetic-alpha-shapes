@@ -485,6 +485,9 @@ static void print_usage(const char* program_name)
             << "  --validate                After meshing, check that vertices with the same metadata source agree in world space\n"
             << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
             << "  --section-shading         Alternate light/dark green and brown materials by even/odd section\n"
+            << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
+            << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
+            << "                            Section events run on [start, end); events with t >= end are skipped.\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -543,7 +546,8 @@ static std::filesystem::path mesh_export_base_directory(const std::optional<std:
 static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources,
-  const std::string& validate_log_path, bool alternate_section_shading)
+  const std::string& validate_log_path, bool alternate_section_shading, size_t start_section,
+  std::optional<size_t> end_section)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -581,6 +585,21 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().validate_mesh_vertex_sources = validate_mesh_vertex_sources;
     mesher.getSettings().validate_mesh_vertex_sources_log_path = validate_log_path;
     mesher.getSettings().alternate_section_shading = alternate_section_shading;
+    mesher.getSettings().start_section = start_section;
+    mesher.getSettings().end_section = end_section;
+    if (start_section != 0 || end_section.has_value())
+    {
+      std::cout << "Section range: start=" << start_section;
+      if (end_section.has_value())
+      {
+        std::cout << " end=" << end_section.value();
+      }
+      else
+      {
+        std::cout << " end=<last>";
+      }
+      std::cout << std::endl;
+    }
     const auto& meshes = mesher.runMeshingAlgorithm(true);
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
@@ -674,6 +693,8 @@ int main(int argc, char* argv[])
   bool mesh_validate_vertex_sources = false;
   std::string mesh_validate_log_path = kinDS::Validator::defaultLogFilePath();
   bool mesh_alternate_section_shading = false;
+  size_t mesh_start_section = 0;
+  std::optional<size_t> mesh_end_section;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -807,6 +828,56 @@ int main(int argc, char* argv[])
       mesh_alternate_section_shading = true;
       ++arg_idx;
     }
+    else if (arg == "--start")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --start requires a section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const long long parsed = std::stoll(argv[arg_idx + 1]);
+        if (parsed < 0)
+        {
+          throw std::out_of_range("negative");
+        }
+        mesh_start_section = static_cast<size_t>(parsed);
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --start expects a non-negative integer section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--end")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --end requires a section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const long long parsed = std::stoll(argv[arg_idx + 1]);
+        if (parsed < 0)
+        {
+          throw std::out_of_range("negative");
+        }
+        mesh_end_section = static_cast<size_t>(parsed);
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --end expects a non-negative integer section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
     else if (arg == "--help" || arg == "-h")
     {
       if (!command.empty() && command != "help")
@@ -862,6 +933,13 @@ int main(int argc, char* argv[])
     return 1;
   }
 
+  if (mesh_end_section.has_value() && mesh_end_section.value() < mesh_start_section)
+  {
+    std::cerr << "Error: --end (" << mesh_end_section.value() << ") is before --start (" << mesh_start_section
+              << ")." << std::endl;
+    return 1;
+  }
+
   // Second pass: execute the chosen command (options already applied)
   if (command == "help")
   {
@@ -881,8 +959,8 @@ int main(int argc, char* argv[])
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
-          mesh_transform_at_construction, mesh_validate_vertex_sources,
-          mesh_validate_log_path, mesh_alternate_section_shading))
+          mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_validate_log_path,
+          mesh_alternate_section_shading, mesh_start_section, mesh_end_section))
     {
       return 1;
     }

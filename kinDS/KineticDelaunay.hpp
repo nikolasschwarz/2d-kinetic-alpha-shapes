@@ -359,7 +359,11 @@ class KineticDelaunay
   /// Strand mesh subdivision schedule; consumed on the first @ref enqueueScheduledSubdivisionEvents in @ref compute.
   std::vector<std::pair<size_t, double>> subdivision_schedule_;
   CallbackManager* callback_manager_ = nullptr;
-  size_t sections_advanced = 0; // Counter for the number of sections advanced
+  size_t sections_advanced = 0; // Counter for the number of sections advanced; starts at @ref start_section_
+  /// First section index to initialize and process (inclusive). Default 0.
+  size_t start_section_ = 0;
+  /// Last section index to process (inclusive). Empty means @ref getSectionCount() - 1.
+  std::optional<size_t> end_section_;
   double cutoff; // Cutoff radius for boundary events
   std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
 
@@ -625,6 +629,16 @@ class KineticDelaunay
   const HalfEdgeDelaunayGraph& getGraph() const;
 
   size_t getSectionCount() const;
+
+  /// Kinetic section window for @ref init / @ref compute. Clamped to start in `[0, getSectionCount())` and
+  /// end in `[start, getSectionCount()]`. @p end_section is the exclusive stop / finalize time: section events
+  /// run for `[start, end)`, and @ref KineticAlgorithm::processEvents discards anything with
+  /// `occurrence_time >= end`. When @p start_section > 0, bootstrap uses that height and input branches there
+  /// become runtime branches directly.
+  void setSectionRange(size_t start_section, std::optional<size_t> end_section = std::nullopt);
+  size_t getStartSection() const { return start_section_; }
+  /// Exclusive kinetic stop / finalize time (defaults to @c getSectionCount(), i.e. tree height).
+  size_t getEndSection() const;
 
   // Computes the Delaunay triangulation of the given splines
   void compute();
