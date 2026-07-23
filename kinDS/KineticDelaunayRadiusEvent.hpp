@@ -59,8 +59,19 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
 
   auto& graph = kd->graph;
 
-  // Check if the event is still valid
+  // Outdated if the event half-edge or its triangle was tombstoned (e.g. after a branch split).
+  if (!graph.isLiveHalfEdge(half_edge_id))
+  {
+    return;
+  }
+
   size_t face_id = graph.halfEdge(half_edge_id).face;
+  if (!graph.isLiveFace(face_id))
+  {
+    return;
+  }
+
+  // Check if the event is still valid
   if (creation_time < kd->face_last_updated[face_id])
   {
     return;

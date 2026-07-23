@@ -12,10 +12,11 @@
       "program": "${workspaceFolder}/build-debug/bin/kinDS-demo.exe",
       "args": [
         "--mesh",
-        "input_examples/test_oak_5.txt",
+        "input_examples/test_oak_6.txt",
         "--export-mode",
         "combined",
         "--validate",
+        "--untransformed"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

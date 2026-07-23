@@ -10,6 +10,7 @@
 #include "SegmentBuilderSectionCallback.hpp"
 #include "SegmentBuilderSubdivisionCallback.hpp"
 #include "SegmentBuilderSeparationCallback.hpp"
+#include "SegmentBuilderVisualDebug.hpp"
 #include "Validator.hpp"
 
 #include <algorithm>
@@ -175,7 +176,7 @@ std::filesystem::path makeTriangulateSimplePolygonDebugPath(const KineticDelauna
   const std::string filename = time_token + "_triangulateSimplePolygon_" + tag + "_"
     + std::to_string(debug_counter) + extension;
 
-  std::filesystem::path filepath = std::filesystem::path("branch0") / filename;
+  std::filesystem::path filepath = std::filesystem::path(kVisualDebugUnresolvedBranchFolder) / filename;
   if (const std::optional<std::filesystem::path>& output_root = kin_del.getVisualDebugOutputRoot();
     output_root.has_value())
   {
@@ -1404,10 +1405,11 @@ std::string formatMeshPairIndex(size_t pair_idx)
   return std::to_string(pair_idx);
 }
 
-bool diagnosticsNearMonitoredFlipTime(double t)
+bool diagnosticsInMonitoredFlipWindow(double t)
 {
   return std::isfinite(t)
-    && std::abs(t - SegmentBuilder::kDiagnosticsMonitoredFlipTime) <= SegmentBuilder::kDiagnosticsMonitoredTimeEpsilon;
+    && t >= std::floor(SegmentBuilder::kDiagnosticsMonitoredFlipTime)
+    && t < std::floor(SegmentBuilder::kDiagnosticsMonitoredFlipTime) + 1.0;
 }
 } // namespace
 
@@ -1422,7 +1424,7 @@ void kinDS::SegmentBuilder::maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(doub
     && delaunay_edge_id.value() == kDiagnosticsMonitoredDelaunayEdgeId;
   const bool pair_hit
     = mesh_pair_index.has_value() && mesh_pair_index.value() == kDiagnosticsMonitoredMeshPairId;
-  if (!edge_hit && !pair_hit && !diagnosticsNearMonitoredFlipTime(t))
+  if (!edge_hit && !pair_hit && !diagnosticsInMonitoredFlipWindow(t))
   {
     return;
   }
@@ -1464,6 +1466,64 @@ void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(double t, c
     {
       return "(empty strip list)";
     }
+
+    // MeshingData::{start,end}_crossing are list iterators into CrossingData::edge_intersections. After erase/insert,
+    // std::optional can still be engaged while the iterator is singular ("value-initialized") or orphaned — never
+    // dereference the stored iterator for diagnostics. Resolve from live CrossingData via the endpoint half-edge.
+    const auto& crossing_data = kin_del.getCrossingData();
+    const auto format_crossing_endpoint
+      = [&](const char* label, const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing_opt,
+          int half_edge_id)
+    {
+      if (!crossing_opt.has_value())
+      {
+        return std::string {};
+      }
+
+      std::ostringstream part;
+      part << " " << label << "{";
+      if (half_edge_id < 0)
+      {
+        part << "stale_or_unset he=-1}";
+        return part.str();
+      }
+
+      const size_t d_edge = static_cast<size_t>(half_edge_id) / 2;
+      if (d_edge >= crossing_data.delaunay_edge_intersections.size())
+      {
+        part << "stale he=" << half_edge_id << " (no d-slot)}";
+        return part.str();
+      }
+
+      const auto& live_refs = crossing_data.delaunay_edge_intersections[d_edge];
+      if (live_refs.empty())
+      {
+        part << "stale he=" << half_edge_id << " d=" << d_edge << " (no live crossing)}";
+        return part.str();
+      }
+
+      if (live_refs.size() == 1)
+      {
+        const auto& ref = live_refs.front();
+        part << "de=" << ref->delaunay_edge_id << ",ve=" << ref->voronoi_edge_id << "}";
+        return part.str();
+      }
+
+      part << "he=" << half_edge_id << " d=" << d_edge << " live=[";
+      bool first = true;
+      for (const auto& ref : live_refs)
+      {
+        if (!first)
+        {
+          part << ";";
+        }
+        first = false;
+        part << "de=" << ref->delaunay_edge_id << ",ve=" << ref->voronoi_edge_id;
+      }
+      part << "]}";
+      return part.str();
+    };
+
     std::ostringstream oss;
     size_t seg_i = 0;
     for (const auto& seg : segs)
@@ -1474,16 +1534,8 @@ void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(double t, c
       }
       oss << "seg" << seg_i << "[v" << seg.mesh_start_vertex_id << "->" << seg.mesh_end_vertex_id << " he("
           << seg.start_half_edge_id << "," << seg.end_half_edge_id << ")";
-      if (seg.start_crossing.has_value())
-      {
-        oss << " start_x{de=" << seg.start_crossing.value()->delaunay_edge_id
-            << ",ve=" << seg.start_crossing.value()->voronoi_edge_id << "}";
-      }
-      if (seg.end_crossing.has_value())
-      {
-        oss << " end_x{de=" << seg.end_crossing.value()->delaunay_edge_id
-            << ",ve=" << seg.end_crossing.value()->voronoi_edge_id << "}";
-      }
+      oss << format_crossing_endpoint("start_x", seg.start_crossing, seg.start_half_edge_id);
+      oss << format_crossing_endpoint("end_x", seg.end_crossing, seg.end_half_edge_id);
       ++seg_i;
     }
     return oss.str();
@@ -3405,25 +3457,9 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
     std::ostringstream oss;
     oss << "resolveIntersectionMeshPairIndex: start/end intersection mesh pair index mismatch (start_next="
         << start_value->next_segment_mesh_pair_index << ", end_prev=" << end_value->prev_segment_mesh_pair_index
-        << ", voronoi_cell_id=" << voronoi_cell_id << ", event_time=" << event_time << ", de=" << d_edge_id << ", s_ve=" << start_value->voronoi_edge_id << ", e_ve=" << end_value->voronoi_edge_id
-        << ", edge_links=(";
-    {
-      bool first = true;
-      for (KineticDelaunay::CrossingData::EdgeIntersectionRef ref : d_list)
-      {
-        if (!first)
-        {
-          oss << ", ";
-        }
-        first = false;
-        const auto fmt = [](size_t idx) -> std::string
-        {
-          return idx == static_cast<size_t>(-1) ? std::string("-1") : std::to_string(idx);
-        };
-        oss << fmt(ref->prev_segment_mesh_pair_index) << ", " << fmt(ref->next_segment_mesh_pair_index);
-      }
-    }
-    oss << ")).";
+        << ", voronoi_cell_id=" << voronoi_cell_id << ", event_time=" << event_time << ", de=" << d_edge_id
+        << ", s_ve=" << start_value->voronoi_edge_id << ", e_ve=" << end_value->voronoi_edge_id << ", edge_links="
+        << formatDelaunayEdgeCrossingMeshPairLinkSequence(d_edge_id) << ").";
     KINDS_ERROR(oss.str());
     throw std::runtime_error(oss.str());
   }
@@ -4093,6 +4129,43 @@ std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> SegmentBuilder::
   return refs;
 }
 
+std::string SegmentBuilder::formatCrossingMeshPairLinkSequence(
+  const std::vector<std::pair<size_t, size_t>>& prev_next_pairs)
+{
+  std::ostringstream oss;
+  oss << '(';
+  bool first = true;
+  for (const auto& [prev_pair, next_pair] : prev_next_pairs)
+  {
+    if (!first)
+    {
+      oss << ", ";
+    }
+    first = false;
+    oss << formatMeshPairIndex(prev_pair) << ", " << formatMeshPairIndex(next_pair);
+  }
+  oss << ')';
+  return oss.str();
+}
+
+std::string SegmentBuilder::formatDelaunayEdgeCrossingMeshPairLinkSequence(size_t delaunay_edge_id) const
+{
+  const auto& crossing_data = kin_del.getCrossingData();
+  if (delaunay_edge_id >= crossing_data.delaunay_edge_intersections.size())
+  {
+    return "(out_of_range)";
+  }
+
+  const auto& d_list = crossing_data.delaunay_edge_intersections[delaunay_edge_id];
+  std::vector<std::pair<size_t, size_t>> prev_next_pairs;
+  prev_next_pairs.reserve(d_list.size());
+  for (const KineticDelaunay::CrossingData::EdgeIntersectionRef& ref : d_list)
+  {
+    prev_next_pairs.emplace_back(ref->prev_segment_mesh_pair_index, ref->next_segment_mesh_pair_index);
+  }
+  return formatCrossingMeshPairLinkSequence(prev_next_pairs);
+}
+
 void SegmentBuilder::clearIntersectionMeshPairLinksOnDelaunayEdge(size_t delaunay_edge_id)
 {
   auto& crossing_data = kin_del.getCrossingDataMutable();
@@ -4167,7 +4240,8 @@ void SegmentBuilder::validateDelaunayEdgeIntersectionMeshPairLinks(
     std::ostringstream oss;
     oss << context << ": Delaunay edge " << delaunay_edge_id << " intersection mesh-pair link mismatch at t="
         << event_time << " (crossing[" << list_index << "].next=" << format_mesh_pair_index(cur_next)
-        << " != crossing[" << next_index << "].prev=" << format_mesh_pair_index(next_prev) << "):\n";
+        << " != crossing[" << next_index << "].prev=" << format_mesh_pair_index(next_prev)
+        << ") edge_links=" << formatDelaunayEdgeCrossingMeshPairLinkSequence(delaunay_edge_id) << ":\n";
 
     size_t dump_index = 0;
     for (KineticDelaunay::CrossingData::EdgeIntersectionRef ref : d_list)
@@ -8524,7 +8598,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       segment_mesh.setCreationKineticTime(earliest_creation);
     }
     neighbor_segments.push_back(neighbor_segments_for_meshlet);
-    segment_mesh.mergeDuplicateVertices(1e-4);
+    segment_mesh.mergeDuplicateVertices(0.0);
     segment_mesh.validateUVLayout("extractSegmentMeshlets merged segment mesh");
     segment_mesh.ensureFaceMetadataSize();
     meshlets.push_back(segment_mesh);

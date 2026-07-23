@@ -92,6 +92,9 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
   }
 
   const bool apply_export_transform = transformed.value_or(!settings.transform_mesh_at_construction);
+  // Explicit profile-space export (@c transformed == false), e.g. CLI --untransformed — not merely
+  // "skip export transform because meshlets were already transformed at construction".
+  const bool untransformed_export = transformed.has_value() && !transformed.value();
   const bool include_metadata = mesh_builder->store_mesh_metadata;
 
   std::vector<VoronoiMesh> meshlets_to_export;
@@ -132,11 +135,29 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
       settings.alternate_section_shading);
   };
 
+  const std::string untransformed_suffix = untransformed_export ? "_untransformed" : "";
+
   auto meshlet_filename = [&](size_t i) -> std::filesystem::path
   {
     const std::string suffix = (i < export_suffixes.size()) ? export_suffixes[i] : "";
     return std::filesystem::path("meshlet" + std::to_string(i) + suffix
-      + meshlets_to_export[i].creationKineticTimeFilenameSuffix() + ".obj");
+      + meshlets_to_export[i].creationKineticTimeFilenameSuffix() + untransformed_suffix + ".obj");
+  };
+
+  auto with_untransformed_path_suffix = [&](std::filesystem::path path) -> std::filesystem::path
+  {
+    if (!untransformed_export)
+    {
+      return path;
+    }
+    const std::filesystem::path ext = path.extension();
+    path.replace_extension();
+    path += untransformed_suffix;
+    if (!ext.empty())
+    {
+      path += ext;
+    }
+    return path;
   };
 
   switch (export_mode)
@@ -158,7 +179,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     break;
   }
 
-  std::filesystem::path obj_path = export_path;
+  std::filesystem::path obj_path = with_untransformed_path_suffix(export_path);
   if (obj_path.extension().empty())
   {
     obj_path.replace_extension(".obj");

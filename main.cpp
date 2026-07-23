@@ -598,11 +598,11 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
       : apply_export_transform ? "transformed at export" : "no export transform";
 
     std::cout << "Exporting segment meshlets to: " << segment_export_dir.string() << " (" << space_label << ", "
-              << transform_label << ")" << std::endl;
+              << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
     mesher.exportMeshlets(kinDS::MeshletExportMode::PerSegment, segment_export_dir, export_transform);
 
     std::cout << "Exporting raw meshlets to: " << raw_export_dir.string() << " (" << space_label << ", "
-              << transform_label << ")" << std::endl;
+              << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
     mesher.exportMeshlets(kinDS::MeshletExportMode::Raw, raw_export_dir, export_transform);
 
     if (export_mode == kinDS::MeshletExportMode::Combined)
@@ -611,7 +611,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
         && export_path->extension() == ".obj"
         ? *export_path
         : export_base / "combined_mesh.obj";
-      std::cout << "Exporting combined mesh to: " << combined_export_path.string() << " (" << space_label << ", "
+      std::cout << "Exporting combined mesh to: " << combined_export_path.string()
+                << (profile_space_export ? " (with _untransformed suffix)" : "") << " (" << space_label << ", "
                 << transform_label << ")" << std::endl;
       mesher.exportMeshlets(kinDS::MeshletExportMode::Combined, combined_export_path, export_transform);
     }
@@ -622,8 +623,10 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     {
       mesher.transformBoundaryMesh(boundary_mesh);
     }
-    kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, true);
-    std::cout << "Boundary mesh exported to: boundary_mesh.obj" << std::endl;
+    const std::filesystem::path boundary_export_path
+      = profile_space_export ? "boundary_mesh_untransformed.obj" : "boundary_mesh.obj";
+    kinDS::ObjExporter::writeMesh(boundary_mesh, boundary_export_path, 1.0, 1.0, {}, true);
+    std::cout << "Boundary mesh exported to: " << boundary_export_path.string() << std::endl;
 
     std::cout << "Meshing complete!" << std::endl;
 

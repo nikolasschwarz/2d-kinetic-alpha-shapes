@@ -70,9 +70,41 @@ void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
     seam_outlines.push_back(std::move(loop));
   }
 
+  std::vector<size_t> svg_branch_ids;
+  const std::optional<size_t> parent_branch = runtimeBranchForPendingSplitParent(kin_del, parent_component_id);
+
+  if (split.has_value())
+  {
+    // Pending separation: always the parent folder only (child strands still belong to the unsplit parent view).
+    if (parent_branch.has_value())
+    {
+      const size_t parent_id = parent_branch.value();
+      cached_split_parent_component_id_ = parent_component_id;
+      cached_split_parent_branch_id_ = parent_id;
+      cached_split_child_branch_ids_.clear();
+      if (const std::vector<size_t>* children = kin_del.getRuntimeBranchData().pendingChildBranches(parent_id))
+      {
+        cached_split_child_branch_ids_ = *children;
+      }
+      svg_branch_ids.push_back(parent_id);
+    }
+  }
+  else if (cached_split_parent_component_id_ == parent_component_id
+    && cached_split_parent_branch_id_ != static_cast<size_t>(-1))
+  {
+    // Graph cut already applied for this split: write parent and each new child folder.
+    svg_branch_ids.push_back(cached_split_parent_branch_id_);
+    svg_branch_ids.insert(
+      svg_branch_ids.end(), cached_split_child_branch_ids_.begin(), cached_split_child_branch_ids_.end());
+  }
+
+  const std::optional<size_t> preferred
+    = !svg_branch_ids.empty() ? std::optional<size_t>(svg_branch_ids.front()) : parent_branch;
+  const std::vector<size_t>* explicit_branches = svg_branch_ids.empty() ? nullptr : &svg_branch_ids;
+
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, kin_del, graph, t, phase,
-    separationEventDescriptor(parent_component_id, iteration), highlight,
-    runtimeBranchForPendingSplitParent(kin_del, parent_component_id), &offset_segments, &seam_outlines);
+    separationEventDescriptor(parent_component_id, iteration), highlight, preferred, &offset_segments, &seam_outlines,
+    explicit_branches);
 }
 
 void SegmentBuilderSeparationCallback::beforeEvent(KineticDelaunay::Event& e)

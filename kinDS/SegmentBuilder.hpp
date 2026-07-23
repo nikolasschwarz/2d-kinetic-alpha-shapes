@@ -598,6 +598,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   void validateDelaunayEdgeIntersectionMeshPairLinks(
     size_t delaunay_edge_id, double event_time, const char* context) const;
+  /// Mesh-pair indices as @c "(prev0, next0, prev1, next1, ...)" (@c -1 for unset).
+  static std::string formatCrossingMeshPairLinkSequence(
+    const std::vector<std::pair<size_t, size_t>>& prev_next_pairs);
+  /// Same as @ref formatCrossingMeshPairLinkSequence from current CrossingData on @p delaunay_edge_id.
+  std::string formatDelaunayEdgeCrossingMeshPairLinkSequence(size_t delaunay_edge_id) const;
   /**
    * @brief Centralized writer for crossing `prev`/`next` mesh-pair links.
    *
@@ -922,12 +927,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void logDiagnosticsMonitoredFaceInsideState(double t, const char* event_context) const;
 
   /// Debug target: Delaunay edge whose crossing @c prev/@c next mesh-pair links are traced.
-  static constexpr size_t kDiagnosticsMonitoredDelaunayEdgeId = 26;
+  static constexpr size_t kDiagnosticsMonitoredDelaunayEdgeId = 80;
+  /// Suspected missed crossing time for @ref kDiagnosticsMonitoredDelaunayEdgeId.
+  static constexpr double kDiagnosticsMonitoredCrossingTime = 10.0;
   /// Debug target: boundary-interval mesh pair id suspected of incorrect wiring.
   static constexpr size_t kDiagnosticsMonitoredMeshPairId = 11;
-  /// Suspected flip event time (log monitored edge state when @p t is near this value).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 5.078627;
-  static constexpr double kDiagnosticsMonitoredTimeEpsilon = 1e-4;
+  /// Suspected incorrect flip event (log monitored edge state in [floor(t), floor(t)+1)).
+  static constexpr double kDiagnosticsMonitoredFlipTime = 35.0;
+  static constexpr double kDiagnosticsMonitoredTimeEpsilon = 0.05;
 
   /// Full snapshot of crossings on @ref kDiagnosticsMonitoredDelaunayEdgeId and mesh-pair metadata they reference.
   void logDiagnosticsMonitoredDelaunayEdgeState(double t, const char* event_context) const;

@@ -107,7 +107,8 @@ class TreeMesher
   /// @param export_path Output directory for @c PerSegment/@c Raw; output OBJ path for @c Combined.
   /// @param max_exports Maximum meshlets to export; default unlimited.
   /// @param transformed When set, force export-time world/profile mapping. When unset, uses
-  ///   @c !settings.transform_mesh_at_construction.
+  ///   @c !settings.transform_mesh_at_construction. When export is untransformed, OBJ filenames are
+  ///   suffixed with @c _untransformed.
   void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
     std::optional<bool> transformed = std::nullopt, std::optional<size_t> max_exports = std::nullopt) const;
   bool meshletsTransformedAtConstruction() const { return settings.transform_mesh_at_construction; }

@@ -511,6 +511,9 @@ class KineticDelaunay
 
   /// Recompute stored @c delaunay_edge_param for all intersections on one Delaunay edge at @p t (kinetic space).
   void refreshDelaunayEdgeIntersectionParams(size_t delaunay_edge_id, double t);
+  /// Like @ref refreshDelaunayEdgeIntersectionParams, then sort the CrossingData list by recomputed param.
+  /// Safe after flips when all mesh-pair edge links on the edge are unset (@c -1).
+  void refreshAndSortDelaunayEdgeIntersectionParams(size_t delaunay_edge_id, double t);
 
   /// Recompute @c delaunay_edge_param for intersections on all three edges of Delaunay face @p face_id.
   void refreshTriangleDelaunayEdgeIntersectionParams(size_t face_id, double t);
@@ -741,6 +744,17 @@ class KineticDelaunay
    * Intended to be called only when @ref SegmentBuilder::diagnostics is enabled.
    */
   static constexpr size_t kDiagnosticsMonitoredFaceId = 54;
+  /// Debug target: Voronoi vertex whose crossing-event trigger roots are traced.
+  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = 81;
+  /// Debug target: undirected Delaunay edge id highlighted in crossing trigger logs.
+  static constexpr size_t kDiagnosticsMonitoredCrossingDelaunayEdgeId = 13;
+  /// Suspected missed crossing time; crossing diagnostics are constrained to its scheduling window [floor(t), floor(t)+1).
+  static constexpr double kDiagnosticsMonitoredCrossingTime = 10.0;
+  static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
+  /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
+  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 80;
+  /// Suspected incorrect flip; flip diagnostics are constrained to [floor(t), floor(t)+1).
+  static constexpr double kDiagnosticsMonitoredFlipTime = 35.0;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
   /// Bounds-checked diagnostic id queries; invalid ids are ignored by monitor logging.
@@ -748,11 +762,18 @@ class KineticDelaunay
   bool isDiagnosticsFaceIdValid(size_t face_id) const;
   bool isDiagnosticsHalfEdgeIdValid(size_t half_edge_id) const;
   bool isDiagnosticsMonitoredFaceValid() const;
+  bool isDiagnosticsMonitoredCrossingValid() const;
   void validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const;
   void validateAllFaceInsideStatesAtTime(double t, const char* context) const;
   void logFaceInsideStateAtTime(size_t face_id, double t, const char* context) const;
   void logRadiusEventTriggerRoots(size_t face_id, size_t he_id, double t, double min_fraction,
     Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
     const std::array<Trajectory<2>, 3>& trajectories) const;
+  /// Log all real roots, sign changes, and findEvents filter/enqueue decisions for one crossing trigger.
+  void logCrossingEventTriggerRoots(size_t voronoi_vertex_id, size_t he_id, size_t edge_index, double t,
+    double min_fraction, const Polynomial& event_trigger, bool only_positive_to_negative) const;
+  /// Log all real roots, sign changes, and findEvents filter/enqueue decisions for one flip trigger.
+  void logFlipEventTriggerRoots(size_t he_id, double t, double min_fraction, const Polynomial& event_trigger,
+    const char* trigger_pass) const;
 };
 } // namespace kinDS

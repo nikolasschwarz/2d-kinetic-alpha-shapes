@@ -53,6 +53,7 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
 
   // Snapshot crossed-edge boundary interval links before CrossingData mutates them.
   crossing_edge_snapshot_.clear();
+  crossing_edge_links_before_.clear();
   crossing_edge_snapshot_delaunay_edge_id_ = crossing->half_edge_id / 2;
   if (!segment_builder_.kin_del.isOnComponentBoundary(crossing->half_edge_id))
   {
@@ -66,6 +67,8 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
   }
   const auto& d_refs = crossing_data.delaunay_edge_intersections[crossing_edge_snapshot_delaunay_edge_id_];
   crossing_edge_snapshot_.reserve(d_refs.size());
+  std::vector<std::pair<size_t, size_t>> prev_next_pairs;
+  prev_next_pairs.reserve(d_refs.size());
   for (const auto& ref : d_refs)
   {
     CrossingEdgeSnapshotEntry s;
@@ -73,9 +76,12 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
     s.prev_pair_idx = ref->prev_segment_mesh_pair_index;
     s.next_pair_idx = ref->next_segment_mesh_pair_index;
     crossing_edge_snapshot_.push_back(s);
+    prev_next_pairs.emplace_back(s.prev_pair_idx, s.next_pair_idx);
   }
-  segment_builder_.maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(crossing->occurrence_time, "crossing_before_snapshot",
-    crossing_edge_snapshot_delaunay_edge_id_, std::nullopt);
+  crossing_edge_links_before_ = SegmentBuilder::formatCrossingMeshPairLinkSequence(prev_next_pairs);
+  // Disabled while focusing on flip diagnostics for the monitored Delaunay edge.
+  // segment_builder_.maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(crossing->occurrence_time, "crossing_before_snapshot",
+  //   crossing_edge_snapshot_delaunay_edge_id_, std::nullopt);
 }
 
 void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
@@ -313,7 +319,10 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         oss << "Boundary crossing merge_2_to_1: could not match middle strip (expected removed[0].next==removed[1].prev "
                "or removed[1].next==removed[0].prev) on de="
             << crossed_d_edge << " t=" << crossing->occurrence_time << " s0.prev=" << s0.prev_pair_idx << " s0.next="
-            << s0.next_pair_idx << " s1.prev=" << s1.prev_pair_idx << " s1.next=" << s1.next_pair_idx << ".";
+            << s0.next_pair_idx << " s1.prev=" << s1.prev_pair_idx << " s1.next=" << s1.next_pair_idx
+            << " edge_links_before=" << crossing_edge_links_before_ << " edge_links_after="
+            << segment_builder_.formatDelaunayEdgeCrossingMeshPairLinkSequence(crossed_d_edge) << ".";
+        KINDS_ERROR(oss.str());
         throw std::runtime_error(oss.str());
       }
 
@@ -349,6 +358,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         std::ostringstream oss;
         oss << "Boundary crossing split_1_to_2: inserted crossing not found on delaunay_edge_intersections[" << crossed_d_edge
             << "] at t=" << crossing->occurrence_time << ".";
+        KINDS_ERROR(oss.str());
         throw std::runtime_error(oss.str());
       }
       KineticDelaunay::CrossingData::EdgeIntersectionRef list_first;
@@ -368,6 +378,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         std::ostringstream oss;
         oss << "Boundary crossing split_1_to_2: inserted crossings are not adjacent in delaunay_edge_intersections["
             << crossed_d_edge << "] at t=" << crossing->occurrence_time << ".";
+        KINDS_ERROR(oss.str());
         throw std::runtime_error(oss.str());
       }
 
@@ -401,8 +412,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
                                                                     << " inserted=" << inserted.size() << " t="
                                                                     << crossing->occurrence_time);
     }
-    segment_builder_.maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(
-      crossing->occurrence_time, "crossing_after_boundary_interval", crossed_d_edge, std::nullopt);
+    // Disabled while focusing on flip diagnostics for the monitored Delaunay edge.
+    // segment_builder_.maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(
+    //   crossing->occurrence_time, "crossing_after_boundary_interval", crossed_d_edge, std::nullopt);
   }
 
   size_t inside_he_id = crossing->half_edge_id;

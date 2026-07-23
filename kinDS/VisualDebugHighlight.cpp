@@ -77,34 +77,6 @@ void flushPendingHighlightWork(VisualDebugHighlight& highlight, const HalfEdgeDe
   }
 }
 
-size_t crossingEmphasisVoronoiEdgeId(
-  const HalfEdgeDelaunayGraph& graph, size_t crossed_half_edge_id, size_t voronoi_vertex_id)
-{
-  const size_t even_he = crossed_half_edge_id & ~static_cast<size_t>(1);
-  const size_t crossed_voronoi_edge_id = even_he / 2;
-  const auto& half_edges = graph.face(voronoi_vertex_id).half_edges;
-
-  for (size_t incident_he : half_edges)
-  {
-    if ((incident_he & ~static_cast<size_t>(1)) == even_he)
-    {
-      return crossed_voronoi_edge_id;
-    }
-  }
-
-  const int old_face = graph.halfEdge(crossed_half_edge_id).face;
-  const int new_face = graph.halfEdge(crossed_half_edge_id ^ 1).face;
-  for (size_t incident_he : half_edges)
-  {
-    const int opposite_face = graph.halfEdge(incident_he ^ 1).face;
-    if (opposite_face == old_face || opposite_face == new_face)
-    {
-      return incident_he / 2;
-    }
-  }
-
-  return half_edges[0] / 2;
-}
 } // namespace
 
 void VisualDebugHighlight::addUndirectedDelaunayEdge(const HalfEdgeDelaunayGraph& graph, size_t he_id)
@@ -155,6 +127,9 @@ bool VisualDebugHighlight::affectsPrimaryVoronoiEdge(size_t voronoi_edge_id) con
 
 bool VisualDebugHighlight::shouldLabelCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const
 {
+  const bool has_explicit_label_filter = !label_crossings_on_delaunay_edges.empty()
+    || !label_crossings_on_voronoi_edges.empty() || !crossing_intersection_keys.empty();
+
   if (!label_crossings_on_delaunay_edges.empty())
   {
     if (label_crossings_on_delaunay_edges.find(delaunay_edge_id) != label_crossings_on_delaunay_edges.end())
@@ -176,6 +151,10 @@ bool VisualDebugHighlight::shouldLabelCrossing(size_t delaunay_edge_id, size_t v
     {
       return true;
     }
+  }
+  if (has_explicit_label_filter)
+  {
+    return false;
   }
   return affectsVoronoiEdge(delaunay_edge_id) || affectsVoronoiEdge(voronoi_edge_id);
 }
@@ -239,10 +218,12 @@ VisualDebugHighlight VisualDebugHighlight::forCrossing(
   VisualDebugHighlight highlight;
 
   const size_t even_he = crossed_half_edge_id & ~static_cast<size_t>(1);
-  const size_t delaunay_edge_id = even_he / 2;
+  const size_t crossed_delaunay_edge_id = even_he / 2;
 
-  highlight.voronoi_vertices.insert(voronoi_vertex_id);
-
+  // Primary focus: the Delaunay edge being crossed (and its dual Voronoi edge, same undirected id).
+  highlight.voronoi_edges.insert(crossed_delaunay_edge_id);
+  highlight.primary_voronoi_edges.insert(crossed_delaunay_edge_id);
+  highlight.label_crossings_on_delaunay_edges.insert(crossed_delaunay_edge_id);
   highlight.directed_half_edges.insert(even_he);
   highlight.directed_half_edges.insert(even_he ^ 1);
 
@@ -256,20 +237,23 @@ VisualDebugHighlight VisualDebugHighlight::forCrossing(
   {
     highlight.delaunay_vertices.insert(static_cast<size_t>(twin_he.origin));
   }
+  if (he.face != -1)
+  {
+    highlight.voronoi_vertices.insert(static_cast<size_t>(he.face));
+  }
+  if (twin_he.face != -1)
+  {
+    highlight.voronoi_vertices.insert(static_cast<size_t>(twin_he.face));
+  }
 
-  const size_t emphasis_voronoi_edge_id
-    = crossingEmphasisVoronoiEdgeId(graph, crossed_half_edge_id, voronoi_vertex_id);
-  highlight.primary_voronoi_edges.insert(emphasis_voronoi_edge_id);
-  highlight.crossing_intersection_keys.insert(
-    (static_cast<uint64_t>(delaunay_edge_id) << 32) | emphasis_voronoi_edge_id);
-
+  // Secondary context: the moving circumcenter and its three incident Voronoi edges.
+  highlight.voronoi_vertices.insert(voronoi_vertex_id);
   if (voronoi_vertex_id < graph.faceSlotCount())
   {
     for (size_t incident_he : graph.face(voronoi_vertex_id).half_edges)
     {
       const size_t voronoi_edge_id = incident_he / 2;
       highlight.voronoi_edges.insert(voronoi_edge_id);
-      highlight.label_crossings_on_voronoi_edges.insert(voronoi_edge_id);
       highlight.directed_half_edges.insert(incident_he);
       highlight.directed_half_edges.insert(incident_he ^ 1);
 

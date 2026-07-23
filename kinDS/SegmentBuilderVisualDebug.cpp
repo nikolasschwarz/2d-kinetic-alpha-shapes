@@ -4,7 +4,9 @@
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "KineticDelaunayEventPredicates.hpp"
+#include "Logger.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -136,9 +138,10 @@ std::string visualDebugSvgRelativePath(double occurrence_time, const char* phase
 {
   const std::string basename = "t" + std::to_string(occurrence_time) + "_segmentbuilder_"
     + chronologicalPhaseToken(phase) + "_" + event_descriptor + ".svg";
-  const std::string relative = runtime_branch_id.has_value()
-    ? ("branch" + std::to_string(runtime_branch_id.value()) + "/" + basename)
-    : ("branch0/" + basename);
+  const std::string branch_folder = runtime_branch_id.has_value()
+    ? ("branch" + std::to_string(runtime_branch_id.value()))
+    : kVisualDebugUnresolvedBranchFolder;
+  const std::string relative = branch_folder + "/" + basename;
   if (!output_root.has_value())
   {
     return relative;
@@ -303,7 +306,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   double occurrence_time, const char* phase, const std::string& event_descriptor,
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id,
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments,
-  const std::vector<std::vector<glm::dvec2>>* seam_outlines)
+  const std::vector<std::vector<glm::dvec2>>* seam_outlines, const std::vector<size_t>* explicit_runtime_branch_ids)
 {
   if (!visual_debug)
   {
@@ -329,75 +332,120 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const std::unordered_set<size_t> active_runtime_branches
     = collectActiveRuntimeBranches(kin_del, live_strand_ids);
 
-  const bool per_branch_svgs = active_runtime_branches.size() > 1;
-
-  auto write_for_runtime_branch = [&](size_t runtime_branch_id)
+  auto try_write_for_runtime_branch = [&](size_t runtime_branch_id) -> bool
   {
+    const size_t unsplit_branch_id = kin_del.unsplitRuntimeBranchId(runtime_branch_id);
     const std::unordered_set<size_t> branch_strands
-      = collectStrandIdsForRuntimeBranch(kin_del, live_strand_ids, runtime_branch_id);
+      = collectStrandIdsForRuntimeBranch(kin_del, live_strand_ids, unsplit_branch_id);
     const std::unordered_map<size_t, glm::dvec3> branch_site_world_positions
       = buildSiteWorldPositions(kin_del, occurrence_time, branch_strands);
     const auto [points, positioned_strands]
       = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, branch_strands);
     if (positioned_strands.empty())
     {
-      return;
+      return false;
     }
     const std::string filename = visualDebugSvgRelativePath(
-      occurrence_time, phase, event_descriptor, runtime_branch_id, output_root);
+      occurrence_time, phase, event_descriptor, unsplit_branch_id, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       &branch_strands, positioned_strands, site_input_branch_labels, branch_site_world_positions,
       voronoi_vertex_world_positions, separation_offset_segments, seam_outlines);
+    return true;
   };
 
-  if (!per_branch_svgs)
+  auto resolve_branch_candidates = [&](std::optional<size_t> preferred_branch_id) -> std::vector<size_t>
   {
-    std::optional<size_t> runtime_branch_id = event_runtime_branch_id;
-    if (!runtime_branch_id.has_value())
+    std::vector<size_t> candidates;
+    auto add_unique = [&](std::optional<size_t> branch_id)
     {
-      runtime_branch_id = inferEventRuntimeBranchFromHighlight(graph, kin_del, highlight);
-    }
-    if (!runtime_branch_id.has_value() && active_runtime_branches.size() == 1)
-    {
-      runtime_branch_id = *active_runtime_branches.begin();
-    }
+      if (!branch_id.has_value())
+      {
+        return;
+      }
+      const size_t unsplit_branch_id = kin_del.unsplitRuntimeBranchId(branch_id.value());
+      if (std::find(candidates.begin(), candidates.end(), unsplit_branch_id) == candidates.end())
+      {
+        candidates.push_back(unsplit_branch_id);
+      }
+    };
 
-    if (runtime_branch_id.has_value())
+    add_unique(preferred_branch_id);
+    add_unique(inferEventRuntimeBranchFromHighlight(graph, kin_del, highlight));
+    if (active_runtime_branches.size() == 1)
     {
-      write_for_runtime_branch(runtime_branch_id.value());
-      return;
+      add_unique(*active_runtime_branches.begin());
     }
+    return candidates;
+  };
 
+  const auto write_unresolved_branch_fallback = [&](const std::string& reason)
+  {
     const auto [points, positioned_strands]
       = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, live_strand_ids);
     if (positioned_strands.empty())
     {
+      KINDS_WARNING("writeSegmentBuilderVisualDebugSvg: branch resolution failed at t=" << occurrence_time
+        << " phase=" << phase << " event=" << event_descriptor << " (" << reason
+        << "); no live strands to export under " << kVisualDebugUnresolvedBranchFolder << ".");
       return;
     }
+    KINDS_WARNING("writeSegmentBuilderVisualDebugSvg: branch resolution failed at t=" << occurrence_time
+      << " phase=" << phase << " event=" << event_descriptor << " (" << reason << "); exporting all live strands to "
+      << kVisualDebugUnresolvedBranchFolder << ".");
     const std::string filename
       = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       nullptr, positioned_strands, site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions,
       separation_offset_segments, seam_outlines);
+  };
+
+  // Explicit branch list: write only those folders (used by separation: parent while pending; parent+child after cut).
+  if (explicit_runtime_branch_ids != nullptr && !explicit_runtime_branch_ids->empty())
+  {
+    bool wrote_any = false;
+    for (size_t branch_id : *explicit_runtime_branch_ids)
+    {
+      wrote_any = try_write_for_runtime_branch(branch_id) || wrote_any;
+    }
+    if (!wrote_any)
+    {
+      write_unresolved_branch_fallback("explicit runtime branch list had no positioned strands");
+    }
     return;
   }
 
-  std::optional<size_t> runtime_branch_id = event_runtime_branch_id;
-  if (!runtime_branch_id.has_value())
+  for (size_t branch_id : resolve_branch_candidates(event_runtime_branch_id))
   {
-    runtime_branch_id = inferEventRuntimeBranchFromHighlight(graph, kin_del, highlight);
+    if (try_write_for_runtime_branch(branch_id))
+    {
+      return;
+    }
   }
 
-  if (runtime_branch_id.has_value())
+  // Preferred event branch was set but had no positioned strands (or candidate write failed).
+  if (event_runtime_branch_id.has_value())
   {
-    write_for_runtime_branch(runtime_branch_id.value());
+    write_unresolved_branch_fallback(
+      "no positioned strands for runtime branch " + std::to_string(event_runtime_branch_id.value()));
     return;
   }
 
-  for (size_t branch_id : active_runtime_branches)
+  // Global / multi-branch events (e.g. section): highlight spans every component, so no unique branch.
+  // Fan out one SVG per active runtime branch — same as pre-separation routing.
+  if (!active_runtime_branches.empty())
   {
-    write_for_runtime_branch(branch_id);
+    bool wrote_any = false;
+    for (size_t branch_id : active_runtime_branches)
+    {
+      wrote_any = try_write_for_runtime_branch(branch_id) || wrote_any;
+    }
+    if (wrote_any)
+    {
+      return;
+    }
   }
+
+  write_unresolved_branch_fallback("no runtime branch resolved");
 }
 
 } // namespace kinDS

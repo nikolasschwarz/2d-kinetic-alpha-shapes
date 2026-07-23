@@ -613,9 +613,9 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
     auto process_intersection = [&](CrossingData::VoronoiDelaunayEdgeIntersection intersection)
     {
       intersection.delaunay_edge_id = inner_he_id / 2;
-      intersection.delaunay_edge_param
-        = delaunayVoronoiEdgeIntersection(intersection.delaunay_edge_id, intersection.voronoi_edge_id, t).first;
-      intersection.param_last_updated = t;
+      assignCrossingIntersectionDelaunayParam(this, intersection,
+        delaunayVoronoiEdgeIntersection(intersection.delaunay_edge_id, intersection.voronoi_edge_id, t).first, t,
+        "copyBoundaryIntersections");
       // Copied intersections move to a new boundary Delaunay edge; mesh-pair links from the source edge are invalid.
       intersection.prev_segment_mesh_pair_index = static_cast<size_t>(-1);
       intersection.next_segment_mesh_pair_index = static_cast<size_t>(-1);
@@ -695,6 +695,10 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
   for (size_t voronoi_vertex : recompute_voronoi_vertices)
   {
     crossing_event_manager_->computeEvents(t, voronoi_vertex);
+    if (voronoi_vertex < crossing_data.last_crossing.size())
+    {
+      crossing_data.last_crossing[voronoi_vertex] = t;
+    }
   }
 }
 
@@ -816,8 +820,9 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
               intersection->voronoi_edge_id = voronoi_edge_id;
               intersection->prev_segment_mesh_pair_index = static_cast<size_t>(-1);
               intersection->next_segment_mesh_pair_index = static_cast<size_t>(-1);
-              intersection->delaunay_edge_param = delaunayVoronoiEdgeIntersection(quad_index, voronoi_edge_id, t).first;
-              intersection->param_last_updated = t;
+              assignCrossingIntersectionDelaunayParam(this, *intersection,
+                delaunayVoronoiEdgeIntersection(quad_index, voronoi_edge_id, t).first, t,
+                "flipUpdate:newVoronoiIntersection");
 
               auto& v_list = crossing_data.voronoi_edge_intersections[voronoi_edge_id];
               intersection->voronoi_ref = v_list.emplace(v_list.end(), intersection);
@@ -831,8 +836,9 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
               const CrossingData::EdgeIntersectionRef intersection = v_intersections.front();
               const size_t old_delaunay_edge_id = intersection->delaunay_edge_id;
               intersection->delaunay_edge_id = quad_index;
-              intersection->delaunay_edge_param = delaunayVoronoiEdgeIntersection(quad_index, voronoi_edge_id, t).first;
-              intersection->param_last_updated = t;
+              assignCrossingIntersectionDelaunayParam(this, *intersection,
+                delaunayVoronoiEdgeIntersection(quad_index, voronoi_edge_id, t).first, t,
+                "flipUpdate:existingVoronoiIntersection");
 
               if (old_delaunay_edge_id != quad_index)
               {
@@ -1061,8 +1067,8 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
         CrossingData::EdgeIntersectionRef new_intersection = std::prev(crossing_data.edge_intersections.end());
         new_intersection->delaunay_edge_id = delaunay_edge_id;
         new_intersection->voronoi_edge_id = voronoi_edge_id;
-        new_intersection->delaunay_edge_param = delaunay_edge_param;
-        new_intersection->param_last_updated = t;
+        assignCrossingIntersectionDelaunayParam(
+          this, *new_intersection, delaunay_edge_param, t, "flipUpdate:addNewQuadIntersection");
 
         if (!insert_after)
         {
@@ -1109,9 +1115,9 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
           }
           else
           {
-            (*v_intersection)->delaunay_edge_param
-              = delaunayVoronoiEdgeIntersection(quad_index, (*v_intersection)->voronoi_edge_id, t).first;
-            (*v_intersection)->param_last_updated = t;
+            assignCrossingIntersectionDelaunayParam(this, **v_intersection,
+              delaunayVoronoiEdgeIntersection(quad_index, (*v_intersection)->voronoi_edge_id, t).first, t,
+              "flipUpdate:extendBeyondQuad");
           }
         }
         else
@@ -1160,9 +1166,9 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
         }
         else if (containing_triangle_id != face_inside_new && intersected_before)
         {
-          (*v_intersection)->delaunay_edge_param
-            = delaunayVoronoiEdgeIntersection(quad_index, (*v_intersection)->voronoi_edge_id, t).first;
-          (*v_intersection)->param_last_updated = t;
+          assignCrossingIntersectionDelaunayParam(this, **v_intersection,
+            delaunayVoronoiEdgeIntersection(quad_index, (*v_intersection)->voronoi_edge_id, t).first, t,
+            "flipUpdate:containedInNewFace");
         }
       }
       ++d_it;
@@ -1198,6 +1204,10 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
   for (size_t voronoi_vertex : recompute_voronoi_vertices)
   {
     crossing_event_manager_->computeEvents(t, voronoi_vertex);
+    if (voronoi_vertex < crossing_data.last_crossing.size())
+    {
+      crossing_data.last_crossing[voronoi_vertex] = t;
+    }
   }
 }
 
@@ -1390,6 +1400,60 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
   }
 
   crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
+
+  // New infinite faces created by the cut cap former cross-component edges. Those edges are now on the convex hull
+  // and need boundary (ccw) flip predicates; invalidate any pre-split interior (inCircle) flip schedules.
+  {
+    std::unordered_set<size_t> new_hull_quads;
+    for (size_t face_id : graph.liveFaces())
+    {
+      if (face_id < prev_face_slots)
+      {
+        continue;
+      }
+      for (size_t he_id : graph.face(face_id).half_edges)
+      {
+        // Finite twin of a new infinite-face half-edge is the newly opened convex-hull edge.
+        const size_t twin_he = he_id ^ 1;
+        if (!graph.isLiveHalfEdge(twin_he))
+        {
+          continue;
+        }
+        if (graph.halfEdge(twin_he).origin < 0 || graph.destination(twin_he) < 0)
+        {
+          continue;
+        }
+        const int twin_face = graph.halfEdge(twin_he).face;
+        if (twin_face < 0 || !graph.isLiveFace(static_cast<size_t>(twin_face)))
+        {
+          continue;
+        }
+        if (graph.isInfinite(twin_he))
+        {
+          continue;
+        }
+        if (!graph.isOnConvexBoundary(twin_he))
+        {
+          continue;
+        }
+        new_hull_quads.insert(twin_he / 2);
+      }
+    }
+
+    for (size_t quad_id : new_hull_quads)
+    {
+      if (!graph.isLiveHalfEdge(quad_id * 2) && !graph.isLiveHalfEdge(quad_id * 2 + 1))
+      {
+        continue;
+      }
+      flip_event_manager_->computeEvents(t, quad_id);
+      if (quad_id < quadrilateral_last_updated.size())
+      {
+        quadrilateral_last_updated[quad_id] = t;
+      }
+    }
+  }
+
   if (update_runtime_branch_map)
   {
     updateRuntimeBranchMapFromLiveGraph(t, "onGraphCutApplied");
@@ -2492,13 +2556,39 @@ void KineticDelaunay::recomputeEventsAfterSeparationTrajectory(size_t parent_com
     {
       face_last_updated[face_id] = t;
     }
-    if (crossing_data.isVoronoiVertexRegistered(face_id))
+
+    const auto stamp_voronoi_crossing_invalidation = [&](size_t voronoi_vertex_id)
     {
-      crossing_event_manager_->computeEvents(t, face_id);
-      if (face_id < crossing_data.last_crossing.size())
+      if (voronoi_vertex_id < crossing_data.last_crossing.size())
       {
-        crossing_data.last_crossing[face_id] = t;
+        crossing_data.last_crossing[voronoi_vertex_id] = t;
       }
+    };
+
+    const auto recompute_crossing_for_voronoi_vertex = [&](size_t voronoi_vertex_id)
+    {
+      if (!crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
+      {
+        return;
+      }
+      crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
+      // last_crossing is the per-Voronoi-vertex invalidation stamp (also set when a crossing is handled).
+      stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
+    };
+
+    // Dual Voronoi vertex for this Delaunay triangle.
+    recompute_crossing_for_voronoi_vertex(face_id);
+
+    // Voronoi vertices contained in this triangle.
+    for (size_t voronoi_vertex_id : crossing_data.getVoronoiVerticesInTri(face_id))
+    {
+      if (voronoi_vertex_id == face_id)
+      {
+        // Self-contained dual: already rescheduled above; still ensure the invalidation stamp.
+        stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
+        continue;
+      }
+      recompute_crossing_for_voronoi_vertex(voronoi_vertex_id);
     }
   }
 
@@ -2574,6 +2664,28 @@ void KineticDelaunay::collectSeparationRecomputeTargets(size_t parent_component_
     if (touches_both_branches(triangle_strands))
     {
       affected_faces.insert(face_id);
+    }
+  }
+
+  // Match VisualDebugHighlight::forSeparationRecompute: also include both triangles
+  // adjacent to each affected flip quadrilateral.
+  for (size_t quad_id : affected_quads)
+  {
+    const size_t flip_half_edge_id = quad_id * 2;
+    if (flip_half_edge_id + 1 >= graph.halfEdgeSlotCount() || !graph.isLiveHalfEdge(flip_half_edge_id))
+    {
+      continue;
+    }
+
+    const auto& flip_he = graph.halfEdge(flip_half_edge_id);
+    const auto& flip_twin_he = graph.halfEdge(flip_half_edge_id ^ 1);
+    if (flip_he.face != static_cast<int>(-1))
+    {
+      affected_faces.insert(static_cast<size_t>(flip_he.face));
+    }
+    if (flip_twin_he.face != static_cast<int>(-1))
+    {
+      affected_faces.insert(static_cast<size_t>(flip_twin_he.face));
     }
   }
 }
@@ -3550,6 +3662,12 @@ std::pair<double, double> KineticDelaunay::delaunayVoronoiEdgeIntersection(
   }
 }
 
+double KineticDelaunay::delaunayVoronoiEdgeIntersectionParameter(
+  size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const
+{
+  return delaunayVoronoiEdgeIntersection(delaunay_edge_id, voronoi_edge_id, t).first;
+}
+
 namespace
 {
 glm::dvec3 crossingCoordsFromDelaunayEdgeInterpolation(const KineticDelaunay& kd,
@@ -3586,20 +3704,58 @@ glm::dvec3 crossingCoordsFromDelaunayEdgeInterpolation(const KineticDelaunay& kd
   }
   return glm::dvec3(xy.x, xy.y, t);
 }
+
+/// Warning-only range check. Finite edges: [0,1]. Infinite boundary rays: [0,+inf).
+bool isDelaunayEdgeParamInExpectedWarningRange(
+  const KineticDelaunay* kd, size_t delaunay_edge_id, double param, double eps)
+{
+  if (!std::isfinite(param))
+  {
+    return false;
+  }
+
+  const bool infinite_edge
+    = kd != nullptr && kd->getGraph().isInfinite(2 * delaunay_edge_id);
+  if (infinite_edge)
+  {
+    return param >= -eps;
+  }
+  return param >= -eps && param <= 1.0 + eps;
+}
+
+const char* delaunayEdgeParamExpectedRangeDescription(const KineticDelaunay* kd, size_t delaunay_edge_id)
+{
+  if (kd != nullptr && kd->getGraph().isInfinite(2 * delaunay_edge_id))
+  {
+    return "[0,+inf)";
+  }
+  return "[0,1]";
+}
 } // namespace
 
-double KineticDelaunay::delaunayVoronoiEdgeIntersectionParameter(
-  size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const
+void kinDS::assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
+  KineticDelaunay::CrossingData::VoronoiDelaunayEdgeIntersection& intersection, double param, double t,
+  const char* context)
 {
-  return delaunayVoronoiEdgeIntersection(delaunay_edge_id, voronoi_edge_id, t).first;
+  intersection.delaunay_edge_param = param;
+  intersection.param_last_updated = t;
+
+  constexpr double param_range_eps = 1e-9;
+  if (!isDelaunayEdgeParamInExpectedWarningRange(kd, intersection.delaunay_edge_id, param, param_range_eps))
+  {
+    KINDS_WARNING((context != nullptr ? context : "assignCrossingIntersectionDelaunayParam")
+      << ": delaunay_edge_param outside expected range "
+      << delaunayEdgeParamExpectedRangeDescription(kd, intersection.delaunay_edge_id) << " param=" << param << " de="
+      << intersection.delaunay_edge_id << " ve=" << intersection.voronoi_edge_id << " t=" << t);
+  }
 }
 
 void kinDS::updateCrossingIntersectionParam(KineticDelaunay& kd,
   KineticDelaunay::CrossingData::EdgeIntersectionRef intersection, double t)
 {
-  intersection->delaunay_edge_param
-    = kd.delaunayVoronoiEdgeIntersection(intersection->delaunay_edge_id, intersection->voronoi_edge_id, t).first;
-  intersection->param_last_updated = t;
+  assignCrossingIntersectionDelaunayParam(&kd, *intersection,
+    kd.delaunayVoronoiEdgeIntersection(intersection->delaunay_edge_id, intersection->voronoi_edge_id, t).first, t,
+    "updateCrossingIntersectionParam");
 }
 
 void kinDS::ensureCrossingIntersectionParamUpToDate(KineticDelaunay& kd,
@@ -3632,10 +3788,27 @@ void KineticDelaunay::refreshDelaunayEdgeIntersectionParams(size_t delaunay_edge
     updateCrossingIntersectionParam(*this, ref, t);
   }
 
-  // TODO: Sorting by recomputed dParam is no longer needed — list order is maintained by insert/erase
-  // (crossing/flip). Re-sorting can scramble coincident crossings whose params differ only by noise.
-  // d_list.sort([&](const CrossingData::EdgeIntersectionRef& a, const CrossingData::EdgeIntersectionRef& b)
-  //   { return a->delaunay_edge_param < b->delaunay_edge_param; });
+  for (auto it = d_list.begin(); it != d_list.end(); ++it)
+  {
+    (*it)->delaunay_ref = it;
+  }
+}
+
+void KineticDelaunay::refreshAndSortDelaunayEdgeIntersectionParams(size_t delaunay_edge_id, double t)
+{
+  if (delaunay_edge_id >= crossing_data.delaunay_edge_intersections.size())
+  {
+    return;
+  }
+
+  auto& d_list = crossing_data.delaunay_edge_intersections[delaunay_edge_id];
+  for (auto ref : d_list)
+  {
+    updateCrossingIntersectionParam(*this, ref, t);
+  }
+
+  d_list.sort([&](const CrossingData::EdgeIntersectionRef& a, const CrossingData::EdgeIntersectionRef& b)
+    { return a->delaunay_edge_param < b->delaunay_edge_param; });
   for (auto it = d_list.begin(); it != d_list.end(); ++it)
   {
     (*it)->delaunay_ref = it;
@@ -3948,13 +4121,14 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
 
       if (delaunay_he_id % 2 == 0)
       {
-        edge_itr->delaunay_edge_param = param;
+        assignCrossingIntersectionDelaunayParam(
+          &kd, *edge_itr, param, t, "initializeVoronoiEdgeIntersections:even");
       }
       else
       {
-        edge_itr->delaunay_edge_param = 1.0 - param;
+        assignCrossingIntersectionDelaunayParam(
+          &kd, *edge_itr, 1.0 - param, t, "initializeVoronoiEdgeIntersections:odd");
       }
-      edge_itr->param_last_updated = t;
 
       auto voronoi_ref = voronoi_edge_intersections[voronoi_edge_id].emplace(
         voronoi_edge_intersections[voronoi_edge_id].end(), edge_itr);
@@ -4031,43 +4205,6 @@ double computeDelaunayEdgeParamForInvariant(
   const KineticDelaunay& kd, KineticDelaunay::CrossingData::EdgeIntersectionRef ref, double t)
 {
   return kd.delaunayVoronoiEdgeIntersection(ref->delaunay_edge_id, ref->voronoi_edge_id, t).first;
-}
-
-double computeInfiniteDelaunayRayParamForInvariant(
-  const KineticDelaunay& kd, size_t delaunay_half_edge_id, size_t voronoi_edge_id, double t)
-{
-  const glm::dvec2 start_point = kd.computeVoronoiVertexClampedInfinity(voronoi_edge_id * 2, t);
-  const glm::dvec2 destination = kd.computeVoronoiVertexClampedInfinity(voronoi_edge_id * 2 + 1, t);
-  const auto ray = kd.computeAngularBisector(delaunay_half_edge_id, t);
-  return segmentIntersectionParameters(ray.first, ray.first + ray.second, start_point, destination).first;
-}
-
-struct DelaunayParamRangeCheck
-{
-  bool valid = false;
-  bool infinite_delaunay_edge = false;
-  double even_ray_param = std::numeric_limits<double>::quiet_NaN();
-  double odd_ray_param = std::numeric_limits<double>::quiet_NaN();
-};
-
-DelaunayParamRangeCheck checkDelaunayParamRangeForInvariant(
-  const KineticDelaunay& kd, KineticDelaunay::CrossingData::EdgeIntersectionRef ref, double recomputed_d_param,
-  double t, double eps)
-{
-  DelaunayParamRangeCheck result;
-  result.infinite_delaunay_edge = kd.getGraph().isInfinite(2 * ref->delaunay_edge_id);
-  if (!result.infinite_delaunay_edge)
-  {
-    result.valid = recomputed_d_param >= -eps && recomputed_d_param <= 1.0 + eps;
-    return result;
-  }
-
-  const size_t even_half_edge_id = 2 * ref->delaunay_edge_id;
-  result.even_ray_param = recomputed_d_param;
-  result.odd_ray_param = computeInfiniteDelaunayRayParamForInvariant(kd, even_half_edge_id ^ 1, ref->voronoi_edge_id, t);
-  result.valid = (std::isfinite(result.even_ray_param) && result.even_ray_param >= -eps)
-    || (std::isfinite(result.odd_ray_param) && result.odd_ray_param >= -eps);
-  return result;
 }
 
 std::string formatDelaunayEdgeIntersectionList(
@@ -4504,11 +4641,12 @@ void KineticDelaunay::CrossingData::validateIntersectionInvariants(
 
         constexpr double param_order_eps = 1e-12;
         constexpr double param_range_eps = 1e-9;
-        if (recomputed_d_param < -param_range_eps || recomputed_d_param > 1.0 + param_range_eps)
+        if (!isDelaunayEdgeParamInExpectedWarningRange(kd, ref->delaunay_edge_id, recomputed_d_param, param_range_eps))
         {
           KINDS_WARNING("validateIntersectionInvariants(" << ctx << ", t=" << t
-            << "): recomputed Delaunay-edge parameter is outside [0,1] for delaunay_edge_intersections[" << d_id
-            << "] list index " << list_index << "; entry="
+            << "): recomputed Delaunay-edge parameter is outside expected range "
+            << delaunayEdgeParamExpectedRangeDescription(kd, ref->delaunay_edge_id)
+            << " for delaunay_edge_intersections[" << d_id << "] list index " << list_index << "; entry="
             << formatIntersectionLogEntry({ ref->delaunay_edge_id, ref->voronoi_edge_id, ref->delaunay_edge_param })
             << ", recomputedDParam=" << recomputed_d_param << "; "
             << formatDelaunayEdgeIntersectionList(*this, *kd, d_id, t));
@@ -4754,9 +4892,9 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
     pending_insert.voronoi_edge_id = voronoi_edge_id;
     pending_insert.intersection.delaunay_edge_id = crossed_delaunay_edge_id;
     pending_insert.intersection.voronoi_edge_id = voronoi_edge_id;
-    pending_insert.intersection.delaunay_edge_param
-      = kd.delaunayVoronoiEdgeIntersection(crossed_delaunay_edge_id, voronoi_edge_id, t).first;
-    pending_insert.intersection.param_last_updated = t;
+    assignCrossingIntersectionDelaunayParam(&kd, pending_insert.intersection,
+      kd.delaunayVoronoiEdgeIntersection(crossed_delaunay_edge_id, voronoi_edge_id, t).first, t,
+      "updateAfterCrossingEvent:pendingInsert");
     pending.push_back(pending_insert);
   }
 
@@ -4795,8 +4933,10 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
     // param refresh + sort cannot reorder them due to tiny numeric differences.
     const double averaged_dparam
       = 0.5 * (pending[0].intersection.delaunay_edge_param + pending[1].intersection.delaunay_edge_param);
-    pending[0].intersection.delaunay_edge_param = averaged_dparam;
-    pending[1].intersection.delaunay_edge_param = averaged_dparam;
+    assignCrossingIntersectionDelaunayParam(
+      &kd, pending[0].intersection, averaged_dparam, t, "updateAfterCrossingEvent:averagedDParam");
+    assignCrossingIntersectionDelaunayParam(
+      &kd, pending[1].intersection, averaged_dparam, t, "updateAfterCrossingEvent:averagedDParam");
 
     KINDS_INFO("updateAfterCrossingEvent split order on de="
       << crossed_delaunay_edge_id << " vv=" << voronoi_vertex_id << " t=" << t

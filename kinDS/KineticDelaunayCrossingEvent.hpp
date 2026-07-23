@@ -111,6 +111,7 @@ struct KineticDelaunay::CrossingData
   EdgeIntersectionRefListSlots voronoi_edge_intersections;
   EdgeIntersectionRefListSlots delaunay_edge_intersections;
 
+  /// Last time a crossing was handled for this Voronoi vertex, or its crossing events were rescheduled/invalidated.
   std::vector<double> last_crossing;
 
   struct VoronoiDelaunayEdgeIntersection
@@ -370,6 +371,11 @@ class KineticDelaunay::CrossingEventManager final : public KineticDelaunay::Even
 void updateCrossingIntersectionParam(KineticDelaunay& kd, KineticDelaunay::CrossingData::EdgeIntersectionRef intersection,
   double t);
 
+/// Assign @c delaunay_edge_param / @c param_last_updated and warn if the param is outside the valid range.
+void assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
+  KineticDelaunay::CrossingData::VoronoiDelaunayEdgeIntersection& intersection, double param, double t,
+  const char* context);
+
 /// Recompute @c delaunay_edge_param when @c param_last_updated != @p t.
 void ensureCrossingIntersectionParamUpToDate(KineticDelaunay& kd,
   KineticDelaunay::CrossingData::EdgeIntersectionRef intersection, double t);
@@ -377,81 +383,6 @@ void ensureCrossingIntersectionParamUpToDate(KineticDelaunay& kd,
 /// Crossing position in kinetic Delaunay space (reference-branch frame + separation), via Delaunay-edge interpolation.
 glm::dvec3 getCrossingCoordsInDelaunaySpace(KineticDelaunay& kd,
   KineticDelaunay::CrossingData::EdgeIntersectionRef intersection, double t);
-
-inline void KineticDelaunay::CrossingEvent::handleEvent()
-{
-  auto* kd = kd_;
-  if (!kd)
-  {
-    throw std::runtime_error("CrossingEvent has no KineticDelaunay pointer");
-  }
-
-  auto& graph = kd->graph;
-
-  // Check if the event is still valid
-  if (creation_time < kd->crossing_data.last_crossing[voronoi_vertex_id])
-  {
-    return;
-  }
-
-  if (voronoi_vertex_id >= graph.faceSlotCount() || !graph.isLiveFace(voronoi_vertex_id)
-    || !kd->crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
-  {
-    return;
-  }
-
-  size_t containing_tri_id = kd->crossing_data.getContainingTriId(voronoi_vertex_id);
-
-  // Outdated if the containing triangle or the dual triangle (same index as the Voronoi vertex) was
-  // updated by a flip after this event was scheduled.
-  if (creation_time < kd->face_last_updated[containing_tri_id])
-  {
-    return;
-  }
-  if (creation_time < kd->face_last_updated[voronoi_vertex_id])
-  {
-    return;
-  }
-
-  auto* event_handler = kd->crossing_event_manager_->getCallback();
-  if (event_handler)
-  {
-    event_handler->beforeEvent(*this);
-  }
-
-  kd->crossing_data.last_crossing[voronoi_vertex_id] = occurrence_time;
-
-  KINDS_DEBUG("Processing crossing event at time " << occurrence_time << " for Voronoi vertex ID " << voronoi_vertex_id
-                                                   << " crossing half-edge ID " << half_edge_id);
-
-  // move to neighboring triangle
-  KINDS_DEBUG("Moving Voronoi vertex " << voronoi_vertex_id << " from triangle " << containing_tri_id << " to triangle "
-                                       << graph.halfEdge(half_edge_id ^ 1).face);
-  kd->crossing_data.moveVertex(voronoi_vertex_id, graph.halfEdge(half_edge_id ^ 1).face, occurrence_time);
-
-  // Update Voronoi–Delaunay edge intersections stored in crossing_data in response to this crossing.
-  kd->crossing_data.updateAfterCrossingEvent(*kd, *this);
-
-  // Recompute params on all three Delaunay edges of this Voronoi vertex (Delaunay face) before callbacks mesh.
-  kd->refreshTriangleDelaunayEdgeIntersectionParams(voronoi_vertex_id, occurrence_time);
-
-  if (event_handler)
-  {
-    event_handler->afterEvent(*this);
-  }
-
-  // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
-  kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", occurrence_time);
-  kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", occurrence_time);
-
-  // Re-compute crossing events for this Voronoi vertex
-  kd->crossing_event_manager_->computeEvents(occurrence_time, voronoi_vertex_id);
-
-  if (kd->diagnosticsEnabled() && kd->isDiagnosticsMonitoredFaceValid())
-  {
-    kd->logFaceInsideStateAtTime(kDiagnosticsMonitoredFaceId, occurrence_time, "crossing_event");
-  }
-}
 
 /** Empty optional formats as "null". Log form is V{idx}xD{idx} for list positions along voronoi/delaunay edge lists. */
 std::string formatCrossingIntersectionForLog(const KineticDelaunay& kd,

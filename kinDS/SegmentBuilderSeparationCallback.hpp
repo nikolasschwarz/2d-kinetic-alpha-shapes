@@ -3,6 +3,9 @@
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunaySeparationEvent.hpp"
 
+#include <cstddef>
+#include <vector>
+
 namespace kinDS
 {
 class SegmentBuilder;
@@ -20,6 +23,11 @@ class SegmentBuilderSeparationCallback final : public KineticDelaunay::EventCall
 
  private:
   SegmentBuilder& segment_builder_;
+  /// Cached across before/after when the graph cut clears the pending split mid-event.
+  mutable size_t cached_split_parent_component_id_ = static_cast<size_t>(-1);
+  mutable size_t cached_split_parent_branch_id_ = static_cast<size_t>(-1);
+  mutable std::vector<size_t> cached_split_child_branch_ids_;
+
   void writeSeparationVisualDebugSvg(const KineticDelaunay::SeparationEvent& separation, const char* phase) const;
 };
 } // namespace kinDS
