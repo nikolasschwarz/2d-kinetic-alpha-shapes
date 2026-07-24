@@ -23,6 +23,10 @@ inline constexpr const char* kVisualDebugUnresolvedBranchFolder = "branchX";
 /// per active runtime branch. @ref kVisualDebugUnresolvedBranchFolder is used only when a preferred/explicit branch
 /// cannot be positioned, or when no active branch has strands.
 ///
+/// By default, pending split-off child runtime branches collapse into the parent (unsplit) folder. When
+/// @ref KineticDelaunay::visualDebugSeparatePendingSplits is enabled, pending children keep their own folders and
+/// strand subsets from the moment the radius event notes the split.
+///
 /// Filename times use @ref formatDebugExportTimeToken / @ref kDebugExportTimePrecision.
 ///
 /// If @p explicit_runtime_branch_ids is non-null and non-empty, SVGs are written only for those runtime branch ids

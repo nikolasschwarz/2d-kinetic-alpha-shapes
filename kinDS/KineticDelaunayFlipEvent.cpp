@@ -71,7 +71,7 @@ std::pair<double, double> signChangeAtRoot(const Polynomial& event_trigger, doub
 bool shouldLogFlipDiagnostics(const KineticDelaunay& kd, size_t he_id, double schedule_t)
 {
   return kd.diagnosticsEnabled()
-    && (he_id / 2) == KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId
+    && KineticDelaunay::matchesDiagnosticsMonitorId(he_id / 2, KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId)
     && schedule_t >= std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime)
     && schedule_t < std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime) + 1.0;
 }
@@ -87,11 +87,11 @@ void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedul
   header << "  flip trigger roots **MONITORED_EDGE** (he_id=" << he_id << ", delaunay_edge=" << delaunay_edge_id
          << ", schedule_t=" << schedule_t << ", section=" << section << ", min_fraction=" << min_fraction
          << ", pass=" << trigger_pass << ", trigger_degree=" << event_trigger.degree() << ")";
-  KINDS_INFO(header.str());
+  KINDS_MONITOR(header.str());
 
   if (event_trigger.degree() == -1)
   {
-    KINDS_INFO("    trigger empty (degree -1)");
+    KINDS_MONITOR("    trigger empty (degree -1)");
     return;
   }
 
@@ -99,7 +99,7 @@ void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedul
   const auto zeros = event_trigger.realRoots();
   if (zeros.empty())
   {
-    KINDS_INFO("    no real roots");
+    KINDS_MONITOR("    no real roots");
     return;
   }
 
@@ -125,7 +125,7 @@ void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedul
     if (std::isnan(root))
     {
       line << " discarded (nan)";
-      KINDS_INFO(line.str());
+      KINDS_MONITOR(line.str());
       continue;
     }
 
@@ -135,36 +135,36 @@ void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedul
     if (root <= min_fraction)
     {
       line << " discarded (fraction <= min_fraction)";
-      KINDS_INFO(line.str());
+      KINDS_MONITOR(line.str());
       continue;
     }
     if (root > kEventIntervalFractionUpperBound)
     {
       line << " discarded (fraction > " << kEventIntervalFractionUpperBound << ")";
-      KINDS_INFO(line.str());
+      KINDS_MONITOR(line.str());
       continue;
     }
 
     if (sign_before == sign_after)
     {
       line << " discarded (no_sign_change)";
-      KINDS_INFO(line.str());
+      KINDS_MONITOR(line.str());
       continue;
     }
 
     // Flip findEvents queues any sign change (only_positive_to_negative=false).
     line << " queued_by_findEvents";
     ++queued_count;
-    KINDS_INFO(line.str());
+    KINDS_MONITOR(line.str());
   }
 
   if (queued_count == 0)
   {
-    KINDS_INFO("    findEvents would return empty for this trigger");
+    KINDS_MONITOR("    findEvents would return empty for this trigger");
   }
   else
   {
-    KINDS_INFO("    findEvents would queue " << queued_count << " root(s) for this trigger");
+    KINDS_MONITOR("    findEvents would queue " << queued_count << " root(s) for this trigger");
   }
 }
 } // namespace
@@ -214,7 +214,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
            << (quad_id < kd->quadrilateral_last_updated.size() ? kd->quadrilateral_last_updated[quad_id]
                                                                : std::numeric_limits<double>::quiet_NaN())
            << ")";
-    KINDS_INFO(header.str());
+    KINDS_MONITOR(header.str());
   }
 
   const auto build_trigger = [&](size_t active_he_id, double schedule_time, Polynomial& event_trigger_out,
@@ -298,7 +298,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     {
       if (log_flip_diag)
       {
-        KINDS_INFO("  flip enqueue skipped (empty trigger) pass=" << trigger_pass);
+        KINDS_MONITOR("  flip enqueue skipped (empty trigger) pass=" << trigger_pass);
       }
       return;
     }
@@ -306,7 +306,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     auto event_times = kd->findEvents(event_trigger, min_fraction);
     if (log_flip_diag && event_times.empty())
     {
-      KINDS_INFO("  flip enqueue: findEvents returned empty pass=" << trigger_pass);
+      KINDS_MONITOR("  flip enqueue: findEvents returned empty pass=" << trigger_pass);
     }
     for (const auto& event_time : event_times)
     {
@@ -321,7 +321,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
 
       if (log_flip_diag)
       {
-        KINDS_INFO("  flip event QUEUED absolute_t=" << std::setprecision(17) << (event_time + section)
+        KINDS_MONITOR("  flip event QUEUED absolute_t=" << std::setprecision(17) << (event_time + section)
                                                      << " fraction=" << event_time << " he_id=" << enqueue_he_id
                                                      << " creation_t=" << creation_time << " pass=" << trigger_pass
                                                      << " center=(" << center[0] << "," << center[1] << ")");
@@ -345,7 +345,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   {
     if (log_flip_diag)
     {
-      KINDS_INFO("  flip post-ramp pass enabled ramp_end_fraction=" << *ramp_end_fraction);
+      KINDS_MONITOR("  flip post-ramp pass enabled ramp_end_fraction=" << *ramp_end_fraction);
     }
     const double post_ramp_schedule_time = static_cast<double>(section) + *ramp_end_fraction;
     Polynomial post_ramp_trigger;
@@ -356,7 +356,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   else if (log_flip_diag)
   {
     const std::optional<double> ramp_end_fraction = separationRampEndFractionForQuad(*kd, quad_strand_ids, section);
-    KINDS_INFO("  flip post-ramp pass skipped ramp_end_fraction="
+    KINDS_MONITOR("  flip post-ramp pass skipped ramp_end_fraction="
       << (ramp_end_fraction.has_value() ? std::to_string(*ramp_end_fraction) : std::string("n/a"))
       << " min_fraction=" << fraction);
   }
@@ -376,7 +376,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
   {
     if (log_flip_diag)
     {
-      KINDS_INFO("Flip handleEvent SKIP (he_id=" << half_edge_id << ", delaunay_edge=" << (half_edge_id / 2)
+      KINDS_MONITOR("Flip handleEvent SKIP (he_id=" << half_edge_id << ", delaunay_edge=" << (half_edge_id / 2)
                                                  << ", occurrence_t=" << std::setprecision(17) << occurrence_time
                                                  << ", creation_t=" << creation_time << "): " << reason);
     }
@@ -388,7 +388,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
     const double quad_last = (quad_id < kd->quadrilateral_last_updated.size())
       ? kd->quadrilateral_last_updated[quad_id]
       : std::numeric_limits<double>::quiet_NaN();
-    KINDS_INFO("Flip handleEvent ENTER (he_id=" << half_edge_id << "/" << (half_edge_id ^ 1)
+    KINDS_MONITOR("Flip handleEvent ENTER (he_id=" << half_edge_id << "/" << (half_edge_id ^ 1)
                                                 << ", delaunay_edge=" << quad_id << ", occurrence_t="
                                                 << std::setprecision(17) << occurrence_time
                                                 << ", creation_t=" << creation_time << ", he_live="
@@ -412,7 +412,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
 
   if (log_flip_diag)
   {
-    KINDS_INFO("Flip handleEvent PROCEED (he_id=" << half_edge_id << ", occurrence_t=" << std::setprecision(17)
+    KINDS_MONITOR("Flip handleEvent PROCEED (he_id=" << half_edge_id << ", occurrence_t=" << std::setprecision(17)
                                                   << occurrence_time << ")");
   }
 
@@ -448,7 +448,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
     event_handler->beforeEvent(*this);
   }
 
-  if (kd->getVisualDebugOutputRoot().has_value()
+  if (kd->isVisualDebugEnabled() && kd->getVisualDebugOutputRoot().has_value()
     && shouldDumpFlipPolynomialsForEvent(*kd, occurrence_time, half_edge_id))
   {
     const FlipEventTriggerDump dump = buildFlipEventTriggerDump(*kd, half_edge_id, creation_time);
@@ -456,9 +456,8 @@ void KineticDelaunay::FlipEvent::handleEvent()
       *kd, dump, *kd->getVisualDebugOutputRoot() / "polynomials.txt", occurrence_time);
   }
 
-  // Flip validation disabled: inCircle/ccw predicate roots can disagree slightly with
-  // transformed Voronoi geometry at event time (numerical / frame lookup tolerance).
-#if 0
+  // Sanity-check Voronoi coincidence / boundary collinearity on every flip (log only; never throws).
+  // FAIL → WARNING (ungated). OK → MONITOR only under flip diagnostic guards.
   if (graph.isOnConvexBoundary(half_edge_id) || graph.isOutsideConvexBoundary(half_edge_id))
   {
     size_t boundary_he_id = half_edge_id;
@@ -476,24 +475,39 @@ void KineticDelaunay::FlipEvent::handleEvent()
       const glm::dvec2 pb = kd->getPointAt(static_cast<size_t>(b), occurrence_time);
       const glm::dvec2 pc = kd->getPointAt(static_cast<size_t>(c), occurrence_time);
       const double collinearity_metric = normalizedTriangleCollinearityMetric(pa, pb, pc);
-      if (collinearity_metric > flip_boundary_collinearity_eps)
+      const bool transformed_collinear = collinearity_metric <= flip_boundary_collinearity_eps;
+
+      if (!transformed_collinear)
       {
         const glm::dvec2 pa_raw = kd->getStrandTree().evaluate(static_cast<size_t>(a), occurrence_time);
         const glm::dvec2 pb_raw = kd->getStrandTree().evaluate(static_cast<size_t>(b), occurrence_time);
         const glm::dvec2 pc_raw = kd->getStrandTree().evaluate(static_cast<size_t>(c), occurrence_time);
         const double raw_collinearity_metric = normalizedTriangleCollinearityMetric(pa_raw, pb_raw, pc_raw);
-        const bool transformed_collinear = collinearity_metric <= flip_boundary_collinearity_eps;
         const bool untransformed_collinear = raw_collinearity_metric <= flip_boundary_collinearity_eps;
 
-        throw std::runtime_error(
-          "Invalid boundary flip event: finite vertices are not collinear for half-edge " + std::to_string(half_edge_id)
-          + " at t=" + std::to_string(occurrence_time) + " (transformed_collinearity_metric="
-          + std::to_string(collinearity_metric) + ", untransformed_collinearity_metric="
-          + std::to_string(raw_collinearity_metric) + ", a=" + std::to_string(a) + ", b=" + std::to_string(b) + ", c="
-          + std::to_string(c) + ", pa=" + glm::to_string(pa) + ", pb=" + glm::to_string(pb) + ", pc=" + glm::to_string(pc)
-          + ", pa_raw=" + glm::to_string(pa_raw) + ", pb_raw=" + glm::to_string(pb_raw) + ", pc_raw="
-          + glm::to_string(pc_raw)
-          + flipUntransformedFrameMismatchNote(transformed_collinear, untransformed_collinear) + ")");
+        KINDS_WARNING("Flip sanity FAIL boundary collinearity (he_id="
+          << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
+          << ", creation_t=" << creation_time
+          << ", transformed_collinearity_metric=" << collinearity_metric
+          << ", untransformed_collinearity_metric=" << raw_collinearity_metric << ", eps="
+          << flip_boundary_collinearity_eps << ", a=" << a << ", b=" << b << ", c=" << c << ", pa="
+          << glm::to_string(pa) << ", pb=" << glm::to_string(pb) << ", pc=" << glm::to_string(pc)
+          << ", pa_raw=" << glm::to_string(pa_raw) << ", pb_raw=" << glm::to_string(pb_raw)
+          << ", pc_raw=" << glm::to_string(pc_raw)
+          << flipUntransformedFrameMismatchNote(transformed_collinear, untransformed_collinear) << ")");
+      }
+      else if (log_flip_diag)
+      {
+        const glm::dvec2 pa_raw = kd->getStrandTree().evaluate(static_cast<size_t>(a), occurrence_time);
+        const glm::dvec2 pb_raw = kd->getStrandTree().evaluate(static_cast<size_t>(b), occurrence_time);
+        const glm::dvec2 pc_raw = kd->getStrandTree().evaluate(static_cast<size_t>(c), occurrence_time);
+        const double raw_collinearity_metric = normalizedTriangleCollinearityMetric(pa_raw, pb_raw, pc_raw);
+
+        KINDS_MONITOR("Flip sanity OK boundary collinearity (he_id="
+          << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
+          << ", creation_t=" << creation_time
+          << ", transformed_collinearity_metric=" << collinearity_metric
+          << ", untransformed_collinearity_metric=" << raw_collinearity_metric << ")");
       }
     }
   }
@@ -502,46 +516,70 @@ void KineticDelaunay::FlipEvent::handleEvent()
     const std::vector<size_t> quad_strand_ids = collectFlipQuadrilateralStrandIds(graph, half_edge_id);
     const size_t shared_reference_branch
       = kd->getSharedReferenceBranchForStrands(quad_strand_ids, occurrence_time);
-    const glm::dvec3 left_voronoi_vertex
-      = kd->computeVoronoiVertexClampedInfinityWithReferenceBranch(half_edge_id, occurrence_time, shared_reference_branch);
+    const glm::dvec3 left_voronoi_vertex = kd->computeVoronoiVertexClampedInfinityWithReferenceBranch(
+      half_edge_id, occurrence_time, shared_reference_branch);
     const glm::dvec3 right_voronoi_vertex = kd->computeVoronoiVertexClampedInfinityWithReferenceBranch(
       half_edge_id ^ 1, occurrence_time, shared_reference_branch);
     const double voronoi_vertex_distance
       = glm::distance(glm::dvec2(left_voronoi_vertex), glm::dvec2(right_voronoi_vertex));
-    if (voronoi_vertex_distance > flip_voronoi_vertex_distance_eps)
+    const bool transformed_coincident = voronoi_vertex_distance <= flip_voronoi_vertex_distance_eps;
+
+    if (!transformed_coincident)
     {
       const glm::dvec2 raw_left_cc
         = flipTriangleCircumcenterAt(*kd, graph, half_edge_id, occurrence_time, false);
       const glm::dvec2 raw_right_cc
         = flipTriangleCircumcenterAt(*kd, graph, half_edge_id ^ 1, occurrence_time, false);
-      const glm::dvec2 transformed_left_cc
-        = flipTriangleCircumcenterAt(*kd, graph, half_edge_id, occurrence_time, true, shared_reference_branch);
+      const glm::dvec2 transformed_left_cc = flipTriangleCircumcenterAt(
+        *kd, graph, half_edge_id, occurrence_time, true, shared_reference_branch);
       const glm::dvec2 transformed_right_cc = flipTriangleCircumcenterAt(
         *kd, graph, half_edge_id ^ 1, occurrence_time, true, shared_reference_branch);
       const double raw_circumcenter_distance = glm::distance(raw_left_cc, raw_right_cc);
       const double shared_frame_circumcenter_distance
         = glm::distance(transformed_left_cc, transformed_right_cc);
-      const bool transformed_coincident = voronoi_vertex_distance <= flip_voronoi_vertex_distance_eps;
       const bool untransformed_coincident = raw_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
-      const bool shared_frame_coincident = shared_frame_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
+      const bool shared_frame_coincident
+        = shared_frame_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
 
-      throw std::runtime_error(
-        "Invalid flip event: Voronoi edge endpoints are not coincident for half-edge " + std::to_string(half_edge_id)
-        + " at t=" + std::to_string(occurrence_time) + " (faces " + std::to_string(face_id) + " and "
-        + std::to_string(twin_face_id) + ", transformed_voronoi_distance=" + std::to_string(voronoi_vertex_distance)
-        + ", untransformed_circumcenter_distance=" + std::to_string(raw_circumcenter_distance)
-        + ", shared_frame_circumcenter_distance=" + std::to_string(shared_frame_circumcenter_distance)
-        + ", shared_reference_branch=" + std::to_string(shared_reference_branch) + ", left="
-        + glm::to_string(left_voronoi_vertex) + ", right=" + glm::to_string(right_voronoi_vertex) + ", raw_left_cc="
-        + glm::to_string(raw_left_cc) + ", raw_right_cc=" + glm::to_string(raw_right_cc)
-        + flipUntransformedFrameMismatchNote(transformed_coincident, untransformed_coincident)
-        + (shared_frame_coincident && !transformed_coincident
-            ? " [shared-frame circumcenters coincide; per-vertex getPointAt frame mismatch]"
-            : "")
-        + ")");
+      KINDS_WARNING("Flip sanity FAIL Voronoi coincidence (he_id="
+        << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
+        << ", creation_t=" << creation_time << ", faces " << face_id << " and " << twin_face_id
+        << ", transformed_voronoi_distance=" << voronoi_vertex_distance
+        << ", untransformed_circumcenter_distance=" << raw_circumcenter_distance
+        << ", shared_frame_circumcenter_distance=" << shared_frame_circumcenter_distance << ", eps="
+        << flip_voronoi_vertex_distance_eps << ", shared_reference_branch=" << shared_reference_branch
+        << ", left=" << glm::to_string(left_voronoi_vertex)
+        << ", right=" << glm::to_string(right_voronoi_vertex) << ", raw_left_cc="
+        << glm::to_string(raw_left_cc) << ", raw_right_cc=" << glm::to_string(raw_right_cc)
+        << flipUntransformedFrameMismatchNote(transformed_coincident, untransformed_coincident)
+        << (shared_frame_coincident && !transformed_coincident
+              ? " [shared-frame circumcenters coincide; per-vertex getPointAt frame mismatch]"
+              : "")
+        << ")");
+    }
+    else if (log_flip_diag)
+    {
+      const glm::dvec2 raw_left_cc
+        = flipTriangleCircumcenterAt(*kd, graph, half_edge_id, occurrence_time, false);
+      const glm::dvec2 raw_right_cc
+        = flipTriangleCircumcenterAt(*kd, graph, half_edge_id ^ 1, occurrence_time, false);
+      const glm::dvec2 transformed_left_cc = flipTriangleCircumcenterAt(
+        *kd, graph, half_edge_id, occurrence_time, true, shared_reference_branch);
+      const glm::dvec2 transformed_right_cc = flipTriangleCircumcenterAt(
+        *kd, graph, half_edge_id ^ 1, occurrence_time, true, shared_reference_branch);
+      const double raw_circumcenter_distance = glm::distance(raw_left_cc, raw_right_cc);
+      const double shared_frame_circumcenter_distance
+        = glm::distance(transformed_left_cc, transformed_right_cc);
+
+      KINDS_MONITOR("Flip sanity OK Voronoi coincidence (he_id="
+        << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
+        << ", creation_t=" << creation_time
+        << ", transformed_voronoi_distance=" << voronoi_vertex_distance
+        << ", untransformed_circumcenter_distance=" << raw_circumcenter_distance
+        << ", shared_frame_circumcenter_distance=" << shared_frame_circumcenter_distance
+        << ", shared_reference_branch=" << shared_reference_branch << ")");
     }
   }
-#endif
 
   // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
   if (graph.halfEdge(half_edge_id).origin == -1)

@@ -13,6 +13,7 @@
 #include "SegmentBuilderSeparationCallback.hpp"
 #include "SegmentBuilderVisualDebug.hpp"
 #include "Validator.hpp"
+#include "VisualDebugHighlight.hpp"
 
 #include <algorithm>
 #include <array>
@@ -379,13 +380,70 @@ std::vector<std::vector<size_t>> splitPolygonAtRepeatedVertices(const VoronoiMes
   return simple_rings;
 }
 
-void writeTriangulateSimplePolygonFailSvg(const KineticDelaunay& kin_del, const VoronoiMesh& mesh,
+void writeTriangulateSimplePolygonFailSvg(KineticDelaunay& kin_del, VoronoiMesh& mesh,
   const std::vector<size_t>& polygon_vertices, std::optional<double> occurrence_time,
   std::optional<size_t> runtime_branch_id)
 {
   if (polygon_vertices.size() < 3)
   {
     return;
+  }
+
+  const double kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
+
+  // Common event-style kinetic SVG with sites / intersections / VVs from the failed polygon highlighted.
+  {
+    const auto& graph = kin_del.getGraph();
+    VisualDebugHighlight highlight;
+    const auto& vertex_metadata = mesh.getVertexMetadata();
+    std::optional<size_t> delaunay_face_id;
+    for (size_t vertex_id : polygon_vertices)
+    {
+      if (vertex_id >= vertex_metadata.size())
+      {
+        continue;
+      }
+      const std::string& metadata = vertex_metadata[vertex_id];
+      if (const auto strand_id = metadataSizeField(metadata, "strand_id"); strand_id.has_value())
+      {
+        highlight.delaunay_vertices.insert(strand_id.value());
+      }
+      if (const auto voronoi_vertex_id = metadataSizeField(metadata, "voronoi_vertex_id");
+        voronoi_vertex_id.has_value())
+      {
+        highlight.voronoi_vertices.insert(voronoi_vertex_id.value());
+      }
+      if (const auto delaunay_edge_id = metadataSizeField(metadata, "delaunay_edge_id");
+        delaunay_edge_id.has_value())
+      {
+        const size_t de = delaunay_edge_id.value();
+        highlight.label_crossings_on_delaunay_edges.insert(de);
+        highlight.addUndirectedDelaunayEdge(graph, 2 * de);
+      }
+      if (const auto voronoi_edge_id = metadataSizeField(metadata, "voronoi_edge_id");
+        voronoi_edge_id.has_value())
+      {
+        const size_t ve = voronoi_edge_id.value();
+        highlight.voronoi_edges.insert(ve);
+        highlight.label_crossings_on_voronoi_edges.insert(ve);
+      }
+      if (const auto face_id = metadataSizeField(metadata, "delaunay_face_id"); face_id.has_value())
+      {
+        delaunay_face_id = face_id;
+      }
+      const auto de = metadataSizeField(metadata, "delaunay_edge_id");
+      const auto ve = metadataSizeField(metadata, "voronoi_edge_id");
+      if (de.has_value() && ve.has_value())
+      {
+        highlight.crossing_intersection_keys.insert((static_cast<uint64_t>(de.value()) << 32) | ve.value());
+      }
+    }
+    if (delaunay_face_id.has_value() && graph.isLiveFace(delaunay_face_id.value()))
+    {
+      highlight.addDelaunayTriangle(graph, delaunay_face_id.value());
+    }
+    writeSegmentBuilderVisualDebugSvg(true, kin_del, graph, kinetic_time, "error",
+      "triangulateSimplePolygon_FAIL", highlight, runtime_branch_id);
   }
 
   const std::filesystem::path filepath
@@ -1493,13 +1551,6 @@ std::string formatMeshPairIndex(size_t pair_idx)
   }
   return std::to_string(pair_idx);
 }
-
-bool diagnosticsInMonitoredFlipWindow(double t)
-{
-  return std::isfinite(t)
-    && t >= std::floor(SegmentBuilder::kDiagnosticsMonitoredFlipTime)
-    && t < std::floor(SegmentBuilder::kDiagnosticsMonitoredFlipTime) + 1.0;
-}
 } // namespace
 
 void kinDS::SegmentBuilder::maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(double t, const char* event_context,
@@ -1510,19 +1561,20 @@ void kinDS::SegmentBuilder::maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(doub
     return;
   }
   const bool edge_hit = delaunay_edge_id.has_value()
-    && delaunay_edge_id.value() == kDiagnosticsMonitoredDelaunayEdgeId;
-  const bool pair_hit
-    = mesh_pair_index.has_value() && mesh_pair_index.value() == kDiagnosticsMonitoredMeshPairId;
-  if (!edge_hit && !pair_hit && !diagnosticsInMonitoredFlipWindow(t))
+    && KineticDelaunay::matchesDiagnosticsMonitorId(*delaunay_edge_id, kDiagnosticsMonitoredDelaunayEdgeId);
+  const bool pair_hit = mesh_pair_index.has_value()
+    && KineticDelaunay::matchesDiagnosticsMonitorId(*mesh_pair_index, kDiagnosticsMonitoredMeshPairId);
+  if (!edge_hit && !pair_hit)
   {
     return;
   }
   logDiagnosticsMonitoredDelaunayEdgeState(t, event_context);
 }
 
-void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(double t, const char* event_context) const
+void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(
+  double t, const char* event_context, size_t delaunay_edge_id) const
 {
-  if (!diagnostics)
+  if (!diagnostics || !KineticDelaunay::isDiagnosticsMonitorIdEnabled(delaunay_edge_id))
   {
     return;
   }
@@ -1630,7 +1682,7 @@ void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(double t, c
     return oss.str();
   };
 
-  const size_t d_edge = kDiagnosticsMonitoredDelaunayEdgeId;
+  const size_t d_edge = delaunay_edge_id;
   const size_t he_even = 2 * d_edge;
   const size_t he_odd = he_even + 1;
   const auto& graph = kin_del.getGraph();
@@ -1642,17 +1694,17 @@ void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(double t, c
     header << " [" << event_context << "]";
   }
   header << " at t=" << t;
-  KINDS_INFO(header.str());
+  KINDS_MONITOR(header.str());
 
   if (he_odd >= graph.halfEdgeSlotCount())
   {
-    KINDS_INFO("  edge slot out of bounds (he_slots=" << graph.halfEdgeSlotCount() << ")");
+    KINDS_MONITOR("  edge slot out of bounds (he_slots=" << graph.halfEdgeSlotCount() << ")");
     return;
   }
 
   const bool on_boundary = kin_del.isOnComponentBoundary(he_even);
   const bool even_outside = on_boundary && kin_del.isOnComponentBoundaryOutside(he_even);
-  KINDS_INFO("  alpha_boundary=" << (on_boundary ? "yes" : "no")
+  KINDS_MONITOR("  alpha_boundary=" << (on_boundary ? "yes" : "no")
                                  << " even_is_outside=" << (even_outside ? "yes" : "no") << " even_origin="
                                  << graph.halfEdge(he_even).origin << " odd_origin=" << graph.halfEdge(he_odd).origin
                                  << " even_face=" << graph.halfEdge(he_even).face << " odd_face="
@@ -1661,12 +1713,12 @@ void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(double t, c
   const auto& crossing_data = kin_del.getCrossingData();
   if (d_edge >= crossing_data.delaunay_edge_intersections.size())
   {
-    KINDS_INFO("  no delaunay_edge_intersections slot");
+    KINDS_MONITOR("  no delaunay_edge_intersections slot");
     return;
   }
 
   const auto& refs = crossing_data.delaunay_edge_intersections[d_edge];
-  KINDS_INFO("  crossing_count=" << refs.size());
+  KINDS_MONITOR("  crossing_count=" << refs.size());
   size_t list_idx = 0;
   for (const auto& ref : refs)
   {
@@ -1674,36 +1726,39 @@ void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(double t, c
     line << "  [" << list_idx << "] ve=" << ref->voronoi_edge_id << " param=" << ref->delaunay_edge_param << " prev_pair="
          << formatMeshPairIndex(ref->prev_segment_mesh_pair_index) << " next_pair="
          << formatMeshPairIndex(ref->next_segment_mesh_pair_index);
-    KINDS_INFO(line.str());
+    KINDS_MONITOR(line.str());
     if (ref->prev_segment_mesh_pair_index != static_cast<size_t>(-1))
     {
-      KINDS_INFO("    prev_pair_meta " << format_intersection_mesh_pair_metadata(ref->prev_segment_mesh_pair_index)
+      KINDS_MONITOR("    prev_pair_meta " << format_intersection_mesh_pair_metadata(ref->prev_segment_mesh_pair_index)
                                        << " strip="
                                        << format_intersection_mesh_pair_strip_state(ref->prev_segment_mesh_pair_index));
     }
     if (ref->next_segment_mesh_pair_index != static_cast<size_t>(-1))
     {
-      KINDS_INFO("    next_pair_meta " << format_intersection_mesh_pair_metadata(ref->next_segment_mesh_pair_index)
+      KINDS_MONITOR("    next_pair_meta " << format_intersection_mesh_pair_metadata(ref->next_segment_mesh_pair_index)
                                        << " strip="
                                        << format_intersection_mesh_pair_strip_state(ref->next_segment_mesh_pair_index));
     }
-    if (ref->prev_segment_mesh_pair_index == kDiagnosticsMonitoredMeshPairId
-      || ref->next_segment_mesh_pair_index == kDiagnosticsMonitoredMeshPairId)
+    if (KineticDelaunay::matchesDiagnosticsMonitorId(
+          ref->prev_segment_mesh_pair_index, kDiagnosticsMonitoredMeshPairId)
+      || KineticDelaunay::matchesDiagnosticsMonitorId(
+           ref->next_segment_mesh_pair_index, kDiagnosticsMonitoredMeshPairId))
     {
-      KINDS_INFO("    ** references monitored mesh pair " << kDiagnosticsMonitoredMeshPairId << " **");
+      KINDS_MONITOR("    ** references monitored mesh pair " << kDiagnosticsMonitoredMeshPairId << " **");
     }
     ++list_idx;
   }
 
-  if (kDiagnosticsMonitoredMeshPairId < intersection_mesh_pair_metadata.size())
+  if (KineticDelaunay::isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredMeshPairId)
+    && kDiagnosticsMonitoredMeshPairId < intersection_mesh_pair_metadata.size())
   {
-    KINDS_INFO("  monitored_pair_" << kDiagnosticsMonitoredMeshPairId << "_meta="
+    KINDS_MONITOR("  monitored_pair_" << kDiagnosticsMonitoredMeshPairId << "_meta="
                                      << format_intersection_mesh_pair_metadata(kDiagnosticsMonitoredMeshPairId));
-    KINDS_INFO("  monitored_pair_" << kDiagnosticsMonitoredMeshPairId << "_strip="
+    KINDS_MONITOR("  monitored_pair_" << kDiagnosticsMonitoredMeshPairId << "_strip="
                                      << format_intersection_mesh_pair_strip_state(kDiagnosticsMonitoredMeshPairId));
     if (kDiagnosticsMonitoredMeshPairId < intersection_meshes.size())
     {
-      KINDS_INFO("  monitored_pair_" << kDiagnosticsMonitoredMeshPairId << "_verts="
+      KINDS_MONITOR("  monitored_pair_" << kDiagnosticsMonitoredMeshPairId << "_verts="
                                        << intersection_meshes[kDiagnosticsMonitoredMeshPairId].getVertexCount()
                                        << " tris="
                                        << intersection_meshes[kDiagnosticsMonitoredMeshPairId].getTriangleCount()
@@ -1782,7 +1837,7 @@ void kinDS::SegmentBuilder::strandInitDiagnosticLogLine(
   {
     oss << ' ' << extra_note;
   }
-  KINDS_INFO(oss.str());
+  KINDS_DEBUG(oss.str());
 }
 
 void kinDS::SegmentBuilder::logStrandInitDiagnosticsSummary(double t) const
@@ -1942,7 +1997,7 @@ void kinDS::SegmentBuilder::meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewM
   if (nv > 0 && strips.empty())
   {
     KINDS_WARNING("meshlet_diag inconsistent after startNewMesh: dual_edge="
-      << dual_edge << " t=" << t << " — mesh has " << nv << " vertices but strip list is empty.");
+      << dual_edge << " t=" << t << " - mesh has " << nv << " vertices but strip list is empty.");
   }
 }
 
@@ -4354,9 +4409,16 @@ void SegmentBuilder::assignIntersectionMeshPairLink(KineticDelaunay::CrossingDat
     return;
   }
 
-  const bool assigned_monitored = new_pair_index == kDiagnosticsMonitoredMeshPairId;
+  // Disabled monitor id must never match cleared/unset pair links (also -1).
+  if (!KineticDelaunay::isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredMeshPairId))
+  {
+    return;
+  }
+  const bool assigned_monitored
+    = KineticDelaunay::matchesDiagnosticsMonitorId(new_pair_index, kDiagnosticsMonitoredMeshPairId);
   const bool cleared_monitored
-    = old_pair_index == kDiagnosticsMonitoredMeshPairId && new_pair_index != kDiagnosticsMonitoredMeshPairId;
+    = KineticDelaunay::matchesDiagnosticsMonitorId(old_pair_index, kDiagnosticsMonitoredMeshPairId)
+    && !KineticDelaunay::matchesDiagnosticsMonitorId(new_pair_index, kDiagnosticsMonitoredMeshPairId);
   if (!assigned_monitored && !cleared_monitored)
   {
     return;
@@ -4391,7 +4453,7 @@ void SegmentBuilder::assignIntersectionMeshPairLink(KineticDelaunay::CrossingDat
   {
     oss << " callback=" << metadata_callback_phase_;
   }
-  KINDS_INFO(oss.str());
+  KINDS_DEBUG(oss.str());
   maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(t, context, ref->delaunay_edge_id, new_pair_index);
 }
 
@@ -5019,10 +5081,11 @@ void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
   {
     return;
   }
-  KINDS_WARNING("SegmentBuilder: " << context << " - Voronoi vertex " << voronoi_vertex_id
+  // Disable for now
+  /*KINDS_WARNING("SegmentBuilder: " << context << " - Voronoi vertex " << voronoi_vertex_id
                                    << " (containing Delaunay triangle " << containing_tri_id
                                    << ") is outside the alpha-shape; position (" << position.x << ", " << position.y
-                                   << ", " << position.z << ").");
+                                   << ", " << position.z << ").");*/
 }
 
 glm::dvec3 SegmentBuilder::transformFromInputBranchToObjectSpace(
@@ -7612,7 +7675,7 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
       }
       if (filtered_polygon.size() != polygon.size())
       {
-        KINDS_INFO("Closing cap outline removed "
+        KINDS_DEBUG("Closing cap outline removed "
           << (polygon.size() - filtered_polygon.size()) << " consecutive Delaunay-space duplicate(s) for strand "
           << strand_id << " at t=" << t);
       }
@@ -7707,8 +7770,8 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
     }
     delaunay_log << "]";
     mesh_log << "]";
-    KINDS_INFO(delaunay_log.str());
-    KINDS_INFO(mesh_log.str());
+    KINDS_DEBUG(delaunay_log.str());
+    KINDS_DEBUG(mesh_log.str());
   }
 
   return result;
@@ -7787,9 +7850,12 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
     {
       debug_rings.emplace_back("sub_" + std::to_string(i), split_polygons[i]);
     }
-    writeTriangulateSimplePolygonDebugTxt(kin_del, mesh,
-      makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "SPLIT", ".txt", occurrence_time, runtime_branch_id),
-      "SPLIT", debug_rings, occurrence_time, runtime_branch_id);
+    if (shouldDumpErrorFiles())
+    {
+      writeTriangulateSimplePolygonDebugTxt(kin_del, mesh,
+        makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "SPLIT", ".txt", occurrence_time, runtime_branch_id),
+        "SPLIT", debug_rings, occurrence_time, runtime_branch_id);
+    }
 
     for (const std::vector<size_t>& sub_polygon : split_polygons)
     {
@@ -7951,10 +8017,13 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
         return;
       }
 
-      writeTriangulateSimplePolygonDebugTxt(kin_del, mesh,
-        makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "FAIL", ".txt", occurrence_time, runtime_branch_id),
-        "FAIL", {{"fail", vertices}}, occurrence_time, runtime_branch_id);
-      writeTriangulateSimplePolygonFailSvg(kin_del, mesh, vertices, occurrence_time, runtime_branch_id);
+      if (shouldDumpErrorFiles())
+      {
+        writeTriangulateSimplePolygonDebugTxt(kin_del, mesh,
+          makeTriangulateSimplePolygonDebugPath(kin_del, mesh, "FAIL", ".txt", occurrence_time, runtime_branch_id),
+          "FAIL", {{"fail", vertices}}, occurrence_time, runtime_branch_id);
+        writeTriangulateSimplePolygonFailSvg(kin_del, mesh, vertices, occurrence_time, runtime_branch_id);
+      }
       KINDS_ERROR("triangulateSimplePolygon: failed to find an ear; polygon may be non-simple. Omitting polygon from mesh.");
       return;
     }

@@ -75,7 +75,7 @@ void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
 
   if (split.has_value())
   {
-    // Pending separation: always the parent folder only (child strands still belong to the unsplit parent view).
+    // Pending separation: parent folder by default; with --svg-separate-pending-splits also write each pending child.
     if (parent_branch.has_value())
     {
       const size_t parent_id = parent_branch.value();
@@ -87,6 +87,11 @@ void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
         cached_split_child_branch_ids_ = *children;
       }
       svg_branch_ids.push_back(parent_id);
+      if (kin_del.visualDebugSeparatePendingSplits())
+      {
+        svg_branch_ids.insert(
+          svg_branch_ids.end(), cached_split_child_branch_ids_.begin(), cached_split_child_branch_ids_.end());
+      }
     }
   }
   else if (cached_split_parent_component_id_ == parent_component_id

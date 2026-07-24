@@ -40,7 +40,8 @@ std::unordered_map<size_t, size_t> buildSiteInputBranchLabels(
 }
 
 void noteRuntimeBranchForStrand(
-  std::unordered_set<size_t>& runtime_branches, const KineticDelaunay& kin_del, size_t strand_id)
+  std::unordered_set<size_t>& runtime_branches, const KineticDelaunay& kin_del, size_t strand_id,
+  bool separate_pending_splits)
 {
   if (kin_del.isDummyBoundary(strand_id))
   {
@@ -53,7 +54,8 @@ void noteRuntimeBranchForStrand(
     return;
   }
 
-  runtime_branches.insert(kin_del.unsplitRuntimeBranchId(runtime_branch_map[strand_id]));
+  const size_t branch_id = runtime_branch_map[strand_id];
+  runtime_branches.insert(separate_pending_splits ? branch_id : kin_del.unsplitRuntimeBranchId(branch_id));
 }
 
 std::optional<size_t> uniqueBranchOrNull(const std::unordered_set<size_t>& branches)
@@ -66,13 +68,14 @@ std::optional<size_t> uniqueBranchOrNull(const std::unordered_set<size_t>& branc
 }
 
 std::optional<size_t> inferEventRuntimeBranchFromHighlight(
-  const HalfEdgeDelaunayGraph& graph, const KineticDelaunay& kin_del, const VisualDebugHighlight& highlight)
+  const HalfEdgeDelaunayGraph& graph, const KineticDelaunay& kin_del, const VisualDebugHighlight& highlight,
+  bool separate_pending_splits)
 {
   std::unordered_set<size_t> runtime_branches;
 
   for (size_t strand_id : highlight.delaunay_vertices)
   {
-    noteRuntimeBranchForStrand(runtime_branches, kin_del, strand_id);
+    noteRuntimeBranchForStrand(runtime_branches, kin_del, strand_id, separate_pending_splits);
   }
 
   for (size_t he_id : highlight.directed_half_edges)
@@ -80,12 +83,12 @@ std::optional<size_t> inferEventRuntimeBranchFromHighlight(
     const int origin = graph.halfEdge(he_id).origin;
     if (origin >= 0)
     {
-      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin), separate_pending_splits);
     }
     const int dest = graph.destination(he_id);
     if (dest >= 0)
     {
-      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(dest));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(dest), separate_pending_splits);
     }
   }
 
@@ -100,7 +103,7 @@ std::optional<size_t> inferEventRuntimeBranchFromHighlight(
     {
       if (v >= 0)
       {
-        noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(v));
+        noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(v), separate_pending_splits);
       }
     }
   }
@@ -116,11 +119,11 @@ std::optional<size_t> inferEventRuntimeBranchFromHighlight(
     const int origin_odd = graph.halfEdge(he_even + 1).origin;
     if (origin_even >= 0)
     {
-      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin_even));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin_even), separate_pending_splits);
     }
     if (origin_odd >= 0)
     {
-      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin_odd));
+      noteRuntimeBranchForStrand(runtime_branches, kin_del, static_cast<size_t>(origin_odd), separate_pending_splits);
     }
   }
 
@@ -171,7 +174,7 @@ std::unordered_set<size_t> collectLiveStrandIds(const HalfEdgeDelaunayGraph& gra
 }
 
 std::unordered_set<size_t> collectActiveRuntimeBranches(
-  const KineticDelaunay& kin_del, const std::unordered_set<size_t>& live_strand_ids)
+  const KineticDelaunay& kin_del, const std::unordered_set<size_t>& live_strand_ids, bool separate_pending_splits)
 {
   std::unordered_set<size_t> runtime_branches;
   const auto& runtime_branch_map = kin_del.getRuntimeBranchMap();
@@ -179,18 +182,37 @@ std::unordered_set<size_t> collectActiveRuntimeBranches(
   {
     if (strand_id < runtime_branch_map.size())
     {
-      runtime_branches.insert(kin_del.unsplitRuntimeBranchId(runtime_branch_map[strand_id]));
+      const size_t branch_id = runtime_branch_map[strand_id];
+      runtime_branches.insert(
+        separate_pending_splits ? branch_id : kin_del.unsplitRuntimeBranchId(branch_id));
     }
   }
   return runtime_branches;
 }
 
 std::unordered_set<size_t> collectStrandIdsForRuntimeBranch(
-  const KineticDelaunay& kin_del, const std::unordered_set<size_t>& live_strand_ids, size_t runtime_branch_id)
+  const KineticDelaunay& kin_del, const std::unordered_set<size_t>& live_strand_ids, size_t runtime_branch_id,
+  bool separate_pending_splits)
 {
-  // @p runtime_branch_id is an unsplit branch id: gather its own strands plus those of any pending split-off children,
-  // keeping only the live ones.
   std::unordered_set<size_t> strand_ids;
+  if (separate_pending_splits)
+  {
+    // Exact runtime branch: retained parent or pending child strands only (already reassigned at note-pending).
+    const auto& branches = kin_del.getRuntimeBranchData().branches;
+    if (runtime_branch_id < branches.size())
+    {
+      for (size_t strand_id : branches[runtime_branch_id])
+      {
+        if (live_strand_ids.count(strand_id) != 0)
+        {
+          strand_ids.insert(strand_id);
+        }
+      }
+    }
+    return strand_ids;
+  }
+
+  // Default: unsplit branch id — gather its own strands plus those of any pending split-off children.
   for (size_t strand_id : kin_del.collectUnsplitRuntimeBranchStrands(runtime_branch_id))
   {
     if (live_strand_ids.count(strand_id) != 0)
@@ -201,21 +223,84 @@ std::unordered_set<size_t> collectStrandIdsForRuntimeBranch(
   return strand_ids;
 }
 
+std::unordered_set<size_t> collectStrandsNeededForBranchVoronoiGeometry(
+  const HalfEdgeDelaunayGraph& graph, const KineticDelaunay& kin_del,
+  const std::unordered_set<size_t>& branch_strands)
+{
+  // Start with the folder's own strands. For any finite Delaunay edge that will be drawn in this folder
+  // (both primal origins in-set), also include finite sites of both adjacent faces. That covers Voronoi
+  // edges that still span a pending sibling branch before the graph cut: the opposite-side site must be
+  // positioned (in the folder frame) so circumcenters are not pulled toward (0,0) / a foreign frame.
+  std::unordered_set<size_t> needed = branch_strands;
+  for (size_t he_id : graph.liveDelaunayEdges())
+  {
+    const HalfEdgeDelaunayGraph::HalfEdge& he = graph.halfEdge(he_id);
+    const HalfEdgeDelaunayGraph::HalfEdge& twin = graph.halfEdge(he_id ^ 1);
+    if (he.origin < 0 || twin.origin < 0)
+    {
+      continue;
+    }
+    const size_t origin = static_cast<size_t>(he.origin);
+    const size_t twin_origin = static_cast<size_t>(twin.origin);
+    if (branch_strands.count(origin) == 0 || branch_strands.count(twin_origin) == 0)
+    {
+      continue;
+    }
+
+    for (size_t face_he_id : { he_id, he_id ^ 1 })
+    {
+      const int face_id = graph.halfEdge(face_he_id).face;
+      if (face_id < 0)
+      {
+        continue;
+      }
+      for (int vertex : graph.getTriangleVertexIndices(static_cast<size_t>(face_id)))
+      {
+        if (vertex < 0 || kin_del.isDummyBoundary(static_cast<size_t>(vertex)))
+        {
+          continue;
+        }
+        needed.insert(static_cast<size_t>(vertex));
+      }
+    }
+  }
+  return needed;
+}
+
 std::pair<std::vector<glm::dvec2>, std::unordered_set<size_t>> buildVisualDebugStrandPositions(
   KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph, double occurrence_time,
-  const std::unordered_set<size_t>& strand_ids)
+  const std::unordered_set<size_t>& strands_to_position,
+  const std::unordered_set<size_t>& frame_strand_ids)
 {
   std::vector<glm::dvec2> points(graph.getVertexCount(), glm::dvec2(0.0));
   std::unordered_set<size_t> positioned_strands;
-  positioned_strands.reserve(strand_ids.size());
+  positioned_strands.reserve(strands_to_position.size());
 
-  for (size_t strand_id : strand_ids)
+  // Prefer the folder's own strands for the shared input-branch frame so opposite-side sites are remapped
+  // into this SVG's reference frame (not a min-id that might belong to the other pending branch).
+  const std::unordered_set<size_t>& frame_source
+    = frame_strand_ids.empty() ? strands_to_position : frame_strand_ids;
+  std::vector<size_t> frame_strands;
+  frame_strands.reserve(frame_source.size());
+  for (size_t strand_id : frame_source)
+  {
+    if (!kin_del.isDummyBoundary(strand_id))
+    {
+      frame_strands.push_back(strand_id);
+    }
+  }
+
+  const size_t shared_reference_branch = frame_strands.empty()
+    ? 0
+    : kin_del.getSharedReferenceBranchForStrands(frame_strands, occurrence_time);
+
+  for (size_t strand_id : strands_to_position)
   {
     if (kin_del.isDummyBoundary(strand_id))
     {
       continue;
     }
-    points[strand_id] = kin_del.getPointInDelaunaySpace(strand_id, occurrence_time);
+    points[strand_id] = kin_del.getPointInDelaunaySpace(strand_id, occurrence_time, shared_reference_branch);
     positioned_strands.insert(strand_id);
   }
 
@@ -314,8 +399,11 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     return;
   }
 
-  // Debug SVGs are always grouped by unsplit branch, so map any pending split-off child id back to its parent.
-  if (event_runtime_branch_id.has_value())
+  const bool separate_pending_splits = kin_del.visualDebugSeparatePendingSplits();
+
+  // By default, debug SVGs are grouped by unsplit branch (pending children collapse into the parent folder).
+  // With --svg-separate-pending-splits, keep pending child ids so folders match future branches as soon as noted.
+  if (event_runtime_branch_id.has_value() && !separate_pending_splits)
   {
     event_runtime_branch_id = kin_del.unsplitRuntimeBranchId(event_runtime_branch_id.value());
   }
@@ -331,23 +419,26 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     = buildVoronoiVertexWorldPositions(kin_del, graph, occurrence_time);
   const std::optional<std::filesystem::path>& output_root = kin_del.getVisualDebugOutputRoot();
   const std::unordered_set<size_t> active_runtime_branches
-    = collectActiveRuntimeBranches(kin_del, live_strand_ids);
+    = collectActiveRuntimeBranches(kin_del, live_strand_ids, separate_pending_splits);
 
   auto try_write_for_runtime_branch = [&](size_t runtime_branch_id) -> bool
   {
-    const size_t unsplit_branch_id = kin_del.unsplitRuntimeBranchId(runtime_branch_id);
+    const size_t folder_branch_id
+      = separate_pending_splits ? runtime_branch_id : kin_del.unsplitRuntimeBranchId(runtime_branch_id);
     const std::unordered_set<size_t> branch_strands
-      = collectStrandIdsForRuntimeBranch(kin_del, live_strand_ids, unsplit_branch_id);
+      = collectStrandIdsForRuntimeBranch(kin_del, live_strand_ids, folder_branch_id, separate_pending_splits);
+    const std::unordered_set<size_t> geometry_strands
+      = collectStrandsNeededForBranchVoronoiGeometry(graph, kin_del, branch_strands);
     const std::unordered_map<size_t, glm::dvec3> branch_site_world_positions
       = buildSiteWorldPositions(kin_del, occurrence_time, branch_strands);
     const auto [points, positioned_strands]
-      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, branch_strands);
+      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, geometry_strands, branch_strands);
     if (positioned_strands.empty())
     {
       return false;
     }
     const std::string filename = visualDebugSvgRelativePath(
-      occurrence_time, phase, event_descriptor, unsplit_branch_id, output_root);
+      occurrence_time, phase, event_descriptor, folder_branch_id, output_root);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       &branch_strands, positioned_strands, site_input_branch_labels, branch_site_world_positions,
       voronoi_vertex_world_positions, separation_offset_segments, seam_outlines);
@@ -363,15 +454,19 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       {
         return;
       }
-      const size_t unsplit_branch_id = kin_del.unsplitRuntimeBranchId(branch_id.value());
-      if (std::find(candidates.begin(), candidates.end(), unsplit_branch_id) == candidates.end())
+      const size_t resolved_branch_id = separate_pending_splits
+        ? branch_id.value()
+        : kin_del.unsplitRuntimeBranchId(branch_id.value());
+      if (std::find(candidates.begin(), candidates.end(), resolved_branch_id) == candidates.end())
       {
-        candidates.push_back(unsplit_branch_id);
+        candidates.push_back(resolved_branch_id);
       }
     };
 
+    add_unique(inferEventRuntimeBranchFromHighlight(graph, kin_del, highlight, separate_pending_splits));
+    // Preferred id is second: callers sometimes pass a half-edge-derived fallback of 0 when the edge is
+    // not live; trying that first would write a clipped SVG for the wrong branch and hide highlights.
     add_unique(preferred_branch_id);
-    add_unique(inferEventRuntimeBranchFromHighlight(graph, kin_del, highlight));
     if (active_runtime_branches.size() == 1)
     {
       add_unique(*active_runtime_branches.begin());
@@ -382,7 +477,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const auto write_unresolved_branch_fallback = [&](const std::string& reason)
   {
     const auto [points, positioned_strands]
-      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, live_strand_ids);
+      = buildVisualDebugStrandPositions(kin_del, graph, occurrence_time, live_strand_ids, live_strand_ids);
     if (positioned_strands.empty())
     {
       KINDS_WARNING("writeSegmentBuilderVisualDebugSvg: branch resolution failed at t=" << occurrence_time
@@ -400,7 +495,8 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       separation_offset_segments, seam_outlines);
   };
 
-  // Explicit branch list: write only those folders (used by separation: parent while pending; parent+child after cut).
+  // Explicit branch list: write only those folders (used by separation: parent while pending; parent+child after cut,
+  // or parent+child while pending when --svg-separate-pending-splits is set).
   if (explicit_runtime_branch_ids != nullptr && !explicit_runtime_branch_ids->empty())
   {
     bool wrote_any = false;

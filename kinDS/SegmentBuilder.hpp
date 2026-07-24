@@ -193,6 +193,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool validate_mesh_vertex_sources = false;
   /// When false, skip meshlet diagnostic logging and related string assembly.
   bool diagnostics = false;
+  /// Failure SVG/TXT dumps (ring-walk / triangulate FAIL, …) plus common highlighted kinetic SVG.
+  /// CLI --error-files; also implied by visual debug.
+  void setErrorFiles(bool enabled) { error_files = enabled; }
+  bool errorFilesEnabled() const { return error_files; }
+  bool shouldDumpErrorFiles() const { return error_files || visual_debug; }
 
   /// Material table for meshlet OBJ export (`material_ids` index into this list).
   static constexpr int RegularMeshletMaterialId = 0;
@@ -375,7 +380,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::unique_ptr<SegmentBuilderSubdivisionCallback> subdivision_callback_;
   std::unique_ptr<SegmentBuilderSeparationCallback> separation_callback_;
   bool finalized = false; // Flag to indicate if the mesh has been finalized
-  bool visual_debug = false; // SVG exports when true (set from @ref TreeMesher::runMeshingAlgorithm)
+  bool visual_debug = false; // Full visual-debug SVG/TXT exports (CLI --debug-files)
+  /// Failure SVG/TXT dumps; toggled via @ref setErrorFiles / implied by @ref visual_debug.
+  bool error_files = false;
   /// When true, one-sided intersection-strip updates append a flexible placeholder on the opposite side (full scheme).
   /// When false (default), ablation: same triangles/endpoints as before flex vectors existed; `MeshingData` flex lists
   /// stay empty.
@@ -939,17 +946,22 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void logDiagnosticsMonitoredFaceInsideState(double t, const char* event_context) const;
 
   /// Debug target: Delaunay edge whose crossing @c prev/@c next mesh-pair links are traced.
-  static constexpr size_t kDiagnosticsMonitoredDelaunayEdgeId = 80;
+  /// Set to @ref KineticDelaunay::kDiagnosticsMonitorDisabledId to disable.
+  static constexpr size_t kDiagnosticsMonitoredDelaunayEdgeId = KineticDelaunay::kDiagnosticsMonitorDisabledId;
   /// Suspected missed crossing time for @ref kDiagnosticsMonitoredDelaunayEdgeId.
   static constexpr double kDiagnosticsMonitoredCrossingTime = 10.0;
   /// Debug target: boundary-interval mesh pair id suspected of incorrect wiring.
-  static constexpr size_t kDiagnosticsMonitoredMeshPairId = 11;
+  /// Set to @ref KineticDelaunay::kDiagnosticsMonitorDisabledId to disable (must not collide with cleared-link sentinel).
+  static constexpr size_t kDiagnosticsMonitoredMeshPairId = KineticDelaunay::kDiagnosticsMonitorDisabledId;
   /// Suspected incorrect flip event (log monitored edge state in [floor(t), floor(t)+1)).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 35.0;
+  /// Keep in sync with @ref KineticDelaunay::kDiagnosticsMonitoredFlipTime.
+  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
   static constexpr double kDiagnosticsMonitoredTimeEpsilon = 0.05;
 
-  /// Full snapshot of crossings on @ref kDiagnosticsMonitoredDelaunayEdgeId and mesh-pair metadata they reference.
-  void logDiagnosticsMonitoredDelaunayEdgeState(double t, const char* event_context) const;
+  /// Full snapshot of crossings on a Delaunay edge (default: @ref kDiagnosticsMonitoredDelaunayEdgeId)
+  /// and mesh-pair metadata they reference. No-op when @p delaunay_edge_id is disabled (@ref KineticDelaunay::kDiagnosticsMonitorDisabledId).
+  void logDiagnosticsMonitoredDelaunayEdgeState(double t, const char* event_context,
+    size_t delaunay_edge_id = kDiagnosticsMonitoredDelaunayEdgeId) const;
 
   /// Log monitored-edge snapshot when @p delaunay_edge_id / @p mesh_pair_index / @p t matches debug targets.
   void maybeLogDiagnosticsMonitoredDelaunayEdgeTrigger(double t, const char* event_context,

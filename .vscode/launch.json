@@ -18,9 +18,9 @@
       //   --help / -h               Print usage and exit
       //
       // Options:
-      //   --log-level <levels>      Replace log levels (comma-separated: debug,info,warning,error,critical).
+      //   --log-level <levels>      Replace log levels (comma-separated: debug,monitor,info,warning,error,critical).
       //                             Default: info,warning,error,critical
-      //   --log-add <levels>        Enable additional log levels
+      //   --log-add <levels>        Enable additional log levels (e.g. monitor for diagnostic-guard tracing)
       //   --log-remove <levels>     Disable specific log levels
       //   --log-file <path>         Also write logs to a file (console still used)
       //   --export-mode <mode>      combined | segments | raw  (default: raw).
@@ -36,13 +36,24 @@
       //   --start <section>         Bootstrap/start kinetic meshing at this section index (default: 0)
       //   --end <section>           Exclusive stop/finalize time (default: tree height).
       //                             Section events on [start, end); skip events with t >= end
+      //   --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)
+      //   --debug-files [path]      Full debug SVGs/TXTs (off by default). Optional output directory (default: cwd).
+      //   --svg-separate-pending-splits
+      //                             With --debug-files: separate SVG folders for pending split-off child branches
+      //                             as soon as a radius event notes the split (not only after the graph cut).
+      //   --error-files [path]      Failure SVGs/TXTs + common highlighted kinetic SVG (off by default;
+      //                             also enabled by --debug-files).
       "args": [
         "--mesh",
-        "input_examples/test_oak_6.txt",
+        "input_examples/test_oak_10.txt",
         "--export-mode",
         "combined",
         "--validate",
         "--section-shading",
+        "--log-add",
+        "monitor",
+        "--cutoff",
+        "3"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -51,7 +62,37 @@
         "exceptions": true,
         "programOutput": true
       },
-      "preLaunchTask": "Build kinDS-demo if needed"
+      "preLaunchTask": "Build kinDS-demo if needed (Debug)"
+    },
+    {
+      "name": "Release kinDS-demo (mesh)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/kinDS-demo.exe",
+      // Same CLI as Debug; binary comes from CMake preset vcpkg-x64 (CMAKE_BUILD_TYPE=Release → build/).
+      "args": [
+        "--mesh",
+        "input_examples/test_oak_10.txt",
+        "--export-mode",
+        "combined",
+        "--validate",
+        "--section-shading",
+        "--debug-files",
+        "debug_output",
+        "--svg-separate-pending-splits",
+        "--log-add",
+        "monitor",
+        "--cutoff",
+        "3"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "logging": {
+        "exceptions": true,
+        "programOutput": true
+      },
+      "preLaunchTask": "Build kinDS-demo if needed (Release)"
     }
   ]
 }

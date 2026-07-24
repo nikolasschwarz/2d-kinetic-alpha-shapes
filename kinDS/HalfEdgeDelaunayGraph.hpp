@@ -176,8 +176,9 @@ class HalfEdgeDelaunayGraph
 
   /**
    * Perpendicular ray direction for the Voronoi vertex dual to an infinite Delaunay face.
-   * Uses the canonical outside-directed hull half-edge, so the result is invariant to how a
-   * triangle stores its three half-edge slots after flips/reordering.
+   * Takes the outside-directed finite hull half-edge on that face (dual of the infinite Voronoi edge)
+   * and rotates it 90° right (`(dy, -dx)`), which points into the infinite face / outward from the mesh.
+   * Independent of triangle half-edge slot order after flips/reordering.
    */
   std::optional<glm::dvec2> infiniteVoronoiRayDirection(
     size_t face_id, const std::function<glm::dvec2(int vertex_index)>& vertex_at) const;

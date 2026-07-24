@@ -1829,10 +1829,11 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
     throw std::runtime_error("applyRuntimeBranchSplit: component_map size mismatch");
   }
 
+  const bool dump_debug = debug_time.has_value();
   static size_t split_debug_dump_counter = 0;
   const size_t debug_dump_id = split_debug_dump_counter++;
   std::string debug_tag = std::to_string(debug_dump_id);
-  if (debug_time.has_value())
+  if (dump_debug)
   {
     std::string time_suffix = "_" + formatDebugExportTimeToken(*debug_time);
     for (char& ch : time_suffix)
@@ -1843,8 +1844,6 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
       }
     }
     debug_tag += time_suffix;
-  }
-  {
     // '!' prefix so the "before" dump sorts chronologically ahead of the "after" dump.
     std::ofstream before_dump("applyRuntimeBranchSplit_!before_" + debug_tag + ".txt");
     if (before_dump.is_open())
@@ -2004,9 +2003,12 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
   }
 
   CreateInfiniteFacesDebugContext infinite_faces_debug;
-  infinite_faces_debug.vertex_at = &vertex_at;
-  infinite_faces_debug.output_prefix = "createInfiniteFacesFromBoundary_" + debug_tag;
-  createInfiniteFacesFromBoundary(outer_half_edges, vertex_at, &infinite_faces_debug);
+  if (dump_debug)
+  {
+    infinite_faces_debug.vertex_at = &vertex_at;
+    infinite_faces_debug.output_prefix = "createInfiniteFacesFromBoundary_" + debug_tag;
+  }
+  createInfiniteFacesFromBoundary(outer_half_edges, vertex_at, dump_debug ? &infinite_faces_debug : nullptr);
 
   // --- Tombstone original finite edge pairs that no longer border any live face ---
   for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
@@ -2076,6 +2078,7 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
   rebuildLiveIndices();
   validateLiveHalfEdgeFaceReferences();
 
+  if (dump_debug)
   {
     std::ofstream after_dump("applyRuntimeBranchSplit_after_" + debug_tag + ".txt");
     if (after_dump.is_open())
@@ -2238,39 +2241,27 @@ std::optional<glm::dvec2> HalfEdgeDelaunayGraph::infiniteVoronoiRayDirection(
   {
     return std::nullopt;
   }
-  for (size_t he_id : face(face_id).half_edges)
+
+  // Dual of the infinite Voronoi ray is the finite hull edge shared with the interior triangle.
+  // Walk the face via .next (slot-order invariant) and take the outside-directed half-edge of that edge.
+  const size_t start_he = face(face_id).half_edges[0];
+  size_t he_id = start_he;
+  for (int i = 0; i < 3; ++i)
   {
-    if (!isOnConvexBoundaryOutside(he_id))
+    if (isOnConvexBoundaryOutside(he_id))
     {
-      continue;
+      const int origin = half_edges[he_id].origin;
+      const int dest = destination(he_id);
+      if (origin >= 0 && dest >= 0)
+      {
+        const glm::dvec2 edge = vertex_at(dest) - vertex_at(origin);
+        // Right perpendicular of the outer half-edge. Verified to point into the infinite face
+        // (outward from the mesh) against the hull-outward regression test. Flip to (-edge.y, edge.x)
+        // if SVGs ever look inverted.
+        return glm::dvec2(edge.y, -edge.x);
+      }
     }
-
-    const int origin = half_edges[he_id].origin;
-    const int dest = destination(he_id);
-    if (origin < 0 || dest < 0)
-    {
-      continue;
-    }
-
-    const int interior_vertex = triangleOppositeVertex(he_id ^ 1);
-    if (interior_vertex < 0)
-    {
-      continue;
-    }
-
-    const glm::dvec2 u = vertex_at(origin);
-    const glm::dvec2 v = vertex_at(dest);
-    const glm::dvec2 w = vertex_at(interior_vertex);
-    const glm::dvec2 edge = v - u;
-    const glm::dvec2 midpoint = 0.5 * (u + v);
-    const glm::dvec2 outward_hint = midpoint - w;
-
-    glm::dvec2 dir(edge.y, -edge.x);
-    if (glm::dot(dir, outward_hint) < 0.0)
-    {
-      dir = -dir;
-    }
-    return dir;
+    he_id = half_edges[he_id].next;
   }
 
   return std::nullopt;
@@ -2294,7 +2285,10 @@ std::vector<std::pair<glm::dvec2, bool>> HalfEdgeDelaunayGraph::computeCircumcen
 
     if (const std::optional<glm::dvec2> infinite_dir = infiniteVoronoiRayDirection(triangle_id, vertex_at))
     {
-      circumcenters[triangle_id] = { *infinite_dir, true };
+      const glm::dvec2 dir = *infinite_dir;
+      const double len2 = glm::dot(dir, dir);
+      circumcenters[triangle_id]
+        = { len2 > 1e-24 ? dir / std::sqrt(len2) : glm::dvec2(1.0, 0.0), true };
       continue;
     }
 

@@ -22,7 +22,9 @@ enum class LogLevel : unsigned int
   Info = 2,
   Warning = 4,
   Error = 8,
-  Critical = 16
+  Critical = 16,
+  /// Targeted diagnostic tracing (flip/crossing/radius monitors). Off by default; enable with --log-add monitor.
+  Monitor = 32
 };
 
 inline LogLevel operator|(LogLevel a, LogLevel b)
@@ -183,6 +185,8 @@ class Logger
       return "ERROR";
     case LogLevel::Critical:
       return "CRITICAL";
+    case LogLevel::Monitor:
+      return "MONITOR";
     default:
       return "UNKNOWN";
     }
@@ -197,6 +201,13 @@ inline Logger logger;
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
     logger.log(LogLevel::Debug, ss.str());                                                                             \
+  }
+
+#define KINDS_MONITOR(msg)                                                                                             \
+  {                                                                                                                    \
+    std::stringstream ss;                                                                                              \
+    ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
+    logger.log(LogLevel::Monitor, ss.str());                                                                           \
   }
 
 #define KINDS_INFO(msg)                                                                                                 \

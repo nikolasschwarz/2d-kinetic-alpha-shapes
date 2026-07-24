@@ -667,22 +667,21 @@ class HalfEdgeDelaunayGraphToSVG
     constexpr double delaunay_edge_stroke_w = 0.006;
     constexpr double voronoi_edge_stroke_w = 0.004;
 
-    auto delaunay_edge_color = [&](size_t voronoi_edge_id) -> svg::Color
+    auto delaunay_edge_color = [&](size_t undirected_edge_id) -> svg::Color
     {
       if (!selective)
       {
         return svg::Color(svg::Color::Black);
       }
-      if (highlight->affectsPrimaryVoronoiEdge(voronoi_edge_id))
+      // Primary undirected focus (flip-style) emphasizes both duals; otherwise only directed half-edges
+      // mark the Delaunay (primal) edge. Plain voronoi_edges must NOT light the Delaunay dual — callers
+      // that want only the Voronoi edge put the id in voronoi_edges alone.
+      if (highlight->affectsPrimaryVoronoiEdge(undirected_edge_id))
       {
         return hi_primary_edge;
       }
-      if (highlight->affectsVoronoiEdge(voronoi_edge_id))
-      {
-        return hi_edge;
-      }
-      if (highlight->affectsDirectedHalfEdge(voronoi_edge_id * 2)
-        || highlight->affectsDirectedHalfEdge(voronoi_edge_id * 2 + 1))
+      if (highlight->affectsDirectedHalfEdge(undirected_edge_id * 2)
+        || highlight->affectsDirectedHalfEdge(undirected_edge_id * 2 + 1))
       {
         return hi_edge;
       }
@@ -1035,7 +1034,7 @@ class HalfEdgeDelaunayGraphToSVG
     // Helper to draw intersection markers and labels, if the caller provides them.
     auto drawIntersections = [&](const std::vector<IntersectionMarker>& intersections)
     {
-      svg::Color marker_light_blue(173, 216, 230);
+      svg::Color marker_neon_pink(255, 16, 240);
       svg::Color label_blue(30, 95, 120);
       svg::Color label_pink(165, 45, 75);
       svg::Color label_green(45, 130, 45);
@@ -1068,8 +1067,8 @@ class HalfEdgeDelaunayGraphToSVG
         }
 
         const bool emphasized = selective && highlight->emphasizesCrossing(delaunay_edge_id, voronoi_edge_id);
-        const double dot_radius = emphasized ? 0.022 : 0.01;
-        const svg::Color dot_fill = emphasized ? hi_voronoi_vertex : marker_light_blue;
+        const double dot_radius = emphasized ? 0.044 : 0.02;
+        const svg::Color dot_fill = marker_neon_pink;
 
         const bool show_intersection_labels
           = !selective || highlight->shouldLabelCrossing(delaunay_edge_id, voronoi_edge_id);

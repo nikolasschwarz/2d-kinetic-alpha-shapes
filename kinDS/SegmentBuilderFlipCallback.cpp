@@ -54,18 +54,22 @@ void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const Half
     return;
   }
   const bool in_monitored_window = std::isfinite(flip.occurrence_time)
-    && flip.occurrence_time >= std::floor(SegmentBuilder::kDiagnosticsMonitoredFlipTime)
-    && flip.occurrence_time < std::floor(SegmentBuilder::kDiagnosticsMonitoredFlipTime) + 1.0;
+    && flip.occurrence_time >= std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime)
+    && flip.occurrence_time < std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime) + 1.0;
   // Match KineticDelaunay flip diagnostics: only the monitored edge inside [floor(t), floor(t)+1).
-  if (!in_monitored_window || (flip.half_edge_id / 2) != SegmentBuilder::kDiagnosticsMonitoredDelaunayEdgeId)
+  // Disabled monitor id (-1) never matches unset/invalid edges.
+  if (!in_monitored_window
+    || !KineticDelaunay::matchesDiagnosticsMonitorId(
+         flip.half_edge_id / 2, KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId))
   {
     return;
   }
 
   std::ostringstream ctx;
   ctx << "flip_" << phase << "_he" << flip.half_edge_id << "_window_t"
-      << "_d" << SegmentBuilder::kDiagnosticsMonitoredDelaunayEdgeId;
-  segment_builder.logDiagnosticsMonitoredDelaunayEdgeState(flip.occurrence_time, ctx.str().c_str());
+      << "_d" << KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId;
+  segment_builder.logDiagnosticsMonitoredDelaunayEdgeState(flip.occurrence_time, ctx.str().c_str(),
+    KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId);
 
   std::ostringstream quad_oss;
   quad_oss << "flip monitored-edge context " << phase << " flip_he=" << flip.half_edge_id << " t="
@@ -80,7 +84,7 @@ void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const Half
     quad_oss << (quad_he_ids[i] / 2);
   }
   quad_oss << "]";
-  KINDS_INFO(quad_oss.str());
+  KINDS_MONITOR(quad_oss.str());
 }
 } // namespace
 

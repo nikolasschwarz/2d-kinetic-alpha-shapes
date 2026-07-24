@@ -4,6 +4,7 @@
 #include "DebugExportFormatting.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "SegmentBuilderVisualDebug.hpp"
+#include "VisualDebugHighlight.hpp"
 #include "Logger.hpp"
 
 #include <algorithm>
@@ -194,7 +195,8 @@ void writeRadiusRingWalkFailDebugTxt(const std::filesystem::path& filepath, doub
 }
 
 /// Debug dump for radius cell ring-walk failure (before any ear-clip). Filename encodes ring_walk_FAIL.
-void writeRadiusRingWalkFailDebug(const KineticDelaunay& kin_del, double occurrence_time,
+/// Also writes the common event-style kinetic SVG with the affected face/sites/edges/VVs highlighted.
+void writeRadiusRingWalkFailDebug(KineticDelaunay& kin_del, double occurrence_time,
   std::optional<size_t> runtime_branch_id, size_t delaunay_face_id, size_t strand_cell_id,
   const std::string& fail_reason, std::vector<RadiusRingWalkDebugVertex> ring,
   std::vector<std::string> incorrect_vertices, std::vector<std::string> unmatched_vertices)
@@ -271,6 +273,49 @@ void writeRadiusRingWalkFailDebug(const KineticDelaunay& kin_del, double occurre
       kin_del, occurrence_time, runtime_branch_id, delaunay_face_id, strand_cell_id, debug_counter, ".txt"),
     occurrence_time, runtime_branch_id, delaunay_face_id, strand_cell_id, fail_reason, ring, incorrect_vertices,
     unmatched_vertices);
+
+  // Common event-style kinetic SVG with the affected triangle / walked sites / edges / VVs highlighted.
+  {
+    const auto& graph = kin_del.getGraph();
+    VisualDebugHighlight highlight;
+    if (graph.isLiveFace(delaunay_face_id))
+    {
+      highlight.addDelaunayTriangle(graph, delaunay_face_id);
+    }
+    highlight.delaunay_vertices.insert(strand_cell_id);
+    for (const RadiusRingWalkDebugVertex& vert : ring)
+    {
+      if (vert.strand_id.has_value())
+      {
+        highlight.delaunay_vertices.insert(vert.strand_id.value());
+      }
+      if (vert.voronoi_vertex_id.has_value())
+      {
+        highlight.voronoi_vertices.insert(vert.voronoi_vertex_id.value());
+      }
+      if (vert.delaunay_edge_id.has_value())
+      {
+        const size_t de = vert.delaunay_edge_id.value();
+        highlight.label_crossings_on_delaunay_edges.insert(de);
+        highlight.addUndirectedDelaunayEdge(graph, 2 * de);
+      }
+      if (vert.voronoi_edge_id.has_value())
+      {
+        const size_t ve = vert.voronoi_edge_id.value();
+        highlight.voronoi_edges.insert(ve);
+        highlight.label_crossings_on_voronoi_edges.insert(ve);
+      }
+      if (vert.delaunay_edge_id.has_value() && vert.voronoi_edge_id.has_value())
+      {
+        highlight.crossing_intersection_keys.insert(
+          (static_cast<uint64_t>(vert.delaunay_edge_id.value()) << 32) | vert.voronoi_edge_id.value());
+      }
+    }
+    const std::string event_descriptor = "radius_ring_walk_FAIL_face" + std::to_string(delaunay_face_id) + "_strand"
+      + std::to_string(strand_cell_id);
+    writeSegmentBuilderVisualDebugSvg(
+      true, kin_del, graph, occurrence_time, "error", event_descriptor, highlight, runtime_branch_id);
+  }
 
   const std::filesystem::path filepath = makeRadiusRingWalkFailDebugPath(
     kin_del, occurrence_time, runtime_branch_id, delaunay_face_id, strand_cell_id, debug_counter, ".svg");
@@ -1056,20 +1101,15 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       }
       const std::string radius_corner_meta = segment_builder_.composeBoundaryMetadata(
         SegmentBuilder::BoundaryEventType::Radius, SegmentBuilder::BoundarySegmentAction::SegmentRemapped);
-      auto with_pos = [&radius_corner_meta](const char* pos) -> std::string
-      {
-        if (radius_corner_meta.empty() || radius_corner_meta.back() != '}')
-        {
-          return radius_corner_meta;
-        }
-        std::string out = radius_corner_meta;
-        out.pop_back();
-        out += ",\"pos\":\"";
-        out += pos;
-        out += "\"}";
-        return out;
-      };
-      const std::string vertex_meta = with_pos(update_start_endpoint ? "left" : "right");
+      // Placement is a site corner, optionally snapped to the interior VV of a radius boundary-transition shift.
+      const char* corner_source
+        = corner_snap_voronoi_vertex_id.has_value() ? "Voronoi vertex" : "site";
+      const std::string vertex_meta = segment_builder_.store_mesh_metadata
+        ? SegmentBuilder::MetadataBuilder::fromObject(radius_corner_meta)
+            .addString("source", corner_source)
+            .addString("pos", update_start_endpoint ? "left" : "right")
+            .build()
+        : std::string {};
       const glm::dvec3 vertex_color
         = update_start_endpoint ? glm::dvec3(1.0, 0.0, 0.0) : glm::dvec3(0.0, 0.0, 1.0);
       const size_t eff_l = segment_builder_.intersectionStripEffectiveVertexIndex(seg, true);
@@ -2102,8 +2142,11 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         unmatched_vertices.push_back("missing_step: " + reason);
       }
-      writeRadiusRingWalkFailDebug(segment_builder_.kin_del, t, runtime_branch_id, affected_face_id, cell_id, reason,
-        std::move(debug_ring), std::move(incorrect_vertices), std::move(unmatched_vertices));
+      if (segment_builder_.shouldDumpErrorFiles())
+      {
+        writeRadiusRingWalkFailDebug(segment_builder_.kin_del, t, runtime_branch_id, affected_face_id, cell_id, reason,
+          std::move(debug_ring), std::move(incorrect_vertices), std::move(unmatched_vertices));
+      }
       encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
       continue;
     }

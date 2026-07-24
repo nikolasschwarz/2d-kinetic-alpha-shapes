@@ -71,6 +71,16 @@ class TreeMesher
     /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.
     bool retriangulate_on_component_split = false;
     size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
+    /// When true, write full visual-debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps, …).
+    /// Default off; CLI @c --debug-files enables this (also enables @ref error_files dumps).
+    bool visual_debug = false;
+    /// When true, write failure SVGs/TXTs (ring-walk / triangulate FAIL, etc.) and the common event-style
+    /// kinetic SVG with affected sites/edges/VVs highlighted, without full visual debug.
+    /// Default off; CLI @c --error-files enables this. Also enabled by @ref visual_debug.
+    bool error_files = false;
+    /// When true with @ref visual_debug, SVG folders already split by pending child runtime branches (from the radius
+    /// event that notes the split) instead of only after the graph cut. CLI @c --svg-separate-pending-splits.
+    bool visual_debug_separate_pending_splits = false;
     std::optional<std::filesystem::path> visual_debug_output_root;
     std::optional<double> flip_polynomial_dump_target_time;
     std::optional<size_t> flip_polynomial_dump_target_half_edge;
@@ -91,7 +101,8 @@ class TreeMesher
  public:
   TreeMesher(StrandTree& strand_tree);
   TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::function<void(size_t)>)> parallel_for);
-  /// @param visual_debug When true, SegmentBuilder callbacks export debug SVG snapshots during meshing.
+  /// @param visual_debug When true, SegmentBuilder callbacks export full visual-debug SVG/TXT snapshots.
+  /// Prefer setting @ref Settings::visual_debug / @ref Settings::error_files (CLI @c --debug-files / @c --error-files).
   const std::vector<VoronoiMesh>& runMeshingAlgorithm(bool visual_debug = false);
   const VoronoiMesh& getBoundaryMesh() const;
   const std::vector<std::vector<int>>& getMeshingNeighborIndices() const;

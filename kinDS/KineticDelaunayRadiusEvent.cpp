@@ -151,7 +151,7 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
                    << kd.sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound);
   }
   branch_summary << " frame_policy=" << (use_shared_transformed_frame ? "shared_transformed" : "local_support");
-  KINDS_INFO(branch_summary.str());
+  KINDS_DEBUG(branch_summary.str());
 
   for (size_t vertex_index = 0; vertex_index < 3; ++vertex_index)
   {
@@ -161,7 +161,7 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
     const glm::dvec2 raw_section_start = support_points[section];
     const glm::dvec2 raw_section_end
       = (section + 1 < support_points.size()) ? support_points[section + 1] : support_points[section];
-    KINDS_INFO("  trajectory[" << vertex_index << "] strand=" << strand_id << " input_branch_at_section="
+    KINDS_DEBUG("  trajectory[" << vertex_index << "] strand=" << strand_id << " input_branch_at_section="
                                << input_branch_at_section << " raw_support_at_section=(" << raw_section_start.x
                                << "," << raw_section_start.y << ") raw_support_at_section_end=(" << raw_section_end.x
                                << "," << raw_section_end.y << ")");
@@ -178,7 +178,7 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
       std::ostringstream line;
       line << std::setprecision(17) << "  trajectory[" << vertex_index << "] strand=" << strand_id << " at t="
            << eval_t << " fraction=" << fraction << " pos=(" << x << "," << y << ")";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
     }
   }
 }
@@ -187,7 +187,8 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
   double min_fraction, Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
   const std::array<Trajectory<2>, 3>& trajectories)
 {
-  if (!kd.diagnosticsEnabled() || face_id != KineticDelaunay::kDiagnosticsMonitoredFaceId)
+  if (!kd.diagnosticsEnabled()
+    || !KineticDelaunay::matchesDiagnosticsMonitorId(face_id, KineticDelaunay::kDiagnosticsMonitoredFaceId))
   {
     return;
   }
@@ -203,12 +204,12 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
          << ", event_interval_upper_bound=" << event_interval_upper_bound << ", section=" << section
          << ", min_fraction=" << min_fraction << ", cutoff=" << kd.getCutoff()
          << ", trigger_degree=" << event_trigger.degree() << ")";
-  KINDS_INFO(header.str());
+  KINDS_DEBUG(header.str());
   logMonitoredFaceRadiusTrajectories(kd, section, t, strand_ids, trajectories);
 
   if (event_trigger.degree() == -1)
   {
-    KINDS_INFO("  trigger empty (degree -1)");
+    KINDS_DEBUG("  trigger empty (degree -1)");
     return;
   }
 
@@ -216,7 +217,7 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
   const auto zeros = event_trigger.realRoots();
   if (zeros.empty())
   {
-    KINDS_INFO("  no real roots");
+    KINDS_DEBUG("  no real roots");
     return;
   }
 
@@ -241,7 +242,7 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
     if (std::isnan(root))
     {
       line << " filtered (nan)";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
 
@@ -251,26 +252,26 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
     if (root <= min_fraction)
     {
       line << " filtered (fraction <= min_fraction)";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
     if (root > kEventIntervalFractionUpperBound)
     {
       line << " filtered (fraction > " << kEventIntervalFractionUpperBound << ")";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
 
     if (sign_before == sign_after)
     {
       line << " filtered (no_sign_change)";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
 
     const bool target_inside = sign_before > 0.0 && sign_after < 0.0;
     line << " enqueued target_inside=" << (target_inside ? "true" : "false");
-    KINDS_INFO(line.str());
+    KINDS_DEBUG(line.str());
   }
 }
 } // namespace
@@ -281,22 +282,23 @@ bool KineticDelaunay::diagnosticsEnabled() const { return diagnostics_enabled_; 
 
 bool KineticDelaunay::isDiagnosticsStrandIdValid(size_t strand_id) const
 {
-  return strand_id < graph.getVertexCount();
+  return isDiagnosticsMonitorIdEnabled(strand_id) && strand_id < graph.getVertexCount();
 }
 
 bool KineticDelaunay::isDiagnosticsFaceIdValid(size_t face_id) const
 {
-  return face_id < graph.faceSlotCount();
+  return isDiagnosticsMonitorIdEnabled(face_id) && face_id < graph.faceSlotCount();
 }
 
 bool KineticDelaunay::isDiagnosticsHalfEdgeIdValid(size_t half_edge_id) const
 {
-  return graph.isLiveHalfEdge(half_edge_id);
+  return isDiagnosticsMonitorIdEnabled(half_edge_id) && graph.isLiveHalfEdge(half_edge_id);
 }
 
 bool KineticDelaunay::isDiagnosticsMonitoredFaceValid() const
 {
-  return isDiagnosticsFaceIdValid(kDiagnosticsMonitoredFaceId);
+  return isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredFaceId)
+    && isDiagnosticsFaceIdValid(kDiagnosticsMonitoredFaceId);
 }
 
 void KineticDelaunay::logRadiusEventTriggerRoots(size_t face_id, size_t he_id, double t, double min_fraction,
@@ -354,7 +356,8 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     = circumradiusEquals(
       trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], kd->cutoff);
 
-  if (kd->diagnosticsEnabled() && face_id == KineticDelaunay::kDiagnosticsMonitoredFaceId
+  if (kd->diagnosticsEnabled()
+    && KineticDelaunay::matchesDiagnosticsMonitorId(face_id, KineticDelaunay::kDiagnosticsMonitoredFaceId)
     && kd->isDiagnosticsFaceIdValid(face_id))
   {
     kd->logRadiusEventTriggerRoots(face_id, he_id, t, fraction, event_trigger,

@@ -486,10 +486,19 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
   kinetic_delaunay = std::make_shared<KineticDelaunay>(strand_tree, settings.alpha_cutoff, false);
-  if (settings.visual_debug_output_root.has_value())
+  // Debug/error file dumps key off the visual-debug output root; default to cwd when either is enabled.
+  const bool enable_debug_output_root = visual_debug || settings.error_files;
+  if (enable_debug_output_root && !settings.visual_debug_output_root.has_value())
+  {
+    kinetic_delaunay->setVisualDebugOutputRoot(std::filesystem::current_path());
+  }
+  else if (settings.visual_debug_output_root.has_value())
   {
     kinetic_delaunay->setVisualDebugOutputRoot(*settings.visual_debug_output_root);
   }
+  kinetic_delaunay->setVisualDebugEnabled(visual_debug);
+  kinetic_delaunay->setErrorFilesEnabled(settings.error_files || visual_debug);
+  kinetic_delaunay->setVisualDebugSeparatePendingSplits(settings.visual_debug_separate_pending_splits);
   if (settings.flip_polynomial_dump_target_time.has_value())
   {
     kinetic_delaunay->setFlipPolynomialDumpTargetTime(settings.flip_polynomial_dump_target_time);
@@ -507,7 +516,9 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
 
   mesh_builder = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction,
     visual_debug, parallel_for);
-  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata || visual_debug || settings.validate_mesh_vertex_sources;
+  mesh_builder->setErrorFiles(settings.error_files || visual_debug);
+  mesh_builder->store_mesh_metadata
+    = settings.store_mesh_metadata || visual_debug || settings.error_files || settings.validate_mesh_vertex_sources;
   mesh_builder->validate_mesh_vertex_sources = settings.validate_mesh_vertex_sources;
   if (settings.validate_mesh_vertex_sources)
   {
@@ -518,6 +529,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
                                                                                       << ", visual_debug=" << visual_debug
+                                                                                      << ", error_files=" << mesh_builder->shouldDumpErrorFiles()
                                                                                       << ", transform_mesh_at_construction="
                                                                                       << transform_mesh_at_construction
                                                                                       << ", debug_export_meshes="
@@ -535,6 +547,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                            ->radius_boundary_transition_shift_enabled);
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
+  KINDS_INFO("Kinetic Delaunay Voronoi Meshing finished.");
 
   std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
   segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(true);

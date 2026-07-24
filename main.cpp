@@ -8,6 +8,7 @@
 #include "kinDS/TreeMesher.hpp"
 #include "kinDS/Validator.hpp"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -380,6 +381,11 @@ static bool modify_log_level(const std::string& levels_str, bool enable)
       logger.setLogLevel(LogLevel::Debug, enable);
       found_any = true;
     }
+    else if (level_lower == "monitor")
+    {
+      logger.setLogLevel(LogLevel::Monitor, enable);
+      found_any = true;
+    }
     else if (level_lower == "info")
     {
       logger.setLogLevel(LogLevel::Info, enable);
@@ -425,6 +431,7 @@ static std::string get_enabled_log_levels()
   };
 
   add_if(LogLevel::Debug, "debug");
+  add_if(LogLevel::Monitor, "monitor");
   add_if(LogLevel::Info, "info");
   add_if(LogLevel::Warning, "warning");
   add_if(LogLevel::Error, "error");
@@ -452,7 +459,7 @@ static void set_log_level(const std::string& levels_str)
 
   // First disable all known levels
   logger.setLogLevel(
-    LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical, false);
+    LogLevel::Debug | LogLevel::Monitor | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical, false);
 
   bool ok = modify_log_level(levels_str, true);
 
@@ -471,8 +478,8 @@ static void print_usage(const char* program_name)
   std::cout << "Usage: " << program_name << " [OPTIONS] COMMAND\n"
             << "\n"
             << "Options:\n"
-            << "  --log-level <levels>      Set log levels (comma-separated: debug,info,warning,error,critical)\n"
-            << "                            Replaces current levels. Default: info,warning,error,critical (no debug)\n"
+            << "  --log-level <levels>      Set log levels (comma-separated: debug,monitor,info,warning,error,critical)\n"
+            << "                            Replaces current levels. Default: info,warning,error,critical (no debug/monitor)\n"
             << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
             << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
             << "  --log-file <path>         Write logs to file (default: no log file, console only)\n"
@@ -488,6 +495,18 @@ static void print_usage(const char* program_name)
             << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
             << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
             << "                            Section events run on [start, end); events with t >= end are skipped.\n"
+            << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)\n"
+            << "  --debug-files [path]      Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
+            << "                            and error dumps). Optional output directory (default: cwd).\n"
+            << "                            Off by default.\n"
+            << "  --svg-separate-pending-splits\n"
+            << "                            With --debug-files: write pending split-off child branches into their own\n"
+            << "                            SVG folders (own strand subsets) as soon as a radius event notes the split,\n"
+            << "                            not only after the graph cut. Off by default.\n"
+            << "  --error-files [path]      Write failure SVGs/TXTs (ring-walk / triangulate FAIL, etc.) plus the\n"
+            << "                            common event-style kinetic SVG with affected sites/edges/VVs highlighted,\n"
+            << "                            without full visual debug. Optional output directory (default: cwd).\n"
+            << "                            Off by default; also enabled by --debug-files.\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -502,6 +521,96 @@ static void print_usage(const char* program_name)
             << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
             << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
             << "  " << program_name << " --export-mode combined --mesh strandtree.txt combined.obj\n";
+}
+
+static const std::vector<std::string>& known_cli_flags()
+{
+  static const std::vector<std::string> flags = {
+    "--log-level",
+    "--log-add",
+    "--log-remove",
+    "--log-file",
+    "--export-mode",
+    "--export-path",
+    "--untransformed",
+    "--transform-at-construction",
+    "--transform-at-export",
+    "--validate",
+    "--validate-log",
+    "--section-shading",
+    "--start",
+    "--end",
+    "--cutoff",
+    "--debug-files",
+    "--svg-separate-pending-splits",
+    "--error-files",
+    "--help",
+    "-h",
+    "--demo",
+    "--mesh",
+  };
+  return flags;
+}
+
+/// Normalize user typos like "debug-files" / "-debug-files" to the canonical "--..." form when unique.
+static std::optional<std::string> suggest_cli_flag(const std::string& arg)
+{
+  if (arg.empty())
+  {
+    return std::nullopt;
+  }
+
+  std::string stripped = arg;
+  while (!stripped.empty() && stripped.front() == '-')
+  {
+    stripped.erase(stripped.begin());
+  }
+  if (stripped.empty())
+  {
+    return std::nullopt;
+  }
+
+  std::vector<std::string> exact;
+  std::vector<std::string> prefix;
+  for (const std::string& flag : known_cli_flags())
+  {
+    std::string flag_body = flag;
+    while (!flag_body.empty() && flag_body.front() == '-')
+    {
+      flag_body.erase(flag_body.begin());
+    }
+    if (flag_body == stripped)
+    {
+      exact.push_back(flag);
+    }
+    else if (flag_body.size() > stripped.size() && flag_body.compare(0, stripped.size(), stripped) == 0)
+    {
+      prefix.push_back(flag);
+    }
+  }
+
+  if (exact.size() == 1)
+  {
+    return exact.front();
+  }
+  if (exact.empty() && prefix.size() == 1)
+  {
+    return prefix.front();
+  }
+  return std::nullopt;
+}
+
+static void report_unknown_cli_argument(const std::string& arg)
+{
+  std::cerr << "Error: Unknown option or command: " << arg << std::endl;
+  if (!arg.empty() && arg.front() != '-')
+  {
+    std::cerr << "Note: options and commands require a leading \"--\" (e.g. --" << arg << ")." << std::endl;
+  }
+  if (const std::optional<std::string> suggestion = suggest_cli_flag(arg); suggestion.has_value())
+  {
+    std::cerr << "Did you mean " << suggestion.value() << "?" << std::endl;
+  }
 }
 
 static bool parse_meshlet_export_mode(const std::string& value, kinDS::MeshletExportMode& out)
@@ -547,7 +656,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources,
   const std::string& validate_log_path, bool alternate_section_shading, size_t start_section,
-  std::optional<size_t> end_section)
+  std::optional<size_t> end_section, double alpha_cutoff, bool visual_debug, bool error_files,
+  bool visual_debug_separate_pending_splits, const std::optional<std::filesystem::path>& visual_debug_output_root)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -587,6 +697,32 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().alternate_section_shading = alternate_section_shading;
     mesher.getSettings().start_section = start_section;
     mesher.getSettings().end_section = end_section;
+    mesher.getSettings().alpha_cutoff = alpha_cutoff;
+    mesher.getSettings().visual_debug = visual_debug;
+    mesher.getSettings().error_files = error_files || visual_debug;
+    mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
+    if (visual_debug_output_root.has_value())
+    {
+      mesher.getSettings().visual_debug_output_root = visual_debug_output_root;
+    }
+    std::cout << "Alpha cutoff: " << alpha_cutoff << std::endl;
+    if (visual_debug || error_files)
+    {
+      const std::filesystem::path debug_root
+        = visual_debug_output_root.value_or(std::filesystem::current_path());
+      if (visual_debug)
+      {
+        std::cout << "Debug files: enabled (root=" << debug_root.string() << ")" << std::endl;
+        if (visual_debug_separate_pending_splits)
+        {
+          std::cout << "SVG separate pending splits: enabled" << std::endl;
+        }
+      }
+      else
+      {
+        std::cout << "Error files: enabled (root=" << debug_root.string() << ")" << std::endl;
+      }
+    }
     if (start_section != 0 || end_section.has_value())
     {
       std::cout << "Section range: start=" << start_section;
@@ -600,7 +736,7 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
       }
       std::cout << std::endl;
     }
-    const auto& meshes = mesher.runMeshingAlgorithm(true);
+    const auto& meshes = mesher.runMeshingAlgorithm(visual_debug);
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
 
@@ -695,6 +831,11 @@ int main(int argc, char* argv[])
   bool mesh_alternate_section_shading = false;
   size_t mesh_start_section = 0;
   std::optional<size_t> mesh_end_section;
+  double mesh_alpha_cutoff = kinDS::TreeMesher::Settings {}.alpha_cutoff;
+  bool mesh_visual_debug = false;
+  bool mesh_error_files = false;
+  bool mesh_visual_debug_separate_pending_splits = false;
+  std::optional<std::filesystem::path> mesh_visual_debug_output_root;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -878,6 +1019,67 @@ int main(int argc, char* argv[])
       }
       arg_idx += 2;
     }
+    else if (arg == "--cutoff")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --cutoff requires a numeric value." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const double parsed = std::stod(argv[arg_idx + 1]);
+        if (!(parsed >= 0.0) || !std::isfinite(parsed))
+        {
+          throw std::out_of_range("non-finite or negative");
+        }
+        mesh_alpha_cutoff = parsed;
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --cutoff expects a non-negative finite number." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--debug-files")
+    {
+      mesh_visual_debug = true;
+      // Optional directory: consume next arg only if it is present and not another option/command.
+      if (arg_idx + 1 < argc)
+      {
+        const std::string next = argv[arg_idx + 1];
+        if (!next.empty() && next[0] != '-')
+        {
+          mesh_visual_debug_output_root = std::filesystem::path(next);
+          arg_idx += 2;
+          continue;
+        }
+      }
+      arg_idx += 1;
+    }
+    else if (arg == "--svg-separate-pending-splits")
+    {
+      mesh_visual_debug_separate_pending_splits = true;
+      arg_idx += 1;
+    }
+    else if (arg == "--error-files")
+    {
+      mesh_error_files = true;
+      if (arg_idx + 1 < argc)
+      {
+        const std::string next = argv[arg_idx + 1];
+        if (!next.empty() && next[0] != '-')
+        {
+          mesh_visual_debug_output_root = std::filesystem::path(next);
+          arg_idx += 2;
+          continue;
+        }
+      }
+      arg_idx += 1;
+    }
     else if (arg == "--help" || arg == "-h")
     {
       if (!command.empty() && command != "help")
@@ -920,7 +1122,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-      std::cerr << "Error: Unknown option or command: " << arg << std::endl;
+      report_unknown_cli_argument(arg);
       print_usage(argv[0]);
       return 1;
     }
@@ -960,7 +1162,8 @@ int main(int argc, char* argv[])
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_validate_log_path,
-          mesh_alternate_section_shading, mesh_start_section, mesh_end_section))
+          mesh_alternate_section_shading, mesh_start_section, mesh_end_section, mesh_alpha_cutoff, mesh_visual_debug,
+          mesh_error_files, mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root))
     {
       return 1;
     }

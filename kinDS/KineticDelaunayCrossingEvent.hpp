@@ -372,9 +372,12 @@ void updateCrossingIntersectionParam(KineticDelaunay& kd, KineticDelaunay::Cross
   double t);
 
 /// Assign @c delaunay_edge_param / @c param_last_updated and warn if the param is outside the valid range.
+/// When @p near_voronoi_vertex / @p opposite_voronoi_vertex are set and error dumps are enabled, writes a
+/// highlighted kinetic SVG for out-of-range params (Voronoi/Delaunay edges, intersection, opposite VV).
 void assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
   KineticDelaunay::CrossingData::VoronoiDelaunayEdgeIntersection& intersection, double param, double t,
-  const char* context);
+  const char* context, std::optional<size_t> near_voronoi_vertex = std::nullopt,
+  std::optional<size_t> opposite_voronoi_vertex = std::nullopt);
 
 /// Recompute @c delaunay_edge_param when @c param_last_updated != @p t.
 void ensureCrossingIntersectionParamUpToDate(KineticDelaunay& kd,

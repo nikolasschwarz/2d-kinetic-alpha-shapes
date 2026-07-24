@@ -45,6 +45,11 @@ std::pair<double, double> signChangeAtRoot(const Polynomial& event_trigger, doub
 
 bool isTriangleAdjacentToMonitoredCrossingEdge(const KineticDelaunay& kd, size_t tri_id)
 {
+  if (!KineticDelaunay::isDiagnosticsMonitorIdEnabled(KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId))
+  {
+    return false;
+  }
+
   const size_t monitored_even_he_id = 2 * KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId;
   const size_t monitored_odd_he_id = monitored_even_he_id + 1;
 
@@ -64,7 +69,9 @@ bool isTriangleAdjacentToMonitoredCrossingEdge(const KineticDelaunay& kd, size_t
 
 bool shouldLogCrossingDiagnostics(const KineticDelaunay& kd, size_t voronoi_vertex_id, double schedule_t)
 {
-  if (!kd.diagnosticsEnabled() || voronoi_vertex_id != KineticDelaunay::kDiagnosticsMonitoredCrossingVoronoiVertexId
+  if (!kd.diagnosticsEnabled()
+    || !KineticDelaunay::matchesDiagnosticsMonitorId(
+         voronoi_vertex_id, KineticDelaunay::kDiagnosticsMonitoredCrossingVoronoiVertexId)
     || !kd.isDiagnosticsFaceIdValid(voronoi_vertex_id)
     || schedule_t < std::floor(KineticDelaunay::kDiagnosticsMonitoredCrossingTime)
     || schedule_t >= std::floor(KineticDelaunay::kDiagnosticsMonitoredCrossingTime) + 1.0
@@ -84,8 +91,10 @@ bool shouldLogCrossingHandleDiagnostics(
   const KineticDelaunay& kd, size_t voronoi_vertex_id, size_t half_edge_id, double occurrence_t)
 {
   return kd.diagnosticsEnabled()
-    && voronoi_vertex_id == KineticDelaunay::kDiagnosticsMonitoredCrossingVoronoiVertexId
-    && (half_edge_id / 2) == KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId
+    && KineticDelaunay::matchesDiagnosticsMonitorId(
+         voronoi_vertex_id, KineticDelaunay::kDiagnosticsMonitoredCrossingVoronoiVertexId)
+    && KineticDelaunay::matchesDiagnosticsMonitorId(
+         half_edge_id / 2, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId)
     && occurrence_t >= std::floor(KineticDelaunay::kDiagnosticsMonitoredCrossingTime)
     && occurrence_t < std::floor(KineticDelaunay::kDiagnosticsMonitoredCrossingTime) + 1.0;
 }
@@ -109,9 +118,9 @@ void logCrossingComputeContext(const KineticDelaunay& kd, size_t voronoi_vertex_
          << ", monitored_half_edges=["
          << (2 * KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId) << ","
          << (2 * KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId + 1) << "])";
-  KINDS_INFO(header.str());
+  KINDS_DEBUG(header.str());
 
-  KINDS_INFO("  voronoi_dual_tri=" << voronoi_vertex_id << " containing_delaunay_tri=" << containing_tri_id
+  KINDS_DEBUG("  voronoi_dual_tri=" << voronoi_vertex_id << " containing_delaunay_tri=" << containing_tri_id
                                    << " registered="
                                    << (kd.getCrossingData().isVoronoiVertexRegistered(voronoi_vertex_id) ? "true"
                                                                                                        : "false"));
@@ -123,7 +132,8 @@ void logCrossingTriggerRoots(const KineticDelaunay& kd, size_t voronoi_vertex_id
   Polynomial event_trigger = event_trigger_in;
   const size_t section = static_cast<size_t>(schedule_t);
   const size_t delaunay_edge_id = he_id / 2;
-  const bool monitored_edge = delaunay_edge_id == KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId;
+  const bool monitored_edge = KineticDelaunay::matchesDiagnosticsMonitorId(
+    delaunay_edge_id, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId);
   std::ostringstream header;
   header << "  crossing trigger roots";
   if (monitored_edge)
@@ -135,11 +145,11 @@ void logCrossingTriggerRoots(const KineticDelaunay& kd, size_t voronoi_vertex_id
          << ", min_fraction=" << min_fraction << ", only_positive_to_negative=" << (only_positive_to_negative ? "true"
                                                                                                               : "false")
          << ", trigger_degree=" << event_trigger.degree() << ")";
-  KINDS_INFO(header.str());
+  KINDS_DEBUG(header.str());
 
   if (event_trigger.degree() == -1)
   {
-    KINDS_INFO("    trigger empty (degree -1)");
+    KINDS_DEBUG("    trigger empty (degree -1)");
     return;
   }
 
@@ -147,7 +157,7 @@ void logCrossingTriggerRoots(const KineticDelaunay& kd, size_t voronoi_vertex_id
   const auto zeros = event_trigger.realRoots();
   if (zeros.empty())
   {
-    KINDS_INFO("    no real roots");
+    KINDS_DEBUG("    no real roots");
     return;
   }
 
@@ -173,7 +183,7 @@ void logCrossingTriggerRoots(const KineticDelaunay& kd, size_t voronoi_vertex_id
     if (std::isnan(root))
     {
       line << " discarded (nan)";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
 
@@ -183,27 +193,27 @@ void logCrossingTriggerRoots(const KineticDelaunay& kd, size_t voronoi_vertex_id
     if (root <= min_fraction)
     {
       line << " discarded (fraction <= min_fraction)";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
     if (root > kEventIntervalFractionUpperBound)
     {
       line << " discarded (fraction > " << kEventIntervalFractionUpperBound << ")";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
 
     if (sign_before == sign_after)
     {
       line << " discarded (no_sign_change)";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
 
     if (only_positive_to_negative && sign_before < 0.0)
     {
       line << " discarded (negative_to_positive, only_positive_to_negative=true)";
-      KINDS_INFO(line.str());
+      KINDS_DEBUG(line.str());
       continue;
     }
 
@@ -214,16 +224,16 @@ void logCrossingTriggerRoots(const KineticDelaunay& kd, size_t voronoi_vertex_id
       first_enqueued_fraction = root;
       line << " **first_enqueued_root**";
     }
-    KINDS_INFO(line.str());
+    KINDS_DEBUG(line.str());
   }
 
   if (!first_enqueued_fraction.has_value())
   {
-    KINDS_INFO("    findEvents would return empty for this trigger");
+    KINDS_DEBUG("    findEvents would return empty for this trigger");
   }
   else
   {
-    KINDS_INFO("    findEvents would return first root fraction=" << *first_enqueued_fraction << " absolute_t="
+    KINDS_DEBUG("    findEvents would return first root fraction=" << *first_enqueued_fraction << " absolute_t="
                                                                   << (*first_enqueued_fraction
                                                                     + static_cast<double>(section)));
   }
@@ -242,7 +252,7 @@ struct CrossingEdgeCandidateSummary
 void logCrossingCandidateSelection(const KineticDelaunay& kd, size_t voronoi_vertex_id, double schedule_t,
   const std::vector<CrossingEdgeCandidateSummary>& candidates, size_t selected_he_id, double selected_event_time)
 {
-  KINDS_INFO("  crossing candidate selection summary (voronoi_vertex=" << voronoi_vertex_id
+  KINDS_DEBUG("  crossing candidate selection summary (voronoi_vertex=" << voronoi_vertex_id
                                                                          << ", schedule_t=" << schedule_t << ")");
   for (size_t edge_index = 0; edge_index < candidates.size(); ++edge_index)
   {
@@ -279,16 +289,16 @@ void logCrossingCandidateSelection(const KineticDelaunay& kd, size_t voronoi_ver
         line << " discarded (not earliest among candidates)";
       }
     }
-    KINDS_INFO(line.str());
+    KINDS_DEBUG(line.str());
   }
 
   if (selected_he_id == size_t(-1))
   {
-    KINDS_INFO("  crossing event NOT queued (no candidate roots)");
+    KINDS_DEBUG("  crossing event NOT queued (no candidate roots)");
   }
   else
   {
-    KINDS_INFO("  crossing event queued he_id=" << selected_he_id << " delaunay_edge=" << (selected_he_id / 2)
+    KINDS_DEBUG("  crossing event queued he_id=" << selected_he_id << " delaunay_edge=" << (selected_he_id / 2)
                                                 << " event_time=" << std::setprecision(17) << selected_event_time);
   }
 }
@@ -296,7 +306,8 @@ void logCrossingCandidateSelection(const KineticDelaunay& kd, size_t voronoi_ver
 
 bool KineticDelaunay::isDiagnosticsMonitoredCrossingValid() const
 {
-  return isDiagnosticsFaceIdValid(kDiagnosticsMonitoredCrossingVoronoiVertexId);
+  return isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredCrossingVoronoiVertexId)
+    && isDiagnosticsFaceIdValid(kDiagnosticsMonitoredCrossingVoronoiVertexId);
 }
 
 void KineticDelaunay::logCrossingEventTriggerRoots(size_t voronoi_vertex_id, size_t he_id, size_t edge_index,
@@ -318,7 +329,7 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
   {
     if (log_crossing_diag)
     {
-      KINDS_INFO("Crossing computeEvents early exit (voronoi_vertex=" << voronoi_vertex_id << ", schedule_t=" << t
+      KINDS_DEBUG("Crossing computeEvents early exit (voronoi_vertex=" << voronoi_vertex_id << ", schedule_t=" << t
                                                                        << "): " << reason);
     }
   };
@@ -460,8 +471,9 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
       if (log_crossing_diag)
       {
         const CrossingEdgeCandidateSummary candidate { finite_he_id, finite_he_id / 2,
-          finite_he_id / 2 == KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId, true,
-          fractional_event_time, event_time };
+          KineticDelaunay::matchesDiagnosticsMonitorId(
+            finite_he_id / 2, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId),
+          true, fractional_event_time, event_time };
         logCrossingCandidateSelection(*kd, voronoi_vertex_id, t, { candidate }, finite_he_id, event_time);
       }
 
@@ -474,8 +486,9 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
     else if (log_crossing_diag)
     {
       const CrossingEdgeCandidateSummary candidate { finite_he_id, finite_he_id / 2,
-        finite_he_id / 2 == KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId, false,
-        std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() };
+        KineticDelaunay::matchesDiagnosticsMonitorId(
+          finite_he_id / 2, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId),
+        false, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() };
       logCrossingCandidateSelection(*kd, voronoi_vertex_id, t, { candidate }, size_t(-1),
         std::numeric_limits<double>::infinity());
     }
@@ -575,8 +588,8 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
       CrossingEdgeCandidateSummary candidate_summary;
       candidate_summary.he_id = he_id;
       candidate_summary.delaunay_edge_id = he_id / 2;
-      candidate_summary.monitored_edge
-        = candidate_summary.delaunay_edge_id == KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId;
+      candidate_summary.monitored_edge = KineticDelaunay::matchesDiagnosticsMonitorId(
+        candidate_summary.delaunay_edge_id, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId);
       if (!fractional_event_times.empty())
       {
         candidate_summary.had_enqueued_root = true;
@@ -641,7 +654,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
   {
     if (log_crossing_diag)
     {
-      KINDS_INFO("Crossing handleEvent SKIP (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
+      KINDS_DEBUG("Crossing handleEvent SKIP (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
                                                               << ", delaunay_edge=" << (half_edge_id / 2)
                                                               << ", occurrence_t=" << std::setprecision(17)
                                                               << occurrence_time << ", creation_t=" << creation_time
@@ -662,7 +675,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
       ? kd->face_last_updated[*containing_tri]
       : std::numeric_limits<double>::quiet_NaN();
 
-    KINDS_INFO("Crossing handleEvent ENTER (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
+    KINDS_DEBUG("Crossing handleEvent ENTER (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
                                                              << ", delaunay_edge=" << (half_edge_id / 2)
                                                              << ", occurrence_t=" << std::setprecision(17)
                                                              << occurrence_time << ", creation_t=" << creation_time
@@ -711,7 +724,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
 
   if (log_crossing_diag)
   {
-    KINDS_INFO("Crossing handleEvent PROCEED (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
+    KINDS_DEBUG("Crossing handleEvent PROCEED (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
                                                                << ", containing_tri=" << containing_tri_id
                                                                << ", occurrence_t=" << std::setprecision(17)
                                                                << occurrence_time << ")");

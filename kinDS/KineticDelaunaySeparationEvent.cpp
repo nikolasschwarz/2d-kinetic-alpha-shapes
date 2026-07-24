@@ -16,7 +16,7 @@ void KineticDelaunay::SeparationEvent::handleEvent()
 
   const std::optional<PendingBranchSplit> split = kd->getPendingBranchSplit(parent_component_id);
   const size_t iteration = split ? split->separation_iteration : 0;
-  KINDS_INFO("SeparationEvent handle parent_component_id=" << parent_component_id << " event_time=" << occurrence_time
+  KINDS_DEBUG("SeparationEvent handle parent_component_id=" << parent_component_id << " event_time=" << occurrence_time
                                                             << " iteration=" << iteration << " split_time=" << split_time
                                                             << " queue_seq=" << queue_sequence_);
 

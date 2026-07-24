@@ -378,6 +378,11 @@ class KineticDelaunay
   std::vector<double> face_last_updated;
   bool on_the_fly_boundary = true;
   std::optional<std::filesystem::path> visual_debug_output_root_;
+  bool visual_debug_enabled_ = false;
+  bool error_files_enabled_ = false;
+  /// When true, visual-debug SVGs use pending split-off child runtime branch folders (and own strand sets) as soon as
+  /// a radius event notes the pending split — not only after the graph cut.
+  bool visual_debug_separate_pending_splits_ = false;
   std::optional<double> flip_polynomial_dump_target_time_;
   std::optional<size_t> flip_polynomial_dump_target_half_edge_;
   bool diagnostics_enabled_ = false;
@@ -540,6 +545,17 @@ class KineticDelaunay
 
   void setVisualDebugOutputRoot(const std::filesystem::path& root);
   const std::optional<std::filesystem::path>& getVisualDebugOutputRoot() const;
+  /// When true, emit full visual-debug artifacts (segmentbuilder-driven SVGs, branch-split dumps, …).
+  void setVisualDebugEnabled(bool enabled);
+  bool isVisualDebugEnabled() const;
+  /// When true, emit failure SVG/TXT dumps (@c --error-files). Also implied by @ref isVisualDebugEnabled.
+  void setErrorFilesEnabled(bool enabled);
+  bool isErrorFilesEnabled() const;
+  bool shouldDumpErrorFiles() const;
+  /// When true, write visual-debug SVGs into pending child branch folders (with that branch's strands only) while a
+  /// split is still pending. Default off; CLI @c --svg-separate-pending-splits.
+  void setVisualDebugSeparatePendingSplits(bool enabled);
+  bool visualDebugSeparatePendingSplits() const;
   /// Path to @c branches.txt under @ref getVisualDebugOutputRoot when visual debug is enabled.
   std::optional<std::filesystem::path> getRuntimeBranchLogPath() const;
 
@@ -757,18 +773,36 @@ class KineticDelaunay
    * Debug sanity checks: compare @ref face_inside against circumradius and @ref cutoff (and @ref mustRemainInside).
    * Intended to be called only when @ref SegmentBuilder::diagnostics is enabled.
    */
-  static constexpr size_t kDiagnosticsMonitoredFaceId = 54;
+  /// Sentinel for disabled diagnostic targets. Never matches unset / invalid / infinite entity ids.
+  static constexpr size_t kDiagnosticsMonitorDisabledId = static_cast<size_t>(-1);
+  static constexpr bool isDiagnosticsMonitorIdEnabled(size_t monitor_id)
+  {
+    return monitor_id != kDiagnosticsMonitorDisabledId;
+  }
+  /// True only when both ids are enabled (not @ref kDiagnosticsMonitorDisabledId) and equal.
+  /// Disabled / unset / invalid sentinels (-1) never match.
+  static constexpr bool matchesDiagnosticsMonitorId(size_t candidate_id, size_t monitor_id)
+  {
+    return isDiagnosticsMonitorIdEnabled(monitor_id) && isDiagnosticsMonitorIdEnabled(candidate_id)
+      && candidate_id == monitor_id;
+  }
+
+  /// Set to @ref kDiagnosticsMonitorDisabledId to disable face monitoring.
+  static constexpr size_t kDiagnosticsMonitoredFaceId = kDiagnosticsMonitorDisabledId;
   /// Debug target: Voronoi vertex whose crossing-event trigger roots are traced.
-  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = 81;
+  /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
+  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = kDiagnosticsMonitorDisabledId;
   /// Debug target: undirected Delaunay edge id highlighted in crossing trigger logs.
-  static constexpr size_t kDiagnosticsMonitoredCrossingDelaunayEdgeId = 13;
+  /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
+  static constexpr size_t kDiagnosticsMonitoredCrossingDelaunayEdgeId = kDiagnosticsMonitorDisabledId;
   /// Suspected missed crossing time; crossing diagnostics are constrained to its scheduling window [floor(t), floor(t)+1).
   static constexpr double kDiagnosticsMonitoredCrossingTime = 10.0;
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
-  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 80;
-  /// Suspected incorrect flip; flip diagnostics are constrained to [floor(t), floor(t)+1).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 35.0;
+  /// Directed half-edge 6548 ⇒ undirected edge 3274 (also matches twin 6549).
+  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 3274;
+  /// Suspected incorrect flip near ~10.48; flip create/discard logging is constrained to [floor(t), floor(t)+1).
+  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
   /// Bounds-checked diagnostic id queries; invalid ids are ignored by monitor logging.
