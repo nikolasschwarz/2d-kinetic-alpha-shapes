@@ -2670,6 +2670,7 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
     KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
                                                    << " has convex seam outlines at t=" << t
                                                    << "; applying graph split");
+    // No separation-trajectory recompute here: the graph cut/retriangulation path refreshes events.
     applyPendingComponentGraphSplit(t);
     debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
     return;
@@ -2854,6 +2855,8 @@ Trajectory<2> KineticDelaunay::addSeparationOffsetToPiecePolynomial(
 
 void KineticDelaunay::recomputeEventsAfterSeparationTrajectory(size_t parent_component_id, double t)
 {
+  // Recompute only simplices whose sites sit on differently shifted pending pieces (retained vs separated).
+  // Uniform translation leaves inCircle/ccw/radius roots unchanged, so same-shift quads/faces are skipped.
   std::unordered_set<size_t> affected_quads;
   std::unordered_set<size_t> affected_faces;
   collectSeparationRecomputeTargets(parent_component_id, affected_quads, affected_faces);
@@ -2862,21 +2865,22 @@ void KineticDelaunay::recomputeEventsAfterSeparationTrajectory(size_t parent_com
 
   for (size_t quad_id : affected_quads)
   {
-    flip_event_manager_->computeEvents(t, quad_id);
+    // Stamp before enqueue so any mid-ramp schedules (creation_time < t) are discarded on handle.
     if (quad_id < quadrilateral_last_updated.size())
     {
       quadrilateral_last_updated[quad_id] = t;
     }
+    flip_event_manager_->computeEvents(t, quad_id);
   }
 
   for (size_t face_id : affected_faces)
   {
-    const size_t he_id = graph.face(face_id).half_edges[0];
-    radius_event_manager_->computeEvents(t, he_id);
     if (face_id < face_last_updated.size())
     {
       face_last_updated[face_id] = t;
     }
+    const size_t he_id = graph.face(face_id).half_edges[0];
+    radius_event_manager_->computeEvents(t, he_id);
 
     const auto stamp_voronoi_crossing_invalidation = [&](size_t voronoi_vertex_id)
     {
@@ -2892,9 +2896,8 @@ void KineticDelaunay::recomputeEventsAfterSeparationTrajectory(size_t parent_com
       {
         return;
       }
-      crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
-      // last_crossing is the per-Voronoi-vertex invalidation stamp (also set when a crossing is handled).
       stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
+      crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
     };
 
     // Dual Voronoi vertex for this Delaunay triangle.
@@ -2942,7 +2945,9 @@ void KineticDelaunay::collectSeparationRecomputeTargets(size_t parent_component_
     }
   }
 
-  const auto touches_both_branches = [&](const std::vector<size_t>& strand_ids) {
+  const auto touches_differently_shifted_pending_branches = [&](const std::vector<size_t>& strand_ids) {
+    // Retained piece has no separation offset; separated pieces share the pending-split shift.
+    // Only mixed sets need recomputation — a common shift leaves predicate roots invariant.
     bool has_retained = false;
     bool has_separated = false;
     for (size_t strand_id : strand_ids)
@@ -2961,7 +2966,7 @@ void KineticDelaunay::collectSeparationRecomputeTargets(size_t parent_component_
 
   for (size_t he_id : graph.liveDelaunayEdges())
   {
-    if (touches_both_branches(collectFlipQuadrilateralStrandIds(graph, he_id)))
+    if (touches_differently_shifted_pending_branches(collectFlipQuadrilateralStrandIds(graph, he_id)))
     {
       affected_quads.insert(he_id / 2);
     }
@@ -2982,7 +2987,7 @@ void KineticDelaunay::collectSeparationRecomputeTargets(size_t parent_component_
         triangle_strands.push_back(static_cast<size_t>(vertex));
       }
     }
-    if (touches_both_branches(triangle_strands))
+    if (touches_differently_shifted_pending_branches(triangle_strands))
     {
       affected_faces.insert(face_id);
     }

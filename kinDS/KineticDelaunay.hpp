@@ -462,6 +462,10 @@ class KineticDelaunay
   void applyPendingComponentGraphSplit(double t);
   void startSeparationSchedule(size_t parent_component_id, double segment_start_time);
   void continueSeparationSchedule(size_t parent_component_id, double segment_start_time);
+  /// Recompute flip/radius/crossing events for simplices spanning differently shifted pending pieces.
+  /// Stamps @c *_last_updated / @c last_crossing to @p t before enqueue so older schedules are discarded.
+  /// Only used when another separation iteration is scheduled (@ref startSeparationSchedule /
+  /// @ref continueSeparationSchedule). A convex graph cut relies on the cut/retriangulation path instead.
   void recomputeEventsAfterSeparationTrajectory(size_t parent_component_id, double t);
   void collectSeparationRecomputeTargets(size_t parent_component_id, std::unordered_set<size_t>& affected_quads,
     std::unordered_set<size_t>& affected_faces) const;
@@ -653,7 +657,8 @@ class KineticDelaunay
   std::vector<std::vector<BoundaryPoint>> collectPendingSplitBranchOutlines(
     size_t parent_component_id, double t) const;
 
-  /// Delaunay simplices whose flip/radius/crossing events are recomputed during separation scheduling.
+  /// Delaunay simplices whose flip/radius/crossing events are recomputed when another separation
+  /// iteration is scheduled. Only mixed-shift (retained vs separated) targets.
   VisualDebugHighlight buildSeparationRecomputeHighlight(size_t parent_component_id) const;
 
   /// Base-to-offset segments for separated strands in an active pending split.
@@ -846,8 +851,8 @@ class KineticDelaunay
   static constexpr double kDiagnosticsMonitoredCrossingTime = 10.0;
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
-  /// Directed half-edge 130 ⇒ undirected edge 65 (also matches twin 131).
-  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 65;
+  /// Directed half-edge 1158 ⇒ undirected edge 579 (also matches twin 1159).
+  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 579;
   /// Flip create/discard / trigger-root logging is constrained to [floor(t), floor(t)+1).
   static constexpr double kDiagnosticsMonitoredFlipTime = 20.0;
   void setDiagnosticsEnabled(bool enabled);
@@ -873,7 +878,8 @@ class KineticDelaunay
   void logCrossingEventTriggerRoots(size_t voronoi_vertex_id, size_t he_id, size_t edge_index, double t,
     double min_fraction, const Polynomial& event_trigger, bool only_positive_to_negative) const;
   /// Log all real roots, sign changes, and findEvents filter/enqueue decisions for one flip trigger.
+  /// @p trigger_predicate is @c "ccw" (convex-boundary) or @c "inCircle" (interior).
   void logFlipEventTriggerRoots(size_t he_id, double t, double min_fraction, const Polynomial& event_trigger,
-    const char* trigger_pass) const;
+    const char* trigger_pass, const char* trigger_predicate) const;
 };
 } // namespace kinDS

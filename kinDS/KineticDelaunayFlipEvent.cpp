@@ -4,7 +4,6 @@
 #include <cmath>
 #include <iomanip>
 #include <limits>
-#include <optional>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -25,20 +24,6 @@ double referenceBranchLookupTimeForSection(size_t section, double schedule_time)
     lookup_time = section_start + std::numeric_limits<double>::epsilon();
   }
   return lookup_time;
-}
-
-std::optional<double> separationRampEndFractionForQuad(
-  const KineticDelaunay& kd, const std::vector<size_t>& quad_strand_ids, size_t section)
-{
-  for (size_t strand_id : quad_strand_ids)
-  {
-    if (const std::optional<double> ramp_end = kd.separationRampEndSectionFraction(strand_id, section);
-      ramp_end.has_value())
-    {
-      return ramp_end;
-    }
-  }
-  return std::nullopt;
 }
 
 std::string formatSignLabel(double sign)
@@ -77,7 +62,7 @@ bool shouldLogFlipDiagnostics(const KineticDelaunay& kd, size_t he_id, double sc
 }
 
 void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedule_t, double min_fraction,
-  const Polynomial& event_trigger_in, const char* trigger_pass)
+  const Polynomial& event_trigger_in, const char* trigger_pass, const char* trigger_predicate)
 {
   Polynomial event_trigger = event_trigger_in;
   const size_t section = static_cast<size_t>(schedule_t);
@@ -86,12 +71,13 @@ void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedul
   std::ostringstream header;
   header << "  flip trigger roots **MONITORED_EDGE** (he_id=" << he_id << ", delaunay_edge=" << delaunay_edge_id
          << ", schedule_t=" << schedule_t << ", section=" << section << ", min_fraction=" << min_fraction
-         << ", pass=" << trigger_pass << ", trigger_degree=" << event_trigger.degree() << ")";
+         << ", pass=" << trigger_pass << ", predicate=" << trigger_predicate
+         << ", trigger_degree=" << event_trigger.degree() << ")";
   KINDS_MONITOR(header.str());
 
   if (event_trigger.degree() == -1)
   {
-    KINDS_MONITOR("    trigger empty (degree -1)");
+    KINDS_MONITOR("    trigger empty (degree -1) predicate=" << trigger_predicate);
     return;
   }
 
@@ -170,13 +156,13 @@ void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedul
 } // namespace
 
 void KineticDelaunay::logFlipEventTriggerRoots(size_t he_id, double t, double min_fraction,
-  const Polynomial& event_trigger, const char* trigger_pass) const
+  const Polynomial& event_trigger, const char* trigger_pass, const char* trigger_predicate) const
 {
   if (!shouldLogFlipDiagnostics(*this, he_id, t))
   {
     return;
   }
-  logFlipTriggerRoots(*this, he_id, t, min_fraction, event_trigger, trigger_pass);
+  logFlipTriggerRoots(*this, he_id, t, min_fraction, event_trigger, trigger_pass, trigger_predicate);
 }
 
 void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
@@ -218,7 +204,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
   }
 
   const auto build_trigger = [&](size_t active_he_id, double schedule_time, Polynomial& event_trigger_out,
-                                 std::vector<Trajectory<2>>& trajs_out) {
+                                 std::vector<Trajectory<2>>& trajs_out, const char*& predicate_out) {
     trajs_out.clear();
     std::vector<size_t> trigger_strand_ids;
     const auto append_trigger_strand = [&](int vertex) {
@@ -238,6 +224,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
 
     if (graph.isOnConvexBoundary(active_he_id) || graph.isOutsideConvexBoundary(active_he_id))
     {
+      predicate_out = "ccw";
       if (graph.isOutsideConvexBoundary(active_he_id))
       {
         active_he_id = active_he_id ^ 1;
@@ -270,6 +257,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
       return;
     }
 
+    predicate_out = "inCircle";
     const int a = graph.halfEdge(active_he_id).origin;
     const int b = graph.triangleOppositeVertex(active_he_id ^ 1);
     const int c = graph.halfEdge(active_he_id ^ 1).origin;
@@ -288,17 +276,18 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
 
   const auto enqueue_flip_roots = [&](const std::vector<Trajectory<2>>& trajs, Polynomial& event_trigger,
                                     double min_fraction, size_t enqueue_he_id, double creation_time,
-                                    const char* trigger_pass) {
+                                    const char* trigger_pass, const char* trigger_predicate) {
     if (log_flip_diag)
     {
-      kd->logFlipEventTriggerRoots(enqueue_he_id, t, min_fraction, event_trigger, trigger_pass);
+      kd->logFlipEventTriggerRoots(enqueue_he_id, t, min_fraction, event_trigger, trigger_pass, trigger_predicate);
     }
 
     if (event_trigger.degree() < 0)
     {
       if (log_flip_diag)
       {
-        KINDS_MONITOR("  flip enqueue skipped (empty trigger) pass=" << trigger_pass);
+        KINDS_MONITOR("  flip enqueue skipped (empty trigger) pass=" << trigger_pass
+                                                                     << " predicate=" << trigger_predicate);
       }
       return;
     }
@@ -306,7 +295,8 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
     auto event_times = kd->findEvents(event_trigger, min_fraction);
     if (log_flip_diag && event_times.empty())
     {
-      KINDS_MONITOR("  flip enqueue: findEvents returned empty pass=" << trigger_pass);
+      KINDS_MONITOR("  flip enqueue: findEvents returned empty pass=" << trigger_pass
+                                                                      << " predicate=" << trigger_predicate);
     }
     for (const auto& event_time : event_times)
     {
@@ -324,7 +314,8 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
         KINDS_MONITOR("  flip event QUEUED absolute_t=" << std::setprecision(17) << (event_time + section)
                                                      << " fraction=" << event_time << " he_id=" << enqueue_he_id
                                                      << " creation_t=" << creation_time << " pass=" << trigger_pass
-                                                     << " center=(" << center[0] << "," << center[1] << ")");
+                                                     << " predicate=" << trigger_predicate << " center=(" << center[0]
+                                                     << "," << center[1] << ")");
       }
 
       KINDS_DEBUG("Scheduled flip event at time " << event_time + section << " for half-edge ID " << enqueue_he_id
@@ -337,29 +328,9 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id)
 
   Polynomial event_trigger;
   std::vector<Trajectory<2>> trajs;
-  build_trigger(he_id, t, event_trigger, trajs);
-  enqueue_flip_roots(trajs, event_trigger, fraction, he_id, t, "primary");
-
-  if (const std::optional<double> ramp_end_fraction = separationRampEndFractionForQuad(*kd, quad_strand_ids, section);
-    ramp_end_fraction.has_value() && fraction < *ramp_end_fraction && *ramp_end_fraction < kEventIntervalFractionUpperBound)
-  {
-    if (log_flip_diag)
-    {
-      KINDS_MONITOR("  flip post-ramp pass enabled ramp_end_fraction=" << *ramp_end_fraction);
-    }
-    const double post_ramp_schedule_time = static_cast<double>(section) + *ramp_end_fraction;
-    Polynomial post_ramp_trigger;
-    std::vector<Trajectory<2>> post_ramp_trajs;
-    build_trigger(he_id, post_ramp_schedule_time, post_ramp_trigger, post_ramp_trajs);
-    enqueue_flip_roots(post_ramp_trajs, post_ramp_trigger, *ramp_end_fraction, he_id, t, "post_separation_ramp");
-  }
-  else if (log_flip_diag)
-  {
-    const std::optional<double> ramp_end_fraction = separationRampEndFractionForQuad(*kd, quad_strand_ids, section);
-    KINDS_MONITOR("  flip post-ramp pass skipped ramp_end_fraction="
-      << (ramp_end_fraction.has_value() ? std::to_string(*ramp_end_fraction) : std::string("n/a"))
-      << " min_fraction=" << fraction);
-  }
+  const char* trigger_predicate = "inCircle";
+  build_trigger(he_id, t, event_trigger, trajs, trigger_predicate);
+  enqueue_flip_roots(trajs, event_trigger, fraction, he_id, t, "primary", trigger_predicate);
 }
 
 void KineticDelaunay::FlipEvent::handleEvent()
