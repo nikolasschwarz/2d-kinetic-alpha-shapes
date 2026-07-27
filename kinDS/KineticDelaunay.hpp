@@ -450,6 +450,8 @@ class KineticDelaunay
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingBranchSplits();
+  /// Clear strand list and boundary/centroid/last_updated for an emptied (merged-away) component slot.
+  void clearComponentSupportData(size_t component_id);
   /// At section @p section_index, look ahead to height @p section_index + 1 and register hold/blend when a
   /// live component's strands already occupy multiple input branches there (upcoming split).
   void registerUpcomingPostSplitFrameTransitions(size_t section_index);
@@ -613,6 +615,13 @@ class KineticDelaunay
   const std::optional<size_t>& getFlipPolynomialDumpTargetHalfEdge() const;
 
   void computeComponentData(double t);
+
+  /// After induced connectivity changes (e.g. radius add), fold any kinetic component ids that now share one
+  /// induced connected piece into a single survivor id. Absorbed ids are left empty and their support data cleared
+  /// (boundaries / centroid / last_updated). Component slots are never compacted.
+  /// Do not call immediately after @ref SegmentBuilder::splitComponent when a pending split was just noted — that
+  /// would re-join future-branch pieces and break graph-cut / seam convexity checks.
+  void reconcileComponentMergers(double t);
 
   /// True once @ref component_data reflects the current @ref HalfEdgeDelaunayGraph after the latest section
   /// retriangulation. While false, connected components may already be split in component data but the mesh

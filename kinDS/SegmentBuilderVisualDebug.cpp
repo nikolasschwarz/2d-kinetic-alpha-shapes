@@ -399,7 +399,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id,
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments,
   const std::vector<std::vector<glm::dvec2>>* seam_outlines, const std::vector<size_t>* explicit_runtime_branch_ids,
-  std::optional<double> creation_time)
+  std::optional<double> creation_time, bool fan_out_active_runtime_branches)
 {
   if (!visual_debug)
   {
@@ -524,6 +524,21 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     {
       return;
     }
+  }
+
+  // Section events: no single owning branch — write one SVG per active runtime branch folder.
+  if (fan_out_active_runtime_branches && !active_runtime_branches.empty())
+  {
+    bool wrote_any = false;
+    for (size_t branch_id : active_runtime_branches)
+    {
+      wrote_any = try_write_for_runtime_branch(branch_id) || wrote_any;
+    }
+    if (!wrote_any)
+    {
+      write_unresolved_branch_fallback("active runtime branch fan-out had no positioned strands");
+    }
+    return;
   }
 
   // No unique/preferred branch, or the candidate folder(s) had no positioned strands.

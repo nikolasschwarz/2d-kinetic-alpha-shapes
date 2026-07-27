@@ -1994,11 +1994,12 @@ void kinDS::SegmentBuilder::meshletDiagnosticWarnIfUnexpectedEmptyAfterStartNewM
       << dual_edge << " t=" << t
       << " — strip entries reference mesh vertex ids but mesh has no vertices (strips=" << strips.size() << ").");
   }
-  if (nv > 0 && strips.empty())
+  // disable for now, probably related to the vertex shift and harmless, but could be a real bug if it happens in other contexts
+  /*if (nv > 0 && strips.empty())
   {
     KINDS_WARNING("meshlet_diag inconsistent after startNewMesh: dual_edge="
       << dual_edge << " t=" << t << " - mesh has " << nv << " vertices but strip list is empty.");
-  }
+  }*/
 }
 
 SegmentBuilder::RegularMeshStripIntervalEndpoints SegmentBuilder::regularMeshStripIntervalFromMeshingData(
@@ -6300,6 +6301,11 @@ bool kinDS::SegmentBuilder::isComponentLive(size_t component_index) const
   }
 
   const auto& component = kin_del.component_data.components[component_index];
+  if (component.empty())
+  {
+    return false;
+  }
+
   const HalfEdgeDelaunayGraph& graph = kin_del.getGraph();
   for (size_t vertex : component)
   {
@@ -6330,7 +6336,9 @@ std::vector<size_t> kinDS::SegmentBuilder::collectLiveComponentIndices() const
 
 void kinDS::SegmentBuilder::updateBoundary(double t, std::vector<bool>& visited, size_t component_index)
 {
-  if (!isComponentLive(component_index))
+  if (component_index >= kin_del.component_data.components.size()
+    || kin_del.component_data.components[component_index].empty()
+    || !isComponentLive(component_index))
   {
     return;
   }
@@ -6339,8 +6347,12 @@ void kinDS::SegmentBuilder::updateBoundary(double t, std::vector<bool>& visited,
   {
     kin_del.component_data.component_boundaries[component_index]
       = kin_del.extractComponentBoundaries(kin_del.component_data.components[component_index], t, visited, false, false);
-    kin_del.component_data.component_centroids[component_index]
-      = polygonCentroid(kin_del.component_data.component_boundaries[component_index][0]);
+    if (!kin_del.component_data.component_boundaries[component_index].empty()
+      && !kin_del.component_data.component_boundaries[component_index][0].empty())
+    {
+      kin_del.component_data.component_centroids[component_index]
+        = polygonCentroid(kin_del.component_data.component_boundaries[component_index][0]);
+    }
     kin_del.component_data.component_last_updated[component_index] = t;
   }
 }

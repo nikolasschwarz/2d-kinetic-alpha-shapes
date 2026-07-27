@@ -2172,6 +2172,135 @@ void KineticDelaunay::computeComponentData(double t)
   component_data.component_last_updated.resize(component_data.components.size(), t);
 }
 
+void KineticDelaunay::clearComponentSupportData(size_t component_id)
+{
+  if (component_id >= component_data.components.size())
+  {
+    return;
+  }
+
+  component_data.components[component_id].clear();
+  if (component_id < component_data.component_boundaries.size())
+  {
+    component_data.component_boundaries[component_id].clear();
+  }
+  if (component_id < component_data.component_centroids.size())
+  {
+    component_data.component_centroids[component_id] = glm::dvec2(0.0, 0.0);
+  }
+  if (component_id < component_data.component_last_updated.size())
+  {
+    component_data.component_last_updated[component_id] = std::numeric_limits<double>::quiet_NaN();
+  }
+}
+
+void KineticDelaunay::reconcileComponentMergers(double t)
+{
+  if (component_data.components.empty())
+  {
+    return;
+  }
+
+  const size_t vertex_count = graph.getVertexCount();
+  component_data.component_map.resize(vertex_count);
+
+  // Never fold components that still participate in a pending split — those ids are the graph-cut / seam inputs.
+  std::unordered_set<size_t> pending_split_component_ids;
+  for (const auto& entry : pending_branch_splits_.by_parent_)
+  {
+    for (size_t split_component_id : entry.second.split_component_ids)
+    {
+      pending_split_component_ids.insert(split_component_id);
+    }
+  }
+
+  const std::vector<std::vector<size_t>> pieces = extractConnectedComponents();
+  bool remapped_merge = false;
+
+  for (const std::vector<size_t>& piece : pieces)
+  {
+    std::vector<size_t> prior_ids;
+    prior_ids.reserve(piece.size());
+    for (size_t strand_id : piece)
+    {
+      if (isDummyBoundary(strand_id) || strand_id >= component_data.component_map.size())
+      {
+        continue;
+      }
+      prior_ids.push_back(component_data.component_map[strand_id]);
+    }
+    if (prior_ids.empty())
+    {
+      continue;
+    }
+
+    std::sort(prior_ids.begin(), prior_ids.end());
+    prior_ids.erase(std::unique(prior_ids.begin(), prior_ids.end()), prior_ids.end());
+    if (prior_ids.size() <= 1)
+    {
+      continue;
+    }
+
+    bool touches_pending_split = false;
+    for (size_t prior_id : prior_ids)
+    {
+      if (pending_split_component_ids.count(prior_id) > 0)
+      {
+        touches_pending_split = true;
+        break;
+      }
+    }
+    if (touches_pending_split)
+    {
+      continue;
+    }
+
+    // Keep the oldest id as survivor; other ids in this piece become empty after rebuild.
+    const size_t survivor = prior_ids.front();
+    for (size_t strand_id : piece)
+    {
+      if (strand_id < component_data.component_map.size())
+      {
+        component_data.component_map[strand_id] = survivor;
+      }
+    }
+    remapped_merge = true;
+    KINDS_DEBUG("Component merge at t=" << t << " survivor=" << survivor << " absorbed_count="
+                                       << (prior_ids.size() - 1));
+  }
+
+  // Rebuild strand lists from component_map so absorbed / stub entries cannot linger in emptied slots.
+  for (std::vector<size_t>& strands : component_data.components)
+  {
+    strands.clear();
+  }
+  for (size_t strand_id = 0; strand_id < component_data.component_map.size(); ++strand_id)
+  {
+    const size_t component_id = component_data.component_map[strand_id];
+    if (component_id < component_data.components.size())
+    {
+      component_data.components[component_id].push_back(strand_id);
+    }
+  }
+
+  component_data.component_boundaries.resize(component_data.components.size());
+  component_data.component_centroids.resize(component_data.components.size());
+  component_data.component_last_updated.resize(component_data.components.size());
+
+  for (size_t component_id = 0; component_id < component_data.components.size(); ++component_id)
+  {
+    if (component_data.components[component_id].empty())
+    {
+      clearComponentSupportData(component_id);
+    }
+  }
+
+  if (remapped_merge)
+  {
+    KINDS_DEBUG("Component merge reconcile finished at t=" << t);
+  }
+}
+
 bool KineticDelaunay::isGraphRetriangulatedForComponents() const
 {
   return component_data.components.size() <= prev_component_count;
@@ -6036,8 +6165,11 @@ std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
     return {};
   }
 
-  // An input branch is isolated only if a component-limited search from *all* of its strands never reaches a
-  // strand of another input branch. A lone disconnected strand of a still-mixed branch must not trigger.
+  // Pending-split criterion (component-limited multi-source BFS / DFS):
+  // For each input branch in this kinetic component, seed a search from *all* of its strands and walk only
+  // parent-component induced neighbors. Trigger isolation only if that search never reaches a different input
+  // branch. A lone disconnected strand of a still-mixed branch must not start a pending split / graph cut.
+  std::unordered_set<size_t> parent_strand_set(parent_strands.begin(), parent_strands.end());
   std::vector<size_t> isolated_input_branches;
   isolated_input_branches.reserve(strands_by_input_branch.size());
   std::vector<bool> branch_search_visited(graph.getVertexCount(), false);
@@ -6068,7 +6200,7 @@ std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
       const size_t v = queue[head++];
       for (size_t w : graph.inducedNeighbors(v, inside_state))
       {
-        if (w >= graph.getVertexCount() || isDummyBoundary(w))
+        if (w >= graph.getVertexCount() || isDummyBoundary(w) || parent_strand_set.count(w) == 0)
         {
           continue;
         }
@@ -6096,44 +6228,33 @@ std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
     return {};
   }
 
-  // Keep induced connected components separate for kinetic component_data. Runtime-branch children are
-  // deduplicated per input branch later in notePendingBranchSplit.
-  std::vector<bool> visited(graph.getVertexCount(), false);
-  const auto extract_component = [&](size_t seed)
-  {
-    std::vector<size_t> component;
-    std::vector<size_t> queue { seed };
-    visited[seed] = true;
-    size_t head = 0;
-    while (head < queue.size())
-    {
-      const size_t v = queue[head++];
-      component.push_back(v);
-      for (size_t w : graph.inducedNeighbors(v, inside_state))
-      {
-        if (w >= graph.getVertexCount() || visited[w] || isDummyBoundary(w))
-        {
-          continue;
-        }
-        visited[w] = true;
-        queue.push_back(w);
-      }
-    }
-    return component;
-  };
+  std::sort(isolated_input_branches.begin(), isolated_input_branches.end());
+  std::unordered_set<size_t> isolated_input_branch_set(
+    isolated_input_branches.begin(), isolated_input_branches.end());
 
-  std::vector<std::vector<size_t>> components;
+  // One pending-split child per isolated input branch (all of that branch's strands in the parent, even if they
+  // form multiple induced pieces). Retained parent keeps every non-isolated strand (and dummies). Runtime-branch
+  // children for the same input branch are still deduplicated later in notePendingBranchSplit.
+  std::vector<size_t> retained_strands;
+  retained_strands.reserve(parent_strands.size());
   for (size_t strand_id : parent_strands)
   {
-    if (strand_id >= visited.size() || visited[strand_id] || isDummyBoundary(strand_id))
+    if (isDummyBoundary(strand_id)
+      || isolated_input_branch_set.find(input_branch_of(strand_id)) == isolated_input_branch_set.end())
     {
-      if (strand_id < visited.size())
-      {
-        visited[strand_id] = true;
-      }
-      continue;
+      retained_strands.push_back(strand_id);
     }
-    components.push_back(extract_component(strand_id));
+  }
+
+  std::vector<std::vector<size_t>> components;
+  components.reserve(isolated_input_branches.size() + 1);
+  if (!retained_strands.empty())
+  {
+    components.push_back(std::move(retained_strands));
+  }
+  for (size_t input_branch : isolated_input_branches)
+  {
+    components.push_back(strands_by_input_branch[input_branch]);
   }
 
   if (components.size() < 2)

@@ -1146,15 +1146,47 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
 
   auto split = segment_builder_.kin_del.checkForSplit(vertices, radius->occurrence_time);
   segment_builder_.splitComponent(component_id, split, radius->occurrence_time);
-
+  // Only reconcile mergers when this radius event did not initiate a pending split. Running the induced-piece
+  // merge pass immediately after splitComponent can re-join future-branch pieces and break the graph-cut /
+  // seam checks that depend on distinct split_component_ids.
   if (split.empty())
   {
-    std::vector<bool> visited(segment_builder_.kin_del.getGraph().halfEdgeSlotCount(), false);
-    segment_builder_.kin_del.component_data.component_boundaries[component_id] = segment_builder_.kin_del.extractComponentBoundaries(
-      segment_builder_.kin_del.component_data.components[component_id], radius->occurrence_time, visited, false);
-    segment_builder_.kin_del.component_data.component_centroids[component_id]
-      = polygonCentroid(segment_builder_.kin_del.component_data.component_boundaries[component_id][0]);
-    segment_builder_.kin_del.component_data.component_last_updated[component_id] = radius->occurrence_time;
+    segment_builder_.kin_del.reconcileComponentMergers(radius->occurrence_time);
+  }
+
+  std::unordered_set<size_t> components_to_refresh;
+  for (int vertex : vertices)
+  {
+    if (vertex < 0)
+    {
+      continue;
+    }
+    const size_t strand_id = static_cast<size_t>(vertex);
+    if (strand_id < segment_builder_.kin_del.component_data.component_map.size())
+    {
+      components_to_refresh.insert(segment_builder_.kin_del.component_data.component_map[strand_id]);
+    }
+  }
+
+  std::vector<bool> visited(segment_builder_.kin_del.getGraph().halfEdgeSlotCount(), false);
+  for (size_t refresh_component_id : components_to_refresh)
+  {
+    if (refresh_component_id >= segment_builder_.kin_del.component_data.components.size()
+      || segment_builder_.kin_del.component_data.components[refresh_component_id].empty())
+    {
+      continue;
+    }
+    segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id]
+      = segment_builder_.kin_del.extractComponentBoundaries(
+        segment_builder_.kin_del.component_data.components[refresh_component_id], radius->occurrence_time, visited,
+        false);
+    if (!segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id].empty()
+      && !segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id][0].empty())
+    {
+      segment_builder_.kin_del.component_data.component_centroids[refresh_component_id] = polygonCentroid(
+        segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id][0]);
+    }
+    segment_builder_.kin_del.component_data.component_last_updated[refresh_component_id] = radius->occurrence_time;
   }
 
   // Keep the same sign-change direction tag as beforeEvent.
