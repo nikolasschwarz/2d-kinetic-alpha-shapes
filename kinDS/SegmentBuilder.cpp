@@ -8367,8 +8367,8 @@ void kinDS::SegmentBuilder::splitComponent(
   kin_del.component_data.component_centroids.resize(new_size);
   kin_del.component_data.component_last_updated.resize(new_size);
 
-  std::vector<bool> he_visited(kin_del.getGraph().halfEdgeSlotCount(), false);
-
+  // Assign strand membership first and note the pending split (writes branches.txt) before boundary
+  // extraction, which can throw on malformed split-off pieces.
   for (size_t i = 0; i < new_components.size(); i++)
   {
     size_t cid = component_ids[i];
@@ -8379,15 +8379,46 @@ void kinDS::SegmentBuilder::splitComponent(
     }
 
     kin_del.component_data.components[cid] = new_components[i];
-    kin_del.component_data.component_boundaries[cid]
-      = kin_del.extractComponentBoundaries(new_components[i], t, he_visited, false, false);
-    kin_del.component_data.component_centroids[cid]
-      = polygonCentroid(kin_del.component_data.component_boundaries[cid][0]);
+
+    glm::dvec2 provisional_centroid { 0.0, 0.0 };
+    double provisional_weight = 0.0;
+    for (size_t strand_id : new_components[i])
+    {
+      if (kin_del.isDummyBoundary(strand_id))
+      {
+        continue;
+      }
+      provisional_centroid += kin_del.getPointAt(strand_id, t, false, false);
+      provisional_weight += 1.0;
+    }
+    if (provisional_weight > 0.0)
+    {
+      provisional_centroid /= provisional_weight;
+    }
+    kin_del.component_data.component_centroids[cid] = provisional_centroid;
     kin_del.component_data.component_last_updated[cid] = t;
   }
 
   kin_del.notePendingBranchSplit(
     component_id, t, pre_split_parent_strands, new_components, component_ids);
+
+  std::vector<bool> he_visited(kin_del.getGraph().halfEdgeSlotCount(), false);
+  for (size_t i = 0; i < new_components.size(); i++)
+  {
+    size_t cid = component_ids[i];
+    kin_del.component_data.component_boundaries[cid]
+      = kin_del.extractComponentBoundaries(new_components[i], t, he_visited, false, false);
+    if (!kin_del.component_data.component_boundaries[cid].empty()
+      && !kin_del.component_data.component_boundaries[cid][0].empty())
+    {
+      kin_del.component_data.component_centroids[cid]
+        = polygonCentroid(kin_del.component_data.component_boundaries[cid][0]);
+    }
+  }
+
+  // Refresh separation centroids now that polygon centroids are available, then enqueue separation.
+  kin_del.refreshPendingSplitSeparationCentroids(component_id);
+  kin_del.maybeScheduleSeparationOrApplyPendingSplit(component_id, t);
 }
 
 void SegmentBuilder::init()

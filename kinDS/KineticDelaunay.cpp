@@ -14,6 +14,7 @@
 #include "DebugExportFormatting.hpp"
 #include "VisualDebugHighlight.hpp"
 #include "SegmentBuilderVisualDebug.hpp"
+#include "PlaneProjector.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -103,6 +104,75 @@ const std::vector<size_t>* PendingBranchSplitState::frozenStrandsForStrand(size_
   }
 
   return nullptr;
+}
+
+void PostSplitFrameTransitionState::clear()
+{
+  transitions_.clear();
+  strand_transition_index_.clear();
+}
+
+void PostSplitFrameTransitionState::resetStrandLookup(size_t strand_count)
+{
+  strand_transition_index_.assign(strand_count, no_transition);
+}
+
+PostSplitFrameTransition& PostSplitFrameTransitionState::add(PostSplitFrameTransition transition)
+{
+  const size_t index = transitions_.size();
+  transitions_.push_back(std::move(transition));
+  PostSplitFrameTransition& stored = transitions_.back();
+  for (size_t strand_id : stored.strand_ids)
+  {
+    if (strand_id >= strand_transition_index_.size())
+    {
+      strand_transition_index_.resize(strand_id + 1, no_transition);
+    }
+    strand_transition_index_[strand_id] = index;
+  }
+  return stored;
+}
+
+const PostSplitFrameTransition* PostSplitFrameTransitionState::findForStrand(size_t strand_id) const
+{
+  if (strand_id >= strand_transition_index_.size())
+  {
+    return nullptr;
+  }
+  const size_t index = strand_transition_index_[strand_id];
+  if (index == no_transition || index >= transitions_.size())
+  {
+    return nullptr;
+  }
+  return &transitions_[index];
+}
+
+void PostSplitFrameTransitionState::expireBeforeHeight(size_t height)
+{
+  // Drop transitions whose blend section has fully finished (native from hold_end_height+1 onward).
+  // A transition with hold_end_height = S+1 / blend_section = S+1 is done once height >= S+2.
+  std::vector<PostSplitFrameTransition> kept;
+  kept.reserve(transitions_.size());
+  for (PostSplitFrameTransition& transition : transitions_)
+  {
+    if (height < transition.hold_end_height + 1)
+    {
+      kept.push_back(std::move(transition));
+    }
+  }
+  transitions_ = std::move(kept);
+  strand_transition_index_.assign(strand_transition_index_.size(), no_transition);
+  for (size_t index = 0; index < transitions_.size(); ++index)
+  {
+    for (size_t strand_id : transitions_[index].strand_ids)
+    {
+      if (strand_id >= strand_transition_index_.size())
+      {
+        strand_transition_index_.resize(strand_id + 1, no_transition);
+      }
+      strand_transition_index_[strand_id] = index;
+    }
+  }
 }
 
 namespace
@@ -1697,6 +1767,14 @@ size_t KineticDelaunay::getSharedReferenceBranchForStrands(
 
 size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
 {
+  const size_t section = static_cast<size_t>(std::floor(std::max(0.0, t)));
+  if (const PostSplitFrameTransition* transition = postSplitFrameTransitionForStrand(strand_id);
+    transition != nullptr && section < transition->hold_end_height)
+  {
+    // During the hold window, motion stays in the shared pre-split frame.
+    return transition->common_reference_branch;
+  }
+
   std::vector<size_t> pool;
   collectReferenceBranchStrandPool(strand_id, pool);
   const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, t);
@@ -1760,9 +1838,27 @@ Trajectory<2> KineticDelaunay::getSitePiecePolynomialForEventStrands(size_t stra
 {
   const double event_interval_upper_bound = eventIntervalUpperBound(schedule_time);
   Trajectory<2> base;
-  if (eventTriggerUsesSharedTransformedFrame(event_strand_ids, event_interval_upper_bound))
+
+  const PostSplitFrameTransition* transition = postSplitFrameTransitionForStrand(strand_id);
+  const bool transition_active
+    = transition != nullptr && section < transition->hold_end_height + 1;
+
+  if (transition_active && section < transition->hold_end_height)
   {
-    const size_t reference_branch = sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound);
+    // Hold: both piece endpoints in the shared pre-split frame.
+    base = branch_trajs.getPiecePolynomial(strand_id, section, transition->common_reference_branch);
+  }
+  else if (transition_active && section == transition->blend_section)
+  {
+    // Blend section [S+1, S+2]: common frame at S+1 → native branch frame at S+2.
+    const size_t native_ref = branch_trajs.getBranchIndex(strand_id, section + 1);
+    base = branch_trajs.getPiecePolynomialBlendingReference(
+      strand_id, section, transition->common_reference_branch, native_ref);
+  }
+  else if (eventTriggerUsesSharedTransformedFrame(event_strand_ids, event_interval_upper_bound))
+  {
+    const size_t reference_branch
+      = sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound);
     base = branch_trajs.getPiecePolynomial(strand_id, section, reference_branch);
   }
   else
@@ -1797,14 +1893,49 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
   {
     position = branch_trajs.evaluate(v, query_t);
   }
-  else if (frac < std::numeric_limits<double>::epsilon())
-  {
-    position = branch_trajs.getPointTransformed(v, section, reference_branch);
-  }
   else
   {
-    const Trajectory<2> piece = branch_trajs.getPiecePolynomial(v, section, reference_branch);
-    position = glm::dvec2(piece[0](frac), piece[1](frac));
+    const PostSplitFrameTransition* transition = postSplitFrameTransitionForStrand(v);
+    const bool transition_active
+      = transition != nullptr && section < transition->hold_end_height + 1;
+
+    if (transition_active && section < transition->hold_end_height)
+    {
+      if (frac < std::numeric_limits<double>::epsilon())
+      {
+        position = branch_trajs.getPointTransformed(v, section, transition->common_reference_branch);
+      }
+      else
+      {
+        const Trajectory<2> piece
+          = branch_trajs.getPiecePolynomial(v, section, transition->common_reference_branch);
+        position = glm::dvec2(piece[0](frac), piece[1](frac));
+      }
+    }
+    else if (transition_active && section == transition->blend_section)
+    {
+      const size_t native_ref = branch_trajs.getBranchIndex(v, section + 1);
+      if (frac < std::numeric_limits<double>::epsilon())
+      {
+        position = branch_trajs.getPointTransformedAtSection(
+          v, section, transition->common_reference_branch, section);
+      }
+      else
+      {
+        const Trajectory<2> piece = branch_trajs.getPiecePolynomialBlendingReference(
+          v, section, transition->common_reference_branch, native_ref);
+        position = glm::dvec2(piece[0](frac), piece[1](frac));
+      }
+    }
+    else if (frac < std::numeric_limits<double>::epsilon())
+    {
+      position = branch_trajs.getPointTransformed(v, section, reference_branch);
+    }
+    else
+    {
+      const Trajectory<2> piece = branch_trajs.getPiecePolynomial(v, section, reference_branch);
+      position = glm::dvec2(piece[0](frac), piece[1](frac));
+    }
   }
 
   if (include_virtual_offset)
@@ -1847,9 +1978,29 @@ Trajectory<2> KineticDelaunay::getSitePiecePolynomialWithReferenceBranch(
 
 Trajectory<2> KineticDelaunay::getSitePiecePolynomial(size_t strand_id, size_t section, double schedule_time) const
 {
-  const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
-  const size_t reference_branch = getReferenceBranch(strand_id, branch_lookup_time);
-  return getSitePiecePolynomialWithReferenceBranch(strand_id, section, reference_branch, schedule_time);
+  const PostSplitFrameTransition* transition = postSplitFrameTransitionForStrand(strand_id);
+  const bool transition_active
+    = transition != nullptr && section < transition->hold_end_height + 1;
+
+  Trajectory<2> base;
+  if (transition_active && section < transition->hold_end_height)
+  {
+    base = branch_trajs.getPiecePolynomial(strand_id, section, transition->common_reference_branch);
+  }
+  else if (transition_active && section == transition->blend_section)
+  {
+    const size_t native_ref = branch_trajs.getBranchIndex(strand_id, section + 1);
+    base = branch_trajs.getPiecePolynomialBlendingReference(
+      strand_id, section, transition->common_reference_branch, native_ref);
+  }
+  else
+  {
+    const double branch_lookup_time = referenceBranchLookupTimeForSection(section, schedule_time);
+    const size_t reference_branch = getReferenceBranch(strand_id, branch_lookup_time);
+    base = branch_trajs.getPiecePolynomial(strand_id, section, reference_branch);
+  }
+
+  return addSeparationOffsetToPiecePolynomial(base, strand_id, section, schedule_time);
 }
 
 std::vector<glm::dvec2> KineticDelaunay::getPointsAt(
@@ -1876,6 +2027,11 @@ void KineticDelaunay::setVisualDebugOutputRoot(const std::filesystem::path& root
 {
   visual_debug_output_root_ = root;
   runtime_branch_log_header_written_ = false;
+
+  // Truncate any previous run's log so appends in logRuntimeBranchEvent start fresh.
+  std::error_code ec;
+  std::filesystem::create_directories(root, ec);
+  std::ofstream clear_log(root / "branches.txt", std::ios::trunc);
 }
 
 void KineticDelaunay::setVisualDebugEnabled(bool enabled)
@@ -1947,6 +2103,7 @@ void KineticDelaunay::logRuntimeBranchEvent(double t, const std::string& event_l
   }
 
   out << "t=" << std::fixed << std::setprecision(6) << t << ' ' << event_line << '\n';
+  out.flush();
 }
 
 const std::optional<std::filesystem::path>& KineticDelaunay::getVisualDebugOutputRoot() const
@@ -2031,7 +2188,8 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
   }
 
   PendingBranchSplit& split = pending_branch_splits_.getOrCreate(parent_component_id);
-  if (split.frozen_parent_strands.empty())
+  const bool first_note_for_parent = split.frozen_parent_strands.empty();
+  if (first_note_for_parent)
   {
     split.reference_vertex = pre_split_parent_strands.front();
     split.frozen_parent_strands = pre_split_parent_strands;
@@ -2040,14 +2198,37 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
   pending_branch_splits_.registerStrandsForSplit(parent_component_id, new_components);
   split.split_component_ids = split_component_ids;
 
-  // Mirror the pending split into the runtime-branch structure: allocate a runtime branch id for each future
-  // split-off piece, record its parent lineage and strand membership, and register the pending-split lookup so the
-  // strands of the still-connected (incomplete) sub-branches can be found before the graph is actually cut.
+  // Mirror the pending split into the runtime-branch structure and write branches.txt before post-split
+  // frame registration / separation scheduling (those paths can throw).
   const size_t parent_branch = runtime_branch_data_.branchForStrand(split.reference_vertex);
   if (parent_branch != RuntimeBranchData::no_branch && split_component_ids.size() >= 2
     && runtime_branch_data_.pendingChildBranches(parent_branch) == nullptr)
   {
+    const size_t branch_section = [&]()
+    {
+      const size_t height = branch_trajs.getHeight();
+      if (height == 0)
+      {
+        return size_t { 0 };
+      }
+      size_t section_index = static_cast<size_t>(std::ceil(split_time));
+      if (section_index >= height)
+      {
+        section_index = height - 1;
+      }
+      return section_index;
+    }();
+
+    {
+      std::ostringstream line;
+      line << "event=pending_split parent_component=" << parent_component_id << " parent_runtime=" << parent_branch
+           << " piece_count=" << split_component_ids.size() << " section=" << branch_section;
+      logRuntimeBranchEvent(split_time, line.str());
+    }
+
     std::vector<size_t> child_branches;
+    // Multiple kinetic components of the same input branch share one pending-split child runtime branch.
+    std::unordered_map<size_t, size_t> input_branch_to_child_runtime;
     for (size_t i = 1; i < split_component_ids.size(); ++i)
     {
       const size_t split_off_component = split_component_ids[i];
@@ -2056,7 +2237,36 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
         continue;
       }
 
-      const size_t child_branch = runtime_branch_data_.allocate(parent_branch);
+      std::optional<size_t> child_input_branch;
+      for (size_t strand_id : component_data.components[split_off_component])
+      {
+        if (isDummyBoundary(strand_id))
+        {
+          continue;
+        }
+        child_input_branch = branch_trajs.getBranchIndex(strand_id, branch_section);
+        break;
+      }
+      if (!child_input_branch.has_value())
+      {
+        continue;
+      }
+
+      size_t child_branch = RuntimeBranchData::no_branch;
+      const auto existing = input_branch_to_child_runtime.find(child_input_branch.value());
+      bool allocated_new_child = false;
+      if (existing != input_branch_to_child_runtime.end())
+      {
+        child_branch = existing->second;
+      }
+      else
+      {
+        child_branch = runtime_branch_data_.allocate(parent_branch);
+        input_branch_to_child_runtime.emplace(child_input_branch.value(), child_branch);
+        child_branches.push_back(child_branch);
+        allocated_new_child = true;
+      }
+
       // Reassign the split-off strands to the child runtime branch now, so runtime branch ids distinguish the future
       // sub-branches while the graph is still connected. Motion frames use component data (not the runtime branch
       // map), so this does not perturb geometry; the child ids are re-derived (and reused) at the graph cut.
@@ -2070,11 +2280,15 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
         runtime_branch_data_.branch_map[strand_id] = child_branch;
         ++assigned_strand_count;
       }
-      child_branches.push_back(child_branch);
 
       std::ostringstream line;
       line << "event=pending_split_child id=" << child_branch << " parent=" << parent_branch
-           << " component=" << split_off_component << " strand_count=" << assigned_strand_count;
+           << " component=" << split_off_component << " strand_count=" << assigned_strand_count
+           << " input_branch=" << child_input_branch.value() << " section=" << branch_section;
+      if (!allocated_new_child)
+      {
+        line << " reused=1";
+      }
       logRuntimeBranchEvent(split_time, line.str());
     }
     if (!child_branches.empty())
@@ -2085,55 +2299,67 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
     }
   }
 
-  if (split_component_ids.size() >= 2)
+  if (first_note_for_parent)
   {
-    const auto weightedCentroid = [&](size_t begin, size_t end) -> std::optional<glm::dvec2> {
-      glm::dvec2 weighted_sum(0.0);
-      double total_weight = 0.0;
-      for (size_t i = begin; i < end; ++i)
-      {
-        const size_t component_id = split_component_ids[i];
-        if (component_id >= component_data.component_centroids.size()
-          || component_id >= component_data.components.size())
-        {
-          continue;
-        }
-
-        double weight = 0.0;
-        for (size_t strand_id : component_data.components[component_id])
-        {
-          if (!isDummyBoundary(strand_id))
-          {
-            ++weight;
-          }
-        }
-        if (weight <= 0.0)
-        {
-          continue;
-        }
-
-        weighted_sum += weight * component_data.component_centroids[component_id];
-        total_weight += weight;
-      }
-      if (total_weight <= 0.0)
-      {
-        return std::nullopt;
-      }
-      return weighted_sum / total_weight;
-    };
-
-    const std::optional<glm::dvec2> old_centroid = weightedCentroid(0, 1);
-    const std::optional<glm::dvec2> new_centroid
-      = weightedCentroid(1, split_component_ids.size());
-    if (old_centroid.has_value() && new_centroid.has_value())
-    {
-      split.old_branch_centroid = old_centroid.value();
-      split.new_branch_centroid = new_centroid.value();
-      split.separation_direction = new_centroid.value() - old_centroid.value();
-    }
+    registerPostSplitFrameTransition(parent_component_id, split_time, pre_split_parent_strands);
   }
 
-  maybeScheduleSeparationOrApplyPendingSplit(parent_component_id, split_time);
+  refreshPendingSplitSeparationCentroids(parent_component_id);
+}
+
+void KineticDelaunay::refreshPendingSplitSeparationCentroids(size_t parent_component_id)
+{
+  auto it = pending_branch_splits_.by_parent_.find(parent_component_id);
+  if (it == pending_branch_splits_.by_parent_.end() || it->second.split_component_ids.size() < 2)
+  {
+    return;
+  }
+
+  PendingBranchSplit& split = it->second;
+  const auto weightedCentroid = [&](size_t begin, size_t end) -> std::optional<glm::dvec2>
+  {
+    glm::dvec2 weighted_sum(0.0);
+    double total_weight = 0.0;
+    for (size_t i = begin; i < end; ++i)
+    {
+      const size_t component_id = split.split_component_ids[i];
+      if (component_id >= component_data.component_centroids.size()
+        || component_id >= component_data.components.size())
+      {
+        continue;
+      }
+
+      double weight = 0.0;
+      for (size_t strand_id : component_data.components[component_id])
+      {
+        if (!isDummyBoundary(strand_id))
+        {
+          ++weight;
+        }
+      }
+      if (weight <= 0.0)
+      {
+        continue;
+      }
+
+      weighted_sum += weight * component_data.component_centroids[component_id];
+      total_weight += weight;
+    }
+    if (total_weight <= 0.0)
+    {
+      return std::nullopt;
+    }
+    return weighted_sum / total_weight;
+  };
+
+  const std::optional<glm::dvec2> old_centroid = weightedCentroid(0, 1);
+  const std::optional<glm::dvec2> new_centroid = weightedCentroid(1, split.split_component_ids.size());
+  if (old_centroid.has_value() && new_centroid.has_value())
+  {
+    split.old_branch_centroid = old_centroid.value();
+    split.new_branch_centroid = new_centroid.value();
+    split.separation_direction = new_centroid.value() - old_centroid.value();
+  }
 }
 
 // Enqueue separation at split_time (after any remaining radius events at that time) instead of handling
@@ -2490,8 +2716,10 @@ void KineticDelaunay::applyPendingComponentGraphSplit(double t)
     // Pass occurrence time only for full visual-debug dumps (not --error-files alone).
     const std::optional<double> branch_split_debug_time
       = isVisualDebugEnabled() ? std::optional<double>(t) : std::nullopt;
+    // Cut by runtime branch (assigned in notePendingBranchSplit), not kinetic components:
+    // one pending-split child may span multiple components that must stay connected.
     graph.applyRuntimeBranchSplit(
-      component_data.component_map, [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time);
+      getRuntimeBranchMap(), [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time);
     onGraphCutApplied(t, prev_face_slots, prev_he_slots);
   }
   prev_component_count = component_data.components.size();
@@ -2954,7 +3182,198 @@ void KineticDelaunay::clearPendingBranchSplits()
   pending_branch_splits_.clear();
   // The split has been executed (graph cut/retriangulation): drop the pending-split lookup entries. Runtime branch
   // membership is re-derived from live-graph connectivity by the caller.
+  // Post-split frame hold/blend state is intentionally retained until after the blend section.
   runtime_branch_data_.pending_splits.clear();
+}
+
+void KineticDelaunay::registerUpcomingPostSplitFrameTransitions(size_t section_index)
+{
+  const size_t tree_height = branch_trajs.getHeight();
+  const size_t hold_end_height = section_index + 1;
+  if (tree_height == 0 || hold_end_height >= tree_height)
+  {
+    return;
+  }
+
+  for (size_t component_id = 0; component_id < component_data.components.size(); ++component_id)
+  {
+    std::vector<size_t> live_strands;
+    live_strands.reserve(component_data.components[component_id].size());
+    for (size_t strand_id : component_data.components[component_id])
+    {
+      if (!isDummyBoundary(strand_id))
+      {
+        live_strands.push_back(strand_id);
+      }
+    }
+    if (live_strands.size() < 2)
+    {
+      continue;
+    }
+
+    std::vector<size_t> distinct_branches_at_end;
+    distinct_branches_at_end.reserve(live_strands.size());
+    for (size_t strand_id : live_strands)
+    {
+      const size_t input_branch = branch_trajs.getBranchIndex(strand_id, hold_end_height);
+      if (std::find(distinct_branches_at_end.begin(), distinct_branches_at_end.end(), input_branch)
+        == distinct_branches_at_end.end())
+      {
+        distinct_branches_at_end.push_back(input_branch);
+      }
+    }
+    if (distinct_branches_at_end.size() <= 1)
+    {
+      continue;
+    }
+
+    bool already_registered = false;
+    for (size_t strand_id : live_strands)
+    {
+      if (const PostSplitFrameTransition* existing = postSplitFrameTransitionForStrand(strand_id);
+        existing != nullptr && existing->hold_end_height == hold_end_height)
+      {
+        already_registered = true;
+        break;
+      }
+    }
+    if (already_registered)
+    {
+      continue;
+    }
+
+    // Parent/common frame at the section start; endpoints at hold_end_height map into this frame.
+    const size_t common_reference_branch = minInputBranchForStrands(live_strands, section_index);
+
+    PostSplitFrameTransition transition;
+    transition.parent_component_id = component_id;
+    transition.common_reference_branch = common_reference_branch;
+    transition.hold_end_height = hold_end_height;
+    transition.blend_section = hold_end_height;
+    transition.strand_ids = std::move(live_strands);
+    PostSplitFrameTransition& stored = post_split_frame_transitions_.add(std::move(transition));
+    maybeWarnPostSplitFrameBlendRotation(stored);
+  }
+}
+
+void KineticDelaunay::registerPostSplitFrameTransition(size_t parent_component_id, double split_time,
+  const std::vector<size_t>& affected_strands)
+{
+  if (affected_strands.empty() || !std::isfinite(split_time) || split_time < 0.0)
+  {
+    return;
+  }
+
+  const size_t split_section = static_cast<size_t>(std::floor(split_time));
+  const size_t hold_end_height = split_section + 1;
+  const size_t tree_height = branch_trajs.getHeight();
+  if (tree_height == 0 || hold_end_height >= tree_height)
+  {
+    // Need a full blend section [hold_end, hold_end+1] inside the tree.
+    return;
+  }
+
+  for (size_t strand_id : affected_strands)
+  {
+    if (const PostSplitFrameTransition* existing = postSplitFrameTransitionForStrand(strand_id);
+      existing != nullptr && existing->hold_end_height == hold_end_height)
+    {
+      // Section lookahead already registered the hold for this split window.
+      return;
+    }
+  }
+
+  const size_t common_reference_branch
+    = minInputBranchForStrands(affected_strands, branchLookupHeightForTime(branch_trajs, split_time));
+
+  PostSplitFrameTransition transition;
+  transition.parent_component_id = parent_component_id;
+  transition.common_reference_branch = common_reference_branch;
+  transition.hold_end_height = hold_end_height;
+  transition.blend_section = hold_end_height;
+  transition.strand_ids = affected_strands;
+  PostSplitFrameTransition& stored = post_split_frame_transitions_.add(std::move(transition));
+  maybeWarnPostSplitFrameBlendRotation(stored);
+}
+
+const PostSplitFrameTransition* KineticDelaunay::postSplitFrameTransitionForStrand(size_t strand_id) const
+{
+  return post_split_frame_transitions_.findForStrand(strand_id);
+}
+
+void KineticDelaunay::maybeWarnPostSplitFrameBlendRotation(PostSplitFrameTransition& transition) const
+{
+  if (transition.rotation_warning_emitted)
+  {
+    return;
+  }
+
+  const size_t seam_height = transition.hold_end_height;
+  const size_t native_height = transition.hold_end_height + 1;
+  if (seam_height >= branch_trajs.getHeight() || native_height > branch_trajs.getHeight())
+  {
+    return;
+  }
+  if (transition.common_reference_branch >= branch_trajs.getBranchCount(seam_height))
+  {
+    return;
+  }
+
+  const glm::dmat4& common_transform
+    = branch_trajs.getTransformByHeightAndBranch(seam_height, transition.common_reference_branch);
+
+  std::unordered_set<size_t> native_branches;
+  for (size_t strand_id : transition.strand_ids)
+  {
+    if (isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+    native_branches.insert(branch_trajs.getBranchIndex(strand_id, native_height));
+  }
+
+  double max_abs_degrees = 0.0;
+  size_t max_native_branch = transition.common_reference_branch;
+  for (size_t native_branch : native_branches)
+  {
+    if (native_branch == transition.common_reference_branch)
+    {
+      continue;
+    }
+    if (native_branch >= branch_trajs.getBranchCount(native_height))
+    {
+      continue;
+    }
+
+    // Relative in-plane rotation: how the common-frame +x axis maps into the native frame at the blend end height.
+    const glm::dmat4& native_transform
+      = branch_trajs.getTransformByHeightAndBranch(native_height, native_branch);
+    const PlaneProjector projector(common_transform, native_transform);
+    const glm::dvec2 origin_native = projector.project(glm::dvec2(0.0, 0.0));
+    const glm::dvec2 x_axis_native = projector.project(glm::dvec2(1.0, 0.0)) - origin_native;
+    const double len2 = glm::dot(x_axis_native, x_axis_native);
+    if (len2 <= 1e-24)
+    {
+      continue;
+    }
+    const double angle_rad = std::atan2(x_axis_native.y, x_axis_native.x);
+    const double angle_deg = angle_rad * (180.0 / 3.14159265358979323846);
+    if (std::abs(angle_deg) > std::abs(max_abs_degrees))
+    {
+      max_abs_degrees = angle_deg;
+      max_native_branch = native_branch;
+    }
+  }
+
+  transition.rotation_warning_emitted = true;
+  if (std::abs(max_abs_degrees) > kPostSplitFrameBlendRotationWarnDegrees)
+  {
+    KINDS_WARNING("Post-split frame blend rotation "
+      << max_abs_degrees << " deg exceeds threshold " << kPostSplitFrameBlendRotationWarnDegrees
+      << " deg (common_branch=" << transition.common_reference_branch << ", native_branch=" << max_native_branch
+      << ", hold_end_height=" << transition.hold_end_height << ", blend_section=" << transition.blend_section
+      << ", parent_component=" << transition.parent_component_id << ")");
+  }
 }
 
 size_t KineticDelaunay::minInputBranchForComponent(size_t component_id, size_t branch_lookup_height) const
@@ -3159,7 +3578,6 @@ void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t, const char* 
 
   const size_t section_index = runtimeBranchSectionIndex(*this, t);
   const std::vector<std::vector<size_t>> graph_components = extractGraphConnectedComponents();
-  std::vector<bool> claimed_runtime_branch(runtime_branch_data_.next_branch_id, false);
 
   for (size_t component_index = 0; component_index < graph_components.size(); ++component_index)
   {
@@ -3207,9 +3625,10 @@ void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t, const char* 
 
     size_t runtime_branch = 0;
     bool reused_existing = false;
-    if (component_runtime_id.has_value() && component_runtime_id.value() < claimed_runtime_branch.size()
-      && !claimed_runtime_branch[component_runtime_id.value()]
-      && component_runtime_id.value() < runtime_branch_data_.alive.size()
+    // If every strand in this graph component already shares one designated runtime branch id (e.g. a pending-split
+    // child that spanned multiple kinetic pieces), keep that id across disconnected pieces. Do not allocate a fresh
+    // runtime branch per graph component.
+    if (component_runtime_id.has_value() && component_runtime_id.value() < runtime_branch_data_.alive.size()
       && runtime_branch_data_.alive[component_runtime_id.value()])
     {
       runtime_branch = component_runtime_id.value();
@@ -3219,12 +3638,6 @@ void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t, const char* 
     {
       runtime_branch = allocateRuntimeBranch();
     }
-
-    if (runtime_branch >= claimed_runtime_branch.size())
-    {
-      claimed_runtime_branch.resize(runtime_branch + 1, false);
-    }
-    claimed_runtime_branch[runtime_branch] = true;
 
     for (size_t strand_id : component)
     {
@@ -3483,6 +3896,140 @@ void KineticDelaunay::validateCrossingIntersectionInvariants(const char* context
 void KineticDelaunay::validateVoronoiVertexIteratorInvariants(const char* context, double t) const
 {
   crossing_data.validateVoronoiVertexIteratorInvariants(context, graph, this, t);
+}
+
+void KineticDelaunay::validateSitesInsideConvexHull(const char* context, double t) const
+{
+  if (!sites_inside_convex_hull_check_enabled_)
+  {
+    return;
+  }
+
+  constexpr double kHullContainmentEps = 1e-9;
+  const auto cross2 = [](const glm::dvec2& u, const glm::dvec2& v) { return u.x * v.y - u.y * v.x; };
+  const auto signed_area2 = [&](const std::vector<glm::dvec2>& poly)
+  {
+    double area2 = 0.0;
+    for (size_t i = 0; i < poly.size(); ++i)
+    {
+      const glm::dvec2& p0 = poly[i];
+      const glm::dvec2& p1 = poly[(i + 1) % poly.size()];
+      area2 += cross2(p0, p1);
+    }
+    return area2;
+  };
+  // Convex hull edges from the graph are oriented so the infinite face is to the left of the outside half-edge
+  // walk; for containment we want the finite component on the left, so reverse if needed.
+  const auto point_inside_or_on_convex = [&](const glm::dvec2& p, const std::vector<glm::dvec2>& poly_ccw) -> bool
+  {
+    for (size_t i = 0; i < poly_ccw.size(); ++i)
+    {
+      const glm::dvec2& a = poly_ccw[i];
+      const glm::dvec2& b = poly_ccw[(i + 1) % poly_ccw.size()];
+      if (cross2(b - a, p - a) < -kHullContainmentEps)
+      {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const std::vector<std::vector<size_t>> components = extractGraphConnectedComponents();
+  for (size_t component_index = 0; component_index < components.size(); ++component_index)
+  {
+    const std::vector<size_t>& component = components[component_index];
+    if (component.size() < 3)
+    {
+      continue;
+    }
+
+    size_t start_he = static_cast<size_t>(-1);
+    for (size_t vertex_id : component)
+    {
+      for (auto it = graph.incidentEdgesBegin(vertex_id); it != graph.incidentEdgesEnd(vertex_id); ++it)
+      {
+        const size_t he_id = *it;
+        if (graph.isOnConvexBoundaryOutside(he_id))
+        {
+          start_he = he_id;
+          break;
+        }
+      }
+      if (start_he != static_cast<size_t>(-1))
+      {
+        break;
+      }
+    }
+    if (start_he == static_cast<size_t>(-1))
+    {
+      KINDS_WARNING("Sites-in-hull check (" << (context ? context : "?") << "): component " << component_index
+                                           << " at t=" << t << " has no outside convex-hull half-edge");
+      continue;
+    }
+
+    std::vector<size_t> hull_vertex_ids;
+    size_t he_id = start_he;
+    do
+    {
+      const int origin = graph.halfEdge(he_id).origin;
+      if (origin < 0)
+      {
+        KINDS_WARNING("Sites-in-hull check (" << (context ? context : "?") << "): infinite origin on hull he="
+                                             << he_id << " at t=" << t);
+        hull_vertex_ids.clear();
+        break;
+      }
+      hull_vertex_ids.push_back(static_cast<size_t>(origin));
+      he_id = graph.nextOnConvexBoundaryId(he_id);
+      if (!graph.isLiveHalfEdge(he_id) || !graph.isOnConvexBoundaryOutside(he_id))
+      {
+        KINDS_WARNING("Sites-in-hull check (" << (context ? context : "?") << "): broken hull walk from he="
+                                             << start_he << " at t=" << t);
+        hull_vertex_ids.clear();
+        break;
+      }
+    } while (he_id != start_he);
+
+    if (hull_vertex_ids.size() < 3)
+    {
+      continue;
+    }
+
+    const size_t reference_branch = getSharedReferenceBranchForStrands(component, t);
+    std::vector<glm::dvec2> hull_poly;
+    hull_poly.reserve(hull_vertex_ids.size());
+    for (size_t vertex_id : hull_vertex_ids)
+    {
+      hull_poly.push_back(getPointInDelaunaySpace(vertex_id, t, reference_branch));
+    }
+    if (signed_area2(hull_poly) < 0.0)
+    {
+      std::reverse(hull_poly.begin(), hull_poly.end());
+    }
+
+    for (size_t site_id : component)
+    {
+      const glm::dvec2 site_p = getPointInDelaunaySpace(site_id, t, reference_branch);
+      if (point_inside_or_on_convex(site_p, hull_poly))
+      {
+        continue;
+      }
+
+      double worst_cross = 0.0;
+      for (size_t i = 0; i < hull_poly.size(); ++i)
+      {
+        const glm::dvec2& a = hull_poly[i];
+        const glm::dvec2& b = hull_poly[(i + 1) % hull_poly.size()];
+        worst_cross = std::min(worst_cross, cross2(b - a, site_p - a));
+      }
+
+      KINDS_WARNING("Sites-in-hull FAIL (" << (context ? context : "?") << "): site " << site_id
+                                          << " outside graph convex hull of component " << component_index
+                                          << " at t=" << std::setprecision(17) << t << " pos=(" << site_p.x << ","
+                                          << site_p.y << ") worst_edge_cross=" << worst_cross
+                                          << " (possible incorrect CCW flip)");
+    }
+  }
 }
 
 namespace
@@ -3953,11 +4500,45 @@ void kinDS::assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
         descriptor << "_oppvv" << opposite_voronoi_vertex.value();
       }
 
-      // Prefer highlight-based branch inference. Do NOT use getRuntimeBranchIdForHalfEdge here: after flips /
-      // tombstones it often falls back to branch 0, and a wrong preferred id wins the write path so highlights
-      // are clipped away.
-      writeSegmentBuilderVisualDebugSvg(
-        true, kd_mut, graph, t, "error", descriptor.str(), highlight, /*event_runtime_branch_id=*/std::nullopt);
+      // Route by the Delaunay edge's two site endpoints. Do not rely on highlight inference: this dump also
+      // marks Voronoi faces/edges whose vertices can span multiple runtime branches, which used to fan the
+      // SVG out to every active branch folder. With --svg-separate-pending-splits, endpoints on different
+      // pending children get a duplicate in each folder; otherwise both collapse to the unsplit parent.
+      std::vector<size_t> endpoint_runtime_branch_ids;
+      const bool separate_pending_splits = kd_mut.visualDebugSeparatePendingSplits();
+      auto add_endpoint_branch = [&](int vertex)
+      {
+        if (vertex < 0 || kd_mut.isDummyBoundary(static_cast<size_t>(vertex)))
+        {
+          return;
+        }
+        const size_t strand_id = static_cast<size_t>(vertex);
+        const size_t raw_branch_id = kd_mut.getRuntimeBranchData().branchForStrand(strand_id);
+        if (raw_branch_id == KineticDelaunay::RuntimeBranchData::no_branch)
+        {
+          return;
+        }
+        const size_t folder_branch_id
+          = separate_pending_splits ? raw_branch_id : kd_mut.unsplitRuntimeBranchId(raw_branch_id);
+        if (std::find(endpoint_runtime_branch_ids.begin(), endpoint_runtime_branch_ids.end(), folder_branch_id)
+          == endpoint_runtime_branch_ids.end())
+        {
+          endpoint_runtime_branch_ids.push_back(folder_branch_id);
+        }
+      };
+      if (de_even + 1 < graph.halfEdgeSlotCount())
+      {
+        add_endpoint_branch(graph.halfEdge(de_even).origin);
+        add_endpoint_branch(graph.halfEdge(de_even ^ 1).origin);
+      }
+
+      const std::optional<size_t> preferred_branch = !endpoint_runtime_branch_ids.empty()
+        ? std::optional<size_t>(endpoint_runtime_branch_ids.front())
+        : std::nullopt;
+      const std::vector<size_t>* explicit_branches
+        = endpoint_runtime_branch_ids.empty() ? nullptr : &endpoint_runtime_branch_ids;
+      writeSegmentBuilderVisualDebugSvg(true, kd_mut, graph, t, "error", descriptor.str(), highlight,
+        preferred_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, explicit_branches);
     }
   }
 }
@@ -4164,6 +4745,13 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
       }
     }
 
+    if(max_s_index == static_cast<size_t>(-1))
+    {
+      KINDS_ERROR("computeCrossedHalfEdges: no valid edge intersection found for line from "
+                  << glm::to_string(start_point) << " to " << glm::to_string(destination) << " in triangle "
+                  << next_face_id << ", start face: " << start_face_id << ". Crossed edges: " << crossed_half_edge_ids.size());
+      break;
+    }
     next_crossed_edge_id = next_tri_half_edges[max_s_index];
     next_face_id = graph.halfEdge(next_crossed_edge_id ^ 1).face;
     // Record the edge we are about to cross
@@ -5385,17 +5973,127 @@ std::vector<size_t> KineticDelaunay::extractGraphConnectedComponent(size_t u, st
 
 const std::vector<glm::dvec2>& KineticDelaunay::getDummyBoundary() const { return dummy_boundary; }
 
-std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(const std::array<int, 3>& tri_vertices) const
+std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(const std::array<int, 3>& tri_vertices, double t) const
 {
-  return checkForSplit(tri_vertices, face_inside);
+  return checkForSplit(tri_vertices, face_inside, t);
 }
 
 std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
-  const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state) const
+  const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state, double t) const
 {
-  std::vector<std::vector<size_t>> components;
-  std::vector<bool> visited(graph.getVertexCount(), false);
+  if (tri_vertices[0] < 0 || tri_vertices[1] < 0 || tri_vertices[2] < 0)
+  {
+    return {};
+  }
 
+  const size_t seed0 = static_cast<size_t>(tri_vertices[0]);
+  if (seed0 >= component_data.component_map.size())
+  {
+    return {};
+  }
+  const size_t parent_component_id = component_data.component_map[seed0];
+  if (parent_component_id >= component_data.components.size())
+  {
+    return {};
+  }
+
+  const std::vector<size_t>& parent_strands = component_data.components[parent_component_id];
+  if (parent_strands.size() < 2)
+  {
+    return {};
+  }
+
+  // Match isMinimalInputBranchTriangle: branch membership for the kinetic interval around t.
+  const size_t section = static_cast<size_t>(std::ceil(t));
+  const auto& strands_by_branch = branch_trajs.getStrandsByBranchId();
+  if (section >= strands_by_branch.size())
+  {
+    return {};
+  }
+
+  const auto input_branch_of = [&](size_t strand_id) -> size_t
+  { return branch_trajs.getBranchIndex(strand_id, section); };
+
+  // Strands of each input branch that still belong to this kinetic component.
+  std::unordered_map<size_t, std::vector<size_t>> strands_by_input_branch;
+  strands_by_input_branch.reserve(parent_strands.size());
+  for (size_t strand_id : parent_strands)
+  {
+    if (isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+    strands_by_input_branch[input_branch_of(strand_id)].push_back(strand_id);
+  }
+  if (strands_by_input_branch.size() < 2)
+  {
+    // A single input branch cannot initiate a pending split.
+    return {};
+  }
+
+  // An input branch is isolated only if a component-limited search from *all* of its strands never reaches a
+  // strand of another input branch. A lone disconnected strand of a still-mixed branch must not trigger.
+  std::vector<size_t> isolated_input_branches;
+  isolated_input_branches.reserve(strands_by_input_branch.size());
+  std::vector<bool> branch_search_visited(graph.getVertexCount(), false);
+  for (const auto& [input_branch, branch_strands] : strands_by_input_branch)
+  {
+    if (branch_strands.empty())
+    {
+      continue;
+    }
+
+    std::fill(branch_search_visited.begin(), branch_search_visited.end(), false);
+    std::vector<size_t> queue;
+    queue.reserve(branch_strands.size());
+    for (size_t strand_id : branch_strands)
+    {
+      if (strand_id >= branch_search_visited.size())
+      {
+        continue;
+      }
+      branch_search_visited[strand_id] = true;
+      queue.push_back(strand_id);
+    }
+
+    bool found_foreign = false;
+    size_t head = 0;
+    while (head < queue.size() && !found_foreign)
+    {
+      const size_t v = queue[head++];
+      for (size_t w : graph.inducedNeighbors(v, inside_state))
+      {
+        if (w >= graph.getVertexCount() || isDummyBoundary(w))
+        {
+          continue;
+        }
+        if (input_branch_of(w) != input_branch)
+        {
+          found_foreign = true;
+          break;
+        }
+        if (!branch_search_visited[w])
+        {
+          branch_search_visited[w] = true;
+          queue.push_back(w);
+        }
+      }
+    }
+
+    if (!found_foreign)
+    {
+      isolated_input_branches.push_back(input_branch);
+    }
+  }
+
+  if (isolated_input_branches.empty())
+  {
+    return {};
+  }
+
+  // Keep induced connected components separate for kinetic component_data. Runtime-branch children are
+  // deduplicated per input branch later in notePendingBranchSplit.
+  std::vector<bool> visited(graph.getVertexCount(), false);
   const auto extract_component = [&](size_t seed)
   {
     std::vector<size_t> component;
@@ -5408,30 +6106,47 @@ std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
       component.push_back(v);
       for (size_t w : graph.inducedNeighbors(v, inside_state))
       {
-        if (!visited[w])
+        if (w >= graph.getVertexCount() || visited[w] || isDummyBoundary(w))
         {
-          visited[w] = true;
-          queue.push_back(w);
+          continue;
         }
+        visited[w] = true;
+        queue.push_back(w);
       }
     }
     return component;
   };
 
-  components.push_back(extract_component(static_cast<size_t>(tri_vertices[0])));
-  if (visited[static_cast<size_t>(tri_vertices[1])] && visited[static_cast<size_t>(tri_vertices[2])])
+  std::vector<std::vector<size_t>> components;
+  for (size_t strand_id : parent_strands)
+  {
+    if (strand_id >= visited.size() || visited[strand_id] || isDummyBoundary(strand_id))
+    {
+      if (strand_id < visited.size())
+      {
+        visited[strand_id] = true;
+      }
+      continue;
+    }
+    components.push_back(extract_component(strand_id));
+  }
+
+  if (components.size() < 2)
   {
     return {};
   }
 
-  if (!visited[static_cast<size_t>(tri_vertices[1])])
+  // Prefer the piece that contains the radius-triangle seed as components[0] (retained parent id).
+  for (size_t i = 0; i < components.size(); ++i)
   {
-    components.push_back(extract_component(static_cast<size_t>(tri_vertices[1])));
-  }
-
-  if (!visited[static_cast<size_t>(tri_vertices[2])])
-  {
-    components.push_back(extract_component(static_cast<size_t>(tri_vertices[2])));
+    if (std::find(components[i].begin(), components[i].end(), seed0) != components[i].end())
+    {
+      if (i != 0)
+      {
+        std::swap(components[0], components[i]);
+      }
+      break;
+    }
   }
 
   return components;

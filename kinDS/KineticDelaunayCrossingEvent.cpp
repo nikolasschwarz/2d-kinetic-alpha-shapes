@@ -760,6 +760,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
   // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
   kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", occurrence_time);
   kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", occurrence_time);
+  kd->validateSitesInsideConvexHull("CrossingEvent:afterEvent", occurrence_time);
 
   // Re-compute crossing events for this Voronoi vertex
   kd->crossing_event_manager_->computeEvents(occurrence_time, voronoi_vertex_id);

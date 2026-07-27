@@ -603,7 +603,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     radius->occurrence_time, "before",
     "radius_he" + std::to_string(radius->half_edge_id) + "_" + radius_transition_tag,
-    VisualDebugHighlight::forRadius(graph, radius->half_edge_id), runtime_branch_id);
+    VisualDebugHighlight::forRadius(graph, radius->half_edge_id), runtime_branch_id,
+    /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
+    radius->creation_time);
   const auto& face_half_edges = graph.face(face_id).half_edges;
   const double t = radius->occurrence_time;
 
@@ -636,7 +638,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       target_face_inside[face_id] = radius->target_inside;
       radius_event_will_create_mixed_branch_split
-        = !segment_builder_.kin_del.checkForSplit(radius_vertices, target_face_inside).empty();
+        = !segment_builder_.kin_del.checkForSplit(radius_vertices, target_face_inside, radius->occurrence_time)
+             .empty();
     }
   }
   const bool pre_triangle_spans_pending_split
@@ -1141,7 +1144,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   auto vertices = graph.adjacentTriangleVertices(radius->half_edge_id);
   size_t component_id = segment_builder_.kin_del.component_data.component_map[vertices[0]];
 
-  auto split = segment_builder_.kin_del.checkForSplit(vertices);
+  auto split = segment_builder_.kin_del.checkForSplit(vertices, radius->occurrence_time);
   segment_builder_.splitComponent(component_id, split, radius->occurrence_time);
 
   if (split.empty())
@@ -1161,7 +1164,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     radius->occurrence_time, "after",
     "radius_he" + std::to_string(radius->half_edge_id) + "_" + radius_transition_tag,
     VisualDebugHighlight::forRadius(graph, radius->half_edge_id),
-    segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(radius->half_edge_id));
+    segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(radius->half_edge_id),
+    /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
+    radius->creation_time);
 
   auto triangle_he_ids = graph.getTriangleHalfEdgeIndices(radius->half_edge_id);
   std::unordered_set<size_t> affected_delaunay_edges;

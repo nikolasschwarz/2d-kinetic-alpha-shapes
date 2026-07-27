@@ -66,6 +66,37 @@ struct PendingBranchSplitState
   std::vector<size_t> strand_parent_component_;
 };
 
+/// Survives @ref clearPendingBranchSplits: hold shared frame through @c hold_end_height, then blend on @c blend_section.
+struct PostSplitFrameTransition
+{
+  size_t parent_component_id = static_cast<size_t>(-1);
+  /// Shared input-branch frame held until @ref hold_end_height.
+  size_t common_reference_branch = 0;
+  /// Last height still fully expressed in the common frame (S+1 when the split is in section S).
+  size_t hold_end_height = 0;
+  /// Section whose piece lerps common(@c hold_end_height) → native(@c hold_end_height + 1).
+  size_t blend_section = 0;
+  std::vector<size_t> strand_ids;
+  bool rotation_warning_emitted = false;
+};
+
+inline constexpr double kPostSplitFrameBlendRotationWarnDegrees = 20.0;
+
+struct PostSplitFrameTransitionState
+{
+  static constexpr size_t no_transition = static_cast<size_t>(-1);
+
+  void clear();
+  void resetStrandLookup(size_t strand_count);
+  PostSplitFrameTransition& add(PostSplitFrameTransition transition);
+  const PostSplitFrameTransition* findForStrand(size_t strand_id) const;
+  void expireBeforeHeight(size_t height);
+
+  std::vector<PostSplitFrameTransition> transitions_;
+  /// Parallel to strand id → index into @ref transitions_, or @ref no_transition.
+  std::vector<size_t> strand_transition_index_;
+};
+
 static glm::dvec2 polygonCentroid(const std::vector<BoundaryPoint>& polygon)
 {
   double A = 0.0;
@@ -372,6 +403,8 @@ class KineticDelaunay
   bool add_dummy_boundary;
   size_t prev_component_count = 1;
   PendingBranchSplitState pending_branch_splits_;
+  /// Post-cut frame hold/blend; survives @ref clearPendingBranchSplits.
+  PostSplitFrameTransitionState post_split_frame_transitions_;
   ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
   double separation_offset_scale_ = 50.0;
   std::vector<double> quadrilateral_last_updated;
@@ -386,6 +419,9 @@ class KineticDelaunay
   std::optional<double> flip_polynomial_dump_target_time_;
   std::optional<size_t> flip_polynomial_dump_target_half_edge_;
   bool diagnostics_enabled_ = false;
+  /// When true, after each kinetic event verify every live site lies in its component's graph convex hull.
+  /// Default off; CLI @c --check-sites-in-hull.
+  bool sites_inside_convex_hull_check_enabled_ = false;
 
   // crossing-related data (see public `CrossingData` forward declaration above).
 
@@ -414,8 +450,14 @@ class KineticDelaunay
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingBranchSplits();
+  /// At section @p section_index, look ahead to height @p section_index + 1 and register hold/blend when a
+  /// live component's strands already occupy multiple input branches there (upcoming split).
+  void registerUpcomingPostSplitFrameTransitions(size_t section_index);
+  void registerPostSplitFrameTransition(size_t parent_component_id, double split_time,
+    const std::vector<size_t>& affected_strands);
+  void maybeWarnPostSplitFrameBlendRotation(PostSplitFrameTransition& transition) const;
+  const PostSplitFrameTransition* postSplitFrameTransitionForStrand(size_t strand_id) const;
   bool pendingSplitSeamsAreConvex(size_t parent_component_id, double t) const;
-  void maybeScheduleSeparationOrApplyPendingSplit(size_t parent_component_id, double split_time);
   void handleSeparationEventAtTime(size_t parent_component_id, double t);
   void applyPendingComponentGraphSplit(double t);
   void startSeparationSchedule(size_t parent_component_id, double segment_start_time);
@@ -557,6 +599,7 @@ class KineticDelaunay
   void setVisualDebugSeparatePendingSplits(bool enabled);
   bool visualDebugSeparatePendingSplits() const;
   /// Path to @c branches.txt under @ref getVisualDebugOutputRoot when visual debug is enabled.
+  /// Truncated whenever @ref setVisualDebugOutputRoot is called so each run starts with a fresh log.
   std::optional<std::filesystem::path> getRuntimeBranchLogPath() const;
 
   void setFlipPolynomialDumpTargetTime(std::optional<double> target_time);
@@ -586,6 +629,10 @@ class KineticDelaunay
   void notePendingBranchSplit(size_t parent_component_id, double split_time,
     const std::vector<size_t>& pre_split_parent_strands, const std::vector<std::vector<size_t>>& new_components,
     const std::vector<size_t>& split_component_ids);
+  /// Recompute @ref PendingBranchSplit separation centroids from current @ref component_data centroids.
+  void refreshPendingSplitSeparationCentroids(size_t parent_component_id);
+  /// Enqueue a @ref SeparationEvent for a recorded pending split (after radius work at the same time).
+  void maybeScheduleSeparationOrApplyPendingSplit(size_t parent_component_id, double split_time);
 
   /// Pending split data keyed by the parent component id, if recorded.
   std::optional<PendingBranchSplit> getPendingBranchSplit(size_t parent_component_id) const;
@@ -663,10 +710,10 @@ class KineticDelaunay
 
   const std::vector<glm::dvec2>& getDummyBoundary() const;
 
-  std::vector<std::vector<size_t>> checkForSplit(const std::array<int, 3>& tri_vertices) const;
+  std::vector<std::vector<size_t>> checkForSplit(const std::array<int, 3>& tri_vertices, double t) const;
   /// Same split check using an explicit face-inside state, allowing callbacks to predict a radius event's target state.
   std::vector<std::vector<size_t>> checkForSplit(
-    const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state) const;
+    const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state, double t) const;
 
   std::vector<std::vector<size_t>> extractConnectedComponents() const;
 
@@ -799,12 +846,17 @@ class KineticDelaunay
   static constexpr double kDiagnosticsMonitoredCrossingTime = 10.0;
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
-  /// Directed half-edge 6548 ⇒ undirected edge 3274 (also matches twin 6549).
-  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 3274;
-  /// Suspected incorrect flip near ~10.48; flip create/discard logging is constrained to [floor(t), floor(t)+1).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
+  /// Directed half-edge 130 ⇒ undirected edge 65 (also matches twin 131).
+  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 65;
+  /// Flip create/discard / trigger-root logging is constrained to [floor(t), floor(t)+1).
+  static constexpr double kDiagnosticsMonitoredFlipTime = 20.0;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
+  /// Optional per-event sanity check: all live sites lie inside the graph convex hull (same topology as SVG).
+  /// Off by default; enable via CLI @c --check-sites-in-hull. Failures log @c KINDS_WARNING (possible bad flip).
+  void setSitesInsideConvexHullCheckEnabled(bool enabled);
+  bool sitesInsideConvexHullCheckEnabled() const;
+  void validateSitesInsideConvexHull(const char* context, double t) const;
   /// Bounds-checked diagnostic id queries; invalid ids are ignored by monitor logging.
   bool isDiagnosticsStrandIdValid(size_t strand_id) const;
   bool isDiagnosticsFaceIdValid(size_t face_id) const;

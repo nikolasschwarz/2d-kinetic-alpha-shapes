@@ -725,4 +725,5 @@ void KineticDelaunay::FlipEvent::handleEvent()
   // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
   kd->validateVoronoiVertexIteratorInvariants("FlipEvent:afterEvent", occurrence_time);
   kd->validateCrossingIntersectionInvariants("FlipEvent:afterEvent", occurrence_time);
+  kd->validateSitesInsideConvexHull("FlipEvent:afterEvent", occurrence_time);
 }

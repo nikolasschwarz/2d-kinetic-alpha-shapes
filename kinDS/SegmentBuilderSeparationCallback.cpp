@@ -109,7 +109,7 @@ void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
 
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, kin_del, graph, t, phase,
     separationEventDescriptor(parent_component_id, iteration), highlight, preferred, &offset_segments, &seam_outlines,
-    explicit_branches);
+    explicit_branches, separation.creation_time);
 }
 
 void SegmentBuilderSeparationCallback::beforeEvent(KineticDelaunay::Event& e)

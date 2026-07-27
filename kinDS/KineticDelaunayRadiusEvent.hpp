@@ -107,6 +107,8 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
   {
     event_handler->afterEvent(*this);
   }
+
+  kd->validateSitesInsideConvexHull("RadiusEvent:afterEvent", occurrence_time);
 }
 
 } // namespace kinDS

@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build kinDS-demo if needed",
+      "label": "Build kinDS-demo if needed (Debug)",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -12,7 +12,58 @@
         "-File",
         "${workspaceFolder}/.vscode/scripts/build-demo-if-needed.ps1",
         "-WorkspaceFolder",
-        "${workspaceFolder}"
+        "${workspaceFolder}",
+        "-BuildDir",
+        "build-debug"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$msCompile"],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "close": true
+      }
+    },
+    {
+      "label": "Build kinDS-demo if needed (Release)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/.vscode/scripts/build-demo-if-needed.ps1",
+        "-WorkspaceFolder",
+        "${workspaceFolder}",
+        "-BuildDir",
+        "build"
+      ],
+      "group": "build",
+      "problemMatcher": ["$msCompile"],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "close": true
+      }
+    },
+    {
+      "label": "Build kinDS-demo if needed (RelWithDebInfo)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/.vscode/scripts/build-demo-if-needed.ps1",
+        "-WorkspaceFolder",
+        "${workspaceFolder}",
+        "-BuildDir",
+        "build-relwithdebinfo"
       ],
       "group": "build",
       "problemMatcher": ["$msCompile"],

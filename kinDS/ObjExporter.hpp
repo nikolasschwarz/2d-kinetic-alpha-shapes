@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <filesystem>
 
@@ -632,6 +633,95 @@ class ObjExporter
     }
 
     file.close();
+  }
+
+  static size_t parseObjFaceIndexToken(const std::string& token)
+  {
+    const size_t slash = token.find('/');
+    const std::string index_token = slash == std::string::npos ? token : token.substr(0, slash);
+    if (index_token.empty())
+    {
+      throw std::runtime_error("ObjExporter::readMesh: empty face index token.");
+    }
+    const long index = std::stol(index_token);
+    if (index == 0)
+    {
+      throw std::runtime_error("ObjExporter::readMesh: face index 0 is invalid in OBJ (indices are 1-based).");
+    }
+    return static_cast<size_t>(index > 0 ? index - 1 : index);
+  }
+
+  static VoronoiMesh readMesh(const std::filesystem::path& obj_path)
+  {
+    std::ifstream file(obj_path);
+    if (!file.is_open())
+    {
+      throw std::runtime_error("ObjExporter::readMesh: failed to open file: " + obj_path.string());
+    }
+
+    std::vector<glm::dvec3> positions;
+    positions.reserve(1024);
+
+    VoronoiMesh mesh({ "boundary" }, NoNormals);
+
+    std::string line;
+    while (std::getline(file, line))
+    {
+      if (line.empty() || line[0] == '#')
+      {
+        continue;
+      }
+
+      std::istringstream iss(line);
+      std::string tag;
+      iss >> tag;
+      if (tag == "v")
+      {
+        double x = 0.0;
+        double y = 0.0;
+        double z = 0.0;
+        iss >> x >> y >> z;
+        positions.emplace_back(x, y, z);
+      }
+      else if (tag == "f")
+      {
+        std::vector<size_t> face_vertices;
+        std::string token;
+        while (iss >> token)
+        {
+          face_vertices.push_back(parseObjFaceIndexToken(token));
+        }
+
+        if (face_vertices.size() < 3)
+        {
+          continue;
+        }
+
+        for (size_t i = 1; i + 1 < face_vertices.size(); ++i)
+        {
+          const size_t i0 = face_vertices[0];
+          const size_t i1 = face_vertices[i];
+          const size_t i2 = face_vertices[i + 1];
+          if (i0 >= positions.size() || i1 >= positions.size() || i2 >= positions.size())
+          {
+            throw std::runtime_error("ObjExporter::readMesh: face references out-of-range vertex index.");
+          }
+          const size_t v0 = mesh.addVertex(positions[i0]);
+          const size_t v1 = mesh.addVertex(positions[i1]);
+          const size_t v2 = mesh.addVertex(positions[i2]);
+          mesh.addTriangle(v0, v1, v2, 0);
+        }
+      }
+    }
+
+    if (mesh.getTriangleCount() == 0)
+    {
+      throw std::runtime_error("ObjExporter::readMesh: no triangles found in " + obj_path.string());
+    }
+
+    mesh.mergeDuplicateVertices(1e-6);
+    mesh.computeNormals(PerTriangleCorner);
+    return mesh;
   }
 };
 } // namespace kinDS

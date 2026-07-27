@@ -302,6 +302,33 @@ Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, siz
   return result;
 }
 
+Trajectory<2> StrandTree::getPiecePolynomialBlendingReference(size_t strand_id, size_t index,
+  size_t start_reference_branch, size_t end_reference_branch) const
+{
+  if (strand_id >= support_points.size())
+  {
+    throw std::out_of_range("Strand id " + std::to_string(strand_id) + " out of range.");
+  }
+
+  if (index >= support_points[strand_id].size() - 1)
+  {
+    throw std::out_of_range("Index " + std::to_string(index) + " out of range for piece polynomial.");
+  }
+
+  const glm::dvec2 P0
+    = getPointTransformedAtSection(strand_id, index, start_reference_branch, index);
+  const glm::dvec2 P1
+    = getPointTransformedAtSection(strand_id, index + 1, end_reference_branch, index + 1);
+
+  Trajectory<2> result;
+  for (int i = 0; i < 2; ++i)
+  {
+    result[i] = POLYNOMIAL(P0[i] + (P1[i] - P0[i]) * x);
+  }
+
+  return result;
+}
+
 Trajectory<2> StrandTree::getLocalPiecePolynomial(size_t strand_id, size_t index) const
 {
   if (strand_id >= support_points.size())

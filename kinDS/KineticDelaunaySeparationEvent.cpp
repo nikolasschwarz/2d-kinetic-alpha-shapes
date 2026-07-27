@@ -32,4 +32,6 @@ void KineticDelaunay::SeparationEvent::handleEvent()
   {
     handler->afterEvent(*this);
   }
+
+  kd->validateSitesInsideConvexHull("SeparationEvent:afterEvent", occurrence_time);
 }

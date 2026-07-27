@@ -22,4 +22,6 @@ void KineticDelaunay::SubdivisionEvent::handleEvent()
     handler->beforeEvent(*this);
     handler->afterEvent(*this);
   }
+
+  kd->validateSitesInsideConvexHull("SubdivisionEvent:afterEvent", occurrence_time);
 }

@@ -526,6 +526,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   }
   mesh_builder->diagnostics = settings.diagnostics;
   kinetic_delaunay->setDiagnosticsEnabled(settings.diagnostics);
+  kinetic_delaunay->setSitesInsideConvexHullCheckEnabled(settings.check_sites_inside_convex_hull);
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
                                                                                       << ", visual_debug=" << visual_debug
@@ -542,6 +543,8 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << mesh_builder->store_mesh_metadata
                                                                                       << ", diagnostics="
                                                                                       << settings.diagnostics
+                                                                                      << ", check_sites_inside_convex_hull="
+                                                                                      << settings.check_sites_inside_convex_hull
                                                                                       << ", radius_vertex_shift_enabled="
                                                                                       << mesh_builder
                                                                                            ->radius_boundary_transition_shift_enabled);

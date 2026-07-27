@@ -150,16 +150,20 @@ class HalfEdgeDelaunayGraph
     const std::function<glm::dvec2(size_t)>& vertex_position);
 
   /**
-   * Apply a pending runtime-branch split without retriangulating: tombstone cross-component
+   * Apply a pending runtime-branch split without retriangulating: tombstone cross-branch
    * finite triangles/edges, preserve surviving infinite topology (infinity is a wildcard, not
    * branch-owned), and add infinite faces only along newly opened outer edges.
+   *
+   * Partitioning uses @p runtime_branch_map (not kinetic components): one pending-split child
+   * may span multiple disconnected kinetic components that still share one runtime branch id,
+   * and live edges between those pieces must not be cut.
    *
    * Here "outer" means: this directed half-edge borders an infinite or tombstoned triangle on
    * its own side and a regular finite triangle on its twin side. This is distinct from any
    * alpha-shape boundary classification derived from inside/outside face flags.
    */
   void applyRuntimeBranchSplit(
-    const std::vector<size_t>& component_map,
+    const std::vector<size_t>& runtime_branch_map,
     const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time = std::nullopt);
 
   /** Tombstone every face/edge incident to a vertex flagged in @p dead_vertex_mask. */

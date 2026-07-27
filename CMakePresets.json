@@ -45,6 +45,15 @@
       }
     },
     {
+      "name": "vcpkg-x64-relwithdebinfo",
+      "displayName": "vcpkg (x64) - Ninja RelWithDebInfo",
+      "inherits": "vcpkg-x64-base",
+      "binaryDir": "${sourceDir}/build-relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
       "name": "vcpkg-x64-vs",
       "displayName": "vcpkg (x64) - Visual Studio 2022",
       "generator": "Visual Studio 17 2022",
@@ -97,6 +106,17 @@
       "configurePreset": "vcpkg-x64"
     },
     {
+      "name": "vcpkg-x64-relwithdebinfo",
+      "displayName": "RelWithDebInfo",
+      "configurePreset": "vcpkg-x64-relwithdebinfo",
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "debuggerCommandArguments": "--demo",
+          "debuggerWorkingDirectory": "${sourceDir}"
+        }
+      }
+    },
+    {
       "name": "vcpkg-x64-vs-debug",
       "configurePreset": "vcpkg-x64-vs",
       "configuration": "Debug",
@@ -111,6 +131,17 @@
       "name": "vcpkg-x64-vs-release",
       "configurePreset": "vcpkg-x64-vs",
       "configuration": "Release"
+    },
+    {
+      "name": "vcpkg-x64-vs-relwithdebinfo",
+      "configurePreset": "vcpkg-x64-vs",
+      "configuration": "RelWithDebInfo",
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "debuggerCommandArguments": "--demo",
+          "debuggerWorkingDirectory": "${sourceDir}"
+        }
+      }
     },
     {
       "name": "msys2-ucrt64-debug",

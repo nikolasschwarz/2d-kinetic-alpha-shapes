@@ -955,7 +955,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   static constexpr size_t kDiagnosticsMonitoredMeshPairId = KineticDelaunay::kDiagnosticsMonitorDisabledId;
   /// Suspected incorrect flip event (log monitored edge state in [floor(t), floor(t)+1)).
   /// Keep in sync with @ref KineticDelaunay::kDiagnosticsMonitoredFlipTime.
-  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
+  static constexpr double kDiagnosticsMonitoredFlipTime = 20.0;
   static constexpr double kDiagnosticsMonitoredTimeEpsilon = 0.05;
 
   /// Full snapshot of crossings on a Delaunay edge (default: @ref kDiagnosticsMonitoredDelaunayEdgeId)

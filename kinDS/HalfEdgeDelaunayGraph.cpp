@@ -1813,20 +1813,24 @@ void HalfEdgeDelaunayGraph::combine(size_t global_vertex_count, const std::vecto
   validateLiveHalfEdgeFaceReferences();
 }
 
-void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& component_map,
+void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& runtime_branch_map,
   const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time)
 {
-  // In-place component split (no retriangulation). Given component_map[v] = component id for each site vertex,
-  // disconnect topology across components while keeping each component's interior triangulation:
+  // In-place runtime-branch split (no retriangulation). Given runtime_branch_map[v] = runtime
+  // branch id for each site vertex, disconnect topology across branches while keeping each
+  // branch's interior triangulation:
   //  1) decide which original Delaunay edge pairs survive the split (finite-finite only; infinity is a wildcard)
-  //  2) kill any finite triangle that uses a dead cross-component edge
+  //  2) kill any finite triangle that uses a dead cross-branch edge
   //  3) drop infinite faces whose interior finite neighbor died; tombstone only orphaned infinite half-edges
   //  4) cap newly opened boundaries (twin has no live face) with fresh infinite faces
   //  5) tombstone finite edge pairs with no live incident face on either side; refresh indices
+  //
+  // Kinetic components are not used for the cut: multiple components may share one pending-split
+  // child branch and must not be severed from each other.
 
-  if (component_map.size() < vertex_count)
+  if (runtime_branch_map.size() < vertex_count)
   {
-    throw std::runtime_error("applyRuntimeBranchSplit: component_map size mismatch");
+    throw std::runtime_error("applyRuntimeBranchSplit: runtime_branch_map size mismatch");
   }
 
   const bool dump_debug = debug_time.has_value();
@@ -1861,7 +1865,7 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
   const size_t original_half_edge_count = invalid_he;
   std::vector<bool> kill_he(original_half_edge_count, false);
 
-  // --- Pass 1: mark Delaunay edges whose endpoints lie in different components ---
+  // --- Pass 1: mark Delaunay edges whose endpoints lie on different runtime branches ---
   for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
   {
     if (!isLiveHalfEdge(he_id))
@@ -1870,14 +1874,15 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
     }
     const int u = half_edges[he_id].origin;
     const int v = half_edges[he_id ^ 1].origin;
-    if (u >= 0 && v >= 0 && component_map[static_cast<size_t>(u)] != component_map[static_cast<size_t>(v)])
+    if (u >= 0 && v >= 0
+      && runtime_branch_map[static_cast<size_t>(u)] != runtime_branch_map[static_cast<size_t>(v)])
     {
       kill_he[he_id] = true;
       kill_he[he_id ^ 1] = true;
     }
   }
 
-  // --- Pass 2: kill any finite triangle touching a cross-component edge ---
+  // --- Pass 2: kill any finite triangle touching a cross-branch edge ---
   std::vector<bool> kill_face(triangles.size(), false);
   for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
   {
@@ -1908,7 +1913,7 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& c
   }
 
   // Infinity is a wildcard: keep infinite faces whose interior finite triangle survived. Drop only caps whose
-  // interior neighbor was removed by the cut (e.g. a hull edge between two components).
+  // interior neighbor was removed by the cut (e.g. a hull edge between two runtime branches).
   for (size_t face_id = 0; face_id < triangles.size(); ++face_id)
   {
     if (!isLiveFace(face_id) || !faceHasInfiniteVertex(face_id))

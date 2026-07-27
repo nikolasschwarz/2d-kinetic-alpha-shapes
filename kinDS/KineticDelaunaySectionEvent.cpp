@@ -217,6 +217,11 @@ void KineticDelaunay::SectionEvent::handleEvent()
   // Retire finished input branches before graph cuts so vertex positions are not queried past strand data.
 
   kd->retireFinishedInputBranches(static_cast<double>(section_index));
+  kd->post_split_frame_transitions_.expireBeforeHeight(section_index);
+
+  // Look ahead to height section_index+1: if strands in a live component already sit on multiple input
+  // branches there, hold the common frame through that endpoint before scheduling this section's events.
+  kd->registerUpcomingPostSplitFrameTransitions(section_index);
 
 
 
@@ -251,6 +256,8 @@ void KineticDelaunay::SectionEvent::handleEvent()
     event_handler->afterEvent(*this);
 
   }
+
+  kd->validateSitesInsideConvexHull("SectionEvent:afterEvent", occurrence_time);
 
 }
 

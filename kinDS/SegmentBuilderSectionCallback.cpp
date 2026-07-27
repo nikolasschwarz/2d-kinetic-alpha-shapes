@@ -21,7 +21,9 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "before",
     "section_" + std::to_string(index),
     VisualDebugHighlight::forSectionBoundary(
-      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }));
+      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }),
+    /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
+    /*explicit_runtime_branch_ids=*/nullptr, section->creation_time);
 
   segment_builder_.advanceBoundaryMeshes(t);
 
@@ -116,7 +118,9 @@ void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "after",
     "section_" + std::to_string(index),
     VisualDebugHighlight::forSectionBoundary(
-      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }));
+      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }),
+    /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
+    /*explicit_runtime_branch_ids=*/nullptr, section->creation_time);
 }
 } // namespace kinDS
 

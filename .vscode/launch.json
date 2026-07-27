@@ -50,10 +50,15 @@
         "combined",
         "--validate",
         "--section-shading",
+        "--debug-files",
+        "debug_output",
+        "--svg-separate-pending-splits",
         "--log-add",
         "monitor",
         "--cutoff",
-        "3"
+        "3",
+        "--start",
+        "20"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -83,7 +88,9 @@
         "--log-add",
         "monitor",
         "--cutoff",
-        "3"
+        "3",
+        "--start",
+        "19"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -93,6 +100,38 @@
         "programOutput": true
       },
       "preLaunchTask": "Build kinDS-demo if needed (Release)"
+    },
+    {
+      "name": "RelWithDebInfo kinDS-demo (mesh)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build-relwithdebinfo/bin/kinDS-demo.exe",
+      // Optimized Release build with PDB debug symbols (CMAKE_BUILD_TYPE=RelWithDebInfo → build-relwithdebinfo/).
+      "args": [
+        "--mesh",
+        "input_examples/test_oak_10.txt",
+        "--export-mode",
+        "combined",
+        "--validate",
+        "--section-shading",
+        "--debug-files",
+        "debug_output",
+        "--svg-separate-pending-splits",
+        "--log-add",
+        "monitor",
+        "--cutoff",
+        "3",
+        "--start",
+        "19"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "logging": {
+        "exceptions": true,
+        "programOutput": true
+      },
+      "preLaunchTask": "Build kinDS-demo if needed (RelWithDebInfo)"
     }
   ]
 }

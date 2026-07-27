@@ -64,8 +64,19 @@ class StrandTree
    */
   Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const;
 
+  /**
+   * Linear motion on [@p index, @p index + 1] with asymmetric frames: start height uses @p start_reference_branch,
+   * end height uses @p end_reference_branch (post-split common→native blend).
+   */
+  Trajectory<2> getPiecePolynomialBlendingReference(size_t strand_id, size_t index, size_t start_reference_branch,
+    size_t end_reference_branch) const;
+
   /// Linear motion on [@p index, @p index + 1] in the strand's native profile support coordinates (no frame transform).
   Trajectory<2> getLocalPiecePolynomial(size_t strand_id, size_t index) const;
+
+  /// Transform support at @p index into @p reference_branch's frame at @p branch_lookup_height.
+  glm::dvec2 getPointTransformedAtSection(
+    size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const;
 
   // getters with named indices
   const std::vector<glm::dvec2>& getSupportPoints(size_t strand_id) const { return support_points[strand_id]; }
@@ -125,9 +136,6 @@ class StrandTree
    * own scale.
    */
   void conditionProfileTransforms();
-
-  glm::dvec2 getPointTransformedAtSection(
-    size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const;
 
   /** Valid branch id at @p height; if absent, parent from a strand in @p branch_id at @p branch_lookup_height. */
   size_t resolveBranchAtHeight(size_t height, size_t branch_id, size_t branch_lookup_height) const;

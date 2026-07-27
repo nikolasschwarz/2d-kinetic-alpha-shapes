@@ -507,6 +507,9 @@ static void print_usage(const char* program_name)
             << "                            common event-style kinetic SVG with affected sites/edges/VVs highlighted,\n"
             << "                            without full visual debug. Optional output directory (default: cwd).\n"
             << "                            Off by default; also enabled by --debug-files.\n"
+            << "  --check-sites-in-hull     After every kinetic event, warn if any live site lies outside its\n"
+            << "                            component's graph convex hull (same topology as SVG blue hull edges).\n"
+            << "                            May indicate an incorrect CCW flip. Off by default.\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -544,6 +547,7 @@ static const std::vector<std::string>& known_cli_flags()
     "--debug-files",
     "--svg-separate-pending-splits",
     "--error-files",
+    "--check-sites-in-hull",
     "--help",
     "-h",
     "--demo",
@@ -657,7 +661,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources,
   const std::string& validate_log_path, bool alternate_section_shading, size_t start_section,
   std::optional<size_t> end_section, double alpha_cutoff, bool visual_debug, bool error_files,
-  bool visual_debug_separate_pending_splits, const std::optional<std::filesystem::path>& visual_debug_output_root)
+  bool visual_debug_separate_pending_splits, const std::optional<std::filesystem::path>& visual_debug_output_root,
+  bool check_sites_inside_convex_hull)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -701,11 +706,16 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().visual_debug = visual_debug;
     mesher.getSettings().error_files = error_files || visual_debug;
     mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
+    mesher.getSettings().check_sites_inside_convex_hull = check_sites_inside_convex_hull;
     if (visual_debug_output_root.has_value())
     {
       mesher.getSettings().visual_debug_output_root = visual_debug_output_root;
     }
     std::cout << "Alpha cutoff: " << alpha_cutoff << std::endl;
+    if (check_sites_inside_convex_hull)
+    {
+      std::cout << "Sites-in-hull check: enabled" << std::endl;
+    }
     if (visual_debug || error_files)
     {
       const std::filesystem::path debug_root
@@ -836,6 +846,7 @@ int main(int argc, char* argv[])
   bool mesh_error_files = false;
   bool mesh_visual_debug_separate_pending_splits = false;
   std::optional<std::filesystem::path> mesh_visual_debug_output_root;
+  bool mesh_check_sites_inside_convex_hull = false;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -1065,6 +1076,11 @@ int main(int argc, char* argv[])
       mesh_visual_debug_separate_pending_splits = true;
       arg_idx += 1;
     }
+    else if (arg == "--check-sites-in-hull")
+    {
+      mesh_check_sites_inside_convex_hull = true;
+      arg_idx += 1;
+    }
     else if (arg == "--error-files")
     {
       mesh_error_files = true;
@@ -1163,7 +1179,8 @@ int main(int argc, char* argv[])
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_validate_log_path,
           mesh_alternate_section_shading, mesh_start_section, mesh_end_section, mesh_alpha_cutoff, mesh_visual_debug,
-          mesh_error_files, mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root))
+          mesh_error_files, mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root,
+          mesh_check_sites_inside_convex_hull))
     {
       return 1;
     }

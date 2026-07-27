@@ -280,6 +280,16 @@ void KineticDelaunay::setDiagnosticsEnabled(bool enabled) { diagnostics_enabled_
 
 bool KineticDelaunay::diagnosticsEnabled() const { return diagnostics_enabled_; }
 
+void KineticDelaunay::setSitesInsideConvexHullCheckEnabled(bool enabled)
+{
+  sites_inside_convex_hull_check_enabled_ = enabled;
+}
+
+bool KineticDelaunay::sitesInsideConvexHullCheckEnabled() const
+{
+  return sites_inside_convex_hull_check_enabled_;
+}
+
 bool KineticDelaunay::isDiagnosticsStrandIdValid(size_t strand_id) const
 {
   return isDiagnosticsMonitorIdEnabled(strand_id) && strand_id < graph.getVertexCount();

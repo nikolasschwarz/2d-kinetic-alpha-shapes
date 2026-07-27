@@ -49,7 +49,9 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
     crossing->occurrence_time, "before",
     "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_"
       + std::to_string(new_tri),
-    VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), runtime_branch_id);
+    VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), runtime_branch_id,
+    /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
+    crossing->creation_time);
 
   // Snapshot crossed-edge boundary interval links before CrossingData mutates them.
   crossing_edge_snapshot_.clear();
@@ -107,7 +109,9 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
       crossing->occurrence_time, "after",
       "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(post_old_tri) + "_to_"
         + std::to_string(post_new_tri),
-      VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), runtime_branch_id);
+      VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), runtime_branch_id,
+      /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
+      crossing->creation_time);
   };
 
   int branch_vertex = graph.halfEdge(crossing->half_edge_id).origin;
