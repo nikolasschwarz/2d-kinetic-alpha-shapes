@@ -1471,10 +1471,10 @@ void KineticDelaunay::initializeNewFacesAfterGraphUpdate(double t, size_t first_
 
 void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots)
 {
-  clearPendingBranchSplits();
   growGraphSlotArrays();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
-  updateRuntimeBranchMapFromLiveGraph(t, "onGraphRetriangulated");
+  // Runtime branch ids for the targeted split are already assigned at notePendingBranchSplit; do not remap all
+  // live-graph components (that would finalize / reassign unrelated pending splits).
   crossing_data.computeEdgeIntersections(*this, t);
   validateVoronoiVertexIteratorInvariants("onGraphRetriangulated", t);
   if (callback_manager_)
@@ -1484,9 +1484,8 @@ void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, si
 }
 
 void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots,
-  bool update_runtime_branch_map)
+  bool update_runtime_branch_map, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result)
 {
-  clearPendingBranchSplits();
   growGraphSlotArrays();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
   for (size_t face_id = 0; face_id < prev_face_slots; ++face_id)
@@ -1522,57 +1521,9 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
 
   crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
 
-  // New infinite faces created by the cut cap former cross-component edges. Those edges are now on the convex hull
-  // and need boundary (ccw) flip predicates; invalidate any pre-split interior (inCircle) flip schedules.
+  if (split_result != nullptr)
   {
-    std::unordered_set<size_t> new_hull_quads;
-    for (size_t face_id : graph.liveFaces())
-    {
-      if (face_id < prev_face_slots)
-      {
-        continue;
-      }
-      for (size_t he_id : graph.face(face_id).half_edges)
-      {
-        // Finite twin of a new infinite-face half-edge is the newly opened convex-hull edge.
-        const size_t twin_he = he_id ^ 1;
-        if (!graph.isLiveHalfEdge(twin_he))
-        {
-          continue;
-        }
-        if (graph.halfEdge(twin_he).origin < 0 || graph.destination(twin_he) < 0)
-        {
-          continue;
-        }
-        const int twin_face = graph.halfEdge(twin_he).face;
-        if (twin_face < 0 || !graph.isLiveFace(static_cast<size_t>(twin_face)))
-        {
-          continue;
-        }
-        if (graph.isInfinite(twin_he))
-        {
-          continue;
-        }
-        if (!graph.isOnConvexBoundary(twin_he))
-        {
-          continue;
-        }
-        new_hull_quads.insert(twin_he / 2);
-      }
-    }
-
-    for (size_t quad_id : new_hull_quads)
-    {
-      if (!graph.isLiveHalfEdge(quad_id * 2) && !graph.isLiveHalfEdge(quad_id * 2 + 1))
-      {
-        continue;
-      }
-      flip_event_manager_->computeEvents(t, quad_id);
-      if (quad_id < quadrilateral_last_updated.size())
-      {
-        quadrilateral_last_updated[quad_id] = t;
-      }
-    }
+    refreshEventsAfterGraphCut(t, *split_result);
   }
 
   if (update_runtime_branch_map)
@@ -1584,6 +1535,76 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
   if (callback_manager_)
   {
     callback_manager_->onGraphCutApplied(t, prev_face_slots, prev_he_slots);
+  }
+}
+
+void KineticDelaunay::refreshEventsAfterGraphCut(
+  double t, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult& split_result)
+{
+  // Flip schedules are keyed by undirected edge id (half_edge / 2).
+  // 1) Infinite edges that bordered one live + one tombstoned face: recompute that edge's own quad.
+  // 2) Finite capped outer edges (interior→hull): recompute those quads separately.
+  std::unordered_set<size_t> flip_quads;
+  std::vector<size_t> infinite_edge_ids = split_result.infinite_half_edges_bordering_tombstone;
+
+  for (size_t he_id : infinite_edge_ids)
+  {
+    flip_quads.insert(he_id / 2);
+  }
+
+  for (size_t he_id : split_result.capped_outer_half_edges)
+  {
+    if (!graph.isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+    if (graph.halfEdge(he_id).origin >= 0 && graph.destination(he_id) >= 0)
+    {
+      flip_quads.insert(he_id / 2);
+    }
+  }
+
+  std::vector<size_t> recomputed_quads;
+  recomputed_quads.reserve(flip_quads.size());
+  for (size_t quad_id : flip_quads)
+  {
+    if (!graph.isLiveHalfEdge(quad_id * 2) && !graph.isLiveHalfEdge(quad_id * 2 + 1))
+    {
+      continue;
+    }
+    flip_event_manager_->computeEvents(t, quad_id);
+    if (quad_id < quadrilateral_last_updated.size())
+    {
+      quadrilateral_last_updated[quad_id] = t;
+    }
+    recomputed_quads.push_back(quad_id);
+  }
+
+  {
+    std::sort(infinite_edge_ids.begin(), infinite_edge_ids.end());
+    std::sort(recomputed_quads.begin(), recomputed_quads.end());
+
+    std::ostringstream infinite_list;
+    for (size_t i = 0; i < infinite_edge_ids.size(); ++i)
+    {
+      if (i > 0)
+      {
+        infinite_list << ',';
+      }
+      infinite_list << infinite_edge_ids[i];
+    }
+    std::ostringstream quad_list;
+    for (size_t i = 0; i < recomputed_quads.size(); ++i)
+    {
+      if (i > 0)
+      {
+        quad_list << ',';
+      }
+      quad_list << recomputed_quads[i];
+    }
+    KINDS_INFO("Graph-cut flip refresh t=" << t
+                                           << " infinite_half_edges_bordering_tombstone=[" << infinite_list.str()
+                                           << "] flip_quad_ids=[" << quad_list.str() << "]");
   }
 }
 
@@ -2330,6 +2351,7 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
   // Mirror the pending split into the runtime-branch structure and write branches.txt before post-split
   // frame registration / separation scheduling (those paths can throw).
   const size_t parent_branch = runtime_branch_data_.branchForStrand(split.reference_vertex);
+  split.parent_runtime_branch = parent_branch;
   if (parent_branch != RuntimeBranchData::no_branch && split_component_ids.size() >= 2
     && runtime_branch_data_.pendingChildBranches(parent_branch) == nullptr)
   {
@@ -2398,7 +2420,8 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
 
       // Reassign the split-off strands to the child runtime branch now, so runtime branch ids distinguish the future
       // sub-branches while the graph is still connected. Motion frames use component data (not the runtime branch
-      // map), so this does not perturb geometry; the child ids are re-derived (and reused) at the graph cut.
+      // map), so this does not perturb geometry. When this parent's cut succeeds, completePendingRuntimeBranchSplit
+      // keeps these child ids as final without remapping unrelated pending splits.
       size_t assigned_strand_count = 0;
       for (size_t strand_id : component_data.components[split_off_component])
       {
@@ -2797,10 +2820,12 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
   if (pendingSplitSeamsAreConvex(parent_component_id, t))
   {
     KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
+                                                   << " parent_runtime=" << split->parent_runtime_branch
                                                    << " has convex seam outlines at t=" << t
                                                    << "; applying graph split");
     // No separation-trajectory recompute here: the graph cut/retriangulation path refreshes events.
-    applyPendingComponentGraphSplit(t);
+    // Cut by parent runtime branch — a branch may span multiple kinetic components.
+    applyPendingRuntimeBranchSplit(t, split->parent_runtime_branch);
     debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
     return;
   }
@@ -2821,10 +2846,16 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
   debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
 }
 
-void KineticDelaunay::applyPendingComponentGraphSplit(double t)
+void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id)
 {
-  if (component_data.components.size() <= prev_component_count)
+  if (parent_runtime_branch_id == RuntimeBranchData::no_branch)
   {
+    return;
+  }
+  if (runtime_branch_data_.pendingChildBranches(parent_runtime_branch_id) == nullptr)
+  {
+    KINDS_DEBUG("applyPendingRuntimeBranchSplit: parent_runtime=" << parent_runtime_branch_id
+                                                                  << " has no pending children; skipping");
     return;
   }
 
@@ -2846,13 +2877,116 @@ void KineticDelaunay::applyPendingComponentGraphSplit(double t)
     // Pass occurrence time only for full visual-debug dumps (not --error-files alone).
     const std::optional<double> branch_split_debug_time
       = isVisualDebugEnabled() ? std::optional<double>(t) : std::nullopt;
-    // Cut by runtime branch (assigned in notePendingBranchSplit), not kinetic components:
-    // one pending-split child may span multiple components that must stay connected.
-    graph.applyRuntimeBranchSplit(
-      getRuntimeBranchMap(), [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time);
-    onGraphCutApplied(t, prev_face_slots, prev_he_slots);
+    // Cut only this parent runtime branch's pending children. Other pending-split child ids are collapsed in the
+    // cut map so untargeted branches are not severed.
+    const std::vector<size_t> cut_map = buildRuntimeBranchCutMapForParent(parent_runtime_branch_id);
+    const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult split_result = graph.applyRuntimeBranchSplit(
+      cut_map, [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time);
+    onGraphCutApplied(t, prev_face_slots, prev_he_slots, false, &split_result);
   }
-  prev_component_count = component_data.components.size();
+
+  completePendingRuntimeBranchSplit(parent_runtime_branch_id, t);
+  syncPrevComponentCountWithPendingSplits();
+}
+
+std::vector<size_t> KineticDelaunay::buildRuntimeBranchCutMapForParent(size_t target_parent_runtime_branch) const
+{
+  std::vector<size_t> cut_map = runtime_branch_data_.branch_map;
+  for (size_t strand_id = 0; strand_id < cut_map.size(); ++strand_id)
+  {
+    const size_t branch_id = cut_map[strand_id];
+    if (branch_id == RuntimeBranchData::no_branch)
+    {
+      continue;
+    }
+    if (!runtime_branch_data_.isPendingSplitChild(branch_id))
+    {
+      continue;
+    }
+    if (branch_id >= runtime_branch_data_.parent.size())
+    {
+      continue;
+    }
+    const size_t parent_branch = runtime_branch_data_.parent[branch_id];
+    if (parent_branch != target_parent_runtime_branch)
+    {
+      // Leave other pending splits connected in the mesh until they pass their own cut check.
+      cut_map[strand_id] = runtime_branch_data_.unsplitBranchId(branch_id);
+    }
+  }
+  return cut_map;
+}
+
+void KineticDelaunay::syncPrevComponentCountWithPendingSplits()
+{
+  size_t uncut_extra = 0;
+  for (const auto& entry : pending_branch_splits_.by_parent_)
+  {
+    const size_t piece_count = entry.second.split_component_ids.size();
+    if (piece_count >= 2)
+    {
+      uncut_extra += piece_count - 1;
+    }
+  }
+  if (component_data.components.size() >= uncut_extra)
+  {
+    prev_component_count = component_data.components.size() - uncut_extra;
+  }
+  else
+  {
+    prev_component_count = component_data.components.size();
+  }
+}
+
+void KineticDelaunay::completePendingRuntimeBranchSplit(size_t parent_runtime_branch_id, double t)
+{
+  if (parent_runtime_branch_id == RuntimeBranchData::no_branch)
+  {
+    return;
+  }
+
+  std::vector<size_t> finalized_children;
+  if (const std::vector<size_t>* children = runtime_branch_data_.pendingChildBranches(parent_runtime_branch_id))
+  {
+    finalized_children = *children;
+  }
+  runtime_branch_data_.completeSplit(parent_runtime_branch_id);
+
+  // A runtime branch may own multiple kinetic PendingBranchSplit rows (one per split component parent).
+  std::vector<size_t> kinetic_parents_to_erase;
+  for (const auto& entry : pending_branch_splits_.by_parent_)
+  {
+    if (entry.second.parent_runtime_branch == parent_runtime_branch_id)
+    {
+      kinetic_parents_to_erase.push_back(entry.first);
+    }
+  }
+  for (size_t parent_component_id : kinetic_parents_to_erase)
+  {
+    for (size_t strand_id = 0; strand_id < pending_branch_splits_.strand_parent_component_.size(); ++strand_id)
+    {
+      if (pending_branch_splits_.strand_parent_component_[strand_id] == parent_component_id)
+      {
+        pending_branch_splits_.strand_parent_component_[strand_id] = PendingBranchSplitState::no_parent_component;
+      }
+    }
+    pending_branch_splits_.by_parent_.erase(parent_component_id);
+  }
+
+  // Child runtime ids were assigned at notePendingBranchSplit; they are now final. Only rebuild strand lists.
+  runtime_branch_data_.rebuildBranchStrandLists();
+
+  std::ostringstream line;
+  line << "event=complete_split parent_runtime=" << parent_runtime_branch_id << " child_runtime_ids=";
+  for (size_t i = 0; i < finalized_children.size(); ++i)
+  {
+    if (i > 0)
+    {
+      line << ',';
+    }
+    line << finalized_children[i];
+  }
+  logRuntimeBranchEvent(t, line.str());
 }
 
 void KineticDelaunay::startSeparationSchedule(size_t parent_component_id, double segment_start_time)
@@ -3314,8 +3448,7 @@ std::vector<std::vector<BoundaryPoint>> KineticDelaunay::collectPendingSplitBran
 void KineticDelaunay::clearPendingBranchSplits()
 {
   pending_branch_splits_.clear();
-  // The split has been executed (graph cut/retriangulation): drop the pending-split lookup entries. Runtime branch
-  // membership is re-derived from live-graph connectivity by the caller.
+  // Drop all pending-split lookup entries. Prefer @ref completePendingRuntimeBranchSplit for a single executed parent.
   // Post-split frame hold/blend state is intentionally retained until after the blend section.
   runtime_branch_data_.pending_splits.clear();
 }

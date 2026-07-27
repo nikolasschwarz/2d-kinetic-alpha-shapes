@@ -116,13 +116,12 @@
         "--section-shading",
         "--debug-files",
         "debug_output",
-        "--svg-separate-pending-splits",
         "--log-add",
         "monitor",
         "--cutoff",
         "3",
         "--start",
-        "19"
+        "10"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

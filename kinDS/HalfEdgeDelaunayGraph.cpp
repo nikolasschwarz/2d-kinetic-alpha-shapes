@@ -1813,8 +1813,9 @@ void HalfEdgeDelaunayGraph::combine(size_t global_vertex_count, const std::vecto
   validateLiveHalfEdgeFaceReferences();
 }
 
-void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& runtime_branch_map,
-  const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time)
+HalfEdgeDelaunayGraph::RuntimeBranchSplitResult HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(
+  const std::vector<size_t>& runtime_branch_map, const std::function<glm::dvec2(size_t)>& vertex_at,
+  std::optional<double> debug_time)
 {
   // In-place runtime-branch split (no retriangulation). Given runtime_branch_map[v] = runtime
   // branch id for each site vertex, disconnect topology across branches while keeping each
@@ -1971,6 +1972,37 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& r
     tombstoneHalfEdge(he_id ^ 1);
   }
 
+  // Infinite half-edges that still border exactly one live triangle and one tombstoned (or cleared) face.
+  // These stay alive and are reassigned during createInfiniteFacesFromBoundary — collect before capping.
+  std::vector<size_t> infinite_half_edges_bordering_tombstone;
+  infinite_half_edges_bordering_tombstone.reserve(half_edges.size() / 8);
+  for (size_t he_id = 0; he_id < original_half_edge_count; he_id += 2)
+  {
+    if (!isLiveHalfEdge(he_id) && !isLiveHalfEdge(he_id ^ 1))
+    {
+      continue;
+    }
+    const int origin0 = half_edges[he_id].origin;
+    const int origin1 = half_edges[he_id ^ 1].origin;
+    if (origin0 >= 0 && origin1 >= 0)
+    {
+      continue; // finite-finite edge
+    }
+
+    const auto face_is_live = [&](int face_id) -> bool
+    {
+      return face_id >= 0 && static_cast<size_t>(face_id) < triangles.size()
+        && isLiveFace(static_cast<size_t>(face_id));
+    };
+    const bool live0 = face_is_live(half_edges[he_id].face);
+    const bool live1 = face_is_live(half_edges[he_id ^ 1].face);
+    if (live0 == live1)
+    {
+      continue; // both live or both dead
+    }
+    infinite_half_edges_bordering_tombstone.push_back(he_id);
+  }
+
   // --- Collect outer half-edges ---
   // A directed half-edge is "outer" when its own side borders an infinite or tombstoned triangle, while the twin side
   // borders a regular finite triangle. This is runtime-branch cut / outer-cap geometry, not an alpha-shape boundary
@@ -2091,6 +2123,11 @@ void HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(const std::vector<size_t>& r
       printDebug(&after_dump);
     }
   }
+
+  RuntimeBranchSplitResult result;
+  result.capped_outer_half_edges = std::move(outer_half_edges);
+  result.infinite_half_edges_bordering_tombstone = std::move(infinite_half_edges_bordering_tombstone);
+  return result;
 }
 
 void HalfEdgeDelaunayGraph::killVertices(const std::vector<bool>& dead_vertex_mask)

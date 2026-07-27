@@ -30,10 +30,12 @@ struct BoundaryPoint
   glm::dvec2 p;
 };
 
-/// Data recorded when a component split awaits graph retriangulation.
+/// Data recorded when a component split awaits graph cut / retriangulation.
 struct PendingBranchSplit
 {
   size_t parent_component_id = static_cast<size_t>(-1);
+  /// Runtime branch that is splitting (the cut / finalize key). One runtime branch may span multiple kinetic components.
+  size_t parent_runtime_branch = static_cast<size_t>(-1);
   /// Reference strand from the parent component used for the frozen frame.
   size_t reference_vertex = static_cast<size_t>(-1);
   /// Full pre-split parent-component strand list.
@@ -171,7 +173,7 @@ class KineticDelaunay
     virtual void finalize(double t) { }
     virtual void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
     virtual void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
-    /// Invoked immediately before pending branch splits are cleared during @ref applyPendingComponentGraphSplit.
+    /// Invoked immediately before a targeted pending runtime-branch graph cut in @ref applyPendingRuntimeBranchSplit.
     virtual void onBeforeComponentGraphSplit(double t) { (void)t; }
   };
 
@@ -450,6 +452,13 @@ class KineticDelaunay
   void initializeFaceState(size_t face_index, double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingBranchSplits();
+  /// Drop pending kinetic entries for @p parent_runtime_branch_id and mark its runtime children as final.
+  void completePendingRuntimeBranchSplit(size_t parent_runtime_branch_id, double t);
+  /// Build a runtime-branch cut map that severs only @p target_parent_runtime_branch from its pending children.
+  /// Other pending-split children are collapsed to their unsplit parent so they are not cut yet.
+  std::vector<size_t> buildRuntimeBranchCutMapForParent(size_t target_parent_runtime_branch) const;
+  /// Set @ref prev_component_count from live components minus still-uncut pending split extras.
+  void syncPrevComponentCountWithPendingSplits();
   /// Clear strand list and boundary/centroid/last_updated for an emptied (merged-away) component slot.
   void clearComponentSupportData(size_t component_id);
   /// At section @p section_index, look ahead to height @p section_index + 1 and register hold/blend when a
@@ -461,7 +470,8 @@ class KineticDelaunay
   const PostSplitFrameTransition* postSplitFrameTransitionForStrand(size_t strand_id) const;
   bool pendingSplitSeamsAreConvex(size_t parent_component_id, double t) const;
   void handleSeparationEventAtTime(size_t parent_component_id, double t);
-  void applyPendingComponentGraphSplit(double t);
+  /// Apply the in-place graph cut (or retriangulation) for one pending parent *runtime branch* only.
+  void applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id);
   void startSeparationSchedule(size_t parent_component_id, double segment_start_time);
   void continueSeparationSchedule(size_t parent_component_id, double segment_start_time);
   /// Recompute flip/radius/crossing events for simplices spanning differently shifted pending pieces.
@@ -495,7 +505,13 @@ class KineticDelaunay
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
   size_t getRuntimeBranchIdForFace(size_t face_id) const;
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots);
-  void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots, bool update_runtime_branch_map = true);
+  /// Post-cut bookkeeping. Does not clear pending splits or remap runtime branches — the caller finalizes the
+  /// targeted pending parent via @ref completePendingRuntimeBranchSplit. Optional live-graph remap is off by default.
+  void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots, bool update_runtime_branch_map = false,
+    const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result = nullptr);
+  /// After a graph cut, recompute flip events for (1) infinite edges that bordered live+tombstoned faces and
+  /// (2) finite capped outer edges. Stamps @ref quadrilateral_last_updated so stale schedules are ignored.
+  void refreshEventsAfterGraphCut(double t, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult& split_result);
 
   void handleEvents();
 
@@ -861,9 +877,9 @@ class KineticDelaunay
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
   /// Directed half-edge 1158 ⇒ undirected edge 579 (also matches twin 1159).
-  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 579;
+  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 6804 / 2;
   /// Flip create/discard / trigger-root logging is constrained to [floor(t), floor(t)+1).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 20.0;
+  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
   /// Optional per-event sanity check: all live sites lie inside the graph convex hull (same topology as SVG).

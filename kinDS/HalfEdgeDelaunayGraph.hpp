@@ -70,7 +70,6 @@ class HalfEdgeDelaunayGraph
   void applyFreshHalfEdgeFaceReferences(
     const std::vector<HalfEdge>& fresh_half_edges, const std::vector<int>& tri_remap);
   bool halfEdgeInFaceCycle(size_t he_id, size_t face_id) const;
-  bool faceHasInfiniteVertex(size_t face_id) const;
   bool isDeadFaceSlot(const Triangle& tri) const;
   void tombstoneHalfEdge(size_t he_id);
   void killFaceSlot(Triangle& tri, size_t invalid_he);
@@ -161,8 +160,19 @@ class HalfEdgeDelaunayGraph
    * Here "outer" means: this directed half-edge borders an infinite or tombstoned triangle on
    * its own side and a regular finite triangle on its twin side. This is distinct from any
    * alpha-shape boundary classification derived from inside/outside face flags.
+   *
+   * Returns edges that callers must refresh flip schedules for after the cut.
    */
-  void applyRuntimeBranchSplit(
+  struct RuntimeBranchSplitResult
+  {
+    /// Interior-directed finite half-edges that received new infinite caps.
+    std::vector<size_t> capped_outer_half_edges;
+    /// Live infinite half-edges (even id of each undirected pair) that bordered one live and one
+    /// tombstoned triangle at collection time — they stay alive and are reassigned a new face.
+    std::vector<size_t> infinite_half_edges_bordering_tombstone;
+  };
+
+  RuntimeBranchSplitResult applyRuntimeBranchSplit(
     const std::vector<size_t>& runtime_branch_map,
     const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time = std::nullopt);
 
@@ -189,6 +199,8 @@ class HalfEdgeDelaunayGraph
 
   bool isLiveHalfEdge(size_t he_id) const;
   bool isLiveFace(size_t face_id) const;
+  /** True if a live face has the infinite vertex among its three corners. */
+  bool faceHasInfiniteVertex(size_t face_id) const;
 
   /** @throws std::runtime_error if any live half-edge references a dead or out-of-range face. */
   void validateLiveHalfEdgeFaceReferences() const;
