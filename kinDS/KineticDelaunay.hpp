@@ -45,11 +45,13 @@ struct PendingBranchSplit
   glm::dvec2 old_branch_centroid { 0.0, 0.0 };
   glm::dvec2 new_branch_centroid { 0.0, 0.0 };
   glm::dvec2 separation_direction { 0.0, 0.0 };
-  double separation_t0 = 0.0;
-  double separation_te = 0.0;
-  size_t separation_iteration = 0;
-  bool separation_trajectory_active = false;
-  /// When true, separation / virtual offset continue, but finalize checks (convex seams → graph cut, section
+  /// Kinetic time at which sites are frozen for virtual / infinitesimal separation.
+  double infinitesimal_t_event = 0.0;
+  /// True while cross-piece events are driven by virtual time along @ref separation_direction.
+  bool infinitesimal_active = false;
+  /// Bumped on activate-replace and finalize so stale infinitesimal events skip.
+  uint64_t infinitesimal_epoch = 0;
+  /// When true, finalize checks (convex seams → graph cut, section
   /// boundary force-cut) are skipped: the pending pieces are no longer topologically distinct (e.g. after a
   /// radius outside→inside component consolidate). Reactivation clears this flag when the same input-branch
   /// split is noted again.
@@ -416,8 +418,17 @@ class KineticDelaunay
   PostSplitFrameTransitionState post_split_frame_transitions_;
   ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
   double separation_offset_scale_ = 500.0;
-  std::vector<double> quadrilateral_last_updated;
-  std::vector<double> face_last_updated;
+  /// Virtual time of the infinitesimal event currently being handled (0 outside that path).
+  mutable double current_infinitesimal_t_ = 0.0;
+  /// Set while @ref EventManager::computeEvents runs with an @ref InfinitesimalComputeContext
+  /// (via @ref ScopedInfinitesimalEventCompute). Prefer the computeEvents parameter at call sites.
+  mutable bool computing_infinitesimal_events_ = false;
+  mutable double infinitesimal_recompute_min_x_ = 0.0;
+  mutable double infinitesimal_schedule_t_ = 0.0;
+  mutable size_t infinitesimal_schedule_parent_ = static_cast<size_t>(-1);
+  mutable uint64_t infinitesimal_schedule_epoch_ = 0;
+  std::vector<EventTime> quadrilateral_last_updated;
+  std::vector<EventTime> face_last_updated;
   bool on_the_fly_boundary = true;
   std::optional<std::filesystem::path> visual_debug_output_root_;
   bool visual_debug_enabled_ = false;
@@ -441,10 +452,12 @@ class KineticDelaunay
   glm::dvec3 computeVoronoiVertexHomogenous(size_t voronoi_vertex_id, double t,
     bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
-  void reassignVoronoiVerticesOnBoundary(size_t he_id, double t);
+  void reassignVoronoiVerticesOnBoundary(size_t he_id, double t,
+    std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt);
 
-  void reassignVoronoiVerticesInQuadrilateral(
-    size_t quad_index, double t, const std::map<size_t, size_t>& pre_flip_quad_faces);
+  void reassignVoronoiVerticesInQuadrilateral(size_t quad_index, double t,
+    const std::map<size_t, size_t>& pre_flip_quad_faces,
+    std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt);
 
   void precomputeStep(double t);
 
@@ -489,16 +502,21 @@ class KineticDelaunay
   void handleSeparationEventAtTime(size_t parent_component_id, double t);
   /// Apply the in-place graph cut (or retriangulation) for one pending parent *runtime branch* only.
   void applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id);
-  void startSeparationSchedule(size_t parent_component_id, double segment_start_time);
-  void continueSeparationSchedule(size_t parent_component_id, double segment_start_time);
-  /// Recompute flip/radius/crossing events for simplices spanning differently shifted pending pieces.
-  /// Stamps @c *_last_updated / @c last_crossing to @p t before enqueue so older schedules are discarded.
-  /// Only used when another separation iteration is scheduled (@ref startSeparationSchedule /
-  /// @ref continueSeparationSchedule). A convex graph cut relies on the cut/retriangulation path instead.
-  void recomputeEventsAfterSeparationTrajectory(size_t parent_component_id, double t);
+  /// Activate frozen-site virtual separation (or cut immediately if seams are already convex).
+  void activateInfinitesimalSeparationOrApplyCut(size_t parent_component_id, double t);
+  /// Recompute flip/radius/crossing for all cross-piece simplices using virtual site trajectories.
+  /// Used to seed the infinitesimal event queue on activate; post-event refresh uses the same local
+  /// neighbor paradigm as regular events (under @ref ScopedInfinitesimalEventCompute).
+  /// Roots are scheduled at kinetic @p t with @c infinitesimal_t in (@p min_virtual_x, +inf).
+  void recomputeEventsAfterInfinitesimalSeparation(size_t parent_component_id, double t, double min_virtual_x);
+  /// If seams are convex and not on hiatus: bump epoch, clear active, apply graph cut.
+  bool maybeFinalizeInfinitesimalSeparation(size_t parent_component_id, double t);
   void collectSeparationRecomputeTargets(size_t parent_component_id, std::unordered_set<size_t>& affected_quads,
     std::unordered_set<size_t>& affected_faces) const;
   const PendingBranchSplit* activeSeparationForStrand(size_t strand_id) const;
+  const PendingBranchSplit* infinitesimalSplitForStrand(size_t strand_id) const;
+  Trajectory<2> buildInfinitesimalSiteTrajectory(size_t strand_id, double t_event,
+    const std::vector<size_t>& event_strand_ids) const;
   Trajectory<2> addSeparationOffsetToPiecePolynomial(
     const Trajectory<2>& base, size_t strand_id, size_t section, double schedule_time) const;
   void debugSeparationTrackedFlipProbe(
@@ -543,6 +561,9 @@ class KineticDelaunay
 
   std::vector<double> findEvents(
     Polynomial& event_trigger, double min_fraction, bool only_positive_to_negative = false);
+  /// Like @ref findEvents but accepts any finite root strictly greater than @p min_x (no section upper bound).
+  std::vector<double> findVirtualEvents(
+    Polynomial& event_trigger, double min_x, bool only_positive_to_negative = false);
 
  public:
   KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);
@@ -674,7 +695,61 @@ class KineticDelaunay
   std::optional<double> separationRampEndSectionFraction(size_t strand_id, size_t section) const;
 
   /// Virtual separation offset for @p strand_id at @p t (added when @c include_virtual_offset is true).
+  /// Uses @ref current_infinitesimal_t_ (see @ref ScopedCurrentInfinitesimalTime).
   glm::dvec2 separationOffsetAt(size_t strand_id, double t) const;
+
+  /// Kinetic @p real_time paired with the infinitesimal coordinate currently in effect for handle/export.
+  EventTime eventTimeAt(double real_time) const { return EventTime(real_time, current_infinitesimal_t_); }
+
+  /// Infinitesimal coordinate bound during event handling / SVG export (0 outside those paths).
+  double currentInfinitesimalTime() const { return current_infinitesimal_t_; }
+
+  /// Temporarily sets @ref current_infinitesimal_t_ so @ref getPointAt / SVG exports apply the matching virtual shift.
+  class ScopedCurrentInfinitesimalTime
+  {
+   public:
+    ScopedCurrentInfinitesimalTime(KineticDelaunay& kd, double infinitesimal_t)
+      : kd_(kd)
+      , previous_(kd.current_infinitesimal_t_)
+    {
+      kd_.current_infinitesimal_t_ = infinitesimal_t;
+    }
+    ScopedCurrentInfinitesimalTime(KineticDelaunay& kd, EventTime t)
+      : ScopedCurrentInfinitesimalTime(kd, t.infinitesimal_time)
+    {
+    }
+    ~ScopedCurrentInfinitesimalTime() { kd_.current_infinitesimal_t_ = previous_; }
+
+    ScopedCurrentInfinitesimalTime(const ScopedCurrentInfinitesimalTime&) = delete;
+    ScopedCurrentInfinitesimalTime& operator=(const ScopedCurrentInfinitesimalTime&) = delete;
+
+   private:
+    KineticDelaunay& kd_;
+    double previous_;
+  };
+
+  /// Enables virtual / infinitesimal polynomial scheduling for @ref findVirtualEvents and site piece polys.
+  /// Restores prior flags on destruction. No-op (inactive) if the pending split is missing or not active.
+  class ScopedInfinitesimalEventCompute
+  {
+   public:
+    ScopedInfinitesimalEventCompute(KineticDelaunay& kd, size_t parent_component_id, double t, double min_virtual_x);
+    ~ScopedInfinitesimalEventCompute();
+
+    ScopedInfinitesimalEventCompute(const ScopedInfinitesimalEventCompute&) = delete;
+    ScopedInfinitesimalEventCompute& operator=(const ScopedInfinitesimalEventCompute&) = delete;
+
+    bool active() const { return active_; }
+
+   private:
+    KineticDelaunay& kd_;
+    bool active_ = false;
+    bool previous_computing_ = false;
+    double previous_min_x_ = 0.0;
+    double previous_schedule_t_ = 0.0;
+    size_t previous_parent_ = static_cast<size_t>(-1);
+    uint64_t previous_epoch_ = 0;
+  };
 
   /// Record a pending branch split until the next graph cut/retriangulation.
   /// If a matching on-hiatus pending split already exists for the same input-branch set, reactivates it
@@ -683,8 +758,14 @@ class KineticDelaunay
     const std::vector<size_t>& pre_split_parent_strands, const std::vector<std::vector<size_t>>& new_components,
     const std::vector<size_t>& split_component_ids);
   /// Recompute @ref PendingBranchSplit separation centroids from current @ref component_data centroids.
-  void refreshPendingSplitSeparationCentroids(size_t parent_component_id);
-  /// Enqueue a @ref SeparationEvent for a recorded pending split (after radius work at the same time).
+  void refreshPendingSplitSeparationCentroids(size_t parent_component_id, double t);
+  /// Centroid-delta direction for @p split at @p t in the same point frame used by event polys / offsets.
+  /// When @p shared_reference_branch is set, all sites are evaluated in that shared transformed frame;
+  /// otherwise each site uses @p apply_reference_transform with its native reference branch (or local support).
+  glm::dvec2 computeSeparationDirection(const PendingBranchSplit& split, double t, bool apply_reference_transform,
+    std::optional<size_t> shared_reference_branch = std::nullopt) const;
+  /// Activate infinitesimal separation or apply the graph cut immediately if seams are already convex.
+  /// Replaces the former SeparationEvent ramp schedule.
   void maybeScheduleSeparationOrApplyPendingSplit(size_t parent_component_id, double split_time);
 
   /// Pending split data keyed by the parent component id, if recorded.
@@ -901,9 +982,9 @@ class KineticDelaunay
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
   /// Directed half-edge 1158 ⇒ undirected edge 579 (also matches twin 1159).
-  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 6804 / 2;
+  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 3644 / 2;
   /// Flip create/discard / trigger-root logging is constrained to [floor(t), floor(t)+1).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
+  static constexpr double kDiagnosticsMonitoredFlipTime = 30.0;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
   /// Optional per-event sanity check: all live sites lie inside the graph convex hull (same topology as SVG).

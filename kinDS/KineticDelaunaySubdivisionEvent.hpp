@@ -37,7 +37,10 @@ class KineticDelaunay::SubdivisionEventManager final : public KineticDelaunay::E
   }
 
   /// Subdivision events are enqueued once in @ref KineticDelaunay::compute (after section scheduling); nothing incremental.
-  void computeEvents(double /*t*/, size_t /*event_id*/) override { }
+  void computeEvents(double /*t*/, size_t /*event_id*/,
+    std::optional<InfinitesimalComputeContext> /*infinitesimal*/ = std::nullopt) override
+  {
+  }
 
  private:
   KineticDelaunay* kd_;

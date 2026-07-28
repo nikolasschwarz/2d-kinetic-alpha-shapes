@@ -1,5 +1,6 @@
 #pragma once
 #include "Delaunator2D.hpp"
+#include "KineticAlgorithm.hpp"
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -174,7 +175,7 @@ class HalfEdgeDelaunayGraph
 
   RuntimeBranchSplitResult applyRuntimeBranchSplit(
     const std::vector<size_t>& runtime_branch_map,
-    const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<double> debug_time = std::nullopt);
+    const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<EventTime> debug_time = std::nullopt);
 
   /** Tombstone every face/edge incident to a vertex flagged in @p dead_vertex_mask. */
   void killVertices(const std::vector<bool>& dead_vertex_mask);

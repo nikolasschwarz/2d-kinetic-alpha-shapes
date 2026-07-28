@@ -32,14 +32,14 @@ std::string formatSignChange(double sign_before, double sign_after)
 }
 
 std::pair<double, double> signChangeAtRoot(const Polynomial& event_trigger, double root,
-  const std::vector<double>& sorted_zeros)
+  const std::vector<double>& sorted_zeros, double root_min, bool virtual_mode)
 {
   const auto root_it = std::lower_bound(sorted_zeros.begin(), sorted_zeros.end(), root);
   const size_t root_index = static_cast<size_t>(root_it - sorted_zeros.begin());
 
-  const double left_bound = root_index == 0 ? 0.0 : sorted_zeros[root_index - 1];
-  const double right_bound
-    = root_index + 1 < sorted_zeros.size() ? sorted_zeros[root_index + 1] : 1.0;
+  const double left_bound = root_index == 0 ? root_min : sorted_zeros[root_index - 1];
+  const double right_bound = root_index + 1 < sorted_zeros.size() ? sorted_zeros[root_index + 1]
+                                                                : (virtual_mode ? root + 1.0 : 1.0);
 
   const double before_test = (left_bound + root) * 0.5;
   const double after_test = (root + right_bound) * 0.5;
@@ -48,7 +48,8 @@ std::pair<double, double> signChangeAtRoot(const Polynomial& event_trigger, doub
   return { sign_before, sign_after };
 }
 
-std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, double min_fraction)
+std::vector<SignedRadiusRoot> findSignedRadiusRoots(
+  Polynomial& event_trigger, double min_fraction, bool virtual_unbounded = false)
 {
   if (event_trigger.degree() == -1)
   {
@@ -60,10 +61,15 @@ std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, d
   std::vector<double> filtered_sorted_zeros;
   for (double root : zeros)
   {
-    if (!std::isnan(root) && root > min_fraction && root <= kEventIntervalFractionUpperBound)
+    if (std::isnan(root) || !std::isfinite(root) || root <= min_fraction)
     {
-      filtered_sorted_zeros.push_back(root);
+      continue;
     }
+    if (!virtual_unbounded && root > kEventIntervalFractionUpperBound)
+    {
+      continue;
+    }
+    filtered_sorted_zeros.push_back(root);
   }
 
   if (filtered_sorted_zeros.empty())
@@ -78,8 +84,18 @@ std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, d
   interval_signs[0] = event_trigger(test_point) > 0.0 ? 1.0 : -1.0;
   for (size_t i = 0; i < filtered_sorted_zeros.size(); ++i)
   {
-    test_point
-      = (filtered_sorted_zeros[i] + (i + 1 < filtered_sorted_zeros.size() ? filtered_sorted_zeros[i + 1] : 1.0)) / 2.0;
+    if (i + 1 < filtered_sorted_zeros.size())
+    {
+      test_point = (filtered_sorted_zeros[i] + filtered_sorted_zeros[i + 1]) / 2.0;
+    }
+    else if (virtual_unbounded)
+    {
+      test_point = filtered_sorted_zeros[i] + 1.0;
+    }
+    else
+    {
+      test_point = (filtered_sorted_zeros[i] + 1.0) / 2.0;
+    }
     interval_signs[i + 1] = event_trigger(test_point) > 0.0 ? 1.0 : -1.0;
   }
 
@@ -103,7 +119,8 @@ std::vector<SignedRadiusRoot> findSignedRadiusRoots(Polynomial& event_trigger, d
 }
 
 void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t section, double schedule_t,
-  const std::array<size_t, 3>& strand_ids, const std::array<Trajectory<2>, 3>& trajectories)
+  const std::array<size_t, 3>& strand_ids, const std::array<Trajectory<2>, 3>& trajectories, bool virtual_mode,
+  double frozen_real_t, double root_min)
 {
   for (size_t vertex_index = 0; vertex_index < 3; ++vertex_index)
   {
@@ -131,9 +148,10 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
     = kd.collectDistinctInputBranchesForEventTrigger(event_strand_ids, event_interval_upper_bound);
   const bool use_shared_transformed_frame
     = kd.eventTriggerUsesSharedTransformedFrame(event_strand_ids, event_interval_upper_bound);
+  const EventTime schedule_event_time(schedule_t, virtual_mode ? root_min : 0.0);
   std::ostringstream branch_summary;
   branch_summary << "  event_trigger_strands=" << event_strand_ids[0] << "," << event_strand_ids[1] << ","
-                 << event_strand_ids[2] << " schedule_t=" << schedule_t
+                 << event_strand_ids[2] << " schedule_t=" << schedule_event_time
                  << " event_interval_upper_bound=" << event_interval_upper_bound
                  << " branch_section_index=" << branch_section_index << " distinct_input_branches=[";
   for (size_t i = 0; i < distinct_input_branches.size(); ++i)
@@ -151,6 +169,11 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
                    << kd.sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound);
   }
   branch_summary << " frame_policy=" << (use_shared_transformed_frame ? "shared_transformed" : "local_support");
+  if (virtual_mode)
+  {
+    branch_summary << " pass=infinitesimal frozen_real_t=" << frozen_real_t
+                   << " (poly param = infinitesimal_t)";
+  }
   KINDS_DEBUG(branch_summary.str());
 
   for (size_t vertex_index = 0; vertex_index < 3; ++vertex_index)
@@ -166,26 +189,42 @@ void logMonitoredFaceRadiusTrajectories(const KineticDelaunay& kd, size_t sectio
                                << "," << raw_section_start.y << ") raw_support_at_section_end=(" << raw_section_end.x
                                << "," << raw_section_end.y << ")");
 
-    for (double eval_t : { static_cast<double>(section), static_cast<double>(section) + 1.0 })
+    if (virtual_mode)
     {
-      if (eval_t > static_cast<double>(section) && section + 1 >= support_points.size())
+      for (double x : { 0.0, 1.0 })
       {
-        continue;
+        const double px = trajectories[vertex_index][0](x);
+        const double py = trajectories[vertex_index][1](x);
+        std::ostringstream line;
+        line << std::setprecision(17) << "  trajectory[" << vertex_index << "] strand=" << strand_id
+             << " at infinitesimal_t=" << x << " frozen_real_t=" << frozen_real_t << " pos=(" << px << "," << py
+             << ")";
+        KINDS_DEBUG(line.str());
       }
-      const double fraction = eval_t - static_cast<double>(section);
-      const double x = trajectories[vertex_index][0](fraction);
-      const double y = trajectories[vertex_index][1](fraction);
-      std::ostringstream line;
-      line << std::setprecision(17) << "  trajectory[" << vertex_index << "] strand=" << strand_id << " at t="
-           << eval_t << " fraction=" << fraction << " pos=(" << x << "," << y << ")";
-      KINDS_DEBUG(line.str());
+    }
+    else
+    {
+      for (double eval_t : { static_cast<double>(section), static_cast<double>(section) + 1.0 })
+      {
+        if (eval_t > static_cast<double>(section) && section + 1 >= support_points.size())
+        {
+          continue;
+        }
+        const double fraction = eval_t - static_cast<double>(section);
+        const double x = trajectories[vertex_index][0](fraction);
+        const double y = trajectories[vertex_index][1](fraction);
+        std::ostringstream line;
+        line << std::setprecision(17) << "  trajectory[" << vertex_index << "] strand=" << strand_id << " at t="
+             << eval_t << " fraction=" << fraction << " pos=(" << x << "," << y << ")";
+        KINDS_DEBUG(line.str());
+      }
     }
   }
 }
 
 void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t face_id, size_t he_id, double t,
   double min_fraction, Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
-  const std::array<Trajectory<2>, 3>& trajectories)
+  const std::array<Trajectory<2>, 3>& trajectories, bool virtual_mode, double frozen_real_t)
 {
   if (!kd.diagnosticsEnabled()
     || !KineticDelaunay::matchesDiagnosticsMonitorId(face_id, KineticDelaunay::kDiagnosticsMonitoredFaceId))
@@ -199,13 +238,22 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
 
   const size_t section = static_cast<size_t>(t);
   const double event_interval_upper_bound = eventIntervalUpperBound(t);
+  const double root_min = min_fraction;
+  const EventTime schedule_event_time(t, virtual_mode ? root_min : 0.0);
   std::ostringstream header;
-  header << "Radius trigger roots monitor (face " << face_id << ", he_id=" << he_id << ", schedule_t=" << t
+  header << "Radius trigger roots monitor (face " << face_id << ", he_id=" << he_id
+         << ", schedule_t=" << schedule_event_time
          << ", event_interval_upper_bound=" << event_interval_upper_bound << ", section=" << section
-         << ", min_fraction=" << min_fraction << ", cutoff=" << kd.getCutoff()
-         << ", trigger_degree=" << event_trigger.degree() << ")";
+         << ", " << (virtual_mode ? "min_infinitesimal_t=" : "min_fraction=") << root_min
+         << ", cutoff=" << kd.getCutoff()
+         << ", trigger_degree=" << event_trigger.degree()
+         << ", pass=" << (virtual_mode ? "infinitesimal" : "primary") << ")";
+  if (virtual_mode)
+  {
+    header << ", virtual=true, frozen_real_t=" << frozen_real_t;
+  }
   KINDS_DEBUG(header.str());
-  logMonitoredFaceRadiusTrajectories(kd, section, t, strand_ids, trajectories);
+  logMonitoredFaceRadiusTrajectories(kd, section, t, strand_ids, trajectories, virtual_mode, frozen_real_t, root_min);
 
   if (event_trigger.degree() == -1)
   {
@@ -225,7 +273,7 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
   sorted_zeros.reserve(zeros.size());
   for (double root : zeros)
   {
-    if (!std::isnan(root))
+    if (!std::isnan(root) && std::isfinite(root))
     {
       sorted_zeros.push_back(root);
     }
@@ -236,40 +284,47 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
   {
     const double root = zeros[root_index];
     std::ostringstream line;
-    line << std::setprecision(17) << "  root[" << root_index << "] fraction=" << root << " absolute_t="
-         << (root + static_cast<double>(section));
-
-    if (std::isnan(root))
+    line << std::setprecision(17) << "  root[" << root_index << "] ";
+    if (virtual_mode)
     {
-      line << " filtered (nan)";
+      line << "infinitesimal_t=" << root << " frozen_real_t=" << frozen_real_t;
+    }
+    else
+    {
+      line << "fraction=" << root << " absolute_t=" << (root + static_cast<double>(section));
+    }
+
+    if (std::isnan(root) || !std::isfinite(root))
+    {
+      line << " filtered (nan/non-finite)";
       KINDS_DEBUG(line.str());
       continue;
     }
 
-    const auto [sign_before, sign_after] = signChangeAtRoot(event_trigger, root, sorted_zeros);
-    line << " sign_change=" << formatSignChange(sign_before, sign_after);
+    const auto [sb, sa] = signChangeAtRoot(event_trigger, root, sorted_zeros, root_min, virtual_mode);
+    line << " sign_change=" << formatSignChange(sb, sa);
 
-    if (root <= min_fraction)
+    if (root <= root_min)
     {
-      line << " filtered (fraction <= min_fraction)";
+      line << " filtered (" << (virtual_mode ? "infinitesimal_t" : "fraction") << " <= min)";
       KINDS_DEBUG(line.str());
       continue;
     }
-    if (root > kEventIntervalFractionUpperBound)
+    if (!virtual_mode && root > kEventIntervalFractionUpperBound)
     {
       line << " filtered (fraction > " << kEventIntervalFractionUpperBound << ")";
       KINDS_DEBUG(line.str());
       continue;
     }
 
-    if (sign_before == sign_after)
+    if (sb == sa)
     {
       line << " filtered (no_sign_change)";
       KINDS_DEBUG(line.str());
       continue;
     }
 
-    const bool target_inside = sign_before > 0.0 && sign_after < 0.0;
+    const bool target_inside = sb > 0.0 && sa < 0.0;
     line << " enqueued target_inside=" << (target_inside ? "true" : "false");
     KINDS_DEBUG(line.str());
   }
@@ -315,15 +370,26 @@ void KineticDelaunay::logRadiusEventTriggerRoots(size_t face_id, size_t he_id, d
   Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,
   const std::array<Trajectory<2>, 3>& trajectories) const
 {
-  logRadiusTriggerRootsForMonitoredFace(
-    *this, face_id, he_id, t, min_fraction, std::move(event_trigger), strand_ids, trajectories);
+  logRadiusTriggerRootsForMonitoredFace(*this, face_id, he_id, t, min_fraction, std::move(event_trigger), strand_ids,
+    trajectories, computing_infinitesimal_events_, infinitesimal_schedule_t_);
 }
 
-void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
+void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id,
+  std::optional<InfinitesimalComputeContext> infinitesimal)
 {
   auto* kd = kd_;
   auto& graph = kd->graph;
   auto& branch_trajs = kd->branch_trajs;
+
+  std::optional<KineticDelaunay::ScopedInfinitesimalEventCompute> scope;
+  if (infinitesimal.has_value())
+  {
+    scope.emplace(*kd, infinitesimal->parent_component_id, t, infinitesimal->min_infinitesimal_t);
+    if (!scope->active())
+    {
+      return;
+    }
+  }
 
   if (kd->cutoff == std::numeric_limits<double>::infinity())
   {
@@ -366,16 +432,19 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     = circumradiusEquals(
       trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], kd->cutoff);
 
+  const bool virtual_mode = infinitesimal.has_value();
+  const double root_min = virtual_mode ? kd->infinitesimal_recompute_min_x_ : static_cast<double>(fraction);
+
   if (kd->diagnosticsEnabled()
     && KineticDelaunay::matchesDiagnosticsMonitorId(face_id, KineticDelaunay::kDiagnosticsMonitoredFaceId)
     && kd->isDiagnosticsFaceIdValid(face_id))
   {
-    kd->logRadiusEventTriggerRoots(face_id, he_id, t, fraction, event_trigger,
+    kd->logRadiusEventTriggerRoots(face_id, he_id, t, root_min, event_trigger,
       { static_cast<size_t>(u), static_cast<size_t>(v), static_cast<size_t>(w) },
       { trajs[0], trajs[1], trajs[2] });
   }
 
-  auto event_times = findSignedRadiusRoots(event_trigger, fraction);
+  auto event_times = findSignedRadiusRoots(event_trigger, root_min, virtual_mode);
   for (const auto& event_time : event_times)
   {
     glm::dvec2 center {};
@@ -387,11 +456,22 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id)
     }
     center[0] /= trajs.size();
     center[1] /= trajs.size();
-    // KINDS_DEBUG("Boundary Event at time " << event_time + section << " for half-edge ID " << he_id << " at center
-    // position"
-    //                                       << glm::to_string(center));
 
-    kd->kinetic_algorithm_->enqueueEvent(
-      std::make_shared<RadiusEvent>(kd, event_time.fraction + section, he_id, t, center, event_time.target_inside));
+    if (virtual_mode)
+    {
+      const EventTime occurrence(kd->infinitesimal_schedule_t_, event_time.fraction);
+      const EventTime creation(kd->infinitesimal_schedule_t_, kd->infinitesimal_recompute_min_x_);
+      auto ev = std::make_shared<RadiusEvent>(
+        kd, occurrence.real_time, he_id, creation.real_time, center, event_time.target_inside);
+      ev->occurrence_time = occurrence;
+      ev->creation_time = creation;
+      ev->infinitesimal_epoch_ = kd->infinitesimal_schedule_epoch_;
+      kd->kinetic_algorithm_->enqueueEvent(std::move(ev));
+    }
+    else
+    {
+      kd->kinetic_algorithm_->enqueueEvent(
+        std::make_shared<RadiusEvent>(kd, event_time.fraction + section, he_id, t, center, event_time.target_inside));
+    }
   }
 }
