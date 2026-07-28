@@ -191,6 +191,22 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
 
   kinDS::VoronoiMesh combined_mesh;
   bool combined_mesh_initialized = false;
+  // Empty meshlets (e.g. unused segments) keep default NoNormals; lock combined mode from the first
+  // meshlet that actually has geometry so the first += does not mismatch.
+  NormalMode combined_normal_mode = NormalMode::NoNormals;
+  for (size_t i = 0; i < export_count; ++i)
+  {
+    const VoronoiMesh& candidate = meshlets_to_export[i];
+    if (candidate.getVertexCount() > 0 || candidate.getTriangleCount() > 0)
+    {
+      combined_normal_mode = candidate.getNormalMode();
+      break;
+    }
+    if (i == 0)
+    {
+      combined_normal_mode = candidate.getNormalMode();
+    }
+  }
   for (size_t i = 0; i < export_count; ++i)
   {
     VoronoiMesh mesh = meshlet_for_export(i);
@@ -198,7 +214,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
 
     if (!combined_mesh_initialized)
     {
-      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, mesh.getNormalMode());
+      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, combined_normal_mode);
       // One OBJ group per meshlet index; boundaries are managed here, not via per-meshlet group_offsets.
       combined_mesh.setGroupOffsets({ 0 });
       combined_mesh_initialized = true;
@@ -517,8 +533,12 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   mesh_builder = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction,
     visual_debug, parallel_for);
   mesh_builder->setErrorFiles(settings.error_files || visual_debug);
-  mesh_builder->store_mesh_metadata
-    = settings.store_mesh_metadata || visual_debug || settings.error_files || settings.validate_mesh_vertex_sources;
+  // Validate needs source metadata; otherwise honor Settings::store_mesh_metadata (CLI-controllable).
+  if (settings.validate_mesh_vertex_sources && !settings.store_mesh_metadata)
+  {
+    KINDS_WARNING("validate_mesh_vertex_sources requires store_mesh_metadata; enabling metadata storage");
+  }
+  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata || settings.validate_mesh_vertex_sources;
   mesh_builder->validate_mesh_vertex_sources = settings.validate_mesh_vertex_sources;
   if (settings.validate_mesh_vertex_sources)
   {

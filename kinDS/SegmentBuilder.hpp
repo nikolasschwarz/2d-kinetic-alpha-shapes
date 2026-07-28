@@ -188,7 +188,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// multiple future runtime branches.
   bool radius_pending_split_triangle_fallback_enabled = true;
   /// When false, skip building/storing per-vertex and per-face JSON metadata on meshlets.
-  bool store_mesh_metadata = true;
+  bool store_mesh_metadata = false;
   /// When true (e.g. via @c --validate), run mesh vertex source consistency checks in @ref finalize.
   bool validate_mesh_vertex_sources = false;
   /// When false, skip meshlet diagnostic logging and related string assembly.

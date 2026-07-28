@@ -65,8 +65,8 @@ std::vector<std::pair<size_t, double>> merge_sorted_vectors(const std::vector<st
   return result;
 }
 
-static bool kinetic_delaunay_example(bool validate_mesh_vertex_sources, const std::string& validate_log_path,
-  bool alternate_section_shading)
+static bool kinetic_delaunay_example(bool validate_mesh_vertex_sources, bool store_mesh_metadata,
+  const std::string& validate_log_path, bool alternate_section_shading)
 {
 #define TEST_TRAJECTORIES
 #ifdef TEST_TRAJECTORIES
@@ -279,7 +279,7 @@ static bool kinetic_delaunay_example(bool validate_mesh_vertex_sources, const st
 
   kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);
   mesh_builder.radius_boundary_transition_shift_enabled = true;
-  mesh_builder.store_mesh_metadata = validate_mesh_vertex_sources;
+  mesh_builder.store_mesh_metadata = store_mesh_metadata || validate_mesh_vertex_sources;
   mesh_builder.validate_mesh_vertex_sources = validate_mesh_vertex_sources;
   kinetic_delaunay.init(&mesh_builder);
   auto points = kinetic_delaunay.getPointsAt(0.0);
@@ -490,7 +490,10 @@ static void print_usage(const char* program_name)
             << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
             << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
             << "  --validate                After meshing, check that vertices with the same metadata source agree in world space\n"
+            << "                            (implies mesh metadata storage)\n"
             << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
+            << "  --store-mesh-metadata     Store JSON vertex/face metadata on meshlets\n"
+            << "  --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)\n"
             << "  --section-shading         Alternate light/dark green and brown materials by even/odd section\n"
             << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
             << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
@@ -544,6 +547,8 @@ static const std::vector<std::string>& known_cli_flags()
     "--transform-at-export",
     "--validate",
     "--validate-log",
+    "--store-mesh-metadata",
+    "--no-store-mesh-metadata",
     "--section-shading",
     "--start",
     "--end",
@@ -664,7 +669,7 @@ static std::filesystem::path mesh_export_base_directory(const std::optional<std:
 
 static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
-  bool transform_mesh_at_construction, bool validate_mesh_vertex_sources,
+  bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, bool store_mesh_metadata,
   const std::string& validate_log_path, bool alternate_section_shading, size_t start_section,
   std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end, double alpha_cutoff,
   bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
@@ -704,6 +709,7 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     kinDS::TreeMesher mesher(strand_tree);
     mesher.getSettings().transform_mesh_at_construction = transform_mesh_at_construction;
     mesher.getSettings().validate_mesh_vertex_sources = validate_mesh_vertex_sources;
+    mesher.getSettings().store_mesh_metadata = store_mesh_metadata;
     mesher.getSettings().validate_mesh_vertex_sources_log_path = validate_log_path;
     mesher.getSettings().alternate_section_shading = alternate_section_shading;
     mesher.getSettings().start_section = start_section;
@@ -850,6 +856,7 @@ int main(int argc, char* argv[])
   bool mesh_export_profile_space = false;
   bool mesh_transform_at_construction = true;
   bool mesh_validate_vertex_sources = false;
+  bool mesh_store_mesh_metadata = kinDS::TreeMesher::Settings {}.store_mesh_metadata;
   std::string mesh_validate_log_path = kinDS::Validator::defaultLogFilePath();
   bool mesh_alternate_section_shading = false;
   size_t mesh_start_section = 0;
@@ -976,6 +983,16 @@ int main(int argc, char* argv[])
     else if (arg == "--validate")
     {
       mesh_validate_vertex_sources = true;
+      ++arg_idx;
+    }
+    else if (arg == "--store-mesh-metadata")
+    {
+      mesh_store_mesh_metadata = true;
+      ++arg_idx;
+    }
+    else if (arg == "--no-store-mesh-metadata")
+    {
+      mesh_store_mesh_metadata = false;
       ++arg_idx;
     }
     else if (arg == "--validate-log")
@@ -1192,7 +1209,8 @@ int main(int argc, char* argv[])
   else if (command == "demo")
   {
     std::cout << "Running demo (kinetic_delaunay_example)..." << std::endl;
-    if (!kinetic_delaunay_example(mesh_validate_vertex_sources, mesh_validate_log_path, mesh_alternate_section_shading))
+    if (!kinetic_delaunay_example(mesh_validate_vertex_sources, mesh_store_mesh_metadata, mesh_validate_log_path,
+          mesh_alternate_section_shading))
     {
       return 1;
     }
@@ -1202,10 +1220,11 @@ int main(int argc, char* argv[])
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
-          mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_validate_log_path,
-          mesh_alternate_section_shading, mesh_start_section, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,
-          mesh_alpha_cutoff, mesh_visual_debug, mesh_error_files, mesh_visual_debug_separate_pending_splits,
-          mesh_visual_debug_output_root, mesh_check_sites_inside_convex_hull))
+          mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
+          mesh_validate_log_path, mesh_alternate_section_shading, mesh_start_section, mesh_end_section,
+          mesh_cap_at_start, mesh_cap_at_end, mesh_alpha_cutoff, mesh_visual_debug, mesh_error_files,
+          mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root,
+          mesh_check_sites_inside_convex_hull))
     {
       return 1;
     }
