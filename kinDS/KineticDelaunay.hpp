@@ -49,6 +49,13 @@ struct PendingBranchSplit
   double separation_te = 0.0;
   size_t separation_iteration = 0;
   bool separation_trajectory_active = false;
+  /// When true, separation / virtual offset continue, but finalize checks (convex seams → graph cut, section
+  /// boundary force-cut) are skipped: the pending pieces are no longer topologically distinct (e.g. after a
+  /// radius outside→inside component consolidate). Reactivation clears this flag when the same input-branch
+  /// split is noted again.
+  bool on_hiatus = false;
+  /// Sorted unique input-branch ids spanned by the pending pieces (identity for hiatus reactivation).
+  std::vector<size_t> input_branch_ids;
 };
 
 /// Registry of pending branch splits and per-strand lookup into the frozen parent frame.
@@ -461,6 +468,16 @@ class KineticDelaunay
   void syncPrevComponentCountWithPendingSplits();
   /// Clear strand list and boundary/centroid/last_updated for an emptied (merged-away) component slot.
   void clearComponentSupportData(size_t component_id);
+  /// Section index used to resolve input-branch ids when noting / reactivating a pending split at @p split_time.
+  size_t pendingSplitBranchSection(double split_time) const;
+  /// Sorted unique input-branch ids among non-dummy strands in @p strand_groups at @p branch_section.
+  std::vector<size_t> collectInputBranchIdsForStrandGroups(
+    const std::vector<std::vector<size_t>>& strand_groups, size_t branch_section) const;
+  /// On-hiatus pending split with the same @c input_branch_ids set, if any.
+  PendingBranchSplit* findHiatusPendingSplitWithInputBranches(const std::vector<size_t>& input_branch_ids);
+  /// Assign split-off strands to pending child runtime branches (allocate only when none exist yet).
+  void assignPendingSplitChildRuntimeBranches(PendingBranchSplit& split, size_t parent_component_id,
+    const std::vector<size_t>& split_component_ids, size_t branch_section, double split_time, bool allow_allocate);
   /// At section @p section_index, look ahead to height @p section_index + 1 and register hold/blend when a
   /// live component's strands already occupy multiple input branches there (upcoming split).
   void registerUpcomingPostSplitFrameTransitions(size_t section_index);
@@ -632,12 +649,17 @@ class KineticDelaunay
 
   void computeComponentData(double t);
 
-  /// After induced connectivity changes (e.g. radius add), fold any kinetic component ids that now share one
-  /// induced connected piece into a single survivor id. Absorbed ids are left empty and their support data cleared
-  /// (boundaries / centroid / last_updated). Component slots are never compacted.
-  /// Do not call immediately after @ref SegmentBuilder::splitComponent when a pending split was just noted — that
-  /// would re-join future-branch pieces and break graph-cut / seam convexity checks.
-  void reconcileComponentMergers(double t);
+  /// On a radius outside→inside transition, if the triangle's vertices belong to different kinetic components,
+  /// fold every higher id into the smallest id: copy strands (updating @c component_map while iterating), clear
+  /// emptied slots, then recompute the survivor's boundary / centroid / last_updated. Slots are never compacted.
+  /// Pending splits that touch any absorbed / survivor id are put @c on_hiatus (finalize suppressed).
+  void consolidateComponentsAtTriangle(const std::array<int, 3>& triangle_vertices, double t);
+
+  /// Put every pending split whose @c split_component_ids intersects @p component_ids onto hiatus.
+  void putPendingSplitsOnHiatusTouchingComponents(const std::vector<size_t>& component_ids, double t);
+
+  /// True if any kinetic pending split for @p parent_runtime_branch_id is currently on hiatus.
+  bool isPendingRuntimeBranchOnHiatus(size_t parent_runtime_branch_id) const;
 
   /// True once @ref component_data reflects the current @ref HalfEdgeDelaunayGraph after the latest section
   /// retriangulation. While false, connected components may already be split in component data but the mesh
@@ -655,6 +677,8 @@ class KineticDelaunay
   glm::dvec2 separationOffsetAt(size_t strand_id, double t) const;
 
   /// Record a pending branch split until the next graph cut/retriangulation.
+  /// If a matching on-hiatus pending split already exists for the same input-branch set, reactivates it
+  /// (clears @c on_hiatus, refreshes piece ids / runtime child assignment) without re-scheduling separation.
   void notePendingBranchSplit(size_t parent_component_id, double split_time,
     const std::vector<size_t>& pre_split_parent_strands, const std::vector<std::vector<size_t>>& new_components,
     const std::vector<size_t>& split_component_ids);

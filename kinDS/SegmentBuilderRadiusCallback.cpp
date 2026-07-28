@@ -134,7 +134,10 @@ void writeRadiusRingWalkFailDebugTxt(const std::filesystem::path& filepath, doub
   std::ofstream out(filepath);
   if (!out)
   {
-    KINDS_WARNING("radius ring walk FAIL: failed to open debug TXT " << filepath.generic_string());
+    KINDS_WARNING("radius ring walk FAIL: failed to open debug TXT " << filepath.generic_string()
+      << " runtime_branch="
+      << (runtime_branch_id.has_value() ? std::to_string(runtime_branch_id.value()) : "unresolved")
+      << " strand_cell=" << strand_cell_id << " face=" << delaunay_face_id << " t=" << occurrence_time);
     return;
   }
 
@@ -191,7 +194,10 @@ void writeRadiusRingWalkFailDebugTxt(const std::filesystem::path& filepath, doub
   }
   out << '\n';
 
-  KINDS_WARNING("radius ring walk FAIL: wrote debug TXT to " << filepath.generic_string());
+  KINDS_WARNING("radius ring walk FAIL: wrote debug TXT to " << filepath.generic_string()
+    << " runtime_branch="
+    << (runtime_branch_id.has_value() ? std::to_string(runtime_branch_id.value()) : "unresolved")
+    << " strand_cell=" << strand_cell_id << " face=" << delaunay_face_id << " t=" << occurrence_time);
 }
 
 /// Debug dump for radius cell ring-walk failure (before any ear-clip). Filename encodes ring_walk_FAIL.
@@ -372,7 +378,10 @@ void writeRadiusRingWalkFailDebug(KineticDelaunay& kin_del, double occurrence_ti
   std::ofstream out(filepath);
   if (!out)
   {
-    KINDS_WARNING("radius ring walk FAIL: failed to open debug SVG " << filepath.generic_string());
+    KINDS_WARNING("radius ring walk FAIL: failed to open debug SVG " << filepath.generic_string()
+      << " runtime_branch="
+      << (runtime_branch_id.has_value() ? std::to_string(runtime_branch_id.value()) : "unresolved")
+      << " strand_cell=" << strand_cell_id << " face=" << delaunay_face_id << " t=" << occurrence_time);
     return;
   }
 
@@ -434,7 +443,10 @@ void writeRadiusRingWalkFailDebug(KineticDelaunay& kin_del, double occurrence_ti
       << "\" fill=\"#444\">" << radiusDebugSvgEscape(fail_reason) << "</text>\n";
   out << "</svg>\n";
 
-  KINDS_WARNING("radius ring walk FAIL: wrote debug SVG to " << filepath.generic_string());
+  KINDS_WARNING("radius ring walk FAIL: wrote debug SVG to " << filepath.generic_string()
+    << " runtime_branch="
+    << (runtime_branch_id.has_value() ? std::to_string(runtime_branch_id.value()) : "unresolved")
+    << " strand_cell=" << strand_cell_id << " face=" << delaunay_face_id << " t=" << occurrence_time);
 }
 
 void trySetOwnedInteriorVoronoiVertexForRadiusShift(RadiusBoundaryTransitionShiftContext& ctx,
@@ -1142,17 +1154,17 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   }
   auto& graph = segment_builder_.kin_del.getGraph();
   auto vertices = graph.adjacentTriangleVertices(radius->half_edge_id);
-  size_t component_id = segment_builder_.kin_del.component_data.component_map[vertices[0]];
 
+  // Outside→inside can glue previously separate kinetic components across this triangle. Fold them into the
+  // smallest component id before any split bookkeeping runs on the (now possibly merged) parent.
+  if (radius->target_inside)
+  {
+    segment_builder_.kin_del.consolidateComponentsAtTriangle(vertices, radius->occurrence_time);
+  }
+
+  size_t component_id = segment_builder_.kin_del.component_data.component_map[vertices[0]];
   auto split = segment_builder_.kin_del.checkForSplit(vertices, radius->occurrence_time);
   segment_builder_.splitComponent(component_id, split, radius->occurrence_time);
-  // Only reconcile mergers when this radius event did not initiate a pending split. Running the induced-piece
-  // merge pass immediately after splitComponent can re-join future-branch pieces and break the graph-cut /
-  // seam checks that depend on distinct split_component_ids.
-  if (split.empty())
-  {
-    segment_builder_.kin_del.reconcileComponentMergers(radius->occurrence_time);
-  }
 
   std::unordered_set<size_t> components_to_refresh;
   for (int vertex : vertices)
@@ -2120,7 +2132,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       if (ids.size() < 3)
       {
         KINDS_WARNING("Radius: traced cell polygon has fewer than three vertices; no triangles emitted for cell "
-          << cell_id << " face=" << affected_face_id << " t=" << t);
+          << cell_id << " face=" << affected_face_id << " t=" << t << " runtime_branch=" << runtime_branch_id
+          << "; " << segment_builder_.formatStrandBranchLogInfo(cell_id, t));
       }
       size_t owner_segment_id = static_cast<size_t>(-1);
       if (cell_id < segment_builder_.strand_to_segment_indices.size()
@@ -2255,8 +2268,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       if (directed_crossings.size() != stored_crossings.size())
       {
         KINDS_WARNING("Radius no-shift subdivision: could not orient every crossing on voronoi_edge="
-          << voronoi_edge_id << " at t=" << t << " (oriented=" << directed_crossings.size()
-          << ", stored=" << stored_crossings.size() << ").");
+          << voronoi_edge_id << " at t=" << t << " runtime_branch=" << runtime_branch_id
+          << " (oriented=" << directed_crossings.size() << ", stored=" << stored_crossings.size() << ").");
         continue;
       }
 
@@ -2284,7 +2297,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         if (affected_interval_index.has_value())
         {
           KINDS_WARNING("Radius no-shift subdivision: affected face " << affected_face_id
-            << " occurs more than once along voronoi_edge=" << voronoi_edge_id << " at t=" << t << ".");
+            << " occurs more than once along voronoi_edge=" << voronoi_edge_id << " at t=" << t
+            << " runtime_branch=" << runtime_branch_id << ".");
           affected_interval_index.reset();
           break;
         }
@@ -2422,7 +2436,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     {
       KINDS_WARNING("Radius no-shift subdivision: " << exact_match_count
         << " active strips match voronoi_edge=" << voronoi_edge_id << " at t=" << t
-        << "; arbitrarily using the first match.");
+        << " runtime_branch=" << runtime_branch_id << "; arbitrarily using the first match.");
     }
     if (matched_strip == nullptr)
     {
@@ -2430,12 +2444,14 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       if (matched_strip != nullptr)
       {
         KINDS_WARNING("Radius no-shift subdivision: no active strip matches the outer endpoints on voronoi_edge="
-          << voronoi_edge_id << " at t=" << t << "; arbitrarily using the first active strip.");
+          << voronoi_edge_id << " at t=" << t << " runtime_branch=" << runtime_branch_id
+          << "; arbitrarily using the first active strip.");
       }
       else
       {
         KINDS_WARNING("Radius no-shift subdivision: no active strip is available on voronoi_edge="
-          << voronoi_edge_id << " at t=" << t << "; skipping subdivision finish without using legacy finish.");
+          << voronoi_edge_id << " at t=" << t << " runtime_branch=" << runtime_branch_id
+          << "; skipping subdivision finish without using legacy finish.");
         return std::vector<SegmentBuilder::MeshingData> {};
       }
     }

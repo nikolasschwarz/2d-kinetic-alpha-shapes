@@ -726,9 +726,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void resolveAllIntersectionFlexibleVertices(const char* context);
 
   /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p
-  /// position.
-  void warnIfVoronoiVertexOutsideAlphaShape(
-    const char* context, size_t voronoi_vertex_id, const glm::dvec3& position) const;
+  /// position and strand/branch ids at @p t.
+  void warnIfVoronoiVertexOutsideAlphaShape(const char* context, size_t voronoi_vertex_id, const glm::dvec3& position,
+    size_t strand_id, double t) const;
+
+  /// Compact strand / runtime-branch / input-branch suffix for warning logs.
+  std::string formatStrandBranchLogInfo(size_t strand_id, double t) const;
 
   /// Validates both circumcenters (Delaunay face ids) incident to a Voronoi edge.
   void requireLiveRegisteredVoronoiEdgeEndpoints(size_t voronoi_edge_id, const char* context) const;

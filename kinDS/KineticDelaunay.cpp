@@ -2215,111 +2215,151 @@ void KineticDelaunay::clearComponentSupportData(size_t component_id)
   }
 }
 
-void KineticDelaunay::reconcileComponentMergers(double t)
+void KineticDelaunay::consolidateComponentsAtTriangle(const std::array<int, 3>& triangle_vertices, double t)
 {
-  if (component_data.components.empty())
+  if (component_data.components.empty() || component_data.component_map.empty())
   {
     return;
   }
 
-  const size_t vertex_count = graph.getVertexCount();
-  component_data.component_map.resize(vertex_count);
-
-  // Never fold components that still participate in a pending split — those ids are the graph-cut / seam inputs.
-  std::unordered_set<size_t> pending_split_component_ids;
-  for (const auto& entry : pending_branch_splits_.by_parent_)
+  std::vector<size_t> triangle_component_ids;
+  triangle_component_ids.reserve(3);
+  for (int vertex : triangle_vertices)
   {
-    for (size_t split_component_id : entry.second.split_component_ids)
+    if (vertex < 0)
     {
-      pending_split_component_ids.insert(split_component_id);
+      continue;
     }
+    const size_t strand_id = static_cast<size_t>(vertex);
+    if (isDummyBoundary(strand_id) || strand_id >= component_data.component_map.size())
+    {
+      continue;
+    }
+    triangle_component_ids.push_back(component_data.component_map[strand_id]);
+  }
+  if (triangle_component_ids.size() < 2)
+  {
+    return;
   }
 
-  const std::vector<std::vector<size_t>> pieces = extractConnectedComponents();
-  bool remapped_merge = false;
-
-  for (const std::vector<size_t>& piece : pieces)
+  std::sort(triangle_component_ids.begin(), triangle_component_ids.end());
+  triangle_component_ids.erase(
+    std::unique(triangle_component_ids.begin(), triangle_component_ids.end()), triangle_component_ids.end());
+  if (triangle_component_ids.size() <= 1)
   {
-    std::vector<size_t> prior_ids;
-    prior_ids.reserve(piece.size());
-    for (size_t strand_id : piece)
-    {
-      if (isDummyBoundary(strand_id) || strand_id >= component_data.component_map.size())
-      {
-        continue;
-      }
-      prior_ids.push_back(component_data.component_map[strand_id]);
-    }
-    if (prior_ids.empty())
+    return;
+  }
+
+  // Smallest component index survives; every other id on this triangle is absorbed into it.
+  const size_t survivor = triangle_component_ids.front();
+  if (survivor >= component_data.components.size())
+  {
+    return;
+  }
+
+  // Merging pending-split pieces makes finalize ill-formed; keep separation running but put those splits on hiatus.
+  putPendingSplitsOnHiatusTouchingComponents(triangle_component_ids, t);
+
+  for (size_t i = 1; i < triangle_component_ids.size(); ++i)
+  {
+    const size_t absorbed_id = triangle_component_ids[i];
+    if (absorbed_id >= component_data.components.size())
     {
       continue;
     }
 
-    std::sort(prior_ids.begin(), prior_ids.end());
-    prior_ids.erase(std::unique(prior_ids.begin(), prior_ids.end()), prior_ids.end());
-    if (prior_ids.size() <= 1)
-    {
-      continue;
-    }
-
-    bool touches_pending_split = false;
-    for (size_t prior_id : prior_ids)
-    {
-      if (pending_split_component_ids.count(prior_id) > 0)
-      {
-        touches_pending_split = true;
-        break;
-      }
-    }
-    if (touches_pending_split)
-    {
-      continue;
-    }
-
-    // Keep the oldest id as survivor; other ids in this piece become empty after rebuild.
-    const size_t survivor = prior_ids.front();
-    for (size_t strand_id : piece)
+    for (size_t strand_id : component_data.components[absorbed_id])
     {
       if (strand_id < component_data.component_map.size())
       {
         component_data.component_map[strand_id] = survivor;
       }
+      component_data.components[survivor].push_back(strand_id);
     }
-    remapped_merge = true;
-    KINDS_DEBUG("Component merge at t=" << t << " survivor=" << survivor << " absorbed_count="
-                                       << (prior_ids.size() - 1));
-  }
-
-  // Rebuild strand lists from component_map so absorbed / stub entries cannot linger in emptied slots.
-  for (std::vector<size_t>& strands : component_data.components)
-  {
-    strands.clear();
-  }
-  for (size_t strand_id = 0; strand_id < component_data.component_map.size(); ++strand_id)
-  {
-    const size_t component_id = component_data.component_map[strand_id];
-    if (component_id < component_data.components.size())
-    {
-      component_data.components[component_id].push_back(strand_id);
-    }
+    clearComponentSupportData(absorbed_id);
   }
 
   component_data.component_boundaries.resize(component_data.components.size());
   component_data.component_centroids.resize(component_data.components.size());
   component_data.component_last_updated.resize(component_data.components.size());
 
-  for (size_t component_id = 0; component_id < component_data.components.size(); ++component_id)
+  std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
+  component_data.component_boundaries[survivor]
+    = extractComponentBoundaries(component_data.components[survivor], t, he_visited, false);
+  if (!component_data.component_boundaries[survivor].empty()
+    && !component_data.component_boundaries[survivor][0].empty())
   {
-    if (component_data.components[component_id].empty())
+    component_data.component_centroids[survivor]
+      = polygonCentroid(component_data.component_boundaries[survivor][0]);
+  }
+  else
+  {
+    glm::dvec2 centroid { 0.0, 0.0 };
+    for (size_t strand_id : component_data.components[survivor])
     {
-      clearComponentSupportData(component_id);
+      centroid += getPointAt(t, strand_id);
     }
+    const double n = static_cast<double>(component_data.components[survivor].size());
+    component_data.component_centroids[survivor] = n > 0.0 ? centroid / n : glm::dvec2(0.0, 0.0);
+  }
+  component_data.component_last_updated[survivor] = t;
+
+  KINDS_DEBUG("Component consolidate at t=" << t << " survivor=" << survivor << " absorbed_count="
+                                           << (triangle_component_ids.size() - 1));
+}
+
+void KineticDelaunay::putPendingSplitsOnHiatusTouchingComponents(const std::vector<size_t>& component_ids, double t)
+{
+  if (component_ids.empty() || pending_branch_splits_.by_parent_.empty())
+  {
+    return;
   }
 
-  if (remapped_merge)
+  std::unordered_set<size_t> touched(component_ids.begin(), component_ids.end());
+  for (auto& entry : pending_branch_splits_.by_parent_)
   {
-    KINDS_DEBUG("Component merge reconcile finished at t=" << t);
+    PendingBranchSplit& split = entry.second;
+    if (split.on_hiatus || split.split_component_ids.size() < 2)
+    {
+      continue;
+    }
+
+    bool overlaps = false;
+    for (size_t piece_id : split.split_component_ids)
+    {
+      if (touched.count(piece_id) > 0)
+      {
+        overlaps = true;
+        break;
+      }
+    }
+    if (!overlaps)
+    {
+      continue;
+    }
+
+    split.on_hiatus = true;
+    KINDS_DEBUG("Pending split parent_component_id=" << entry.first << " parent_runtime="
+                                                     << split.parent_runtime_branch << " put on hiatus at t=" << t
+                                                     << " (component consolidate)");
   }
+}
+
+bool KineticDelaunay::isPendingRuntimeBranchOnHiatus(size_t parent_runtime_branch_id) const
+{
+  if (parent_runtime_branch_id == RuntimeBranchData::no_branch)
+  {
+    return false;
+  }
+  for (const auto& entry : pending_branch_splits_.by_parent_)
+  {
+    const PendingBranchSplit& split = entry.second;
+    if (split.parent_runtime_branch == parent_runtime_branch_id && split.on_hiatus)
+    {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool KineticDelaunay::isGraphRetriangulatedForComponents() const
@@ -2332,8 +2372,30 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
   const std::vector<size_t>& split_component_ids)
 {
   if (parent_component_id >= component_data.components.size() || new_components.empty()
-    || pre_split_parent_strands.empty())
+    || pre_split_parent_strands.empty() || split_component_ids.size() < 2)
   {
+    return;
+  }
+
+  const size_t branch_section = pendingSplitBranchSection(split_time);
+  const std::vector<size_t> input_branch_ids
+    = collectInputBranchIdsForStrandGroups(new_components, branch_section);
+
+  // Same input-branch family on hiatus: reactivate that pending split. Separation is already driving it.
+  if (PendingBranchSplit* hiatus_split = findHiatusPendingSplitWithInputBranches(input_branch_ids))
+  {
+    const size_t hiatus_parent = hiatus_split->parent_component_id;
+    hiatus_split->on_hiatus = false;
+    hiatus_split->split_component_ids = split_component_ids;
+    hiatus_split->input_branch_ids = input_branch_ids;
+    pending_branch_splits_.registerStrandsForSplit(hiatus_parent, new_components);
+    assignPendingSplitChildRuntimeBranches(
+      *hiatus_split, hiatus_parent, split_component_ids, branch_section, split_time, /*allow_allocate=*/false);
+    refreshPendingSplitSeparationCentroids(hiatus_parent);
+    KINDS_DEBUG("Pending split parent_component_id=" << hiatus_parent << " parent_runtime="
+                                                     << hiatus_split->parent_runtime_branch
+                                                     << " reactivated from hiatus at t=" << split_time
+                                                     << " (noted_parent=" << parent_component_id << ")");
     return;
   }
 
@@ -2347,109 +2409,15 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
 
   pending_branch_splits_.registerStrandsForSplit(parent_component_id, new_components);
   split.split_component_ids = split_component_ids;
+  split.input_branch_ids = input_branch_ids;
+  split.on_hiatus = false;
 
   // Mirror the pending split into the runtime-branch structure and write branches.txt before post-split
   // frame registration / separation scheduling (those paths can throw).
   const size_t parent_branch = runtime_branch_data_.branchForStrand(split.reference_vertex);
   split.parent_runtime_branch = parent_branch;
-  if (parent_branch != RuntimeBranchData::no_branch && split_component_ids.size() >= 2
-    && runtime_branch_data_.pendingChildBranches(parent_branch) == nullptr)
-  {
-    const size_t branch_section = [&]()
-    {
-      const size_t height = branch_trajs.getHeight();
-      if (height == 0)
-      {
-        return size_t { 0 };
-      }
-      size_t section_index = static_cast<size_t>(std::ceil(split_time));
-      if (section_index >= height)
-      {
-        section_index = height - 1;
-      }
-      return section_index;
-    }();
-
-    {
-      std::ostringstream line;
-      line << "event=pending_split parent_component=" << parent_component_id << " parent_runtime=" << parent_branch
-           << " piece_count=" << split_component_ids.size() << " section=" << branch_section;
-      logRuntimeBranchEvent(split_time, line.str());
-    }
-
-    std::vector<size_t> child_branches;
-    // Multiple kinetic components of the same input branch share one pending-split child runtime branch.
-    std::unordered_map<size_t, size_t> input_branch_to_child_runtime;
-    for (size_t i = 1; i < split_component_ids.size(); ++i)
-    {
-      const size_t split_off_component = split_component_ids[i];
-      if (split_off_component >= component_data.components.size())
-      {
-        continue;
-      }
-
-      std::optional<size_t> child_input_branch;
-      for (size_t strand_id : component_data.components[split_off_component])
-      {
-        if (isDummyBoundary(strand_id))
-        {
-          continue;
-        }
-        child_input_branch = branch_trajs.getBranchIndex(strand_id, branch_section);
-        break;
-      }
-      if (!child_input_branch.has_value())
-      {
-        continue;
-      }
-
-      size_t child_branch = RuntimeBranchData::no_branch;
-      const auto existing = input_branch_to_child_runtime.find(child_input_branch.value());
-      bool allocated_new_child = false;
-      if (existing != input_branch_to_child_runtime.end())
-      {
-        child_branch = existing->second;
-      }
-      else
-      {
-        child_branch = runtime_branch_data_.allocate(parent_branch);
-        input_branch_to_child_runtime.emplace(child_input_branch.value(), child_branch);
-        child_branches.push_back(child_branch);
-        allocated_new_child = true;
-      }
-
-      // Reassign the split-off strands to the child runtime branch now, so runtime branch ids distinguish the future
-      // sub-branches while the graph is still connected. Motion frames use component data (not the runtime branch
-      // map), so this does not perturb geometry. When this parent's cut succeeds, completePendingRuntimeBranchSplit
-      // keeps these child ids as final without remapping unrelated pending splits.
-      size_t assigned_strand_count = 0;
-      for (size_t strand_id : component_data.components[split_off_component])
-      {
-        if (isDummyBoundary(strand_id) || strand_id >= runtime_branch_data_.branch_map.size())
-        {
-          continue;
-        }
-        runtime_branch_data_.branch_map[strand_id] = child_branch;
-        ++assigned_strand_count;
-      }
-
-      std::ostringstream line;
-      line << "event=pending_split_child id=" << child_branch << " parent=" << parent_branch
-           << " component=" << split_off_component << " strand_count=" << assigned_strand_count
-           << " input_branch=" << child_input_branch.value() << " section=" << branch_section;
-      if (!allocated_new_child)
-      {
-        line << " reused=1";
-      }
-      logRuntimeBranchEvent(split_time, line.str());
-    }
-    if (!child_branches.empty())
-    {
-      runtime_branch_data_.noteSplit(parent_branch, std::move(child_branches));
-      // Keep the per-branch strand lists consistent with the updated branch_map.
-      runtime_branch_data_.rebuildBranchStrandLists();
-    }
-  }
+  assignPendingSplitChildRuntimeBranches(
+    split, parent_component_id, split_component_ids, branch_section, split_time, /*allow_allocate=*/true);
 
   if (first_note_for_parent)
   {
@@ -2457,6 +2425,192 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
   }
 
   refreshPendingSplitSeparationCentroids(parent_component_id);
+}
+
+size_t KineticDelaunay::pendingSplitBranchSection(double split_time) const
+{
+  const size_t height = branch_trajs.getHeight();
+  if (height == 0)
+  {
+    return 0;
+  }
+  size_t section_index = static_cast<size_t>(std::ceil(split_time));
+  if (section_index >= height)
+  {
+    section_index = height - 1;
+  }
+  return section_index;
+}
+
+std::vector<size_t> KineticDelaunay::collectInputBranchIdsForStrandGroups(
+  const std::vector<std::vector<size_t>>& strand_groups, size_t branch_section) const
+{
+  std::vector<size_t> input_branch_ids;
+  for (const std::vector<size_t>& strands : strand_groups)
+  {
+    for (size_t strand_id : strands)
+    {
+      if (isDummyBoundary(strand_id))
+      {
+        continue;
+      }
+      const size_t input_branch = branch_trajs.getBranchIndex(strand_id, branch_section);
+      input_branch_ids.push_back(input_branch);
+    }
+  }
+  std::sort(input_branch_ids.begin(), input_branch_ids.end());
+  input_branch_ids.erase(std::unique(input_branch_ids.begin(), input_branch_ids.end()), input_branch_ids.end());
+  return input_branch_ids;
+}
+
+PendingBranchSplit* KineticDelaunay::findHiatusPendingSplitWithInputBranches(
+  const std::vector<size_t>& input_branch_ids)
+{
+  if (input_branch_ids.empty())
+  {
+    return nullptr;
+  }
+  for (auto& entry : pending_branch_splits_.by_parent_)
+  {
+    PendingBranchSplit& split = entry.second;
+    if (!split.on_hiatus || split.input_branch_ids != input_branch_ids)
+    {
+      continue;
+    }
+    return &split;
+  }
+  return nullptr;
+}
+
+void KineticDelaunay::assignPendingSplitChildRuntimeBranches(PendingBranchSplit& split, size_t parent_component_id,
+  const std::vector<size_t>& split_component_ids, size_t branch_section, double split_time, bool allow_allocate)
+{
+  const size_t parent_branch = split.parent_runtime_branch;
+  if (parent_branch == RuntimeBranchData::no_branch || split_component_ids.size() < 2)
+  {
+    return;
+  }
+
+  const std::vector<size_t>* existing_children = runtime_branch_data_.pendingChildBranches(parent_branch);
+  if (!allow_allocate && existing_children == nullptr)
+  {
+    return;
+  }
+  if (allow_allocate && existing_children != nullptr)
+  {
+    // Already mirrored for this parent runtime; still refresh strand → child assignments below.
+  }
+  else if (allow_allocate)
+  {
+    std::ostringstream line;
+    line << "event=pending_split parent_component=" << parent_component_id << " parent_runtime=" << parent_branch
+         << " piece_count=" << split_component_ids.size() << " section=" << branch_section;
+    logRuntimeBranchEvent(split_time, line.str());
+  }
+
+  // Prefer reconstructing input_branch → child runtime from strands already on pending children.
+  std::unordered_map<size_t, size_t> input_branch_to_child_runtime;
+  if (existing_children != nullptr)
+  {
+    for (size_t child_branch : *existing_children)
+    {
+      for (size_t strand_id = 0; strand_id < runtime_branch_data_.branch_map.size(); ++strand_id)
+      {
+        if (runtime_branch_data_.branch_map[strand_id] != child_branch || isDummyBoundary(strand_id))
+        {
+          continue;
+        }
+        input_branch_to_child_runtime.emplace(
+          branch_trajs.getBranchIndex(strand_id, branch_section), child_branch);
+      }
+    }
+  }
+
+  std::vector<size_t> newly_allocated_children;
+  bool assigned_any_strand = false;
+  for (size_t i = 1; i < split_component_ids.size(); ++i)
+  {
+    const size_t split_off_component = split_component_ids[i];
+    if (split_off_component >= component_data.components.size())
+    {
+      continue;
+    }
+
+    std::optional<size_t> child_input_branch;
+    for (size_t strand_id : component_data.components[split_off_component])
+    {
+      if (isDummyBoundary(strand_id))
+      {
+        continue;
+      }
+      child_input_branch = branch_trajs.getBranchIndex(strand_id, branch_section);
+      break;
+    }
+    if (!child_input_branch.has_value())
+    {
+      continue;
+    }
+
+    size_t child_branch = RuntimeBranchData::no_branch;
+    const auto existing = input_branch_to_child_runtime.find(child_input_branch.value());
+    bool allocated_new_child = false;
+    if (existing != input_branch_to_child_runtime.end())
+    {
+      child_branch = existing->second;
+    }
+    else if (allow_allocate && existing_children == nullptr)
+    {
+      child_branch = runtime_branch_data_.allocate(parent_branch);
+      input_branch_to_child_runtime.emplace(child_input_branch.value(), child_branch);
+      newly_allocated_children.push_back(child_branch);
+      allocated_new_child = true;
+    }
+    else
+    {
+      continue;
+    }
+
+    // Reassign the split-off strands to the child runtime branch now, so runtime branch ids distinguish the future
+    // sub-branches while the graph is still connected. Motion frames use component data (not the runtime branch
+    // map), so this does not perturb geometry. When this parent's cut succeeds, completePendingRuntimeBranchSplit
+    // keeps these child ids as final without remapping unrelated pending splits.
+    size_t assigned_strand_count = 0;
+    for (size_t strand_id : component_data.components[split_off_component])
+    {
+      if (isDummyBoundary(strand_id) || strand_id >= runtime_branch_data_.branch_map.size())
+      {
+        continue;
+      }
+      runtime_branch_data_.branch_map[strand_id] = child_branch;
+      ++assigned_strand_count;
+    }
+    assigned_any_strand = assigned_any_strand || assigned_strand_count > 0;
+
+    std::ostringstream line;
+    line << "event=pending_split_child id=" << child_branch << " parent=" << parent_branch
+         << " component=" << split_off_component << " strand_count=" << assigned_strand_count
+         << " input_branch=" << child_input_branch.value() << " section=" << branch_section;
+    if (!allocated_new_child)
+    {
+      line << " reused=1";
+    }
+    if (!allow_allocate)
+    {
+      line << " reactivate=1";
+    }
+    logRuntimeBranchEvent(split_time, line.str());
+  }
+
+  bool did_note_split = false;
+  if (!newly_allocated_children.empty())
+  {
+    runtime_branch_data_.noteSplit(parent_branch, std::move(newly_allocated_children));
+    did_note_split = true;
+  }
+  if (assigned_any_strand || existing_children != nullptr || did_note_split)
+  {
+    runtime_branch_data_.rebuildBranchStrandLists();
+  }
 }
 
 void KineticDelaunay::refreshPendingSplitSeparationCentroids(size_t parent_component_id)
@@ -2520,7 +2674,12 @@ void KineticDelaunay::maybeScheduleSeparationOrApplyPendingSplit(
   size_t parent_component_id, double split_time)
 {
   const PendingBranchSplit* split = pending_branch_splits_.findByParent(parent_component_id);
-  if (split == nullptr || split->split_component_ids.size() < 2)
+  if (split == nullptr || split->on_hiatus || split->split_component_ids.size() < 2)
+  {
+    return;
+  }
+  // Reactivated / already-driving pending splits keep their existing separation schedule.
+  if (split->separation_trajectory_active)
   {
     return;
   }
@@ -2552,7 +2711,7 @@ std::unordered_set<size_t> partnerComponentsExcluding(
 bool KineticDelaunay::pendingSplitSeamsAreConvex(size_t parent_component_id, double t) const
 {
   const PendingBranchSplit* split = pending_branch_splits_.findByParent(parent_component_id);
-  if (split == nullptr || split->split_component_ids.size() < 2)
+  if (split == nullptr || split->on_hiatus || split->split_component_ids.size() < 2)
   {
     return false;
   }
@@ -2817,7 +2976,9 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
     return;
   }
 
-  if (pendingSplitSeamsAreConvex(parent_component_id, t))
+  // On hiatus the pieces are no longer a well-formed finalize candidate (e.g. after component consolidate).
+  // Keep driving separation / virtual offset, but do not run the convex-seam → graph-cut finalize path.
+  if (!split->on_hiatus && pendingSplitSeamsAreConvex(parent_component_id, t))
   {
     KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
                                                    << " parent_runtime=" << split->parent_runtime_branch
@@ -2828,6 +2989,13 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
     applyPendingRuntimeBranchSplit(t, split->parent_runtime_branch);
     debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
     return;
+  }
+
+  if (split->on_hiatus)
+  {
+    KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
+                                                    << " on hiatus at t=" << t
+                                                    << "; skipping finalize, continuing separation");
   }
 
   if (!split->separation_trajectory_active)
@@ -2850,6 +3018,12 @@ void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_run
 {
   if (parent_runtime_branch_id == RuntimeBranchData::no_branch)
   {
+    return;
+  }
+  if (isPendingRuntimeBranchOnHiatus(parent_runtime_branch_id))
+  {
+    KINDS_DEBUG("applyPendingRuntimeBranchSplit: parent_runtime=" << parent_runtime_branch_id
+                                                                  << " on hiatus at t=" << t << "; skipping finalize");
     return;
   }
   if (runtime_branch_data_.pendingChildBranches(parent_runtime_branch_id) == nullptr)

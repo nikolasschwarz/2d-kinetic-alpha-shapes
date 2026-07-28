@@ -5075,18 +5075,56 @@ void kinDS::SegmentBuilder::requireLiveRegisteredVoronoiEdgeEndpoints(size_t vor
 }
 
 void kinDS::SegmentBuilder::warnIfVoronoiVertexOutsideAlphaShape(
-  const char* context, size_t voronoi_vertex_id, const glm::dvec3& position) const
+  const char* context, size_t voronoi_vertex_id, const glm::dvec3& position, size_t strand_id, double t) const
 {
   const size_t containing_tri_id = kin_del.getCrossingDataContainingTriId(voronoi_vertex_id);
   if (kin_del.getFaceInside(containing_tri_id))
   {
     return;
   }
-  // Disable for now
-  /*KINDS_WARNING("SegmentBuilder: " << context << " - Voronoi vertex " << voronoi_vertex_id
+  KINDS_WARNING("SegmentBuilder: " << context << " - Voronoi vertex " << voronoi_vertex_id
                                    << " (containing Delaunay triangle " << containing_tri_id
                                    << ") is outside the alpha-shape; position (" << position.x << ", " << position.y
-                                   << ", " << position.z << ").");*/
+                                   << ", " << position.z << "); " << formatStrandBranchLogInfo(strand_id, t));
+}
+
+std::string kinDS::SegmentBuilder::formatStrandBranchLogInfo(size_t strand_id, double t) const
+{
+  std::ostringstream oss;
+  oss << "strand=" << strand_id;
+  if (strand_id == static_cast<size_t>(-1) || kin_del.isDummyBoundary(strand_id))
+  {
+    return oss.str();
+  }
+
+  const size_t runtime_branch = kin_del.getRuntimeBranchIdForStrand(strand_id);
+  oss << " runtime_branch=";
+  if (runtime_branch == KineticDelaunay::RuntimeBranchData::no_branch)
+  {
+    oss << "none";
+  }
+  else
+  {
+    oss << runtime_branch;
+  }
+
+  const size_t height = kin_del.getStrandTree().getHeight();
+  size_t section = 0;
+  if (height > 0)
+  {
+    section = static_cast<size_t>(std::ceil(t));
+    if (section >= height)
+    {
+      section = height - 1;
+    }
+  }
+  oss << " input_branch=" << kin_del.getStrandTree().getBranchIndex(strand_id, section);
+
+  if (strand_id < kin_del.component_data.component_map.size())
+  {
+    oss << " component=" << kin_del.component_data.component_map[strand_id];
+  }
+  return oss.str();
 }
 
 glm::dvec3 SegmentBuilder::transformFromInputBranchToObjectSpace(
@@ -5421,14 +5459,14 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   {
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
     {
-      KINDS_WARNING("addMeshletVertex(" << stage << "): non-finite vertex for strand " << strand_id << " at t=" << t
-                                        << " -> (" << p.x << ", " << p.y << ", " << p.z << ").");
+      KINDS_WARNING("addMeshletVertex(" << stage << "): non-finite vertex at t=" << t << " -> (" << p.x << ", " << p.y
+                                        << ", " << p.z << "); " << formatStrandBranchLogInfo(strand_id, t));
       return;
     }
     if (p.x == 0.0 && p.y == 0.0)
     {
-      KINDS_WARNING("addMeshletVertex(" << stage << "): degenerate XY vertex (0,0,z) for strand " << strand_id
-                                        << " at t=" << t << " -> (" << p.x << ", " << p.y << ", " << p.z << ").");
+      KINDS_WARNING("addMeshletVertex(" << stage << "): degenerate XY vertex (0,0,z) at t=" << t << " -> (" << p.x
+                                        << ", " << p.y << ", " << p.z << "); " << formatStrandBranchLogInfo(strand_id, t));
     }
   };
 
@@ -5489,8 +5527,8 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     vertex = voronoi_object_space.value().position;
     if (!vertexPositionFinite(vertex))
     {
-      KINDS_WARNING("addMeshletVertex: non-finite mesh-space Voronoi vertex for strand " << strand_id << " at t=" << t
-        << "; falling back to site-equivalent profile placement.");
+      KINDS_WARNING("addMeshletVertex: non-finite mesh-space Voronoi vertex at t=" << t
+        << "; falling back to site-equivalent profile placement; " << formatStrandBranchLogInfo(strand_id, t));
       vertex = computeMeshSiteVertexPosition(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
     }
   }
@@ -5499,8 +5537,8 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     vertex = radiusTransitionProjectionPosition(runtime_info.radius_transition_projection.value(), t, true);
     if (!vertexPositionFinite(vertex))
     {
-      KINDS_WARNING("addMeshletVertex: non-finite radius-transition projection for strand " << strand_id << " at t="
-        << t << "; falling back to site placement.");
+      KINDS_WARNING("addMeshletVertex: non-finite radius-transition projection at t=" << t
+        << "; falling back to site placement; " << formatStrandBranchLogInfo(strand_id, t));
       vertex = computeMeshSiteVertexPosition(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
     }
   }
@@ -5542,8 +5580,8 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     vertex = transformFromInputBranchToObjectSpace(vertex, strand_id, t);
     if (!vertexPositionFinite(vertex))
     {
-      KINDS_WARNING("addMeshletVertex: non-finite transformed vertex for strand " << strand_id << " at t=" << t
-        << "; falling back to input-branch transform.");
+      KINDS_WARNING("addMeshletVertex: non-finite transformed vertex at t=" << t
+        << "; falling back to input-branch transform; " << formatStrandBranchLogInfo(strand_id, t));
       vertex = transformFromInputBranchToObjectSpace(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
     }
   }
@@ -5554,7 +5592,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   if (meshlet_voronoi_vertex_for_alpha_check.has_value())
   {
     warnIfVoronoiVertexOutsideAlphaShape("addMeshletVertex", meshlet_voronoi_vertex_for_alpha_check.value(),
-      glm::dvec3(profile_xy.x, profile_xy.y, t));
+      glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
   }
   std::string vertex_metadata = metadata;
   if (store_mesh_metadata)
@@ -5563,12 +5601,13 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     const std::string event_type = event_type_field.value_or("unknown_event");
     if (!event_type_field.has_value())
     {
-      KINDS_WARNING("addMeshletVertex: missing metadata event_type for strand " << strand_id << " at t=" << t
-                                                                               << "; using 'unknown_event'.");
+      KINDS_WARNING("addMeshletVertex: missing metadata event_type at t=" << t << "; using 'unknown_event'; "
+                                                                         << formatStrandBranchLogInfo(strand_id, t));
     }
     else if (event_type == "unknown_event")
     {
-      KINDS_WARNING("addMeshletVertex: unknown metadata event_type for strand " << strand_id << " at t=" << t << ".");
+      KINDS_WARNING("addMeshletVertex: unknown metadata event_type at t=" << t << "; "
+                                                                         << formatStrandBranchLogInfo(strand_id, t));
     }
     // Source follows how the vertex was placed. VV snap wins over intersection/site labels.
     const std::string source = meshlet_voronoi_vertex_for_alpha_check.has_value()
@@ -5579,14 +5618,13 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     {
       KINDS_WARNING("addMeshletVertex: caller metadata source '" << source_field.value()
                                                                 << "' disagrees with placement source '" << source
-                                                                << "' for strand " << strand_id << " at t=" << t
-                                                                << "; using placement source.");
+                                                                << "' at t=" << t << "; using placement source; "
+                                                                << formatStrandBranchLogInfo(strand_id, t));
     }
     else if (!source_field.has_value())
     {
-      KINDS_WARNING("addMeshletVertex: missing metadata source for strand " << strand_id << " at t=" << t
-                                                                            << "; using placement source '" << source
-                                                                            << "'.");
+      KINDS_WARNING("addMeshletVertex: missing metadata source at t=" << t << "; using placement source '" << source
+                                                                      << "'; " << formatStrandBranchLogInfo(strand_id, t));
     }
     MetadataBuilder builder;
     builder.addString("event_type", event_type).addString("source", source);

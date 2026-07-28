@@ -117,13 +117,18 @@ void KineticDelaunay::SectionEvent::handleEvent()
   kd->registerUpcomingPostSplitFrameTransitions(section_index);
 
   // Force any still-pending splits at the section boundary, one parent *runtime branch* at a time.
+  // Hiatus pending splits are not finalizable (seam check / cut would be ill-formed) — leave them alone.
   if (kd->component_data.components.size() > kd->prev_component_count)
   {
     std::vector<size_t> pending_runtime_parents;
     kd->visitPendingBranchSplits(
       [&](size_t, const PendingBranchSplit& split)
       {
-        if (split.parent_runtime_branch == KineticDelaunay::RuntimeBranchData::no_branch)
+        if (split.on_hiatus || split.parent_runtime_branch == KineticDelaunay::RuntimeBranchData::no_branch)
+        {
+          return;
+        }
+        if (kd->isPendingRuntimeBranchOnHiatus(split.parent_runtime_branch))
         {
           return;
         }
