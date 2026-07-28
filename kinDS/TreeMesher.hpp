@@ -46,7 +46,9 @@ class TreeMesher
     double alpha_cutoff = 10.0; // default value, can be adjusted as needed
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
     /// When false, skip JSON vertex/face metadata on meshlets (material_ids still stored for OBJ export).
-    bool store_mesh_metadata = true;
+    /// Default off; CLI @c --store-mesh-metadata / @c --no-store-mesh-metadata.
+    /// @ref validate_mesh_vertex_sources implies metadata storage when enabled.
+    bool store_mesh_metadata = false;
     /// When true, run @ref Validator::validateAndReportMeshVertexSources after meshing.
     bool validate_mesh_vertex_sources = false;
     /// Output path for @ref Validator when validation is enabled (@ref Validator::defaultLogFilePath by default).

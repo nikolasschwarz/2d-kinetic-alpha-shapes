@@ -31,7 +31,10 @@
       //   --transform-at-construction  Store vertices in object space while meshing (default)
       //   --transform-at-export        Keep profile-space verts until OBJ export
       //   --validate                After meshing, check same-source vertices agree in world space
+      //                             (implies mesh metadata storage)
       //   --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)
+      //   --store-mesh-metadata     Store JSON vertex/face metadata on meshlets
+      //   --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)
       //   --section-shading         Alternate light/dark materials by even/odd kinetic section
       //   --start <section>         Bootstrap/start kinetic meshing at this section index (default: 0)
       //   --end <section>           Exclusive stop/finalize time (default: tree height).
@@ -45,10 +48,11 @@
       //                             also enabled by --debug-files).
       "args": [
         "--mesh",
-        "input_examples/test_oak_10.txt",
+        "input_examples/test_oak_2.txt",
         "--export-mode",
         "combined",
         "--validate",
+        "--store-mesh-metadata",
         "--section-shading",
         "--debug-files",
         "debug_output",
@@ -76,7 +80,7 @@
       // Same CLI as Debug; binary comes from CMake preset vcpkg-x64 (CMAKE_BUILD_TYPE=Release → build/).
       "args": [
         "--mesh",
-        "input_examples/test_oak_10.txt",
+        "input_examples/test_oak_2.txt",
         "--export-mode",
         "combined",
         "--validate",

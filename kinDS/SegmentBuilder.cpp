@@ -8852,7 +8852,9 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
   std::vector<std::vector<int>> neighbor_segments; // accessed as [segment_id][triangle_index]
   for (size_t segment_id = 0; segment_id < segment_properties.size(); ++segment_id)
   {
-    VoronoiMesh segment_mesh(MeshletExportMaterialNames);
+    // Match finalized meshlets (PerTriangleCorner). Empty segments must not stay NoNormals or
+    // combined export can lock the wrong mode before the first geometric append.
+    VoronoiMesh segment_mesh(MeshletExportMaterialNames, NormalMode::PerTriangleCorner);
     segment_mesh.setStoreMetadata(store_mesh_metadata);
     bool segment_mesh_initialized = false;
     std::vector<int> neighbor_segments_for_meshlet;
