@@ -31,8 +31,7 @@ class KineticDelaunay::SectionEventManager final : public KineticDelaunay::Event
   {
   }
 
-  void computeEvents(double t, size_t event_id,
-    std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt) override;
+  void computeEvents(double t, size_t event_id) override;
 
   void updateProgress(size_t section_index);
   void finishProgressIfNeeded(size_t section_index);

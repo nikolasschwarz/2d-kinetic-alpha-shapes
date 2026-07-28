@@ -137,8 +137,7 @@ class KineticDelaunay::FlipEventManager final : public KineticDelaunay::EventMan
   {
   }
 
-  void computeEvents(double t, size_t event_id,
-    std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt) override;
+  void computeEvents(double t, size_t event_id) override;
 
  private:
   KineticDelaunay* kd_;

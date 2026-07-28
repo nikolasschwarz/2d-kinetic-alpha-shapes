@@ -53,10 +53,9 @@ void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const Half
   {
     return;
   }
-  const double flip_t = flip.occurrence_time.real_time;
-  const bool in_monitored_window = std::isfinite(flip_t)
-    && flip_t >= std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime)
-    && flip_t < std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime) + 1.0;
+  const bool in_monitored_window = std::isfinite(flip.occurrence_time)
+    && flip.occurrence_time >= std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime)
+    && flip.occurrence_time < std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime) + 1.0;
   // Match KineticDelaunay flip diagnostics: only the monitored edge inside [floor(t), floor(t)+1).
   // Disabled monitor id (-1) never matches unset/invalid edges.
   if (!in_monitored_window

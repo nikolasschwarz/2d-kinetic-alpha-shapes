@@ -18,7 +18,7 @@ void KineticAlgorithm::processEvents(std::optional<double> end_time)
   while (!events_.empty())
   {
     auto event = events_.top();
-    if (end_time.has_value() && !(event->occurrence_time.real_time < *end_time))
+    if (end_time.has_value() && !(event->occurrence_time < *end_time))
     {
       // Queue is ordered by occurrence_time; everything left is at/after the stop time.
       clear();

@@ -1815,7 +1815,7 @@ void HalfEdgeDelaunayGraph::combine(size_t global_vertex_count, const std::vecto
 
 HalfEdgeDelaunayGraph::RuntimeBranchSplitResult HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(
   const std::vector<size_t>& runtime_branch_map, const std::function<glm::dvec2(size_t)>& vertex_at,
-  std::optional<EventTime> debug_time)
+  std::optional<double> debug_time)
 {
   // In-place runtime-branch split (no retriangulation). Given runtime_branch_map[v] = runtime
   // branch id for each site vertex, disconnect topology across branches while keeping each

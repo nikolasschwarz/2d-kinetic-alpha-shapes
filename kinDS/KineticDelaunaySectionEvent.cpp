@@ -6,8 +6,7 @@
 
 using namespace kinDS;
 
-void KineticDelaunay::SectionEventManager::computeEvents(double /*t*/, size_t event_id,
-  std::optional<InfinitesimalComputeContext> /*infinitesimal*/)
+void KineticDelaunay::SectionEventManager::computeEvents(double /*t*/, size_t event_id)
 {
   const size_t section_count = kd_->getSectionCount();
 

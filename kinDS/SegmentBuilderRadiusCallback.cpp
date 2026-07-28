@@ -74,7 +74,7 @@ struct RadiusRingWalkDebugVertex
   std::string note {};
 };
 
-std::filesystem::path makeRadiusRingWalkFailDebugPath(const KineticDelaunay& kin_del, EventTime occurrence_time,
+std::filesystem::path makeRadiusRingWalkFailDebugPath(const KineticDelaunay& kin_del, double occurrence_time,
   std::optional<size_t> runtime_branch_id, size_t delaunay_face_id, size_t strand_cell_id, size_t debug_counter,
   const char* extension)
 {

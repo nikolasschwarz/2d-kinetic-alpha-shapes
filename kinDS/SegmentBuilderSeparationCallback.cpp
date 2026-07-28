@@ -50,7 +50,7 @@ void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
   const double t = separation.occurrence_time;
 
   const std::optional<PendingBranchSplit> split = kin_del.getPendingBranchSplit(parent_component_id);
-  const size_t iteration = split ? static_cast<size_t>(split->infinitesimal_epoch) : 0;
+  const size_t iteration = split ? split->separation_iteration : 0;
   const VisualDebugHighlight highlight = kin_del.buildSeparationRecomputeHighlight(parent_component_id);
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment> offset_segments
     = kin_del.collectSeparationOffsetSegments(parent_component_id, t);
