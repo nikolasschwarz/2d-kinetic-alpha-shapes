@@ -52,13 +52,12 @@
         "--section-shading",
         "--debug-files",
         "debug_output",
-        "--svg-separate-pending-splits",
         "--log-add",
         "monitor",
         "--cutoff",
         "3",
         "--start",
-        "20"
+        "30"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -121,7 +120,7 @@
         "--cutoff",
         "3",
         "--start",
-        "10"
+        "31"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

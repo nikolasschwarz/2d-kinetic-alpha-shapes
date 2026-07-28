@@ -495,6 +495,10 @@ static void print_usage(const char* program_name)
             << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
             << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
             << "                            Section events run on [start, end); events with t >= end are skipped.\n"
+            << "  --mesh-cap-at-start       Emit closing-cap meshlets at --start (default: off).\n"
+            << "                            Caps for branches that finish during the run are always produced.\n"
+            << "  --mesh-cap-at-end         Emit closing-cap meshlets at --end / finalize (default: off).\n"
+            << "                            Caps for branches that finish during the run are always produced.\n"
             << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)\n"
             << "  --debug-files [path]      Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
             << "                            and error dumps). Optional output directory (default: cwd).\n"
@@ -543,6 +547,8 @@ static const std::vector<std::string>& known_cli_flags()
     "--section-shading",
     "--start",
     "--end",
+    "--mesh-cap-at-start",
+    "--mesh-cap-at-end",
     "--cutoff",
     "--debug-files",
     "--svg-separate-pending-splits",
@@ -660,9 +666,9 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources,
   const std::string& validate_log_path, bool alternate_section_shading, size_t start_section,
-  std::optional<size_t> end_section, double alpha_cutoff, bool visual_debug, bool error_files,
-  bool visual_debug_separate_pending_splits, const std::optional<std::filesystem::path>& visual_debug_output_root,
-  bool check_sites_inside_convex_hull)
+  std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end, double alpha_cutoff,
+  bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
+  const std::optional<std::filesystem::path>& visual_debug_output_root, bool check_sites_inside_convex_hull)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -702,6 +708,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().alternate_section_shading = alternate_section_shading;
     mesher.getSettings().start_section = start_section;
     mesher.getSettings().end_section = end_section;
+    mesher.getSettings().mesh_cap_at_start = mesh_cap_at_start;
+    mesher.getSettings().mesh_cap_at_end = mesh_cap_at_end;
     mesher.getSettings().alpha_cutoff = alpha_cutoff;
     mesher.getSettings().visual_debug = visual_debug;
     mesher.getSettings().error_files = error_files || visual_debug;
@@ -745,6 +753,11 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
         std::cout << " end=<last>";
       }
       std::cout << std::endl;
+    }
+    if (mesh_cap_at_start || mesh_cap_at_end)
+    {
+      std::cout << "Mesh caps: start=" << (mesh_cap_at_start ? "on" : "off")
+                << " end=" << (mesh_cap_at_end ? "on" : "off") << std::endl;
     }
     const auto& meshes = mesher.runMeshingAlgorithm(visual_debug);
 
@@ -841,6 +854,8 @@ int main(int argc, char* argv[])
   bool mesh_alternate_section_shading = false;
   size_t mesh_start_section = 0;
   std::optional<size_t> mesh_end_section;
+  bool mesh_cap_at_start = false;
+  bool mesh_cap_at_end = false;
   double mesh_alpha_cutoff = kinDS::TreeMesher::Settings {}.alpha_cutoff;
   bool mesh_visual_debug = false;
   bool mesh_error_files = false;
@@ -1030,6 +1045,16 @@ int main(int argc, char* argv[])
       }
       arg_idx += 2;
     }
+    else if (arg == "--mesh-cap-at-start")
+    {
+      mesh_cap_at_start = true;
+      ++arg_idx;
+    }
+    else if (arg == "--mesh-cap-at-end")
+    {
+      mesh_cap_at_end = true;
+      ++arg_idx;
+    }
     else if (arg == "--cutoff")
     {
       if (arg_idx + 1 >= argc)
@@ -1178,9 +1203,9 @@ int main(int argc, char* argv[])
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_validate_log_path,
-          mesh_alternate_section_shading, mesh_start_section, mesh_end_section, mesh_alpha_cutoff, mesh_visual_debug,
-          mesh_error_files, mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root,
-          mesh_check_sites_inside_convex_hull))
+          mesh_alternate_section_shading, mesh_start_section, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,
+          mesh_alpha_cutoff, mesh_visual_debug, mesh_error_files, mesh_visual_debug_separate_pending_splits,
+          mesh_visual_debug_output_root, mesh_check_sites_inside_convex_hull))
     {
       return 1;
     }

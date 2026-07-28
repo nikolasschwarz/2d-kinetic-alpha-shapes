@@ -408,7 +408,7 @@ class KineticDelaunay
   /// Post-cut frame hold/blend; survives @ref clearPendingBranchSplits.
   PostSplitFrameTransitionState post_split_frame_transitions_;
   ComponentSplitPolicy component_split_policy_ = ComponentSplitPolicy::InPlaceCut;
-  double separation_offset_scale_ = 50.0;
+  double separation_offset_scale_ = 500.0;
   std::vector<double> quadrilateral_last_updated;
   std::vector<double> face_last_updated;
   bool on_the_fly_boundary = true;

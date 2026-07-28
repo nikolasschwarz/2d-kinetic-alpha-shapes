@@ -4760,13 +4760,13 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(
   // check bounds
   if (u >= boundary_mesh.getVertexCount() || v >= boundary_mesh.getVertexCount() || w >= boundary_mesh.getVertexCount())
   {
-    KINDS_ERROR("Vertex index out of boundary mesh range.");
+    KINDS_ERROR("Vertex index " + std::to_string(u) + ", " + std::to_string(v) + ", " + std::to_string(w) + " out of boundary mesh range.");
     return -1;
   }
 
   if (u >= boundary_mesh_raw_uvs.size() || v >= boundary_mesh_raw_uvs.size() || w >= boundary_mesh_raw_uvs.size())
   {
-    KINDS_ERROR("Vertex index out of raw uv range.");
+    KINDS_ERROR("Vertex index " + std::to_string(u) + ", " + std::to_string(v) + ", " + std::to_string(w) + " out of raw uv range.");
     return -1;
   }
 
@@ -8473,27 +8473,35 @@ void SegmentBuilder::init()
     {
       std::ostringstream oss;
       oss << "segment_id=" << new_segment_id << " component_id=" << component_index
-          << " component_size=" << component.size() << " boundary_polygon_size=" << boundary_polygon.size();
+          << " component_size=" << component.size() << " boundary_polygon_size=" << boundary_polygon.size()
+          << " mesh_cap_at_start=" << (mesh_cap_at_start ? "true" : "false");
       strandInitDiagnosticLogLine("init_cap_begin", strand_id, t, oss.str().c_str());
     }
 
-    // create a closing mesh
-    size_t closing_mesh_index = createClosingMesh(strand_id, t, boundary_polygon, centroid);
-    MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[new_segment_id];
-    segment_mesh_pair.segment_index0 = -1;
-    segment_mesh_pair.segment_index1 = strand_to_segment_indices[strand_id].back();
-
-    if (diagnostics)
+    if (mesh_cap_at_start)
     {
-      std::ostringstream oss;
-      oss << "closing_meshlet_index=" << closing_mesh_index << " mesh_pair_slot=" << new_segment_id
-          << " segment_index1=" << segment_mesh_pair.segment_index1;
-      if (closing_mesh_index < meshes.size())
+      // create a closing mesh
+      size_t closing_mesh_index = createClosingMesh(strand_id, t, boundary_polygon, centroid);
+      MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[new_segment_id];
+      segment_mesh_pair.segment_index0 = -1;
+      segment_mesh_pair.segment_index1 = strand_to_segment_indices[strand_id].back();
+
+      if (diagnostics)
       {
-        oss << " cap_verts=" << meshes[closing_mesh_index].getVertexCount()
-            << " cap_tris=" << meshes[closing_mesh_index].getTriangleCount();
+        std::ostringstream oss;
+        oss << "closing_meshlet_index=" << closing_mesh_index << " mesh_pair_slot=" << new_segment_id
+            << " segment_index1=" << segment_mesh_pair.segment_index1;
+        if (closing_mesh_index < meshes.size())
+        {
+          oss << " cap_verts=" << meshes[closing_mesh_index].getVertexCount()
+              << " cap_tris=" << meshes[closing_mesh_index].getTriangleCount();
+        }
+        strandInitDiagnosticLogLine("init_cap_end", strand_id, t, oss.str().c_str());
       }
-      strandInitDiagnosticLogLine("init_cap_end", strand_id, t, oss.str().c_str());
+    }
+    else if (diagnostics)
+    {
+      strandInitDiagnosticLogLine("init_cap_skipped", strand_id, t, "mesh_cap_at_start=false");
     }
   }
 
@@ -8686,9 +8694,13 @@ void SegmentBuilder::finalize(double t)
   }
 
   // Finalize closing meshes for strands still live in the graph (branches that ended earlier already got caps).
-  for (size_t strand_id = 0; strand_id < graph.getVertexCount(); ++strand_id)
+  // Optional end-range cap; ending input branches always receive caps via createClosingCapsForInputBranchesFinishingAtSection.
+  if (mesh_cap_at_end)
   {
-    createClosingCapForStrand(strand_id, t);
+    for (size_t strand_id = 0; strand_id < graph.getVertexCount(); ++strand_id)
+    {
+      createClosingCapForStrand(strand_id, t);
+    }
   }
 
   accumulateSegmentProperties();

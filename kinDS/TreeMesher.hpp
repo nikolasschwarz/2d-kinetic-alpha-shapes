@@ -65,6 +65,12 @@ class TreeMesher
     /// Exclusive kinetic stop / finalize time; empty means tree height (@c StrandTree::getHeight()).
     /// Section events run on `[start_section, end_section)`; events with `t >= end_section` are not processed.
     std::optional<size_t> end_section;
+    /// When true, emit a closing-cap meshlet for every live strand at @ref start_section (bootstrap). Default false.
+    /// Caps for input branches that finish during the run are always produced regardless of this flag.
+    bool mesh_cap_at_start = false;
+    /// When true, emit a closing-cap meshlet for every strand still live at @ref end_section (finalize). Default false.
+    /// Caps for input branches that finish during the run are always produced regardless of this flag.
+    bool mesh_cap_at_end = false;
 
     // for debugging purposes:
     bool debug_export_meshes = false;

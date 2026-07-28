@@ -525,6 +525,8 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
     Validator::setLogFile(settings.validate_mesh_vertex_sources_log_path);
   }
   mesh_builder->diagnostics = settings.diagnostics;
+  mesh_builder->mesh_cap_at_start = settings.mesh_cap_at_start;
+  mesh_builder->mesh_cap_at_end = settings.mesh_cap_at_end;
   kinetic_delaunay->setDiagnosticsEnabled(settings.diagnostics);
   kinetic_delaunay->setSitesInsideConvexHullCheckEnabled(settings.check_sites_inside_convex_hull);
 
@@ -543,6 +545,10 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << mesh_builder->store_mesh_metadata
                                                                                       << ", diagnostics="
                                                                                       << settings.diagnostics
+                                                                                      << ", mesh_cap_at_start="
+                                                                                      << settings.mesh_cap_at_start
+                                                                                      << ", mesh_cap_at_end="
+                                                                                      << settings.mesh_cap_at_end
                                                                                       << ", check_sites_inside_convex_hull="
                                                                                       << settings.check_sites_inside_convex_hull
                                                                                       << ", radius_vertex_shift_enabled="
