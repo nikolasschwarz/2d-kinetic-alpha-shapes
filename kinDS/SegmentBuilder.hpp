@@ -193,7 +193,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool validate_mesh_vertex_sources = false;
   /// When false, skip meshlet diagnostic logging and related string assembly.
   bool diagnostics = false;
-  /// Emit closing-cap meshlets at kinetic @c start_section / @c end_section. Ending input branches always get caps.
+  /// Emit closing-cap meshlets at kinetic @c start_section / premature @c end_section.
+  /// Ending input branches (including tree top) always get caps at finalize; @c mesh_cap_at_end only
+  /// seals strands truncated by @c --end.
   bool mesh_cap_at_start = false;
   bool mesh_cap_at_end = false;
   /// Failure SVG/TXT dumps (ring-walk / triangulate FAIL, …) plus common highlighted kinetic SVG.
