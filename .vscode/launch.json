@@ -39,6 +39,9 @@
       //   --start <section>         Bootstrap/start kinetic meshing at this section index (default: 0)
       //   --end <section>           Exclusive stop/finalize time (default: tree height).
       //                             Section events on [start, end); skip events with t >= end
+      //   --mesh-cap-at-start       Closing caps at --start (default: off); finishers during run always capped
+      //   --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off);
+      //                             natural branch endings and tree-top caps are always produced
       //   --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)
       //   --debug-files [path]      Full debug SVGs/TXTs (off by default). Optional output directory (default: cwd).
       //   --svg-separate-pending-splits

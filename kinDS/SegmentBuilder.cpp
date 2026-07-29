@@ -8731,12 +8731,29 @@ void SegmentBuilder::finalize(double t)
     }
   }
 
-  // Finalize closing meshes for strands still live in the graph (branches that ended earlier already got caps).
-  // Optional end-range cap; ending input branches always receive caps via createClosingCapsForInputBranchesFinishingAtSection.
+  // Natural branch endings at finalize time (including the tree top). Section events run on
+  // [start, end), so finishers at the exclusive end_section are never capped in the section
+  // callback — always seal them here. mesh_cap_at_end only seals strands truncated by a premature --end.
+  createClosingCapsForInputBranchesFinishingAtSection(t);
+  for (size_t input_branch_id : kin_del.inputBranchesFinishingAtSection(t))
+  {
+    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
+  }
+
   if (mesh_cap_at_end)
   {
+    const size_t section = static_cast<size_t>(t);
     for (size_t strand_id = 0; strand_id < graph.getVertexCount(); ++strand_id)
     {
+      if (kin_del.isDummyBoundary(strand_id) || !kin_del.isStrandLiveInGraph(strand_id))
+      {
+        continue;
+      }
+      // Skip natural finishers (already capped above); only seal strands that continue past --end.
+      if (kin_del.getStrandTree().getSupportPoints(strand_id).size() <= section + 1)
+      {
+        continue;
+      }
       createClosingCapForStrand(strand_id, t);
     }
   }

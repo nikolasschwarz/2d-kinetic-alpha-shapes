@@ -70,8 +70,8 @@ class TreeMesher
     /// When true, emit a closing-cap meshlet for every live strand at @ref start_section (bootstrap). Default false.
     /// Caps for input branches that finish during the run are always produced regardless of this flag.
     bool mesh_cap_at_start = false;
-    /// When true, emit a closing-cap meshlet for every strand still live at @ref end_section (finalize). Default false.
-    /// Caps for input branches that finish during the run are always produced regardless of this flag.
+    /// When true, also emit closing caps for strands still continuing past a premature @ref end_section
+    /// (@c --end). Default false. Natural branch endings and the tree-top finalize always get caps regardless.
     bool mesh_cap_at_end = false;
 
     // for debugging purposes:
