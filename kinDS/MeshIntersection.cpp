@@ -4,7 +4,10 @@
 
 #include <array>
 #include <iostream>
+#include <limits>
+#include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #ifdef USE_CGAL
@@ -17,6 +20,261 @@
 #endif
 
 using namespace kinDS;
+
+namespace
+{
+#ifdef USE_CGAL
+// Only fill small cracks/holes on meshlets; large openings stay open and fail closedness checks.
+constexpr std::size_t kMaxHoleHalfedgesToFill = 32;
+// Boundary solid should be closed: fill any hole that triangulate_hole can handle.
+constexpr std::size_t kMaxHoleHalfedgesToFillBoundary = std::numeric_limits<std::size_t>::max();
+constexpr std::size_t kMaxLoggedBoundaryEdges = 1;
+
+struct MeshReadinessReport
+{
+  std::size_t vertex_count = 0;
+  std::size_t face_count = 0;
+  std::size_t edge_count = 0;
+  std::size_t boundary_edge_count = 0;
+  std::size_t non_manifold_vertex_count = 0;
+  std::size_t add_face_failures = 0;
+  bool is_closed = false;
+  bool self_intersects = false;
+  bool self_intersect_checked = false;
+
+  bool readyForBoolean() const
+  {
+    return is_closed && non_manifold_vertex_count == 0;
+  }
+
+  std::string summary() const
+  {
+    std::ostringstream oss;
+    oss << "closed=" << (is_closed ? "true" : "false") << ", V=" << vertex_count << ", F=" << face_count
+        << ", E=" << edge_count << ", boundary_edges=" << boundary_edge_count
+        << ", non_manifold_vertices=" << non_manifold_vertex_count;
+    if (add_face_failures > 0)
+    {
+      oss << ", add_face_failures=" << add_face_failures;
+    }
+    if (self_intersect_checked)
+    {
+      oss << ", self_intersects=" << (self_intersects ? "true" : "false");
+    }
+    return oss.str();
+  }
+
+  std::string failureReason() const
+  {
+    if (boundary_edge_count > 0 || !is_closed)
+    {
+      return "Input mesh is not closed (" + std::to_string(boundary_edge_count) + " boundary edges).";
+    }
+    if (non_manifold_vertex_count > 0)
+    {
+      return "Input mesh has non-manifold vertices (" + std::to_string(non_manifold_vertex_count) + ").";
+    }
+    return "Input mesh is not suitable for boolean intersection.";
+  }
+};
+
+std::size_t countBoundaryEdges(const MeshCGAL_internal& mesh)
+{
+  std::size_t count = 0;
+  for (const auto e : edges(mesh))
+  {
+    if (CGAL::is_border(e, mesh))
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+std::size_t countNonManifoldVertices(const MeshCGAL_internal& mesh)
+{
+  std::size_t count = 0;
+  for (const auto v : vertices(mesh))
+  {
+    if (PMP::is_non_manifold_vertex(v, mesh))
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+MeshReadinessReport diagnoseMesh(
+  const MeshCGAL_internal& mesh, std::size_t add_face_failures = 0, bool check_self_intersection = false)
+{
+  MeshReadinessReport report;
+  report.vertex_count = mesh.number_of_vertices();
+  report.face_count = mesh.number_of_faces();
+  report.edge_count = mesh.number_of_edges();
+  report.add_face_failures = add_face_failures;
+  report.boundary_edge_count = countBoundaryEdges(mesh);
+  report.non_manifold_vertex_count = countNonManifoldVertices(mesh);
+  report.is_closed = CGAL::is_closed(mesh) && report.boundary_edge_count == 0;
+  if (check_self_intersection)
+  {
+    report.self_intersect_checked = true;
+    try
+    {
+      report.self_intersects = PMP::does_self_intersect(mesh);
+    }
+    catch (...)
+    {
+      report.self_intersects = true;
+    }
+  }
+  return report;
+}
+
+std::string formatCorefineFailureDiag(const MeshReadinessReport& input_pre, const MeshReadinessReport& boundary_pre,
+  const MeshReadinessReport& input_post, const MeshReadinessReport& boundary_post, const MeshReadinessReport& output_post)
+{
+  std::ostringstream oss;
+  oss << "corefine_and_compute_intersection returned false (CGAL: output is not a manifold volume; "
+         "not necessarily that inputs were open). "
+      << "input_pre[" << input_pre.summary() << "], boundary_pre[" << boundary_pre.summary() << "], "
+      << "input_post[" << input_post.summary() << "], boundary_post[" << boundary_post.summary() << "], "
+      << "output[" << output_post.summary() << "]";
+  return oss.str();
+}
+
+void logSampleBoundaryEdges(const MeshCGAL_internal& mesh, const std::string& suffix)
+{
+  const std::size_t total = countBoundaryEdges(mesh);
+  std::size_t logged = 0;
+  for (const auto e : edges(mesh))
+  {
+    if (!CGAL::is_border(e, mesh))
+    {
+      continue;
+    }
+
+    const auto h = halfedge(e, mesh);
+    const auto v0 = source(h, mesh);
+    const auto v1 = target(h, mesh);
+    const auto& p0 = mesh.point(v0);
+    const auto& p1 = mesh.point(v1);
+    //KINDS_WARNING("  boundary edge " << logged << ": v" << v0 << " (" << p0 << ") -- v" << v1 << " (" << p1 << ")"
+    //                                 << suffix);
+    if (++logged >= kMaxLoggedBoundaryEdges)
+    {
+      if (total > logged)
+      {
+        //KINDS_WARNING("  ... and " << (total - logged) << " more boundary edge(s)" << suffix);
+      }
+      break;
+    }
+  }
+}
+
+std::size_t collectBoundaryCycle(
+  MeshCGAL_internal::Halfedge_index start, const MeshCGAL_internal& mesh, std::vector<MeshCGAL_internal::Halfedge_index>& cycle)
+{
+  cycle.clear();
+  auto h = start;
+  do
+  {
+    cycle.push_back(h);
+    h = next(h, mesh);
+    // Guard against corrupt cycles.
+    if (cycle.size() > mesh.number_of_halfedges())
+    {
+      break;
+    }
+  } while (h != start);
+  return cycle.size();
+}
+
+/// Best-effort repair so corefinement can run. Returns false only on exception.
+bool tryRepairMeshForIntersection(
+  MeshCGAL_internal& mesh, std::string* log, std::size_t max_hole_halfedges = kMaxHoleHalfedgesToFill)
+{
+  std::ostringstream oss;
+  try
+  {
+    const std::size_t removed_deg = PMP::remove_degenerate_faces(mesh);
+    PMP::remove_isolated_vertices(mesh);
+    const std::size_t stitched = PMP::stitch_borders(mesh);
+    const std::size_t duplicated_nm = PMP::duplicate_non_manifold_vertices(mesh);
+
+    std::size_t holes_filled = 0;
+    std::size_t faces_from_holes = 0;
+    std::size_t holes_skipped_too_large = 0;
+    std::unordered_set<MeshCGAL_internal::Halfedge_index> visited;
+    for (const auto h : halfedges(mesh))
+    {
+      if (!mesh.is_border(h) || visited.count(h) != 0)
+      {
+        continue;
+      }
+
+      std::vector<MeshCGAL_internal::Halfedge_index> cycle;
+      collectBoundaryCycle(h, mesh, cycle);
+      for (const auto hh : cycle)
+      {
+        visited.insert(hh);
+      }
+
+      if (cycle.size() < 3)
+      {
+        continue;
+      }
+      if (cycle.size() > max_hole_halfedges)
+      {
+        ++holes_skipped_too_large;
+        continue;
+      }
+
+      const std::size_t before_faces = mesh.number_of_faces();
+      // Return type is an output iterator in this CGAL version (not a face count).
+      PMP::triangulate_hole(mesh, h, PMP::parameters::use_delaunay_triangulation(true));
+      const std::size_t added = mesh.number_of_faces() - before_faces;
+      if (added > 0)
+      {
+        ++holes_filled;
+        faces_from_holes += added;
+      }
+    }
+
+    oss << "repair: removed_degenerate_faces=" << removed_deg << ", stitched_borders=" << stitched
+        << ", duplicated_non_manifold_vertices=" << duplicated_nm << ", holes_filled=" << holes_filled
+        << " (+" << faces_from_holes << " faces)";
+    if (holes_skipped_too_large > 0)
+    {
+      oss << ", holes_skipped_too_large=" << holes_skipped_too_large << " (max_halfedges=" << max_hole_halfedges
+          << ")";
+    }
+    if (log)
+    {
+      *log = oss.str();
+    }
+    return true;
+  }
+  catch (const std::exception& e)
+  {
+    oss << "repair threw: " << e.what();
+    if (log)
+    {
+      *log = oss.str();
+    }
+    return false;
+  }
+  catch (...)
+  {
+    oss << "repair threw an unknown exception";
+    if (log)
+    {
+      *log = oss.str();
+    }
+    return false;
+  }
+}
+#endif
+} // namespace
 
 #ifdef USE_CGAL
 using SideTest = CGAL::Side_of_triangle_mesh<MeshCGAL_internal, Kernel>;
@@ -77,10 +335,14 @@ static MeshCGAL_internal vectorToCgalMesh(
   return mesh;
 }
 
-static MeshCGAL<Origin> voronoiMeshToCgalMesh(
-  const VoronoiMesh& input_mesh, const std::vector<int>& neighbor_segments, int mesh_id = -1)
+static MeshCGAL<Origin> voronoiMeshToCgalMesh(const VoronoiMesh& input_mesh,
+  [[maybe_unused]] const std::vector<int>& neighbor_segments, int mesh_id = -1, std::size_t* add_face_failures = nullptr)
 {
   MeshCGAL<Origin> output_mesh("f:origin", Origin { -1, 0 });
+  if (add_face_failures)
+  {
+    *add_face_failures = 0;
+  }
 
   auto& vertices = input_mesh.getVertices();
   std::vector<MeshCGAL_internal::Vertex_index> vmap(vertices.size());
@@ -96,20 +358,19 @@ static MeshCGAL<Origin> voronoiMeshToCgalMesh(
 
     if (output_mesh.mesh.is_valid(face_index))
     {
-      if (!neighbor_segments.empty())
-      {
-        output_mesh.fidx[face_index] = { mesh_id, i / 3 };
-      }
+      // Always record origin so hole-fill defaults (-1) stay distinguishable from real faces.
+      output_mesh.fidx[face_index] = { mesh_id, i / 3 };
     }
     else
     {
-      // usually not relevant, but can be commented in if any issues arise
-      /*KINDS_WARNING("Adding triangle no. " << (i / 3) << " failed, will be ignored. It is probably degenerate.");
-      std::array<size_t, 3> tri_vertices = {triangles[i], triangles[i + 1], triangles[i + 2]};
-      KINDS_WARNING("Vertices: " << tri_vertices[0] << ", " << tri_vertices[1] << ", " << tri_vertices[2]);
-      KINDS_WARNING("Coordinates: {" << vertices[tri_vertices[0]].toString() << ", "
-                                         << vertices[tri_vertices[1]].toString() << ", "
-                                         << vertices[tri_vertices[2]].toString() << "}");*/
+      if (add_face_failures)
+      {
+        ++(*add_face_failures);
+        if (*add_face_failures <= 5)
+        {
+          //KINDS_WARNING("Adding triangle no. " << (i / 3) << " failed (likely degenerate or non-manifold), ignored.");
+        }
+      }
     }
   }
 
@@ -118,140 +379,68 @@ static MeshCGAL<Origin> voronoiMeshToCgalMesh(
 
 static double eps = 1e-12;
 
-bool isManifold(const MeshCGAL_internal& mesh)
-{
-  auto vindex = get(CGAL::vertex_index, mesh);
-  auto eindex = get(CGAL::edge_index, mesh);
-  auto findex = get(CGAL::face_index, mesh);
-
-  auto origin_map_pair = mesh.property_map<CGAL::Surface_mesh<Point_CGAL>::Face_index, Origin>("f:origin");
-  bool has_origin = origin_map_pair.second;
-  auto origin_map = origin_map_pair.first;
-
-  for (auto e : edges(mesh))
-  {
-    int count = 0;
-
-    auto h = halfedge(e, mesh);
-    auto h2 = CGAL::opposite(h, mesh);
-
-    auto f1 = face(h, mesh);
-    auto f2 = face(h2, mesh);
-
-    bool boundary = (f1 == mesh.null_face() || f2 == mesh.null_face());
-
-    if (boundary)
-    {
-      auto v0 = source(h, mesh);
-      auto v1 = target(h, mesh);
-
-      return false;
-      /*std::cerr << "Non-manifold edge detected\n";
-      std::cerr << "  edge index: " << eindex[e] << "\n";
-      std::cerr << "  vertices:   " << vindex[v0] << " -- " << vindex[v1] << "\n";
-
-      auto p0 = mesh.point(v0);
-      auto p1 = mesh.point(v1);
-
-      std::cerr << "  coords: (" << p0 << ") -- (" << p1 << ")\n";
-      std::cerr << "  incident halfedges: " << count << "\n";
-
-      std::cerr << "  incident faces:\n";
-      for (auto f : {f1, f2}) {
-        std::cerr << "    face " << findex[f];
-        if (has_origin) {
-          std::cerr << "  original face id =" << origin_map[f].face_id;
-        }
-        std::cerr << "\n";
-      }*/
-    }
-  }
-
-  using Halfedge = MeshCGAL_internal::Halfedge_index;
-  using Face = MeshCGAL_internal::Face_index;
-
-  for (auto v : vertices(mesh))
-  {
-    std::set<Face> incident_faces;
-
-    Halfedge h_start = halfedge(v, mesh);
-    if (h_start == MeshCGAL_internal::null_halfedge())
-      continue;
-
-    Halfedge h = h_start;
-    do
-    {
-      Face f = face(h, mesh);
-      if (f != MeshCGAL_internal::null_face())
-        incident_faces.insert(f);
-
-      h = opposite(next(h, mesh), mesh);
-    } while (h != h_start);
-
-    if (incident_faces.size() < 2)
-      continue;
-    std::set<Face> visited;
-    std::queue<Face> q;
-
-    Face seed = *incident_faces.begin();
-    visited.insert(seed);
-    q.push(seed);
-
-    while (!q.empty())
-    {
-      Face f = q.front();
-      q.pop();
-
-      Halfedge hf = halfedge(f, mesh);
-      Halfedge h = hf;
-      do
-      {
-        if (target(h, mesh) == v || source(h, mesh) == v)
-        {
-          Halfedge ho = opposite(h, mesh);
-          Face fn = face(ho, mesh);
-
-          if (fn != MeshCGAL_internal::null_face() && incident_faces.count(fn) && !visited.count(fn))
-          {
-            visited.insert(fn);
-            q.push(fn);
-          }
-        }
-        h = next(h, mesh);
-      } while (h != hf);
-    }
-
-    if (visited.size() != incident_faces.size())
-    {
-      return false;
-    }
-  }
-  return true;
-}
-
 kinDS::MeshIntersection::MeshIntersection(const VoronoiMesh& static_mesh)
   : boundary_mesh_voronoi(static_mesh)
 {
   // All neighbor segments are -1
   std::vector<int> neighbor_segments(boundary_mesh_voronoi.getTriangleCount(), -1);
 
-  boundary_mesh = voronoiMeshToCgalMesh(boundary_mesh_voronoi, neighbor_segments, 0);
+  std::size_t add_face_failures = 0;
+  boundary_mesh = voronoiMeshToCgalMesh(boundary_mesh_voronoi, neighbor_segments, 0, &add_face_failures);
 
-  namespace PMP = CGAL::Polygon_mesh_processing;
-
-  /*if (!CGAL::is_valid_polygon_mesh(boundary_mesh.mesh)) {
-    throw std::runtime_error("Invalid polygon mesh");
+  MeshReadinessReport readiness = diagnoseMesh(boundary_mesh.mesh, add_face_failures, true);
+  if (add_face_failures > 0)
+  {
+    //KINDS_WARNING("Boundary CGAL conversion dropped " << add_face_failures << " triangle(s); " << readiness.summary());
   }
 
-  if (!CGAL::is_closed(boundary_mesh.mesh)) {
-    throw std::runtime_error("Mesh must be closed and manifold");
+  if (!readiness.readyForBoolean())
+  {
+    KINDS_WARNING("Boundary mesh not ready for intersection (" << readiness.summary() << "). Attempting repair.");
+    if (readiness.boundary_edge_count > 0)
+    {
+      logSampleBoundaryEdges(boundary_mesh.mesh, {});
+    }
+
+    std::string repair_log;
+    const bool repaired =
+      tryRepairMeshForIntersection(boundary_mesh.mesh, &repair_log, kMaxHoleHalfedgesToFillBoundary);
+    KINDS_WARNING(repair_log);
+
+    readiness = diagnoseMesh(boundary_mesh.mesh, add_face_failures, true);
+    if (!repaired || !readiness.readyForBoolean())
+    {
+      if (readiness.boundary_edge_count > 0)
+      {
+        logSampleBoundaryEdges(boundary_mesh.mesh, {});
+      }
+      KINDS_ERROR("Boundary mesh still not closed/manifold after repair [" << readiness.summary()
+                                                                          << "]. Classification and intersection may fail.");
+    }
+    else
+    {
+      KINDS_WARNING("Boundary repair succeeded [" << readiness.summary() << "].");
+    }
+  }
+  else
+  {
+    KINDS_DEBUG("Boundary mesh ready for intersection [" << readiness.summary() << "].");
   }
 
-  */
+  try
+  {
+    PMP::orient_to_bound_a_volume(boundary_mesh.mesh);
+  }
+  catch (const std::exception& e)
+  {
+    KINDS_ERROR("orient_to_bound_a_volume failed on boundary mesh: " << e.what());
+  }
+  catch (...)
+  {
+    KINDS_ERROR("orient_to_bound_a_volume failed on boundary mesh (unknown exception).");
+  }
 
-  // assume that this is already the case and omit this call
-
-  PMP::orient_to_bound_a_volume(boundary_mesh.mesh);
+  // Build AABB tree only after repair/orientation so ClassifyMeshRelation uses the fixed mesh.
   tree = TreeCGAL(faces(boundary_mesh.mesh).first, faces(boundary_mesh.mesh).second, boundary_mesh.mesh);
   tree.build();
   tree.accelerate_distance_queries();
@@ -311,40 +500,92 @@ void interpolateProperties(
   }
 }
 
-std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(
-  const VoronoiMesh& mesh, const std::vector<int>& neighbor_segments)
+std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const VoronoiMesh& mesh,
+  const std::vector<int>& neighbor_segments, std::optional<size_t> meshlet_index, bool* failed)
 {
   std::pair<VoronoiMesh, std::vector<int>> ret_val {
     VoronoiMesh(std::vector<std::string> {}, NormalMode::PerTriangleCorner), {}
   };
   auto& [intersection_mesh, out_neighbor_segments] = ret_val;
+  if (failed)
+  {
+    *failed = false;
+  }
+
+  const auto meshlet_suffix = [&]() -> std::string
+  {
+    if (!meshlet_index.has_value())
+    {
+      return {};
+    }
+    return " (meshlet index " + std::to_string(*meshlet_index) + ")";
+  };
+
+  auto mark_failed = [&](const std::string& message)
+  {
+    if (failed)
+    {
+      *failed = true;
+    }
+    KINDS_ERROR(message << meshlet_suffix());
+  };
 
   if (mesh.getTriangles().empty())
   {
-    KINDS_WARNING("The input is empty. Returning empty intersection mesh.");
+    KINDS_WARNING("The input is empty. Returning empty intersection mesh." << meshlet_suffix());
     return ret_val; // empty mesh
   }
 
 #ifdef USE_CGAL
 
-  MeshCGAL<Origin> input_mesh = voronoiMeshToCgalMesh(mesh, neighbor_segments, 1);
+  std::size_t add_face_failures = 0;
+  MeshCGAL<Origin> input_mesh = voronoiMeshToCgalMesh(mesh, neighbor_segments, 1, &add_face_failures);
   // we need a copy because the corefinement is destructive
   MeshCGAL<Origin> boundary_mesh_copy = boundary_mesh;
   MeshCGAL<Origin> output_mesh("f:origin", { -1, 0 });
-  //  assume that this is already the case and omit this call
-  // PMP::orient_to_bound_a_volume(input_mesh.mesh);
 
-  bool manifold = isManifold(input_mesh.mesh);
-
-  if (!manifold)
+  MeshReadinessReport readiness = diagnoseMesh(input_mesh.mesh, add_face_failures);
+  if (add_face_failures > 0)
   {
-    KINDS_ERROR("Intersection failed - Input mesh is not a manifold.");
-    return ret_val; // empty mesh
+    //KINDS_WARNING("CGAL conversion dropped " << add_face_failures << " triangle(s); " << readiness.summary()
+    //                                         << meshlet_suffix());
   }
 
-  if (PMP::does_self_intersect(input_mesh.mesh))
+  if (!readiness.readyForBoolean())
   {
-    KINDS_ERROR("Intersection failed - Mesh self-intersects.");
+    KINDS_WARNING("Input mesh not ready for intersection (" << readiness.summary() << "). Attempting repair."
+                                                           << meshlet_suffix());
+    if (readiness.boundary_edge_count > 0)
+    {
+      logSampleBoundaryEdges(input_mesh.mesh, meshlet_suffix());
+    }
+
+    std::string repair_log;
+    const bool repaired = tryRepairMeshForIntersection(input_mesh.mesh, &repair_log);
+    KINDS_WARNING(repair_log << meshlet_suffix());
+
+    readiness = diagnoseMesh(input_mesh.mesh, add_face_failures);
+    if (!repaired || !readiness.readyForBoolean())
+    {
+      if (readiness.boundary_edge_count > 0)
+      {
+        logSampleBoundaryEdges(input_mesh.mesh, meshlet_suffix());
+      }
+      mark_failed("Intersection failed - " + readiness.failureReason() + " [" + readiness.summary() + "]");
+      return ret_val; // empty mesh
+    }
+
+    KINDS_WARNING("Repair succeeded for intersection (" << readiness.summary() << ")." << meshlet_suffix());
+  }
+
+  // Capture pre-corefine state: corefine mutates both input meshes.
+  MeshReadinessReport input_pre = diagnoseMesh(input_mesh.mesh, add_face_failures, true);
+  const MeshReadinessReport boundary_pre = diagnoseMesh(boundary_mesh_copy.mesh, 0, true);
+
+  if (input_pre.self_intersects)
+  {
+    mark_failed("Intersection failed - Mesh self-intersects. input[" + input_pre.summary() + "], boundary["
+      + boundary_pre.summary() + "]");
     return ret_val; // empty mesh
   }
 
@@ -356,16 +597,32 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(
     success = PMP::corefine_and_compute_intersection(
       boundary_mesh_copy.mesh, input_mesh.mesh, output_mesh.mesh, PMP::parameters::visitor(visitor));
   }
+  catch (const std::exception& e)
+  {
+    const MeshReadinessReport input_post = diagnoseMesh(input_mesh.mesh, add_face_failures, true);
+    const MeshReadinessReport boundary_post = diagnoseMesh(boundary_mesh_copy.mesh, 0, true);
+    const MeshReadinessReport output_post = diagnoseMesh(output_mesh.mesh, 0, true);
+    mark_failed(std::string("Intersection failed - exception: ") + e.what() + ". "
+      + formatCorefineFailureDiag(input_pre, boundary_pre, input_post, boundary_post, output_post));
+    return ret_val; // empty mesh
+  }
   catch (...)
   {
-    success = false;
-    KINDS_ERROR("Intersection failed - An exception was thrown.");
+    const MeshReadinessReport input_post = diagnoseMesh(input_mesh.mesh, add_face_failures, true);
+    const MeshReadinessReport boundary_post = diagnoseMesh(boundary_mesh_copy.mesh, 0, true);
+    const MeshReadinessReport output_post = diagnoseMesh(output_mesh.mesh, 0, true);
+    mark_failed("Intersection failed - An exception was thrown. "
+      + formatCorefineFailureDiag(input_pre, boundary_pre, input_post, boundary_post, output_post));
     return ret_val; // empty mesh
   }
 
   if (!success)
   {
-    KINDS_ERROR("Intersection failed - make sure both meshes are closed.");
+    const MeshReadinessReport input_post = diagnoseMesh(input_mesh.mesh, add_face_failures, true);
+    const MeshReadinessReport boundary_post = diagnoseMesh(boundary_mesh_copy.mesh, 0, true);
+    const MeshReadinessReport output_post = diagnoseMesh(output_mesh.mesh, 0, true);
+    mark_failed(
+      "Intersection failed - " + formatCorefineFailureDiag(input_pre, boundary_pre, input_post, boundary_post, output_post));
     return ret_val; // empty mesh
   }
 
@@ -385,10 +642,13 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(
     }
     size_t new_triangle_index = intersection_mesh.addTriangle(tri[0], tri[1], tri[2]);
 
-    // Get neighbor segment from face property map
-    // -2 is default and corresponds to the bark boundary. We need this because -1 corresponds to open segments, which
-    // can be thought of as either cut off or connecting to the soil.
-    int neighbor_segment = -2;
+    // Neighbor segment material tags:
+    //  >= 0  shared face with another segment
+    //  -1    open / cut / intersection face → interior material
+    //  -2    exterior bark surface
+    // Default to interior so faces from the intersection boundary (and synthetic repair faces)
+    // use inner wood rather than bark.
+    int neighbor_segment = -1;
 
     auto origin = output_mesh.fidx[f];
     if (origin.mesh_index == 1)
@@ -399,25 +659,29 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(
       }
       else
       {
-        KINDS_WARNING("Invalid origin triangle index: " << origin.face_id)
+        KINDS_WARNING("Invalid origin triangle index: " << origin.face_id << meshlet_suffix());
       }
 
       interpolateProperties(mesh, intersection_mesh, origin.face_id, tri);
     }
     else if (origin.mesh_index == 0)
     {
-      // we keep the default value for the neighbor as the boundary mesh has no neighbors
+      // Boundary/intersection faces: keep neighbor_segment = -1 (interior material).
       interpolateProperties(boundary_mesh_voronoi, intersection_mesh, origin.face_id, tri);
+    }
+    else if (origin.mesh_index < 0)
+    {
+      // Synthetic faces from repair (e.g. small hole fills): interior material, no property interp.
     }
     else
     {
-      KINDS_WARNING("Invalid origin mesh index: " << origin.mesh_index);
+      KINDS_WARNING("Invalid origin mesh index: " << origin.mesh_index << meshlet_suffix());
     }
 
     out_neighbor_segments.push_back(neighbor_segment);
   }
 #else
-  KINDS_ERROR(
+  mark_failed(
     "CGAL is required for the intersection computation but was not found. Returning empty intersection mesh.");
 #endif
 

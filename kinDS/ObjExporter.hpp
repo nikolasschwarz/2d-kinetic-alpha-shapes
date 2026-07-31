@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VoronoiMesh.hpp"
+#include "Logger.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -609,7 +610,11 @@ class ObjExporter
 
       for (size_t group_index = 0; group_index < group_count - 1; group_index++)
       {
-        file << "o group_" << group_index << "\n";
+        const auto& names = mesh.getGroupNames();
+        const std::string group_name = (group_index < names.size() && !names[group_index].empty())
+          ? names[group_index]
+          : ("group_" + std::to_string(group_index));
+        file << "o " << group_name << "\n";
         size_t lb = mesh.getGroupOffsets()[group_index];
         size_t ub = mesh.getGroupOffsets()[group_index + 1];
         validateFaceWriteRange(mesh, lb, ub, mesh_context + " group " + std::to_string(group_index));
@@ -617,8 +622,14 @@ class ObjExporter
       }
 
       // Write the last group
-
-      file << "o group_" << (group_count - 1) << "\n";
+      {
+        const auto& names = mesh.getGroupNames();
+        const size_t last_index = group_count - 1;
+        const std::string group_name = (last_index < names.size() && !names[last_index].empty())
+          ? names[last_index]
+          : ("group_" + std::to_string(last_index));
+        file << "o " << group_name << "\n";
+      }
       size_t lb = mesh.getGroupOffsets().back();
       size_t ub = mesh.getTriangles().size() / 3;
       validateFaceWriteRange(mesh, lb, ub, mesh_context + " last group");
@@ -720,6 +731,10 @@ class ObjExporter
     }
 
     mesh.mergeDuplicateVertices(1e-6);
+    if (mesh.orientFacesAwayFromCentroid())
+    {
+      KINDS_INFO("Loaded mesh was flipped to orient faces away from centroid: " << obj_path.string());
+    }
     mesh.computeNormals(PerTriangleCorner);
     return mesh;
   }

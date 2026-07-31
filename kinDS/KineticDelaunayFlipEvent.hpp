@@ -16,6 +16,35 @@ namespace kinDS
 inline constexpr double flip_voronoi_vertex_distance_eps = 1e-6;
 inline constexpr double flip_boundary_collinearity_eps = 1e-8;
 
+/// At a flip, the two Voronoi vertices of the flipped Delaunay edge coincide (unless one face is
+/// infinite). Meshing must snap both sides to one canonical id so mesh-space positions match.
+/// Prefer buffering those coordinates once in @c SegmentBuilderFlipCallback::beforeEvent and reusing
+/// them in @c afterEvent — face/strand association changes during the flip.
+/// Do @b not use this in the flip sanity check, which intentionally compares both coordinates.
+inline size_t canonicalFlipEdgeVoronoiVertexIdForMeshing(
+  const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id, size_t voronoi_vertex_id)
+{
+  const size_t even_he = flip_half_edge_id & ~size_t { 1 };
+  const int left_face = graph.halfEdge(even_he).face;
+  const int right_face = graph.halfEdge(even_he ^ 1).face;
+  if (left_face < 0 || right_face < 0)
+  {
+    return voronoi_vertex_id;
+  }
+
+  const size_t left_vv = static_cast<size_t>(left_face);
+  const size_t right_vv = static_cast<size_t>(right_face);
+  if (graph.faceHasInfiniteVertex(left_vv) || graph.faceHasInfiniteVertex(right_vv))
+  {
+    return voronoi_vertex_id;
+  }
+  if (voronoi_vertex_id != left_vv && voronoi_vertex_id != right_vv)
+  {
+    return voronoi_vertex_id;
+  }
+  return std::min(left_vv, right_vv);
+}
+
 inline double normalizedTriangleCollinearityMetric(const glm::dvec2& pa, const glm::dvec2& pb, const glm::dvec2& pc)
 {
   const glm::dvec2 ab = pb - pa;
