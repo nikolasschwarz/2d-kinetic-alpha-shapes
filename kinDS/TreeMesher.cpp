@@ -6,8 +6,11 @@
 #include "SegmentBuilder.hpp"
 #include "TreeMesher.hpp"
 #include "Validator.hpp"
+#include <algorithm>
 #include <execution>
 #include <filesystem>
+#include <mutex>
+#include <sstream>
 #include <stdexcept>
 
 #ifdef _DEBUG
@@ -217,17 +220,19 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
       combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, combined_normal_mode);
       // One OBJ group per meshlet index; boundaries are managed here, not via per-meshlet group_offsets.
       combined_mesh.setGroupOffsets({ 0 });
+      combined_mesh.setGroupNames({ "meshlet_0" });
       combined_mesh_initialized = true;
     }
     else
     {
-      combined_mesh.startNewGroup();
+      combined_mesh.startNewGroup("meshlet_" + std::to_string(i));
     }
 
     if (mesh_has_geometry)
     {
       // operator+= merges the rhs group_offsets, which would shift/absorb prior meshlet groups.
       mesh.setGroupOffsets({});
+      mesh.setGroupNames({});
       combined_mesh += mesh;
     }
   }
@@ -260,12 +265,16 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
   std::atomic<int> threads { 0 };
   thread_local bool counted = false;*/
 
+  std::mutex failed_mutex;
+  std::vector<std::pair<size_t, VoronoiMesh>> failed_meshlets;
+
   parallel_for(segment_meshlets.size(),
     [&](auto mesh_index)
     {
       // progress_counter.fetch_add(1, std::memory_order_relaxed);
       // intersection_progress_bar.Update(progress_counter);
-      auto intersect_relation = boundary_intersector.ClassifyMeshRelation(segment_meshlets[mesh_index], true);
+      // Do not assume inside: classify fully so outside meshlets are cleared correctly.
+      auto intersect_relation = boundary_intersector.ClassifyMeshRelation(segment_meshlets[mesh_index], false);
 
       switch (intersect_relation)
       {
@@ -283,8 +292,27 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
               + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix() + "_raw.obj",
             1.0, 1.0, {}, mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata);
         }
-        std::tie(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index])
-          = boundary_intersector.Intersect(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index]);
+        {
+          bool intersection_failed = false;
+          auto [clipped_mesh, clipped_neighbors] = boundary_intersector.Intersect(
+            segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index], mesh_index, &intersection_failed);
+          if (intersection_failed)
+          {
+            std::lock_guard<std::mutex> lock(failed_mutex);
+            failed_meshlets.emplace_back(mesh_index, segment_meshlets[mesh_index]);
+            if (!settings.keep_original_on_intersection_failure)
+            {
+              segment_meshlets[mesh_index] = kinDS::VoronoiMesh();
+              meshing_neighbor_indices[mesh_index] = {};
+            }
+            // else keep the uncut meshlet and its neighbor indices.
+          }
+          else
+          {
+            segment_meshlets[mesh_index] = std::move(clipped_mesh);
+            meshing_neighbor_indices[mesh_index] = std::move(clipped_neighbors);
+          }
+        }
         break;
 
       case kinDS::MeshIntersection::MeshRelation::OUTSIDE:
@@ -294,14 +322,44 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
         break;
 
       case kinDS::MeshIntersection::MeshRelation::UNDEFINED:
-        KINDS_ERROR("Mesh relation returned UNDEFINED");
+        KINDS_ERROR("Mesh relation returned UNDEFINED (meshlet index " << mesh_index << ")");
         break;
 
       default:
-        KINDS_ERROR("Unknown return value of mesh relation");
+        KINDS_ERROR("Unknown return value of mesh relation (meshlet index " << mesh_index << ")");
         break;
       }
     });
+
+  if (!failed_meshlets.empty())
+  {
+    std::sort(failed_meshlets.begin(), failed_meshlets.end(),
+      [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    std::ostringstream index_list;
+    for (size_t i = 0; i < failed_meshlets.size(); ++i)
+    {
+      if (i > 0)
+      {
+        index_list << ", ";
+      }
+      index_list << failed_meshlets[i].first;
+    }
+    KINDS_ERROR("Intersection failed for " << failed_meshlets.size()
+                                           << " meshlet(s). Indices: [" << index_list.str() << "]. "
+                                           << "Dumping failed meshlets as OBJ.");
+
+    const bool include_metadata = mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata;
+    for (const auto& [mesh_index, failed_mesh] : failed_meshlets)
+    {
+      const std::string suffix
+        = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
+      const std::filesystem::path obj_path = "failed_meshlet_" + std::to_string(mesh_index) + suffix
+        + failed_mesh.creationKineticTimeFilenameSuffix() + ".obj";
+      kinDS::ObjExporter::writeMesh(failed_mesh, obj_path, 1.0, 1.0, {}, include_metadata);
+      KINDS_ERROR("Wrote failed meshlet " << mesh_index << " to " << obj_path.string());
+    }
+  }
 
   // intersection_progress_bar.Finish();
   // std::cout << "Threads used: " << threads.load() << "\n";
@@ -580,6 +638,16 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
 
   std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
   segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(true);
+  size_t flipped_meshlet_count = 0;
+  for (VoronoiMesh& meshlet : segment_meshlets)
+  {
+    if (meshlet.orientFacesAwayFromCentroid())
+    {
+      ++flipped_meshlet_count;
+    }
+  }
+  KINDS_INFO(flipped_meshlet_count << "/" << segment_meshlets.size()
+                                   << " meshlets flipped to orient faces away from centroid.");
 }
 
 void TreeMesher::mapMeshingToPhysicsSegmentIndices()

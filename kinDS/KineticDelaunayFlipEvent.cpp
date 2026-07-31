@@ -429,6 +429,8 @@ void KineticDelaunay::FlipEvent::handleEvent()
 
   // Sanity-check Voronoi coincidence / boundary collinearity on every flip (log only; never throws).
   // FAIL → WARNING (ungated). OK → MONITOR only under flip diagnostic guards.
+  // Intentionally compares both flip-edge Voronoi vertices; do not use
+  // @ref canonicalFlipEdgeVoronoiVertexIdForMeshing here.
   if (graph.isOnConvexBoundary(half_edge_id) || graph.isOutsideConvexBoundary(half_edge_id))
   {
     size_t boundary_he_id = half_edge_id;

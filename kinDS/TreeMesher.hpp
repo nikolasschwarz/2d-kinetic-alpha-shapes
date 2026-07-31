@@ -45,6 +45,8 @@ class TreeMesher
   {
     double alpha_cutoff = 10.0; // default value, can be adjusted as needed
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
+    /// When true, a failed meshlet intersection keeps the uncut meshlet; when false, replaces it with an empty mesh.
+    bool keep_original_on_intersection_failure = true;
     /// When false, skip JSON vertex/face metadata on meshlets (material_ids still stored for OBJ export).
     /// Default off; CLI @c --store-mesh-metadata / @c --no-store-mesh-metadata.
     /// @ref validate_mesh_vertex_sources implies metadata storage when enabled.
@@ -124,6 +126,8 @@ class TreeMesher
   void transformToWorldSpace(
     VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform = glm::dmat4(1)) const;
   const std::vector<VoronoiMesh>& getSegmentMeshlets() const { return segment_meshlets; }
+  std::vector<VoronoiMesh>& getSegmentMeshlets() { return segment_meshlets; }
+  std::vector<std::vector<int>>& getMeshingNeighborIndices() { return meshing_neighbor_indices; }
   Settings& getSettings() { return settings; }
   const Settings& getSettings() const { return settings; }
   void setSettings(const Settings& new_settings) { settings = new_settings; }

@@ -2,9 +2,11 @@
 
 #include "SegmentBuilder.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "KineticDelaunayFlipEvent.hpp"
 #include "Logger.hpp"
 #include "SegmentBuilderVisualDebug.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <sstream>
@@ -90,6 +92,10 @@ void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const Half
 
 void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
 {
+  buffered_flip_voronoi_vertex_id_.reset();
+  buffered_flip_mesh_position_.reset();
+  buffered_flip_delaunay_xy_.reset();
+
   auto* flip = dynamic_cast<KineticDelaunay::FlipEvent*>(&e);
   if (!flip)
   {
@@ -106,6 +112,31 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   const size_t component_id = segment_builder_.kin_del.component_data.component_map[static_cast<size_t>(vertex)];
   const size_t runtime_branch_id = runtimeBranchIdForFlipEdge(segment_builder_.kin_del, graph, flip->half_edge_id);
 
+  // Buffer coinciding flip-edge Voronoi coordinates once from pre-flip topology/strands. afterEvent must
+  // reuse these: face↔strand association changes during the flip and recomputation introduces mismatch.
+  {
+    const size_t even_he = flip->half_edge_id & ~size_t { 1 };
+    const int left_face = graph.halfEdge(even_he).face;
+    const int right_face = graph.halfEdge(even_he ^ 1).face;
+    if (left_face >= 0 && right_face >= 0)
+    {
+      const size_t left_vv = static_cast<size_t>(left_face);
+      const size_t right_vv = static_cast<size_t>(right_face);
+      if (!graph.faceHasInfiniteVertex(left_vv) && !graph.faceHasInfiniteVertex(right_vv))
+      {
+        const size_t canonical_vv = std::min(left_vv, right_vv);
+        const glm::dvec3 fallback_profile
+          = unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
+        const auto object_space = segment_builder_.computeMeshVoronoiVertexObjectSpace(
+          canonical_vv, fallback_profile, static_cast<size_t>(vertex), flip->occurrence_time);
+        buffered_flip_voronoi_vertex_id_ = canonical_vv;
+        buffered_flip_mesh_position_ = object_space.position;
+        buffered_flip_delaunay_xy_ = glm::dvec2(
+          segment_builder_.computeVoronoiVertex(graph.face(canonical_vv).half_edges[0], flip->occurrence_time));
+      }
+    }
+  }
+
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     flip->occurrence_time, "before", "flip_he" + std::to_string(flip->half_edge_id),
     VisualDebugHighlight::forFlip(graph, flip->half_edge_id), runtime_branch_id,
@@ -115,9 +146,15 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
 
-  // Finish the segment mesh pair of the edge being flipped
-  const glm::dvec3 event_point
-    = unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
+  SegmentBuilder::MeshletVertexRuntimeInfo flip_voronoi_runtime;
+  flip_voronoi_runtime.explicit_mesh_position = buffered_flip_mesh_position_;
+  flip_voronoi_runtime.explicit_delaunay_xy = buffered_flip_delaunay_xy_;
+
+  // Finish the segment mesh pair of the edge being flipped.
+  // Prefer buffered Delaunay XY as the profile input; mesh-space placement comes from explicit_mesh_position.
+  const glm::dvec3 event_point = buffered_flip_delaunay_xy_.has_value()
+    ? glm::dvec3(buffered_flip_delaunay_xy_->x, buffered_flip_delaunay_xy_->y, flip->occurrence_time)
+    : unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
   size_t segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[flip->half_edge_id];
 
   if(graph.isInfinite(flip->half_edge_id) && segment_builder_.kin_del.computeBoundaryOnTheFly())
@@ -145,10 +182,12 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     if (!last_segments.empty())
     {
       const size_t pre_even_flip_he = flip->half_edge_id & ~1;
-      const size_t pre_left_voronoi_vertex_id = graph.halfEdge(pre_even_flip_he).face;
+      const size_t pre_left_voronoi_vertex_id = static_cast<size_t>(graph.halfEdge(pre_even_flip_he).face);
+      const size_t meshing_voronoi_vertex_id = buffered_flip_voronoi_vertex_id_.value_or(
+        canonicalFlipEdgeVoronoiVertexIdForMeshing(graph, flip->half_edge_id, pre_left_voronoi_vertex_id));
       size_t event_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
-        flip->occurrence_time, false, std::optional<size_t>(pre_left_voronoi_vertex_id),
-        flip_vertex_metadata(pre_left_voronoi_vertex_id));
+        flip->occurrence_time, false, std::optional<size_t>(meshing_voronoi_vertex_id),
+        flip_vertex_metadata(meshing_voronoi_vertex_id), std::nullopt, flip_voronoi_runtime);
       size_t last_left = last_segments.front().mesh_start_vertex_id;
       size_t last_right = last_segments.back().mesh_end_vertex_id;
       // create one triangle to the event point
@@ -257,13 +296,15 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   auto centroid = polygonCentroid(boundary_polygon);
 
   const size_t even_flip_he = flip->half_edge_id & ~1;
-  const size_t left_voronoi_vertex_id = graph.halfEdge(even_flip_he).face;
+  const size_t left_voronoi_vertex_id = static_cast<size_t>(graph.halfEdge(even_flip_he).face);
   const size_t left_containing_tri_id = segment_builder_.kin_del.getCrossingDataContainingTriId(left_voronoi_vertex_id);
   const bool left_inside = segment_builder_.kin_del.getFaceInside(left_containing_tri_id);
   const bool flip_pos_finite = std::isfinite(flip->position[0]) && std::isfinite(flip->position[1]);
   const bool seed_mesh_with_flip_vertex = left_inside && flip_pos_finite;
-  const glm::dvec3 event_point
-    = unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
+  // Prefer pre-flip buffered coincidence coords; post-flip strand/face association would reintroduce mismatch.
+  const glm::dvec3 event_point = buffered_flip_delaunay_xy_.has_value()
+    ? glm::dvec3(buffered_flip_delaunay_xy_->x, buffered_flip_delaunay_xy_->y, flip->occurrence_time)
+    : unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
   const auto flip_vertex_metadata = [](size_t voronoi_vertex_id)
   {
     return SegmentBuilder::MetadataBuilder()
@@ -278,6 +319,9 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
         .addDouble("t", flip->occurrence_time)
         .build()
     : std::string {};
+  SegmentBuilder::MeshletVertexRuntimeInfo flip_voronoi_runtime;
+  flip_voronoi_runtime.explicit_mesh_position = buffered_flip_mesh_position_;
+  flip_voronoi_runtime.explicit_delaunay_xy = buffered_flip_delaunay_xy_;
 
   // For now also create a mesh, but this might be changed later
   VoronoiMesh mesh;
@@ -286,9 +330,11 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
   if (seed_mesh_with_flip_vertex)
   {
+    const size_t meshing_voronoi_vertex_id = buffered_flip_voronoi_vertex_id_.value_or(
+      canonicalFlipEdgeVoronoiVertexIdForMeshing(graph, flip->half_edge_id, left_voronoi_vertex_id));
     size_t index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, event_point, vertex,
-      flip->occurrence_time, false, std::optional<size_t>(left_voronoi_vertex_id),
-      flip_vertex_metadata(left_voronoi_vertex_id));
+      flip->occurrence_time, false, std::optional<size_t>(meshing_voronoi_vertex_id),
+      flip_vertex_metadata(meshing_voronoi_vertex_id), std::nullopt, flip_voronoi_runtime);
     segment_builder_.segment_mesh_pair_last_left_and_right_vertex.back().emplace_back(
       SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
   }
@@ -315,9 +361,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       continue;
     }
 
-    // This extends the open endpoint represented by this directed half-edge. Its face is the corresponding
-    // Voronoi vertex; at the flip instant all involved circumcenters coincide geometrically, but mesh-space
-    // placement must still use that specific Voronoi vertex's barycentric transfer rather than site placement.
+    // Open endpoint of this directed half-edge: its face is a flip-edge Voronoi vertex. Reuse the
+    // pre-flip buffered coincidence coords so before/after meshlets share identical positions.
     const int neighbor_voronoi_vertex_i = graph.halfEdge(he_id).face;
     if (neighbor_voronoi_vertex_i < 0)
     {
@@ -327,10 +372,12 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       continue;
     }
     const size_t neighbor_voronoi_vertex_id = static_cast<size_t>(neighbor_voronoi_vertex_i);
+    const size_t meshing_voronoi_vertex_id = buffered_flip_voronoi_vertex_id_.value_or(
+      canonicalFlipEdgeVoronoiVertexIdForMeshing(graph, flip->half_edge_id, neighbor_voronoi_vertex_id));
     size_t new_vertex_index
       = segment_builder_.addMeshletVertex(mesh_ref, boundary_polygon, centroid, event_point, vertex,
-        flip->occurrence_time, false, std::make_optional(neighbor_voronoi_vertex_id),
-        flip_vertex_metadata(neighbor_voronoi_vertex_id));
+        flip->occurrence_time, false, std::make_optional(meshing_voronoi_vertex_id),
+        flip_vertex_metadata(meshing_voronoi_vertex_id), std::nullopt, flip_voronoi_runtime);
 
     int he_id_left = segments.front().start_half_edge_id;
     int he_id_right = segments.back().end_half_edge_id;
@@ -454,6 +501,10 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
         delaunay_edge_id, flip->occurrence_time);
     }
   }
+
+  buffered_flip_voronoi_vertex_id_.reset();
+  buffered_flip_mesh_position_.reset();
+  buffered_flip_delaunay_xy_.reset();
 }
 } // namespace kinDS
 

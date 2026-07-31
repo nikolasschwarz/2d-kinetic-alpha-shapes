@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <stdexcept>
 #include <sstream>
 #include <unordered_map>
@@ -90,6 +91,7 @@ size_t VoronoiMesh::addVertex(double x, double y, double z, const std::string& m
   size_t index = vertices.size();
   vertices.emplace_back(glm::dvec3 { x, y, z });
   vertex_kinetic_times_.push_back(std::numeric_limits<double>::quiet_NaN());
+  vertex_is_flexible_.push_back(false);
   if (store_metadata_)
   {
     vertex_metadata.push_back(metadata);
@@ -103,6 +105,7 @@ size_t VoronoiMesh::addVertex(const glm::dvec3& p, const std::string& metadata, 
   size_t index = vertices.size();
   vertices.emplace_back(p);
   vertex_kinetic_times_.push_back(std::numeric_limits<double>::quiet_NaN());
+  vertex_is_flexible_.push_back(false);
   if (store_metadata_)
   {
     vertex_metadata.push_back(metadata);
@@ -214,6 +217,28 @@ void VoronoiMesh::setVertexMetadata(size_t vertex_index, const std::string& meta
   vertex_metadata[vertex_index] = metadata;
 }
 
+void VoronoiMesh::setVertexFlexible(size_t vertex_index, bool is_flexible)
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("setVertexFlexible: vertex index out of range.");
+  }
+  if (vertex_is_flexible_.size() < vertices.size())
+  {
+    vertex_is_flexible_.resize(vertices.size(), false);
+  }
+  vertex_is_flexible_[vertex_index] = is_flexible;
+}
+
+bool VoronoiMesh::isVertexFlexible(size_t vertex_index) const
+{
+  if (vertex_index >= vertices.size())
+  {
+    throw std::out_of_range("isVertexFlexible: vertex index out of range.");
+  }
+  return vertex_index < vertex_is_flexible_.size() && vertex_is_flexible_[vertex_index];
+}
+
 void kinDS::VoronoiMesh::replaceVertex(size_t index, const glm::dvec3& new_position) { vertices[index] = new_position; }
 
 size_t VoronoiMesh::addTriangle(size_t v1, size_t v2, size_t v3, int material_id, const std::string& metadata)
@@ -249,6 +274,184 @@ size_t VoronoiMesh::addTriangle(
   return index;
 }
 
+size_t VoronoiMesh::triangleCornerIndex(size_t triangle_id, size_t vertex_id) const
+{
+  if (triangle_id >= triangles.size() / 3)
+  {
+    return static_cast<size_t>(-1);
+  }
+  for (size_t e = 0; e < 3; ++e)
+  {
+    const size_t corner = 3 * triangle_id + e;
+    if (triangles[corner] == vertex_id)
+    {
+      return corner;
+    }
+  }
+  return static_cast<size_t>(-1);
+}
+
+std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t tri_vert_id1, const glm::dvec3& vertex)
+{
+  constexpr std::pair<size_t, size_t> k_fail { static_cast<size_t>(-1), static_cast<size_t>(-1) };
+  if (tri_vert_id0 >= triangles.size() || tri_vert_id1 >= triangles.size())
+  {
+    return k_fail;
+  }
+  // Same triangle iff integer division by 3 matches (drop remainder intentionally).
+  if ((tri_vert_id0 / 3) != (tri_vert_id1 / 3) || tri_vert_id0 == tri_vert_id1)
+  {
+    return k_fail;
+  }
+
+  const size_t tri = tri_vert_id0 / 3;
+  const size_t base = 3 * tri;
+
+  // Orient the split edge to the triangle's existing winding: corner_a → corner_b along the cycle.
+  // Callers may pass the two corners in either order.
+  size_t corner_a = tri_vert_id0;
+  size_t corner_b = tri_vert_id1;
+  if (((corner_a % 3) + 1) % 3 != (corner_b % 3))
+  {
+    std::swap(corner_a, corner_b);
+  }
+  if (((corner_a % 3) + 1) % 3 != (corner_b % 3))
+  {
+    return k_fail; // not an edge of this triangle (should be unreachable for distinct corners)
+  }
+  const size_t corner_c = base + (((corner_b % 3) + 1) % 3);
+
+  const size_t va = triangles[corner_a];
+  const size_t vb = triangles[corner_b];
+  const size_t vc = triangles[corner_c];
+  if (va >= vertices.size() || vb >= vertices.size() || vc >= vertices.size())
+  {
+    return k_fail;
+  }
+
+  // Parameter along the winding-oriented edge va → vb.
+  const glm::dvec3& pa = vertices[va];
+  const glm::dvec3& pb = vertices[vb];
+  const glm::dvec3 ab = pb - pa;
+  const double len2 = glm::dot(ab, ab);
+  double s = 0.5;
+  if (len2 > 1e-24)
+  {
+    s = std::clamp(glm::dot(vertex - pa, ab) / len2, 0.0, 1.0);
+  }
+
+  const size_t new_vid = addVertex(vertex);
+
+  // Interpolate per-vertex attributes from the split edge endpoints (va → vb).
+  {
+    const double t0 = vertexKineticTime(va);
+    const double t1 = vertexKineticTime(vb);
+    if (std::isfinite(t0) && std::isfinite(t1))
+    {
+      setVertexKineticTime(new_vid, t0 * (1.0 - s) + t1 * s);
+    }
+  }
+  if (const auto uv0 = vertexSemanticUv(va); uv0.has_value())
+  {
+    if (const auto uv1 = vertexSemanticUv(vb); uv1.has_value())
+    {
+      setVertexSemanticUv(new_vid, uv0.value() * (1.0 - s) + uv1.value() * s);
+    }
+  }
+  {
+    const bool p0_ok = va < profile_plane_xy_.size() && std::isfinite(profile_plane_xy_[va].x)
+      && std::isfinite(profile_plane_xy_[va].y);
+    const bool p1_ok = vb < profile_plane_xy_.size() && std::isfinite(profile_plane_xy_[vb].x)
+      && std::isfinite(profile_plane_xy_[vb].y);
+    if (p0_ok && p1_ok)
+    {
+      setProfilePlanePosition(new_vid, profile_plane_xy_[va] * (1.0 - s) + profile_plane_xy_[vb] * s);
+    }
+  }
+  if (isVertexFlexible(va) || isVertexFlexible(vb))
+  {
+    setVertexFlexible(new_vid, true);
+  }
+  if (va < vertex_colors.size() && vb < vertex_colors.size() && new_vid < vertex_colors.size())
+  {
+    vertex_colors[new_vid] = vertex_colors[va] * (1.0 - s) + vertex_colors[vb] * s;
+  }
+  // After addVertex, a synced PerVertex normal buffer has size == vertices.size() - 1.
+  if (normal_mode == PerVertex && normals.size() + 1 == vertices.size() && va < normals.size() && vb < normals.size())
+  {
+    normals.push_back(normals[va] * (1.0 - s) + normals[vb] * s);
+  }
+
+  size_t uv_a_idx = std::numeric_limits<size_t>::max();
+  size_t uv_b_idx = std::numeric_limits<size_t>::max();
+  size_t uv_c_idx = std::numeric_limits<size_t>::max();
+  size_t uv_f_idx = std::numeric_limits<size_t>::max();
+  const bool has_uvs = uv_indices.size() == triangles.size();
+  if (has_uvs)
+  {
+    uv_a_idx = uv_indices[corner_a];
+    uv_b_idx = uv_indices[corner_b];
+    uv_c_idx = uv_indices[corner_c];
+    if (uv_a_idx < uvs.size() && uv_b_idx < uvs.size())
+    {
+      uv_f_idx = addUV(uvs[uv_a_idx] * (1.0 - s) + uvs[uv_b_idx] * s);
+    }
+  }
+
+  glm::dvec3 n_a { 0.0 };
+  glm::dvec3 n_b { 0.0 };
+  glm::dvec3 n_c { 0.0 };
+  glm::dvec3 n_f { 0.0 };
+  const bool has_corner_normals = normal_mode == PerTriangleCorner && normals.size() == triangles.size();
+  if (has_corner_normals)
+  {
+    n_a = normals[corner_a];
+    n_b = normals[corner_b];
+    n_c = normals[corner_c];
+    n_f = n_a * (1.0 - s) + n_b * s;
+  }
+
+  // Keep per-face attribute buffers aligned with the existing triangle count before appending.
+  const size_t tri_count_before = triangles.size() / 3;
+  if (material_ids.size() < tri_count_before)
+  {
+    material_ids.resize(tri_count_before, -1);
+  }
+  if (store_metadata_ && face_metadata.size() < tri_count_before)
+  {
+    face_metadata.resize(tri_count_before, "{}");
+  }
+
+  const int material_id = material_ids[tri];
+  std::string face_meta = "{}";
+  if (store_metadata_)
+  {
+    face_meta = face_metadata[tri];
+  }
+
+  // Original face (…, va, vb, vc, …) → (…, va, F, vc, …): replace vb with F, preserve winding.
+  triangles[corner_b] = new_vid;
+  if (has_uvs)
+  {
+    uv_indices[corner_b] = uv_f_idx;
+  }
+  if (has_corner_normals)
+  {
+    normals[corner_b] = n_f;
+  }
+
+  // New face: F, vb, vc — same cyclic order as va → vb → vc on the original triangle.
+  const size_t new_tri = addTriangle(new_vid, vb, vc, uv_f_idx, uv_b_idx, uv_c_idx, material_id, face_meta);
+  if (has_corner_normals)
+  {
+    normals.push_back(n_f);
+    normals.push_back(n_b);
+    normals.push_back(n_c);
+  }
+
+  return { new_vid, new_tri };
+}
+
 size_t VoronoiMesh::addNormal(double nx, double ny, double nz) { return addNormal(glm::dvec3 { nx, ny, nz }); }
 
 size_t VoronoiMesh::addNormal(const glm::dvec3& n)
@@ -273,12 +476,33 @@ size_t VoronoiMesh::addUV(glm::dvec3 uv)
   return index;
 }
 
-void VoronoiMesh::startNewGroup()
+void VoronoiMesh::startNewGroup(const std::string& name)
 {
   group_offsets.push_back(triangles.size() / 3);
+  group_names.push_back(name);
 }
 
-void VoronoiMesh::setGroupOffsets(const std::vector<size_t>& offsets) { group_offsets = offsets; }
+void VoronoiMesh::setGroupOffsets(const std::vector<size_t>& offsets)
+{
+  group_offsets = offsets;
+  if (group_names.size() > group_offsets.size())
+  {
+    group_names.resize(group_offsets.size());
+  }
+  else if (group_names.size() < group_offsets.size())
+  {
+    group_names.resize(group_offsets.size());
+  }
+}
+
+void VoronoiMesh::setGroupNames(const std::vector<std::string>& names)
+{
+  group_names = names;
+  if (group_names.size() < group_offsets.size())
+  {
+    group_names.resize(group_offsets.size());
+  }
+}
 
 int VoronoiMesh::ensureMaterialName(const std::string& name)
 {
@@ -387,6 +611,19 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
     vertex_semantic_uvs_.insert(
       vertex_semantic_uvs_.end(), other.vertices.size(), glm::dvec3(std::numeric_limits<double>::quiet_NaN()));
   }
+  if (vertex_is_flexible_.size() < old_vertices_size)
+  {
+    vertex_is_flexible_.resize(old_vertices_size, false);
+  }
+  if (other.vertex_is_flexible_.size() == other.vertices.size())
+  {
+    vertex_is_flexible_.insert(
+      vertex_is_flexible_.end(), other.vertex_is_flexible_.begin(), other.vertex_is_flexible_.end());
+  }
+  else
+  {
+    vertex_is_flexible_.insert(vertex_is_flexible_.end(), other.vertices.size(), false);
+  }
 
   size_t old_vertex_indices_size = triangles.size();
   const size_t old_triangle_count = old_vertex_indices_size / 3;
@@ -414,6 +651,16 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
 
   std::transform(group_offsets.begin() + old_group_count, group_offsets.end(), group_offsets.begin() + old_group_count,
     [&](size_t offset) { return offset + old_triangle_count; });
+
+  group_names.insert(group_names.end(), other.group_names.begin(), other.group_names.end());
+  if (group_names.size() < group_offsets.size())
+  {
+    group_names.resize(group_offsets.size());
+  }
+  else if (group_names.size() > group_offsets.size())
+  {
+    group_names.resize(group_offsets.size());
+  }
   if (store_metadata_)
   {
     const size_t other_tri_count = other.triangles.size() / 3;
@@ -484,7 +731,10 @@ void VoronoiMesh::flipOrientation()
   for (size_t i = 0; i < triangles.size(); i += 3)
   {
     std::swap(triangles[i + 1], triangles[i + 2]);
-    std::swap(uv_indices[i + 1], uv_indices[i + 2]);
+    if (uv_indices.size() == triangles.size())
+    {
+      std::swap(uv_indices[i + 1], uv_indices[i + 2]);
+    }
   }
 
   // flip all normals
@@ -492,6 +742,41 @@ void VoronoiMesh::flipOrientation()
   {
     normals[i] = -normals[i];
   }
+}
+
+bool VoronoiMesh::orientFacesAwayFromCentroid()
+{
+  if (vertices.empty() || triangles.size() < 3)
+  {
+    return false;
+  }
+
+  glm::dvec3 centroid(0.0);
+  for (const glm::dvec3& vertex : vertices)
+  {
+    centroid += vertex;
+  }
+  centroid /= static_cast<double>(vertices.size());
+
+  // Positive score means normals predominantly point away from the centroid (desired outward polarity).
+  double outward_score = 0.0;
+  for (size_t i = 0; i < triangles.size(); i += 3)
+  {
+    const glm::dvec3& v0 = vertices[triangles[i]];
+    const glm::dvec3& v1 = vertices[triangles[i + 1]];
+    const glm::dvec3& v2 = vertices[triangles[i + 2]];
+    const glm::dvec3 normal = glm::cross(v1 - v0, v2 - v0);
+    const glm::dvec3 face_centroid = (v0 + v1 + v2) / 3.0;
+    outward_score += glm::dot(normal, face_centroid - centroid);
+  }
+
+  if (outward_score >= 0.0)
+  {
+    return false;
+  }
+
+  flipOrientation();
+  return true;
 }
 
 glm::dmat4 VoronoiMesh::profileSpaceSwapYAndZTransform()
@@ -545,6 +830,8 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   new_vertex_kinetic_times.reserve(vertices.size());
   std::vector<glm::dvec3> new_vertex_semantic_uvs;
   new_vertex_semantic_uvs.reserve(vertices.size());
+  std::vector<bool> new_vertex_is_flexible;
+  new_vertex_is_flexible.reserve(vertices.size());
 
   std::vector<size_t> remap(vertices.size(), size_t(-1));
 
@@ -567,6 +854,7 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
       key[2] = static_cast<int>(std::hash<double> {}(v[2]) & 0x7FFFFFFF);
     }
 
+    const bool is_flexible = i < vertex_is_flexible_.size() && vertex_is_flexible_[i];
     auto it = grid.find(key);
     if (it == grid.end())
     {
@@ -605,11 +893,16 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
       {
         new_vertex_semantic_uvs.push_back(glm::dvec3(std::numeric_limits<double>::quiet_NaN()));
       }
+      new_vertex_is_flexible.push_back(is_flexible);
       remap[i] = newIndex;
     }
     else
     {
       remap[i] = it->second;
+      if (is_flexible)
+      {
+        new_vertex_is_flexible[it->second] = true;
+      }
     }
   }
 
@@ -625,12 +918,244 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
   vertex_colors.swap(new_vertex_colors);
   vertex_kinetic_times_.swap(new_vertex_kinetic_times);
   vertex_semantic_uvs_.swap(new_vertex_semantic_uvs);
+  vertex_is_flexible_.swap(new_vertex_is_flexible);
   if (!store_metadata_)
   {
     vertex_metadata.clear();
   }
 
   return remap;
+}
+
+size_t VoronoiMesh::collapseDegreeTwoFlexibleVertices()
+{
+  const size_t n_vertices = vertices.size();
+  const size_t n_triangles = triangles.size() / 3;
+  if (n_vertices == 0 || n_triangles == 0)
+  {
+    return 0;
+  }
+
+  struct MergedTriangle
+  {
+    size_t v0 = 0;
+    size_t v1 = 0;
+    size_t v2 = 0;
+    size_t uv0 = std::numeric_limits<size_t>::max();
+    size_t uv1 = std::numeric_limits<size_t>::max();
+    size_t uv2 = std::numeric_limits<size_t>::max();
+    int material_id = -1;
+    std::string face_metadata = "{}";
+  };
+
+  const auto mark_collapsed_metadata = [](const std::string& metadata) -> std::string
+  {
+    if (metadata.empty() || metadata == "{}")
+    {
+      return "{\"postprocess_merged_flexible\":true}";
+    }
+    if (metadata.back() == '}')
+    {
+      std::string out = metadata;
+      out.pop_back();
+      if (out.size() > 1)
+      {
+        out += ",";
+      }
+      out += "\"postprocess_merged_flexible\":true}";
+      return out;
+    }
+    return metadata;
+  };
+
+  std::vector<bool> triangle_removed(n_triangles, false);
+  std::vector<MergedTriangle> merged;
+  size_t collapsed = 0;
+
+  const bool has_uvs = !uv_indices.empty() && uv_indices.size() == triangles.size();
+
+  for (size_t vertex_index = 0; vertex_index < n_vertices; ++vertex_index)
+  {
+    if (!isVertexFlexible(vertex_index))
+    {
+      continue;
+    }
+
+    const std::vector<size_t> corners = findTriangleCorners(vertex_index);
+    if (corners.size() != 2)
+    {
+      continue;
+    }
+
+    const size_t tri_a = corners[0] / 3;
+    const size_t tri_b = corners[1] / 3;
+    if (tri_a >= n_triangles || tri_b >= n_triangles || tri_a == tri_b)
+    {
+      continue;
+    }
+    if (triangle_removed[tri_a] || triangle_removed[tri_b])
+    {
+      continue;
+    }
+
+    const size_t local_a = corners[0] % 3;
+    const size_t local_b = corners[1] % 3;
+
+    // Opposite directed edge of tri_a (skip flexible vertex), preserves that triangle's winding.
+    const size_t u = triangles[3 * tri_a + ((local_a + 1) % 3)];
+    const size_t v = triangles[3 * tri_a + ((local_a + 2) % 3)];
+    if (u == v || u == vertex_index || v == vertex_index)
+    {
+      continue;
+    }
+
+    size_t w = std::numeric_limits<size_t>::max();
+    for (size_t k = 0; k < 3; ++k)
+    {
+      const size_t candidate = triangles[3 * tri_b + k];
+      if (candidate != vertex_index && candidate != u && candidate != v)
+      {
+        w = candidate;
+        break;
+      }
+    }
+    if (w == std::numeric_limits<size_t>::max() || w == u || w == v)
+    {
+      continue;
+    }
+
+    // Confirm the two triangles share an edge through the flexible vertex.
+    size_t shared_neighbors = 0;
+    for (size_t k = 0; k < 3; ++k)
+    {
+      const size_t candidate = triangles[3 * tri_b + k];
+      if (candidate == u || candidate == v)
+      {
+        ++shared_neighbors;
+      }
+    }
+    if (shared_neighbors != 1)
+    {
+      continue;
+    }
+
+    MergedTriangle out;
+    out.v0 = u;
+    out.v1 = v;
+    out.v2 = w;
+    out.material_id = tri_a < material_ids.size() ? material_ids[tri_a] : -1;
+    if (store_metadata_ && tri_a < face_metadata.size())
+    {
+      out.face_metadata = mark_collapsed_metadata(face_metadata[tri_a]);
+    }
+    else if (store_metadata_)
+    {
+      out.face_metadata = mark_collapsed_metadata("{}");
+    }
+
+    if (has_uvs)
+    {
+      out.uv0 = uv_indices[3 * tri_a + ((local_a + 1) % 3)];
+      out.uv1 = uv_indices[3 * tri_a + ((local_a + 2) % 3)];
+      size_t w_local = 0;
+      for (; w_local < 3; ++w_local)
+      {
+        if (triangles[3 * tri_b + w_local] == w)
+        {
+          break;
+        }
+      }
+      out.uv2 = uv_indices[3 * tri_b + w_local];
+    }
+
+    triangle_removed[tri_a] = true;
+    triangle_removed[tri_b] = true;
+    merged.push_back(std::move(out));
+    ++collapsed;
+  }
+
+  if (collapsed == 0)
+  {
+    return 0;
+  }
+
+  std::vector<size_t> new_triangles;
+  std::vector<size_t> new_uv_indices;
+  std::vector<int> new_material_ids;
+  std::vector<std::string> new_face_metadata;
+  new_triangles.reserve(triangles.size() - 3 * collapsed + 3 * merged.size());
+  if (has_uvs)
+  {
+    new_uv_indices.reserve(new_triangles.capacity());
+  }
+  new_material_ids.reserve(n_triangles - collapsed + merged.size());
+  if (store_metadata_)
+  {
+    new_face_metadata.reserve(n_triangles - collapsed + merged.size());
+  }
+
+  for (size_t t = 0; t < n_triangles; ++t)
+  {
+    if (triangle_removed[t])
+    {
+      continue;
+    }
+    new_triangles.push_back(triangles[3 * t + 0]);
+    new_triangles.push_back(triangles[3 * t + 1]);
+    new_triangles.push_back(triangles[3 * t + 2]);
+    if (has_uvs)
+    {
+      new_uv_indices.push_back(uv_indices[3 * t + 0]);
+      new_uv_indices.push_back(uv_indices[3 * t + 1]);
+      new_uv_indices.push_back(uv_indices[3 * t + 2]);
+    }
+    new_material_ids.push_back(t < material_ids.size() ? material_ids[t] : -1);
+    if (store_metadata_)
+    {
+      new_face_metadata.push_back(t < face_metadata.size() ? face_metadata[t] : std::string("{}"));
+    }
+  }
+
+  for (const MergedTriangle& tri : merged)
+  {
+    new_triangles.push_back(tri.v0);
+    new_triangles.push_back(tri.v1);
+    new_triangles.push_back(tri.v2);
+    if (has_uvs)
+    {
+      new_uv_indices.push_back(tri.uv0);
+      new_uv_indices.push_back(tri.uv1);
+      new_uv_indices.push_back(tri.uv2);
+    }
+    new_material_ids.push_back(tri.material_id);
+    if (store_metadata_)
+    {
+      new_face_metadata.push_back(tri.face_metadata);
+    }
+  }
+
+  triangles.swap(new_triangles);
+  if (has_uvs)
+  {
+    uv_indices.swap(new_uv_indices);
+  }
+  else
+  {
+    uv_indices.clear();
+  }
+  material_ids.swap(new_material_ids);
+  if (store_metadata_)
+  {
+    face_metadata.swap(new_face_metadata);
+  }
+  else
+  {
+    face_metadata.clear();
+  }
+
+  // Drop collapsed flexible vertices (and any other unused verts).
+  removeIsolatedVertices();
+  return collapsed;
 }
 
 #ifdef USE_CGAL
@@ -898,6 +1423,8 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
   new_vertex_kinetic_times.reserve(new_count);
   std::vector<glm::dvec3> new_vertex_semantic_uvs;
   new_vertex_semantic_uvs.reserve(new_count);
+  std::vector<bool> new_vertex_is_flexible;
+  new_vertex_is_flexible.reserve(new_count);
 
   for (size_t i = 0; i < n_vertices; ++i)
   {
@@ -936,6 +1463,7 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
       {
         new_vertex_semantic_uvs.push_back(glm::dvec3(std::numeric_limits<double>::quiet_NaN()));
       }
+      new_vertex_is_flexible.push_back(i < vertex_is_flexible_.size() && vertex_is_flexible_[i]);
     }
   }
   vertices.swap(new_vertices);
@@ -943,6 +1471,7 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
   vertex_colors.swap(new_vertex_colors);
   vertex_kinetic_times_.swap(new_vertex_kinetic_times);
   vertex_semantic_uvs_.swap(new_vertex_semantic_uvs);
+  vertex_is_flexible_.swap(new_vertex_is_flexible);
   if (!store_metadata_)
   {
     vertex_metadata.clear();
@@ -973,7 +1502,7 @@ std::vector<size_t> VoronoiMesh::removeIsolatedVertices()
   return remap;
 }
 
-void VoronoiMesh::removeDegenerateTriangles()
+size_t VoronoiMesh::removeDegenerateTriangles()
 {
   const size_t n_triangles = triangles.size() / 3;
   std::vector<size_t> new_triangles;
@@ -1035,12 +1564,7 @@ void VoronoiMesh::removeDegenerateTriangles()
     face_metadata.clear();
   }
 
-  // Optionally: warn if triangles were removed
-  size_t removed = n_triangles - (triangles.size() / 3);
-  if (removed > 0)
-  {
-    // std::cerr << "Removed " << removed << " degenerate triangles.\n";
-  }
+  return n_triangles - (triangles.size() / 3);
 }
 
 void VoronoiMesh::ensureFaceMetadataSize(const std::string& fill_value)

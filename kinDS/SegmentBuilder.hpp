@@ -193,6 +193,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool validate_mesh_vertex_sources = false;
   /// When false, skip meshlet diagnostic logging and related string assembly.
   bool diagnostics = false;
+  /// When true, finalize collapses degree-2 flexible vertices on intersection meshlets.
+  bool collapse_degree_two_flexible_vertices_postprocess_enabled = true;
+  /// When true, segment meshlet assembly aligns glue seams across contributing mesh copies
+  /// (multi-match boundary seams; propagate unmatched interiors onto partners before combine).
+  bool align_flexible_glue_edges_postprocess_enabled = true;
   /// Emit closing-cap meshlets at kinetic @c start_section / premature @c end_section.
   /// Ending input branches (including tree top) always get caps at finalize; @c mesh_cap_at_end only
   /// seals strands truncated by @c --end.
@@ -415,6 +420,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// When set, stored as @ref VoronoiMesh::setProfilePlanePosition for ear-clip triangulation.
     /// Use the same XY the caller used to build the polygon ring (typically Delaunay space).
     std::optional<glm::dvec2> triangulation_plane_xy {};
+    /// When set with a Voronoi snap id, skip recomputing mesh/Delaunay placement and use these
+    /// (e.g. flip coincidence buffered once from pre-flip topology).
+    std::optional<glm::dvec3> explicit_mesh_position {};
+    std::optional<glm::dvec2> explicit_delaunay_xy {};
 
     bool isIntersectionVertex() const { return position_intersection.has_value(); }
   };
@@ -726,6 +735,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t anchor_new_vertex);
   void snapFlexibleVerticesToAnchor(VoronoiMesh& mesh, const std::vector<int>& flex, size_t anchor_vertex);
   void resolveAllIntersectionFlexibleVertices(const char* context);
+  /// Collapse flexible vertices that only bind two triangles (see @ref VoronoiMesh::collapseDegreeTwoFlexibleVertices).
+  void collapseDegreeTwoFlexibleVerticesOnIntersectionMeshes();
+
+  /// Glue-edge unmatched-vertex alignment runs during @ref extractSegmentMeshlets on contributing copies.
+  /// Reserved for any remaining segment-meshlet post-steps after combine/merge.
+  void postProcessFlexibleVerticesOnSegmentMeshlet(VoronoiMesh& segment_mesh) const;
 
   /// If the containing Delaunay triangle for @p voronoi_vertex_id is not inside the alpha-shape, log a warning with @p
   /// position and strand/branch ids at @p t.
