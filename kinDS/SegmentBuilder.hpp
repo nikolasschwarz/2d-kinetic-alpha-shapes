@@ -129,6 +129,17 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::string previous_phase_;
   };
 
+  /// Clears the crossing-event vertex buffer when @c afterEvent returns (including early exits).
+  class ScopedEndActiveCrossingEvent
+  {
+   public:
+    explicit ScopedEndActiveCrossingEvent(SegmentBuilder& segment_builder);
+    ~ScopedEndActiveCrossingEvent();
+
+   private:
+    SegmentBuilder& segment_builder_;
+  };
+
   enum class BoundaryEventType
   {
     Init,
@@ -231,6 +242,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<MeshStructure::SegmentMeshPair> intersection_segment_mesh_pairs;
   std::vector<MeshStructure::IntersectionMeshPairMetadata> intersection_mesh_pair_metadata;
   std::string metadata_callback_phase_;
+  std::optional<size_t> active_crossing_voronoi_vertex_id_;
+  std::optional<size_t> active_crossing_delaunay_edge_id_;
+  std::array<size_t, 3> active_crossing_voronoi_edge_ids_ {
+    static_cast<size_t>(-1), static_cast<size_t>(-1), static_cast<size_t>(-1)
+  };
+  std::optional<glm::dvec3> active_crossing_mesh_position_;
+  std::optional<glm::dvec2> active_crossing_delaunay_xy_;
   std::vector<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
@@ -348,14 +366,22 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::vector<VoronoiMesh> intersection_meshes;
   std::vector<std::string> intersection_meshlet_export_suffixes;
   std::vector<std::list<MeshingData>> intersection_mesh_pair_last_left_and_right_vertex;
-  /// Parallel to @c meshes / @c intersection_meshes; set when a meshlet is retired at subdivision.
-  std::vector<bool> regular_meshlet_completed_;
+  /// Parallel to @c meshes (interior / regular Voronoi-edge strips) and @c intersection_meshes
+  /// (boundary-interval strips). Set when a meshlet is retired (currently: subdivision of its cell).
+  std::vector<bool> interior_meshlet_completed_;
   std::vector<bool> boundary_meshlet_completed_;
 
   std::optional<size_t> regularMeshletIndexForMesh(const VoronoiMesh& mesh) const;
+  /// Warns when @p mesh is a retired interior or boundary meshlet. Returns true so callers can skip the mutation.
   bool warnAndSkipIfMeshletCompleted(const VoronoiMesh& mesh, const char* operation, double t) const;
-  void markRegularMeshletCompleted(size_t meshlet_index);
+  bool isBoundaryMeshletCompleted(size_t meshlet_index) const;
+  /// If @p pair_idx names a meshlet retired by subdivision, return the newest live pair with the same
+  /// interval (cell + MeshingData crossings / metadata edges). Otherwise return @p pair_idx.
+  size_t preferLiveBoundaryMeshPair(size_t pair_idx) const;
+  void markInteriorMeshletCompleted(size_t meshlet_index);
   void markBoundaryMeshletCompleted(size_t meshlet_index);
+  /// Retire every interior strip on Voronoi edges of @p voronoi_cell_id (Delaunay site / strand).
+  void markInteriorMeshletsCompletedForVoronoiCell(size_t voronoi_cell_id);
   // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no
   // cutoff mesh exists
   std::vector<int> corner_to_cutoff_mesh_indices;
@@ -420,8 +446,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// When set, stored as @ref VoronoiMesh::setProfilePlanePosition for ear-clip triangulation.
     /// Use the same XY the caller used to build the polygon ring (typically Delaunay space).
     std::optional<glm::dvec2> triangulation_plane_xy {};
-    /// When set with a Voronoi snap id, skip recomputing mesh/Delaunay placement and use these
-    /// (e.g. flip coincidence buffered once from pre-flip topology).
+    /// When set, skip recomputing mesh placement and use these coordinates (flip coincidence buffer, or
+    /// radius-shifted corner reuse via @c RadiusShiftedSiteCacheEntry::explicit_mesh_position).
+    /// Crossing-event coincidence uses @c SegmentBuilder's event buffer instead of this field.
     std::optional<glm::dvec3> explicit_mesh_position {};
     std::optional<glm::dvec2> explicit_delaunay_xy {};
 
@@ -446,13 +473,25 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// True when the containing Delaunay triangle has an infinite vertex (barycentric transfer is ill-defined).
     std::optional<bool> containing_tri_infinite {};
     std::optional<std::array<double, 3>> barycentric {};
+    /// True when the active crossing-event buffer supplied this position (not barycentric transfer).
+    bool from_crossing_event_buffer = false;
   };
   /// Place a Voronoi vertex by barycentric transfer: compute it and the containing triangle in Delaunay space
   /// *with* kinetic separation shifts, then interpolate the same sites in mesh space *without* those shifts.
   /// If the containing triangle is infinite, the vertex lies on the finite edge and is interpolated from those
   /// two sites (same as an intersection), with barycentric weight 0 on the infinite vertex.
+  /// During a crossing event, the event Voronoi vertex reuses the position buffered at @c beforeEvent.
   MeshVoronoiVertexObjectSpaceResult computeMeshVoronoiVertexObjectSpace(size_t voronoi_vertex_id,
     glm::dvec3 fallback_profile_vertex, size_t fallback_strand_id, double t) const;
+  /// Intersection of an incident Voronoi edge of @p voronoi_vertex_id with @p delaunay_edge_id, if any.
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> findIncidentIntersectionOnDelaunayEdge(
+    size_t voronoi_vertex_id, size_t delaunay_edge_id) const;
+  /// Compute one mesh/Delaunay position for this crossing (prefer a pre-event incident intersection) and
+  /// reuse it for the event Voronoi vertex and for added/removed coincidence intersections.
+  void beginActiveCrossingEvent(size_t voronoi_vertex_id, size_t delaunay_edge_id, double t, size_t strand_id);
+  void endActiveCrossingEvent();
+  bool activeCrossingEventBufferApplies(std::optional<size_t> voronoi_vertex_id,
+    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& intersection) const;
   glm::dvec2 meshVirtualShiftForStrand(size_t strand_id, double t) const;
   void applyMeshVirtualShiftToProfileVertex(
     glm::dvec3& vertex, glm::dvec2& profile_xy, size_t strand_id, double t, bool& includes_virtual_shift) const;
@@ -557,6 +596,128 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<size_t> snap_voronoi_vertex_id {};
     std::optional<RadiusTransitionProjection> projection {};
   };
+  /// Event-local cache: one canonical projection per (site, unordered source-edge pair); mesh XYZ filled on first insert.
+  struct RadiusShiftedSiteCacheKey
+  {
+    size_t site_vertex_id = 0;
+    size_t source_edge_lo = 0;
+    size_t source_edge_hi = 0;
+
+    bool operator==(const RadiusShiftedSiteCacheKey& other) const
+    {
+      return site_vertex_id == other.site_vertex_id && source_edge_lo == other.source_edge_lo
+        && source_edge_hi == other.source_edge_hi;
+    }
+  };
+  struct RadiusShiftedSiteCacheKeyHash
+  {
+    size_t operator()(const RadiusShiftedSiteCacheKey& key) const noexcept
+    {
+      size_t h = std::hash<size_t> {}(key.site_vertex_id);
+      h ^= std::hash<size_t> {}(key.source_edge_lo) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      h ^= std::hash<size_t> {}(key.source_edge_hi) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+  struct RadiusShiftedSiteCacheEntry
+  {
+    RadiusTransitionSitePlacement placement {};
+    std::optional<glm::dvec3> explicit_mesh_position {};
+  };
+
+  /// Deferred complementary-strip insert: recorded when the target mid-interval meshlet is known
+  /// (often freshly started with verts 0/1 and no triangles yet), applied in @ref finalize.
+  struct PendingRadiusComplementarySplit
+  {
+    size_t intersection_pair_index = 0;
+    size_t edge_vertex_a = 0;
+    size_t edge_vertex_b = 1;
+    glm::dvec3 mesh_position {};
+    double t = 0.0;
+    size_t site_vertex_id = 0;
+    size_t target_delaunay_edge = 0;
+    /// True when insert came from radius-shift projection; false for non-shift VV/site insert.
+    bool from_shift = true;
+    /// True: split the closing edge of a just-finished strip (last triangle).
+    /// False: split the seed edge of a newly started strip (first triangle, verts 0/1).
+    bool split_last_triangle = false;
+    std::optional<size_t> snap_voronoi_vertex_id {};
+  };
+
+  enum class RadiusEdgeInsideTransition
+  {
+    None,
+    IoToIi, // inside/outside → inside/inside (edge leaves alpha boundary)
+    IiToIo // inside/inside → inside/outside (edge joins alpha boundary)
+  };
+
+  void clearRadiusShiftedSiteCache();
+  static RadiusShiftedSiteCacheKey makeRadiusShiftedSiteCacheKey(
+    size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext& ctx);
+  /// Fill-once cache lookup; canonical strip = min(source edges). Returns nullptr when shift is inapplicable.
+  RadiusShiftedSiteCacheEntry* getOrFillRadiusShiftedSiteCache(double t, size_t site_vertex_id,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
+  void noteRadiusShiftedSiteMeshPosition(
+    RadiusShiftedSiteCacheEntry& entry, const glm::dvec3& mesh_position, const char* consumer_context);
+
+  /// Inside flags of the two Delaunay faces adjacent to undirected edge @p delaunay_edge_id.
+  /// When @p override_face_id is set, that face uses @p override_inside instead of the live flag.
+  std::pair<bool, bool> delaunayEdgeAdjacentInsideFlags(size_t delaunay_edge_id,
+    std::optional<size_t> override_face_id = std::nullopt, bool override_inside = false) const;
+  static RadiusEdgeInsideTransition classifyRadiusEdgeInsideTransition(
+    std::pair<bool, bool> pre_inside, std::pair<bool, bool> post_inside);
+
+  /// Mesh-space insert for non-shift complementary / IO↔II splits: interior VV if set, else site corner.
+  std::optional<glm::dvec3> resolveRadiusNonShiftComplementaryInsertPosition(double t, size_t site_vertex_id,
+    const RadiusBoundaryTransitionShiftContext* ctx) const;
+
+  /// True when @p start/@p end are the two remapped shift-anchor crossings on @p ctx.target_delaunay_edge.
+  bool midIntervalMatchesRadiusShiftAnchors(KineticDelaunay::CrossingData::EdgeIntersectionRef start,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef end, size_t site_vertex_id,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, double t);
+
+  /// Queue a deferred split of edge (@p edge_a,@p edge_b) on @p intersection_pair_index (typically 0,1).
+  /// @p split_last_triangle: finished/closing strip (last face) vs newly started strip (first face).
+  void queuePendingRadiusComplementarySplit(size_t intersection_pair_index, size_t edge_a, size_t edge_b,
+    const glm::dvec3& mesh_position, double t, size_t site_vertex_id, size_t target_delaunay_edge,
+    bool from_shift = true, std::optional<size_t> snap_voronoi_vertex_id = std::nullopt,
+    bool split_last_triangle = false);
+
+  /// After @c startNewMeshFromIntersections of a target mid-interval: queue if it matches remapped anchors.
+  void maybeQueueRadiusComplementarySplitForStartedMid(size_t intersection_pair_index,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef start, KineticDelaunay::CrossingData::EdgeIntersectionRef end,
+    double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
+
+  /// After one-null finish/start filled the cache: queue a finished complementary mid if it already exists.
+  void maybeQueueRadiusComplementarySplitForExistingMid(
+    double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
+
+  /// Non-shift: after starting a mid-interval on edge @p delaunay_edge_id whose adjacent faces went IO→II.
+  void maybeQueueRadiusNonShiftSplitForStartedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
+    size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
+    const RadiusBoundaryTransitionShiftContext* roles_ctx);
+
+  /// Non-shift: after finishing a mid-interval on edge @p delaunay_edge_id whose adjacent faces went II→IO.
+  void maybeQueueRadiusNonShiftSplitForFinishedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
+    size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
+    const RadiusBoundaryTransitionShiftContext* roles_ctx);
+
+  /// Non-shift 1→2: complementary mid finished earlier on target; queue VV/site split once roles are known.
+  void maybeQueueRadiusNonShiftSplitForExistingMid(
+    double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* roles_ctx);
+
+  /// Apply buffered complementary splits (before other intersection-mesh postprocess in @ref finalize).
+  void flushPendingRadiusComplementarySplits();
+  /// Apply any pending complementary split targeting @p intersection_pair_index (e.g. just before it is retired).
+  void flushPendingRadiusComplementarySplitsForPair(size_t intersection_pair_index);
+  /// @p allow_completed: apply even if the pair was just retired (last-triangle insert on the finished strip).
+  bool applyPendingRadiusComplementarySplit(const PendingRadiusComplementarySplit& pending, bool allow_completed);
+
+  /// Cleared at the start of each radius beforeEvent / afterEvent phase.
+  std::unordered_map<RadiusShiftedSiteCacheKey, RadiusShiftedSiteCacheEntry, RadiusShiftedSiteCacheKeyHash>
+    radius_shifted_site_cache_;
+  std::vector<PendingRadiusComplementarySplit> pending_radius_complementary_splits_;
+
   glm::dvec3 radiusTransitionProjectionPosition(
     const RadiusTransitionProjection& projection, double t, bool mesh_space) const;
   std::optional<RadiusTransitionSitePlacement> radiusTransitionInterpolatedSitePosition(double t, size_t site_vertex_id,

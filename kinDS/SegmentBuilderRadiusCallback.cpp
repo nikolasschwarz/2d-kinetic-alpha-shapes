@@ -601,6 +601,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  segment_builder_.clearRadiusShiftedSiteCache();
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
   auto& graph = segment_builder_.kin_del.getGraph();
   const auto radius_vertices = graph.adjacentTriangleVertices(radius->half_edge_id);
@@ -746,6 +747,22 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       segment_builder_.finishMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_finish_shift_arg);
+      // Non-shift: II→IO on this edge's adjacent faces → split the finished mid (deferred to finalize).
+      if (radius_finish_shift_arg == nullptr)
+      {
+        try
+        {
+          const size_t pair_idx
+            = segment_builder_.resolveIntersectionMeshPairIndex(mid_cell, refs[k], refs[k + 1], t);
+          const RadiusBoundaryTransitionShiftContext* roles_ctx
+            = radius_pre_finish_shift_ctx.roles_valid ? &radius_pre_finish_shift_ctx : nullptr;
+          segment_builder_.maybeQueueRadiusNonShiftSplitForFinishedMid(pair_idx, d_edge_id, mid_cell, t, face_id,
+            is_inside, radius->target_inside, roles_ctx);
+        }
+        catch (const std::runtime_error&)
+        {
+        }
+      }
     }
     {
       const size_t last_cell
@@ -753,6 +770,37 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       segment_builder_.finishMeshFromIntersections(
         last_cell, t, refs.back(), std::nullopt, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_finish_shift_arg);
+    }
+  }
+
+  if (radius_finish_shift_arg != nullptr)
+  {
+    // Complementary target mid-interval is not finished here (internal for 2-boundary pre-flip).
+    // Queue happens in afterEvent when the target mid is started, or via existing-mid lookup.
+    const auto& graph_for_site = segment_builder_.kin_del.getGraph();
+    const size_t s0 = radius_finish_shift_arg->source_delaunay_edges[0];
+    const size_t s1 = radius_finish_shift_arg->source_delaunay_edges[1];
+    std::optional<size_t> shared_site;
+    const int a0 = graph_for_site.halfEdge(2 * s0).origin;
+    const int a1 = graph_for_site.halfEdge(2 * s0 + 1).origin;
+    const int b0 = graph_for_site.halfEdge(2 * s1).origin;
+    const int b1 = graph_for_site.halfEdge(2 * s1 + 1).origin;
+    for (int a : { a0, a1 })
+    {
+      if (a < 0)
+      {
+        continue;
+      }
+      if (a == b0 || a == b1)
+      {
+        shared_site = static_cast<size_t>(a);
+        break;
+      }
+    }
+    if (shared_site.has_value())
+    {
+      // Ensure the shifted site is computed once during finish of the two source one-nulls.
+      (void)segment_builder_.getOrFillRadiusShiftedSiteCache(t, shared_site.value(), radius_finish_shift_arg);
     }
   }
 
@@ -1069,6 +1117,11 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
         }
       }
 
+      if (pair_idx != static_cast<size_t>(-1))
+      {
+        pair_idx = segment_builder_.preferLiveBoundaryMeshPair(pair_idx);
+      }
+
       if (pair_idx == static_cast<size_t>(-1) || pair_idx >= segment_builder_.intersection_meshes.size()
         || pair_idx >= segment_builder_.intersection_mesh_pair_last_left_and_right_vertex.size())
       {
@@ -1147,6 +1200,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   {
     return;
   }
+  segment_builder_.clearRadiusShiftedSiteCache();
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
   if (segment_builder_.diagnostics)
   {
@@ -2668,6 +2722,33 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   // After the radius topology update, start/reseed all boundary-interval meshes on
   // boundary Delaunay edges of the affected (now updated) triangle.
 
+  std::optional<size_t> radius_shift_shared_site;
+  const RadiusBoundaryTransitionShiftContext* roles_for_shared_site
+    = radius_boundary_shift_arg != nullptr
+    ? radius_boundary_shift_arg
+    : (radius_boundary_shift_ctx.roles_valid ? &radius_boundary_shift_ctx : nullptr);
+  if (roles_for_shared_site != nullptr)
+  {
+    const size_t s0 = roles_for_shared_site->source_delaunay_edges[0];
+    const size_t s1 = roles_for_shared_site->source_delaunay_edges[1];
+    const int a0 = graph.halfEdge(2 * s0).origin;
+    const int a1 = graph.halfEdge(2 * s0 + 1).origin;
+    const int b0 = graph.halfEdge(2 * s1).origin;
+    const int b1 = graph.halfEdge(2 * s1 + 1).origin;
+    for (int a : { a0, a1 })
+    {
+      if (a < 0)
+      {
+        continue;
+      }
+      if (a == b0 || a == b1)
+      {
+        radius_shift_shared_site = static_cast<size_t>(a);
+        break;
+      }
+    }
+  }
+
   std::unordered_set<size_t> started_boundary_he_even;
   for (size_t he_id : affected_face_he)
   {
@@ -2721,9 +2802,41 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       KINDS_DEBUG("Radius: passing extracted segment interval [crossing,crossing] to startNewMeshFromIntersections k=" << k
                    << " voronoi_cell=" << mid_cell << " t=" << t << " start={" << format_crossing(refs[k]) << "} end={"
                    << format_crossing(refs[k + 1]) << "}");
-      segment_builder_.startNewMeshFromIntersections(
+      const size_t mid_pair = segment_builder_.startNewMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], false, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
+      if (radius_boundary_shift_arg != nullptr && radius_shift_shared_site.has_value()
+        && d_edge_id == radius_boundary_shift_arg->target_delaunay_edge)
+      {
+        segment_builder_.maybeQueueRadiusComplementarySplitForStartedMid(
+          mid_pair, refs[k], refs[k + 1], t, radius_shift_shared_site.value(), radius_boundary_shift_arg);
+      }
+      else if (radius_boundary_shift_arg == nullptr)
+      {
+        // Non-shift: IO→II on this edge's adjacent faces → split the newly started mid.
+        const bool pre_affected_inside = !new_inside_state;
+        segment_builder_.maybeQueueRadiusNonShiftSplitForStartedMid(mid_pair, d_edge_id, mid_cell, t, affected_face_id,
+          pre_affected_inside, new_inside_state,
+          radius_boundary_shift_ctx.roles_valid ? &radius_boundary_shift_ctx : nullptr);
+        // 2→1 non-shift (interior VV): complementary mid is started on the target edge (often II→IO
+        // locally). Mirror the shift-path queue so the VV/site is inserted on verts 0/1.
+        if (radius_boundary_shift_ctx.roles_valid
+          && d_edge_id == radius_boundary_shift_ctx.target_delaunay_edge && mid_pair != static_cast<size_t>(-1))
+        {
+          std::optional<size_t> shared_site = radius_shift_shared_site;
+          if (!shared_site.has_value())
+          {
+            shared_site = mid_cell;
+          }
+          if (auto insert_pos = segment_builder_.resolveRadiusNonShiftComplementaryInsertPosition(
+                t, shared_site.value(), &radius_boundary_shift_ctx);
+            insert_pos.has_value())
+          {
+            segment_builder_.queuePendingRadiusComplementarySplit(mid_pair, 0, 1, insert_pos.value(), t,
+              shared_site.value(), d_edge_id, false, radius_boundary_shift_ctx.interior_voronoi_vertex_id);
+          }
+        }
+      }
     }
     {
       const size_t last_cell
@@ -2734,6 +2847,20 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         last_cell, t, refs.back(), std::nullopt, false, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
     }
+  }
+
+  if (radius_boundary_shift_arg != nullptr && radius_shift_shared_site.has_value())
+  {
+    // 1->2: complementary mid was finished earlier on the old boundary; queue it now that the
+    // shifted site exists. 2->1: no-op if already queued from the fresh target mid start above.
+    segment_builder_.maybeQueueRadiusComplementarySplitForExistingMid(
+      t, radius_shift_shared_site.value(), radius_boundary_shift_arg);
+  }
+  else if (radius_boundary_shift_arg == nullptr && radius_boundary_shift_ctx.roles_valid
+    && radius_shift_shared_site.has_value())
+  {
+    segment_builder_.maybeQueueRadiusNonShiftSplitForExistingMid(
+      t, radius_shift_shared_site.value(), &radius_boundary_shift_ctx);
   }
 }
 } // namespace kinDS

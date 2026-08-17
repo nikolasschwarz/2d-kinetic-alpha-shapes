@@ -45,6 +45,9 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
   }
   const size_t runtime_branch_id
     = segment_builder_.kin_del.getRuntimeBranchIdForStrand(static_cast<size_t>(branch_vertex));
+  const size_t strand_id_for_buffer = branch_vertex >= 0 ? static_cast<size_t>(branch_vertex) : 0;
+  segment_builder_.beginActiveCrossingEvent(
+    crossing->voronoi_vertex_id, crossing->half_edge_id / 2, crossing->occurrence_time, strand_id_for_buffer);
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph,
     crossing->occurrence_time, "before",
     "crossing_v" + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_"
@@ -94,6 +97,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     return;
   }
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "after");
+  SegmentBuilder::ScopedEndActiveCrossingEvent end_active_crossing(segment_builder_);
   const HalfEdgeDelaunayGraph& graph = segment_builder_.kin_del.getGraph();
 
   // `KineticDelaunay::CrossingEvent::handleEvent` already ran `updateAfterCrossingEvent`, which erases/inserts

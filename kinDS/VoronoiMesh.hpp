@@ -106,7 +106,11 @@ class VoronoiMesh
   /// them to the triangle's existing corner cycle first. The two original edge endpoints keep that
   /// cyclic order on both resulting faces. Returns @{new vertex id, new triangle id}, or
   /// @{size_t(-1), size_t(-1)} on failure.
-  std::pair<size_t, size_t> splitTriangle(size_t tri_vert_id0, size_t tri_vert_id1, const glm::dvec3& vertex);
+  /// @p metadata is stored on the new vertex when metadata storage is enabled (identifies split
+  /// vertices in exports); face metadata is still copied from the original triangle.
+  /// When @p kinetic_time is set, it overrides edge-endpoint interpolation for @c vertexKineticTime.
+  std::pair<size_t, size_t> splitTriangle(size_t tri_vert_id0, size_t tri_vert_id1, const glm::dvec3& vertex,
+    const std::string& metadata = "{}", std::optional<double> kinetic_time = std::nullopt);
   /// Corner index (@c 3*tri+e) of @p vertex_id within @p triangle_id, or @c size_t(-1) if absent.
   size_t triangleCornerIndex(size_t triangle_id, size_t vertex_id) const;
   size_t addNormal(double nx, double ny, double nz);
@@ -138,7 +142,8 @@ class VoronoiMesh
   /// Maps profile-space coordinates (x, y, t) to (x, t, y) for Blender-oriented export.
   static glm::dmat4 profileSpaceSwapYAndZTransform();
 
-  // Merge duplicate vertices (within epsilon) and update triangle indices
+  // Merge duplicate vertices (within epsilon) and update triangle indices.
+  // Vertex metadata uses a merge priority: @c glue_align yields to any other event_type.
   std::vector<size_t> mergeDuplicateVertices(double epsilon = 0.0);
   /// If a @ref isVertexFlexible vertex belongs to exactly two triangles (sharing an edge through it),
   /// replace those triangles with one spanning the three outer vertices and drop the flexible vertex.

@@ -6,11 +6,14 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <sstream>
+#include <string>
 #include <unordered_map>
 #ifdef USE_CGAL
 #include <CGAL/Polygon_mesh_processing/triangulate_hole.h>
@@ -39,9 +42,93 @@ std::string normalModeToString(NormalMode normal_mode)
     return "PerVertex";
   case NormalMode::PerTriangleCorner:
     return "PerTriangleCorner";
-  default:
+    default:
     return "Unknown";
   }
+}
+
+bool metadataLooksEmpty(const std::string& metadata)
+{
+  if (metadata.empty())
+  {
+    return true;
+  }
+  size_t i = 0;
+  while (i < metadata.size() && std::isspace(static_cast<unsigned char>(metadata[i])))
+  {
+    ++i;
+  }
+  if (i >= metadata.size() || metadata[i] != '{')
+  {
+    return false;
+  }
+  ++i;
+  while (i < metadata.size() && std::isspace(static_cast<unsigned char>(metadata[i])))
+  {
+    ++i;
+  }
+  return i < metadata.size() && metadata[i] == '}';
+}
+
+std::optional<std::string> metadataEventType(const std::string& metadata)
+{
+  const std::string needle = "\"event_type\":";
+  const size_t key_pos = metadata.find(needle);
+  if (key_pos == std::string::npos)
+  {
+    return std::nullopt;
+  }
+  size_t value_pos = key_pos + needle.size();
+  while (value_pos < metadata.size() && std::isspace(static_cast<unsigned char>(metadata[value_pos])))
+  {
+    ++value_pos;
+  }
+  if (value_pos >= metadata.size() || metadata[value_pos] != '"')
+  {
+    return std::nullopt;
+  }
+  ++value_pos;
+  std::string value;
+  for (; value_pos < metadata.size(); ++value_pos)
+  {
+    const char ch = metadata[value_pos];
+    if (ch == '"')
+    {
+      return value;
+    }
+    if (ch == '\\' && value_pos + 1 < metadata.size())
+    {
+      ++value_pos;
+      value += metadata[value_pos];
+      continue;
+    }
+    value += ch;
+  }
+  return std::nullopt;
+}
+
+/// Higher wins when coincident vertices are merged. @c glue_align is below every other event type.
+int vertexMetadataMergePriority(const std::string& metadata)
+{
+  if (metadataLooksEmpty(metadata))
+  {
+    return 0;
+  }
+  const std::optional<std::string> event_type = metadataEventType(metadata);
+  if (event_type.has_value() && event_type.value() == "glue_align")
+  {
+    return 1;
+  }
+  return 2;
+}
+
+std::string preferredMergedVertexMetadata(const std::string& kept, const std::string& incoming)
+{
+  if (vertexMetadataMergePriority(incoming) > vertexMetadataMergePriority(kept))
+  {
+    return incoming;
+  }
+  return kept;
 }
 } // namespace
 
@@ -291,7 +378,8 @@ size_t VoronoiMesh::triangleCornerIndex(size_t triangle_id, size_t vertex_id) co
   return static_cast<size_t>(-1);
 }
 
-std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t tri_vert_id1, const glm::dvec3& vertex)
+std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t tri_vert_id1, const glm::dvec3& vertex,
+  const std::string& metadata, std::optional<double> kinetic_time)
 {
   constexpr std::pair<size_t, size_t> k_fail { static_cast<size_t>(-1), static_cast<size_t>(-1) };
   if (tri_vert_id0 >= triangles.size() || tri_vert_id1 >= triangles.size())
@@ -340,9 +428,14 @@ std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t
     s = std::clamp(glm::dot(vertex - pa, ab) / len2, 0.0, 1.0);
   }
 
-  const size_t new_vid = addVertex(vertex);
+  const size_t new_vid = addVertex(vertex, metadata);
 
   // Interpolate per-vertex attributes from the split edge endpoints (va → vb).
+  if (kinetic_time.has_value() && std::isfinite(kinetic_time.value()))
+  {
+    setVertexKineticTime(new_vid, kinetic_time.value());
+  }
+  else
   {
     const double t0 = vertexKineticTime(va);
     const double t1 = vertexKineticTime(vb);
@@ -902,6 +995,12 @@ std::vector<size_t> VoronoiMesh::mergeDuplicateVertices(double epsilon)
       if (is_flexible)
       {
         new_vertex_is_flexible[it->second] = true;
+      }
+      if (store_metadata_ && it->second < new_vertex_metadata.size())
+      {
+        const std::string incoming = (i < vertex_metadata.size()) ? vertex_metadata[i] : std::string("{}");
+        new_vertex_metadata[it->second]
+          = preferredMergedVertexMetadata(new_vertex_metadata[it->second], incoming);
       }
     }
   }

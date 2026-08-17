@@ -78,6 +78,8 @@ class TreeMesher
 
     // for debugging purposes:
     bool debug_export_meshes = false;
+    /// When true, OBJ export emits one @c o object per interior/boundary contributor (iN / bN).
+    bool export_separate_contributor_objects = true;
     /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.
     bool retriangulate_on_component_split = false;
     size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
