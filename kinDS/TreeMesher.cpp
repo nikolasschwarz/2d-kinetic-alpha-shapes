@@ -135,7 +135,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
   {
     const bool include_vertex_colors = Validator::meshUsesValidationErrorMaterial(mesh);
     kinDS::ObjExporter::writeMesh(mesh, path, 1.0, 1.0, {}, include_metadata, include_vertex_colors,
-      settings.alternate_section_shading);
+      settings.alternate_section_shading, settings.export_separate_contributor_objects);
   };
 
   const std::string untransformed_suffix = untransformed_export ? "_untransformed" : "";
@@ -290,7 +290,8 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
           kinDS::ObjExporter::writeMesh(segment_meshlets[mesh_index],
             "meshlet" + std::to_string(mesh_index) + suffix
               + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix() + "_raw.obj",
-            1.0, 1.0, {}, mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata);
+            1.0, 1.0, {}, mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata, false, false,
+            settings.export_separate_contributor_objects);
         }
         {
           bool intersection_failed = false;
@@ -356,7 +357,8 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
         = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
       const std::filesystem::path obj_path = "failed_meshlet_" + std::to_string(mesh_index) + suffix
         + failed_mesh.creationKineticTimeFilenameSuffix() + ".obj";
-      kinDS::ObjExporter::writeMesh(failed_mesh, obj_path, 1.0, 1.0, {}, include_metadata);
+      kinDS::ObjExporter::writeMesh(failed_mesh, obj_path, 1.0, 1.0, {}, include_metadata, false, false,
+        settings.export_separate_contributor_objects);
       KINDS_ERROR("Wrote failed meshlet " << mesh_index << " to " << obj_path.string());
     }
   }

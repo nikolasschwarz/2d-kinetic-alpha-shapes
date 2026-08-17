@@ -784,6 +784,116 @@ SegmentBuilder::ScopedMetadataCallbackPhase::~ScopedMetadataCallbackPhase()
   segment_builder_.metadata_callback_phase_ = std::move(previous_phase_);
 }
 
+SegmentBuilder::ScopedEndActiveCrossingEvent::ScopedEndActiveCrossingEvent(SegmentBuilder& segment_builder)
+  : segment_builder_(segment_builder)
+{
+}
+
+SegmentBuilder::ScopedEndActiveCrossingEvent::~ScopedEndActiveCrossingEvent()
+{
+  segment_builder_.endActiveCrossingEvent();
+}
+
+void SegmentBuilder::endActiveCrossingEvent()
+{
+  active_crossing_voronoi_vertex_id_.reset();
+  active_crossing_delaunay_edge_id_.reset();
+  active_crossing_voronoi_edge_ids_ = { static_cast<size_t>(-1), static_cast<size_t>(-1), static_cast<size_t>(-1) };
+  active_crossing_mesh_position_.reset();
+  active_crossing_delaunay_xy_.reset();
+}
+
+bool SegmentBuilder::activeCrossingEventBufferApplies(std::optional<size_t> voronoi_vertex_id,
+  const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& intersection) const
+{
+  if (!active_crossing_mesh_position_.has_value())
+  {
+    return false;
+  }
+  if (voronoi_vertex_id.has_value() && active_crossing_voronoi_vertex_id_.has_value()
+    && voronoi_vertex_id.value() == active_crossing_voronoi_vertex_id_.value())
+  {
+    return true;
+  }
+  if (!intersection.has_value() || !active_crossing_delaunay_edge_id_.has_value())
+  {
+    return false;
+  }
+  if (intersection.value()->delaunay_edge_id != active_crossing_delaunay_edge_id_.value())
+  {
+    return false;
+  }
+  const size_t voronoi_edge_id = intersection.value()->voronoi_edge_id;
+  for (size_t incident_edge_id : active_crossing_voronoi_edge_ids_)
+  {
+    if (incident_edge_id == voronoi_edge_id)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+namespace
+{
+bool vertexPositionFinite(const glm::dvec3& p);
+}
+
+void SegmentBuilder::beginActiveCrossingEvent(
+  size_t voronoi_vertex_id, size_t delaunay_edge_id, double t, size_t strand_id)
+{
+  endActiveCrossingEvent();
+  active_crossing_voronoi_vertex_id_ = voronoi_vertex_id;
+  active_crossing_delaunay_edge_id_ = delaunay_edge_id;
+
+  const auto& graph = kin_del.getGraph();
+  const glm::dvec3 fallback_profile(0.0, 0.0, t);
+  if (voronoi_vertex_id < graph.faceSlotCount() && graph.isLiveFace(voronoi_vertex_id))
+  {
+    const std::array<size_t, 3> half_edges = graph.face(voronoi_vertex_id).half_edges;
+    for (size_t i = 0; i < 3; ++i)
+    {
+      active_crossing_voronoi_edge_ids_[i] = half_edges[i] / 2;
+    }
+    active_crossing_delaunay_xy_ = glm::dvec2(computeVoronoiVertex(half_edges[0], t));
+  }
+
+  // Prefer one pre-event incident intersection so the shared point uses Delaunay-edge interpolation.
+  const auto coincidence = findIncidentIntersectionOnDelaunayEdge(voronoi_vertex_id, delaunay_edge_id);
+  if (coincidence.has_value())
+  {
+    MeshletVertexRuntimeInfo runtime_info;
+    runtime_info.position_intersection = coincidence;
+    runtime_info.conceptual_intersection = coincidence;
+    const MeshIntersectionObjectSpaceResult inter
+      = computeMeshIntersectionObjectSpace(runtime_info, fallback_profile, strand_id, t);
+    if (vertexPositionFinite(inter.position))
+    {
+      active_crossing_mesh_position_ = inter.position;
+      active_crossing_delaunay_xy_
+        = glm::dvec2(getCrossingCoordsInDelaunaySpace(kin_del, coincidence.value(), t));
+      KINDS_DEBUG("beginActiveCrossingEvent: buffered vv=" << voronoi_vertex_id << " de=" << delaunay_edge_id
+        << " from intersection ve=" << coincidence.value()->voronoi_edge_id
+        << " d_param=" << coincidence.value()->delaunay_edge_param << " t=" << t);
+      return;
+    }
+    KINDS_WARNING("beginActiveCrossingEvent: incident intersection placement was non-finite for Voronoi vertex "
+      << voronoi_vertex_id << " at t=" << t << "; falling back to barycentric.");
+  }
+
+  const MeshVoronoiVertexObjectSpaceResult voronoi
+    = computeMeshVoronoiVertexObjectSpace(voronoi_vertex_id, fallback_profile, strand_id, t);
+  if (vertexPositionFinite(voronoi.position))
+  {
+    active_crossing_mesh_position_ = voronoi.position;
+    KINDS_DEBUG("beginActiveCrossingEvent: buffered vv=" << voronoi_vertex_id << " de=" << delaunay_edge_id
+      << " from barycentric Voronoi vertex t=" << t);
+    return;
+  }
+  KINDS_WARNING("beginActiveCrossingEvent: failed to buffer a finite crossing vertex for Voronoi vertex "
+    << voronoi_vertex_id << " at t=" << t);
+}
+
 namespace
 {
 std::optional<glm::dvec3> meshVertexUv(const VoronoiMesh& mesh, size_t vertex_index)
@@ -2242,7 +2352,7 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
   {
     if (retire_meshlet_at_subdivision)
     {
-      markRegularMeshletCompleted(segment_mesh_pair_index);
+      markInteriorMeshletCompleted(segment_mesh_pair_index);
     }
   };
 
@@ -3088,17 +3198,41 @@ std::optional<size_t> SegmentBuilder::intersectionMeshletIndexForMesh(const Voro
   return std::nullopt;
 }
 
-void SegmentBuilder::markRegularMeshletCompleted(size_t meshlet_index)
+void SegmentBuilder::markInteriorMeshletCompleted(size_t meshlet_index)
 {
   if (meshlet_index >= meshes.size())
   {
     return;
   }
-  if (regular_meshlet_completed_.size() < meshes.size())
+  if (interior_meshlet_completed_.size() < meshes.size())
   {
-    regular_meshlet_completed_.resize(meshes.size(), false);
+    interior_meshlet_completed_.resize(meshes.size(), false);
   }
-  regular_meshlet_completed_[meshlet_index] = true;
+  interior_meshlet_completed_[meshlet_index] = true;
+}
+
+void SegmentBuilder::markInteriorMeshletsCompletedForVoronoiCell(size_t voronoi_cell_id)
+{
+  auto& graph = kin_del.getGraph();
+  if (voronoi_cell_id >= graph.getVertexCount())
+  {
+    return;
+  }
+  for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(voronoi_cell_id),
+                                                   end = graph.incidentEdgesEnd(voronoi_cell_id);
+    it != end; ++it)
+  {
+    const size_t he_id = *it;
+    if (he_id >= half_edge_index_to_segment_mesh_pair_index.size())
+    {
+      continue;
+    }
+    const size_t pair_index = half_edge_index_to_segment_mesh_pair_index[he_id];
+    if (pair_index != static_cast<size_t>(-1) && pair_index < meshes.size())
+    {
+      markInteriorMeshletCompleted(pair_index);
+    }
+  }
 }
 
 void SegmentBuilder::markBoundaryMeshletCompleted(size_t meshlet_index)
@@ -3114,15 +3248,94 @@ void SegmentBuilder::markBoundaryMeshletCompleted(size_t meshlet_index)
   boundary_meshlet_completed_[meshlet_index] = true;
 }
 
+bool SegmentBuilder::isBoundaryMeshletCompleted(size_t meshlet_index) const
+{
+  return meshlet_index < boundary_meshlet_completed_.size() && boundary_meshlet_completed_[meshlet_index];
+}
+
+size_t SegmentBuilder::preferLiveBoundaryMeshPair(size_t pair_idx) const
+{
+  if (pair_idx == static_cast<size_t>(-1) || pair_idx >= intersection_meshes.size())
+  {
+    return pair_idx;
+  }
+  if (!isBoundaryMeshletCompleted(pair_idx))
+  {
+    return pair_idx;
+  }
+
+  size_t cell = static_cast<size_t>(-1);
+  size_t start_d = static_cast<size_t>(-1);
+  size_t end_d = static_cast<size_t>(-1);
+  if (pair_idx < intersection_mesh_pair_metadata.size())
+  {
+    cell = intersection_mesh_pair_metadata[pair_idx].voronoi_cell_id;
+    start_d = intersection_mesh_pair_metadata[pair_idx].start_delaunay_edge_id;
+    end_d = intersection_mesh_pair_metadata[pair_idx].end_delaunay_edge_id;
+  }
+
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_crossing;
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_crossing;
+  if (pair_idx < intersection_mesh_pair_last_left_and_right_vertex.size()
+    && !intersection_mesh_pair_last_left_and_right_vertex[pair_idx].empty())
+  {
+    const MeshingData& stale = intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front();
+    start_crossing = stale.start_crossing;
+    end_crossing = stale.end_crossing;
+  }
+
+  auto crossings_match = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& a,
+                           const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& b) -> bool
+  {
+    if (!a.has_value() && !b.has_value())
+    {
+      return true;
+    }
+    return a.has_value() && b.has_value() && a.value() == b.value();
+  };
+  auto interval_matches = [&](const MeshingData& seg) -> bool
+  {
+    return (crossings_match(seg.start_crossing, start_crossing) && crossings_match(seg.end_crossing, end_crossing))
+      || (crossings_match(seg.start_crossing, end_crossing) && crossings_match(seg.end_crossing, start_crossing));
+  };
+
+  for (size_t i = intersection_meshes.size(); i-- > 0;)
+  {
+    if (i == pair_idx || isBoundaryMeshletCompleted(i))
+    {
+      continue;
+    }
+    bool meta_ok = false;
+    if (i < intersection_mesh_pair_metadata.size())
+    {
+      const auto& meta = intersection_mesh_pair_metadata[i];
+      meta_ok = meta.voronoi_cell_id == cell && meta.start_delaunay_edge_id == start_d
+        && meta.end_delaunay_edge_id == end_d;
+    }
+    bool interval_ok = false;
+    if (i < intersection_mesh_pair_last_left_and_right_vertex.size()
+      && !intersection_mesh_pair_last_left_and_right_vertex[i].empty())
+    {
+      interval_ok = interval_matches(intersection_mesh_pair_last_left_and_right_vertex[i].front());
+    }
+    if (meta_ok || interval_ok)
+    {
+      KINDS_DEBUG("preferLiveBoundaryMeshPair: pair " << pair_idx << " retired after subdivision; using live pair " << i);
+      return i;
+    }
+  }
+  return pair_idx;
+}
+
 bool SegmentBuilder::warnAndSkipIfMeshletCompleted(const VoronoiMesh& mesh, const char* operation, double t) const
 {
   if (const std::optional<size_t> regular_idx = regularMeshletIndexForMesh(mesh); regular_idx.has_value())
   {
-    if (regular_idx.value() < regular_meshlet_completed_.size() && regular_meshlet_completed_[regular_idx.value()])
+    if (regular_idx.value() < interior_meshlet_completed_.size() && interior_meshlet_completed_[regular_idx.value()])
     {
       std::ostringstream oss;
       oss << "SegmentBuilder: skipping " << (operation != nullptr ? operation : "meshlet operation")
-          << " on completed regular meshlet " << regular_idx.value();
+          << " on completed interior meshlet " << regular_idx.value();
       if (std::isfinite(t))
       {
         oss << " at t=" << t;
@@ -3474,10 +3687,747 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
   return RadiusTransitionSitePlacement { out, std::nullopt, projection };
 }
 
+void SegmentBuilder::clearRadiusShiftedSiteCache()
+{
+  radius_shifted_site_cache_.clear();
+}
+
+SegmentBuilder::RadiusShiftedSiteCacheKey SegmentBuilder::makeRadiusShiftedSiteCacheKey(
+  size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext& ctx)
+{
+  size_t lo = ctx.source_delaunay_edges[0];
+  size_t hi = ctx.source_delaunay_edges[1];
+  if (hi < lo)
+  {
+    std::swap(lo, hi);
+  }
+  return RadiusShiftedSiteCacheKey { site_vertex_id, lo, hi };
+}
+
+SegmentBuilder::RadiusShiftedSiteCacheEntry* SegmentBuilder::getOrFillRadiusShiftedSiteCache(double t,
+  size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
+{
+  if (boundary_transition_shift == nullptr || !boundary_transition_shift->roles_valid
+    || !radius_boundary_transition_shift_enabled)
+  {
+    return nullptr;
+  }
+
+  const RadiusShiftedSiteCacheKey key = makeRadiusShiftedSiteCacheKey(site_vertex_id, *boundary_transition_shift);
+  if (auto it = radius_shifted_site_cache_.find(key); it != radius_shifted_site_cache_.end())
+  {
+    KINDS_DEBUG("RadiusShiftedSiteCache reuse: site=" << site_vertex_id << " sources=(" << key.source_edge_lo << ","
+                                                      << key.source_edge_hi << ") has_mesh_pos="
+                                                      << (it->second.explicit_mesh_position.has_value() ? "true" : "false")
+                                                      << " t=" << t);
+    return &it->second;
+  }
+
+  const size_t canonical_strip = key.source_edge_lo;
+  auto placement
+    = radiusTransitionInterpolatedSitePosition(t, site_vertex_id, canonical_strip, boundary_transition_shift);
+  if (!placement.has_value())
+  {
+    return nullptr;
+  }
+
+  RadiusShiftedSiteCacheEntry entry;
+  entry.placement = std::move(placement.value());
+  KINDS_DEBUG("RadiusShiftedSiteCache fill: site=" << site_vertex_id << " sources=(" << key.source_edge_lo << ","
+                                                   << key.source_edge_hi << ") canonical_strip=" << canonical_strip
+                                                   << " param="
+                                                   << (entry.placement.projection.has_value()
+                                                         ? entry.placement.projection->param
+                                                         : std::numeric_limits<double>::quiet_NaN())
+                                                   << " profile=(" << entry.placement.position.x << ","
+                                                   << entry.placement.position.y << "," << entry.placement.position.z
+                                                   << ") t=" << t);
+  auto [ins_it, inserted] = radius_shifted_site_cache_.emplace(key, std::move(entry));
+  (void)inserted;
+  return &ins_it->second;
+}
+
+void SegmentBuilder::noteRadiusShiftedSiteMeshPosition(
+  RadiusShiftedSiteCacheEntry& entry, const glm::dvec3& mesh_position, const char* consumer_context)
+{
+  if (!entry.explicit_mesh_position.has_value())
+  {
+    entry.explicit_mesh_position = mesh_position;
+    KINDS_DEBUG("RadiusShiftedSiteCache mesh_pos store (" << (consumer_context != nullptr ? consumer_context : "?")
+                                                          << "): (" << mesh_position.x << "," << mesh_position.y << ","
+                                                          << mesh_position.z << ")");
+    return;
+  }
+  const glm::dvec3& cached = entry.explicit_mesh_position.value();
+  const bool identical
+    = cached.x == mesh_position.x && cached.y == mesh_position.y && cached.z == mesh_position.z;
+  KINDS_DEBUG("RadiusShiftedSiteCache mesh_pos reuse (" << (consumer_context != nullptr ? consumer_context : "?")
+                                                        << "): identical=" << (identical ? "true" : "false")
+                                                        << " cached=(" << cached.x << "," << cached.y << "," << cached.z
+                                                        << ") got=(" << mesh_position.x << "," << mesh_position.y << ","
+                                                        << mesh_position.z << ")");
+}
+
+bool SegmentBuilder::midIntervalMatchesRadiusShiftAnchors(
+  KineticDelaunay::CrossingData::EdgeIntersectionRef start, KineticDelaunay::CrossingData::EdgeIntersectionRef end,
+  size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, double t)
+{
+  RadiusShiftedSiteCacheEntry* cache_entry
+    = getOrFillRadiusShiftedSiteCache(t, site_vertex_id, boundary_transition_shift);
+  if (cache_entry == nullptr || !cache_entry->placement.projection.has_value())
+  {
+    return false;
+  }
+  const RadiusTransitionProjection& projection = cache_entry->placement.projection.value();
+  if (!projection.endpoints[0].intersection.has_value() || !projection.endpoints[1].intersection.has_value())
+  {
+    return false;
+  }
+  const auto remapped0 = projection.endpoints[0].intersection.value();
+  const auto remapped1 = projection.endpoints[1].intersection.value();
+  if (remapped0->delaunay_edge_id != boundary_transition_shift->target_delaunay_edge
+    || remapped1->delaunay_edge_id != boundary_transition_shift->target_delaunay_edge)
+  {
+    return false;
+  }
+  if (start->delaunay_edge_id != boundary_transition_shift->target_delaunay_edge
+    || end->delaunay_edge_id != boundary_transition_shift->target_delaunay_edge)
+  {
+    return false;
+  }
+  return (start == remapped0 && end == remapped1) || (start == remapped1 && end == remapped0);
+}
+
+void SegmentBuilder::queuePendingRadiusComplementarySplit(size_t intersection_pair_index, size_t edge_a, size_t edge_b,
+  const glm::dvec3& mesh_position, double t, size_t site_vertex_id, size_t target_delaunay_edge, bool from_shift,
+  std::optional<size_t> snap_voronoi_vertex_id, bool split_last_triangle)
+{
+  intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
+  if (intersection_pair_index == static_cast<size_t>(-1))
+  {
+    return;
+  }
+  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+  {
+    if (pending.intersection_pair_index == intersection_pair_index)
+    {
+      KINDS_DEBUG("Radius complementary queue skip: pair=" << intersection_pair_index
+                                                             << " already pending site=" << site_vertex_id << " t=" << t);
+      return;
+    }
+  }
+  PendingRadiusComplementarySplit pending;
+  pending.intersection_pair_index = intersection_pair_index;
+  pending.edge_vertex_a = edge_a;
+  pending.edge_vertex_b = edge_b;
+  pending.mesh_position = mesh_position;
+  pending.t = t;
+  pending.site_vertex_id = site_vertex_id;
+  pending.target_delaunay_edge = target_delaunay_edge;
+  pending.from_shift = from_shift;
+  pending.split_last_triangle = split_last_triangle;
+  pending.snap_voronoi_vertex_id = snap_voronoi_vertex_id;
+  pending_radius_complementary_splits_.push_back(pending);
+  KINDS_DEBUG("Radius complementary queue: pair=" << intersection_pair_index << " edge=(" << edge_a << "," << edge_b
+                                                   << ") site=" << site_vertex_id << " target_d=" << target_delaunay_edge
+                                                   << " from_shift=" << (from_shift ? "true" : "false")
+                                                   << " split_last=" << (split_last_triangle ? "true" : "false")
+                                                   << " mesh_pos=(" << mesh_position.x << "," << mesh_position.y << ","
+                                                   << mesh_position.z << ") t=" << t);
+}
+
+void SegmentBuilder::maybeQueueRadiusComplementarySplitForStartedMid(size_t intersection_pair_index,
+  KineticDelaunay::CrossingData::EdgeIntersectionRef start, KineticDelaunay::CrossingData::EdgeIntersectionRef end,
+  double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
+{
+  intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
+  if (intersection_pair_index == static_cast<size_t>(-1) || boundary_transition_shift == nullptr)
+  {
+    return;
+  }
+  if (!midIntervalMatchesRadiusShiftAnchors(start, end, site_vertex_id, boundary_transition_shift, t))
+  {
+    return;
+  }
+  RadiusShiftedSiteCacheEntry* cache_entry
+    = getOrFillRadiusShiftedSiteCache(t, site_vertex_id, boundary_transition_shift);
+  if (cache_entry == nullptr || !cache_entry->placement.projection.has_value())
+  {
+    return;
+  }
+  glm::dvec3 insert_pos;
+  if (cache_entry->explicit_mesh_position.has_value())
+  {
+    insert_pos = cache_entry->explicit_mesh_position.value();
+  }
+  else
+  {
+    insert_pos = radiusTransitionProjectionPosition(cache_entry->placement.projection.value(), t, true);
+    noteRadiusShiftedSiteMeshPosition(*cache_entry, insert_pos, "complementary_queue_start");
+  }
+  // Fresh mid-interval from startNewMeshFromIntersections: seed verts are always 0 and 1.
+  queuePendingRadiusComplementarySplit(intersection_pair_index, 0, 1, insert_pos, t, site_vertex_id,
+    boundary_transition_shift->target_delaunay_edge);
+}
+
+void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
+  double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
+{
+  if (boundary_transition_shift == nullptr)
+  {
+    return;
+  }
+  RadiusShiftedSiteCacheEntry* cache_entry
+    = getOrFillRadiusShiftedSiteCache(t, site_vertex_id, boundary_transition_shift);
+  if (cache_entry == nullptr || !cache_entry->placement.projection.has_value())
+  {
+    return;
+  }
+  const RadiusTransitionProjection& projection = cache_entry->placement.projection.value();
+  if (!projection.endpoints[0].intersection.has_value() || !projection.endpoints[1].intersection.has_value())
+  {
+    return;
+  }
+  const auto remapped0 = projection.endpoints[0].intersection.value();
+  const auto remapped1 = projection.endpoints[1].intersection.value();
+  const size_t target_d = boundary_transition_shift->target_delaunay_edge;
+  if (remapped0->delaunay_edge_id != target_d || remapped1->delaunay_edge_id != target_d)
+  {
+    return;
+  }
+
+  auto crossings_match = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& a,
+                           KineticDelaunay::CrossingData::EdgeIntersectionRef b) -> bool
+  {
+    return a.has_value() && a.value() == b;
+  };
+
+  size_t pair_idx = static_cast<size_t>(-1);
+  if (remapped0->next_segment_mesh_pair_index != static_cast<size_t>(-1)
+    && remapped0->next_segment_mesh_pair_index == remapped1->prev_segment_mesh_pair_index)
+  {
+    pair_idx = remapped0->next_segment_mesh_pair_index;
+  }
+  else if (remapped1->next_segment_mesh_pair_index != static_cast<size_t>(-1)
+    && remapped1->next_segment_mesh_pair_index == remapped0->prev_segment_mesh_pair_index)
+  {
+    pair_idx = remapped1->next_segment_mesh_pair_index;
+  }
+
+  auto segment_matches = [&](const MeshingData& seg) -> bool
+  {
+    if (!seg.start_crossing.has_value() || !seg.end_crossing.has_value())
+    {
+      return false;
+    }
+    if (seg.start_crossing.value()->delaunay_edge_id != target_d
+      || seg.end_crossing.value()->delaunay_edge_id != target_d)
+    {
+      return false;
+    }
+    return (crossings_match(seg.start_crossing, remapped0) && crossings_match(seg.end_crossing, remapped1))
+      || (crossings_match(seg.start_crossing, remapped1) && crossings_match(seg.end_crossing, remapped0));
+  };
+
+  if (pair_idx != static_cast<size_t>(-1))
+  {
+    pair_idx = preferLiveBoundaryMeshPair(pair_idx);
+    if (pair_idx >= intersection_mesh_pair_last_left_and_right_vertex.size()
+      || intersection_mesh_pair_last_left_and_right_vertex[pair_idx].empty()
+      || !segment_matches(intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front()))
+    {
+      pair_idx = static_cast<size_t>(-1);
+    }
+  }
+  if (pair_idx == static_cast<size_t>(-1))
+  {
+    for (size_t i = intersection_mesh_pair_last_left_and_right_vertex.size(); i-- > 0;)
+    {
+      if (isBoundaryMeshletCompleted(i) || intersection_mesh_pair_last_left_and_right_vertex[i].empty())
+      {
+        continue;
+      }
+      if (segment_matches(intersection_mesh_pair_last_left_and_right_vertex[i].front()))
+      {
+        pair_idx = i;
+        break;
+      }
+    }
+  }
+  if (pair_idx == static_cast<size_t>(-1) || pair_idx >= intersection_meshes.size())
+  {
+    return;
+  }
+
+  // Already queued from a fresh start of this mid-interval.
+  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+  {
+    if (pending.intersection_pair_index == pair_idx)
+    {
+      return;
+    }
+  }
+
+  const MeshingData& seg = intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front();
+  if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+  {
+    return;
+  }
+  const size_t v0 = static_cast<size_t>(seg.mesh_start_vertex_id);
+  const size_t v1 = static_cast<size_t>(seg.mesh_end_vertex_id);
+  if (v0 == v1)
+  {
+    return;
+  }
+
+  glm::dvec3 insert_pos;
+  if (cache_entry->explicit_mesh_position.has_value())
+  {
+    insert_pos = cache_entry->explicit_mesh_position.value();
+  }
+  else
+  {
+    insert_pos = radiusTransitionProjectionPosition(projection, t, true);
+    noteRadiusShiftedSiteMeshPosition(*cache_entry, insert_pos, "complementary_queue_existing");
+  }
+
+  // Finished complementary (e.g. 1->2): split the closing edge of the finished strip (last triangle).
+  queuePendingRadiusComplementarySplit(pair_idx, v0, v1, insert_pos, t, site_vertex_id, target_d, true, std::nullopt,
+    true);
+}
+
+std::pair<bool, bool> SegmentBuilder::delaunayEdgeAdjacentInsideFlags(
+  size_t delaunay_edge_id, std::optional<size_t> override_face_id, bool override_inside) const
+{
+  const auto& graph = kin_del.getGraph();
+  const size_t he0 = 2 * delaunay_edge_id;
+  const size_t he1 = he0 + 1;
+  const size_t face_a = graph.halfEdge(he0).face;
+  const size_t face_b = graph.halfEdge(he1).face;
+  auto inside_of = [&](size_t face_id) -> bool
+  {
+    if (override_face_id.has_value() && face_id == override_face_id.value())
+    {
+      return override_inside;
+    }
+    return kin_del.getFaceInside(face_id);
+  };
+  return { inside_of(face_a), inside_of(face_b) };
+}
+
+SegmentBuilder::RadiusEdgeInsideTransition SegmentBuilder::classifyRadiusEdgeInsideTransition(
+  std::pair<bool, bool> pre_inside, std::pair<bool, bool> post_inside)
+{
+  const bool pre_io = pre_inside.first != pre_inside.second;
+  const bool pre_ii = pre_inside.first && pre_inside.second;
+  const bool post_io = post_inside.first != post_inside.second;
+  const bool post_ii = post_inside.first && post_inside.second;
+  if (pre_io && post_ii)
+  {
+    return RadiusEdgeInsideTransition::IoToIi;
+  }
+  if (pre_ii && post_io)
+  {
+    return RadiusEdgeInsideTransition::IiToIo;
+  }
+  return RadiusEdgeInsideTransition::None;
+}
+
+std::optional<glm::dvec3> SegmentBuilder::resolveRadiusNonShiftComplementaryInsertPosition(double t,
+  size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* ctx) const
+{
+  if (ctx != nullptr && ctx->interior_voronoi_vertex_id.has_value())
+  {
+    const size_t vv = ctx->interior_voronoi_vertex_id.value();
+    return computeMeshVoronoiVertexObjectSpace(vv, glm::dvec3(0.0, 0.0, t), site_vertex_id, t).position;
+  }
+  return computeMeshSiteVertexPosition(glm::dvec3(0.0, 0.0, t), site_vertex_id, t);
+}
+
+void SegmentBuilder::maybeQueueRadiusNonShiftSplitForStartedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
+  size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
+  const RadiusBoundaryTransitionShiftContext* roles_ctx)
+{
+  intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
+  if (intersection_pair_index == static_cast<size_t>(-1) || mid_cell == static_cast<size_t>(-1))
+  {
+    return;
+  }
+  const auto pre = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, pre_affected_inside);
+  const auto post = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, post_affected_inside);
+  if (classifyRadiusEdgeInsideTransition(pre, post) != RadiusEdgeInsideTransition::IoToIi)
+  {
+    return;
+  }
+
+  const size_t site_id = mid_cell;
+  std::optional<size_t> snap_vv;
+  if (roles_ctx != nullptr && roles_ctx->interior_voronoi_vertex_id.has_value())
+  {
+    snap_vv = roles_ctx->interior_voronoi_vertex_id;
+  }
+  const auto insert_pos = resolveRadiusNonShiftComplementaryInsertPosition(t, site_id, roles_ctx);
+  if (!insert_pos.has_value())
+  {
+    return;
+  }
+  KINDS_DEBUG("Radius non-shift IO→II: queue started mid pair=" << intersection_pair_index << " d_edge="
+                                                                << delaunay_edge_id << " site=" << site_id << " t=" << t);
+  queuePendingRadiusComplementarySplit(intersection_pair_index, 0, 1, insert_pos.value(), t, site_id, delaunay_edge_id,
+    false, snap_vv);
+}
+
+void SegmentBuilder::maybeQueueRadiusNonShiftSplitForFinishedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
+  size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
+  const RadiusBoundaryTransitionShiftContext* roles_ctx)
+{
+  intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
+  if (intersection_pair_index == static_cast<size_t>(-1) || mid_cell == static_cast<size_t>(-1))
+  {
+    return;
+  }
+  if (intersection_pair_index >= intersection_mesh_pair_last_left_and_right_vertex.size()
+    || intersection_mesh_pair_last_left_and_right_vertex[intersection_pair_index].empty())
+  {
+    return;
+  }
+  const auto pre = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, pre_affected_inside);
+  const auto post = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, post_affected_inside);
+  if (classifyRadiusEdgeInsideTransition(pre, post) != RadiusEdgeInsideTransition::IiToIo)
+  {
+    return;
+  }
+
+  const MeshingData& seg = intersection_mesh_pair_last_left_and_right_vertex[intersection_pair_index].front();
+  if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+  {
+    return;
+  }
+  const size_t v0 = static_cast<size_t>(seg.mesh_start_vertex_id);
+  const size_t v1 = static_cast<size_t>(seg.mesh_end_vertex_id);
+  if (v0 == v1)
+  {
+    return;
+  }
+
+  const size_t site_id = mid_cell;
+  std::optional<size_t> snap_vv;
+  if (roles_ctx != nullptr && roles_ctx->interior_voronoi_vertex_id.has_value())
+  {
+    snap_vv = roles_ctx->interior_voronoi_vertex_id;
+  }
+  const auto insert_pos = resolveRadiusNonShiftComplementaryInsertPosition(t, site_id, roles_ctx);
+  if (!insert_pos.has_value())
+  {
+    return;
+  }
+  KINDS_DEBUG("Radius non-shift II→IO: queue finished mid pair=" << intersection_pair_index << " d_edge="
+                                                                  << delaunay_edge_id << " site=" << site_id
+                                                                  << " edge=(" << v0 << "," << v1 << ") t=" << t);
+  queuePendingRadiusComplementarySplit(intersection_pair_index, v0, v1, insert_pos.value(), t, site_id, delaunay_edge_id,
+    false, snap_vv, true);
+}
+
+void SegmentBuilder::maybeQueueRadiusNonShiftSplitForExistingMid(
+  double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* roles_ctx)
+{
+  if (roles_ctx == nullptr || !roles_ctx->roles_valid)
+  {
+    return;
+  }
+  // Reuse remapped-anchor mid lookup from the shift path (neighbors still exist without shifting XY).
+  const size_t s0 = roles_ctx->source_delaunay_edges[0];
+  const size_t s1 = roles_ctx->source_delaunay_edges[1];
+  const size_t target_d = roles_ctx->target_delaunay_edge;
+
+  auto site_side_crossing = [&](size_t delaunay_edge_id) -> std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>
+  {
+    const auto& graph = kin_del.getGraph();
+    const size_t he_even = 2 * delaunay_edge_id;
+    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+      = getBoundaryIntersectionsInBoundaryOrder(delaunay_edge_id);
+    if (refs.empty())
+    {
+      return std::nullopt;
+    }
+    const int o0 = graph.halfEdge(he_even).origin;
+    const int o1 = graph.halfEdge(he_even + 1).origin;
+    if (o0 >= 0 && static_cast<size_t>(o0) == site_vertex_id)
+    {
+      return refs.front();
+    }
+    if (o1 >= 0 && static_cast<size_t>(o1) == site_vertex_id)
+    {
+      return refs.back();
+    }
+    return std::nullopt;
+  };
+
+  const auto c0 = site_side_crossing(s0);
+  const auto c1 = site_side_crossing(s1);
+  if (!c0.has_value() || !c1.has_value())
+  {
+    return;
+  }
+  const auto n0 = neighborIntersectionOnTargetAlongVoronoiEdge(c0.value(), target_d);
+  const auto n1 = neighborIntersectionOnTargetAlongVoronoiEdge(c1.value(), target_d);
+  if (!n0.has_value() || !n1.has_value())
+  {
+    return;
+  }
+
+  size_t pair_idx = static_cast<size_t>(-1);
+  if (n0.value()->next_segment_mesh_pair_index != static_cast<size_t>(-1)
+    && n0.value()->next_segment_mesh_pair_index == n1.value()->prev_segment_mesh_pair_index)
+  {
+    pair_idx = n0.value()->next_segment_mesh_pair_index;
+  }
+  else if (n1.value()->next_segment_mesh_pair_index != static_cast<size_t>(-1)
+    && n1.value()->next_segment_mesh_pair_index == n0.value()->prev_segment_mesh_pair_index)
+  {
+    pair_idx = n1.value()->next_segment_mesh_pair_index;
+  }
+  if (pair_idx != static_cast<size_t>(-1))
+  {
+    pair_idx = preferLiveBoundaryMeshPair(pair_idx);
+  }
+  if (pair_idx == static_cast<size_t>(-1) || pair_idx >= intersection_mesh_pair_last_left_and_right_vertex.size()
+    || intersection_mesh_pair_last_left_and_right_vertex[pair_idx].empty())
+  {
+    return;
+  }
+  const MeshingData& seg = intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front();
+  if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+  {
+    return;
+  }
+  const size_t v0 = static_cast<size_t>(seg.mesh_start_vertex_id);
+  const size_t v1 = static_cast<size_t>(seg.mesh_end_vertex_id);
+  if (v0 == v1)
+  {
+    return;
+  }
+  const auto insert_pos = resolveRadiusNonShiftComplementaryInsertPosition(t, site_vertex_id, roles_ctx);
+  if (!insert_pos.has_value())
+  {
+    return;
+  }
+  KINDS_DEBUG("Radius non-shift existing mid queue: pair=" << pair_idx << " site=" << site_vertex_id << " target_d="
+                                                             << target_d << " t=" << t);
+  queuePendingRadiusComplementarySplit(pair_idx, v0, v1, insert_pos.value(), t, site_vertex_id, target_d, false,
+    roles_ctx->interior_voronoi_vertex_id, true);
+}
+
+bool SegmentBuilder::applyPendingRadiusComplementarySplit(
+  const PendingRadiusComplementarySplit& pending, bool allow_completed)
+{
+  if (pending.intersection_pair_index >= intersection_meshes.size())
+  {
+    KINDS_WARNING("flushPendingRadiusComplementarySplits: invalid pair=" << pending.intersection_pair_index);
+    return false;
+  }
+  VoronoiMesh& mesh = intersection_meshes[pending.intersection_pair_index];
+  if (!allow_completed
+    && warnAndSkipIfMeshletCompleted(mesh, "flushPendingRadiusComplementarySplits/splitTriangle", pending.t))
+  {
+    return false;
+  }
+
+  size_t v0 = pending.edge_vertex_a;
+  size_t v1 = pending.edge_vertex_b;
+  bool prefer_last_triangle = pending.split_last_triangle;
+  if (prefer_last_triangle && pending.intersection_pair_index < intersection_mesh_pair_last_left_and_right_vertex.size()
+    && !intersection_mesh_pair_last_left_and_right_vertex[pending.intersection_pair_index].empty())
+  {
+    const MeshingData& seg
+      = intersection_mesh_pair_last_left_and_right_vertex[pending.intersection_pair_index].front();
+    if (seg.mesh_start_vertex_id >= 0 && seg.mesh_end_vertex_id >= 0
+      && seg.mesh_start_vertex_id != seg.mesh_end_vertex_id)
+    {
+      v0 = static_cast<size_t>(seg.mesh_start_vertex_id);
+      v1 = static_cast<size_t>(seg.mesh_end_vertex_id);
+    }
+  }
+
+  if (v0 >= mesh.getVertices().size() || v1 >= mesh.getVertices().size() || v0 == v1)
+  {
+    KINDS_WARNING("flushPendingRadiusComplementarySplits: bad edge verts pair=" << pending.intersection_pair_index
+                                                                                << " (" << v0 << "," << v1 << ")");
+    return false;
+  }
+
+  const std::string split_meta = [&]() -> std::string
+  {
+    if (!store_mesh_metadata)
+    {
+      return {};
+    }
+    MetadataBuilder builder;
+    builder.addString("event_type", boundaryEventTypeToString(BoundaryEventType::Radius))
+      .addString("segment_action", boundarySegmentActionToString(BoundarySegmentAction::SegmentRemapped))
+      .addString("source", pending.snap_voronoi_vertex_id.has_value() ? "Voronoi vertex" : "site")
+      .addString("pos", pending.from_shift ? "complementary_shift" : "complementary_noshift")
+      .addBool("split_triangle", true)
+      .addBool("radius_shifted_corner", pending.from_shift)
+      .addBool("radius_noshift_corner", !pending.from_shift)
+      .addSize("strand_id", pending.site_vertex_id)
+      .addSize("target_delaunay_edge", pending.target_delaunay_edge)
+      .addSize("intersection_pair_index", pending.intersection_pair_index)
+      .addDouble("time", pending.t)
+      .addDouble("t", pending.t);
+    if (pending.snap_voronoi_vertex_id.has_value())
+    {
+      builder.addSize("voronoi_vertex_id", pending.snap_voronoi_vertex_id.value());
+    }
+    return builder.build();
+  }();
+
+  auto find_tri = [&](size_t a, size_t b) -> std::optional<size_t>
+  {
+    const auto& tris = mesh.getTriangles();
+    const size_t n_tri = tris.size() / 3;
+    if (prefer_last_triangle)
+    {
+      for (size_t tri = n_tri; tri-- > 0;)
+      {
+        for (size_t e = 0; e < 3; ++e)
+        {
+          if (tris[3 * tri + e] == a && tris[3 * tri + ((e + 1) % 3)] == b)
+          {
+            return tri;
+          }
+        }
+      }
+      return std::nullopt;
+    }
+    // Prefer early strip faces (seed edge 0-1 lives on the first triangles).
+    const size_t scan_n = n_tri < 2 ? n_tri : 2;
+    for (size_t pass = 0; pass < 2; ++pass)
+    {
+      const size_t begin = (pass == 0) ? 0 : scan_n;
+      const size_t end = (pass == 0) ? scan_n : n_tri;
+      for (size_t tri = begin; tri < end; ++tri)
+      {
+        for (size_t e = 0; e < 3; ++e)
+        {
+          if (tris[3 * tri + e] == a && tris[3 * tri + ((e + 1) % 3)] == b)
+          {
+            return tri;
+          }
+        }
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto try_edge = [&](size_t a, size_t b) -> std::optional<std::pair<size_t, size_t>>
+  {
+    std::optional<size_t> split_tri = find_tri(a, b);
+    size_t edge_a = a;
+    size_t edge_b = b;
+    if (!split_tri.has_value())
+    {
+      split_tri = find_tri(b, a);
+      edge_a = b;
+      edge_b = a;
+    }
+    if (!split_tri.has_value())
+    {
+      return std::nullopt;
+    }
+    return std::make_pair(edge_a, edge_b);
+  };
+
+  std::optional<std::pair<size_t, size_t>> edge = try_edge(v0, v1);
+  if (!edge.has_value() && prefer_last_triangle)
+  {
+    prefer_last_triangle = false;
+    v0 = pending.edge_vertex_a;
+    v1 = pending.edge_vertex_b;
+    if (v0 < mesh.getVertices().size() && v1 < mesh.getVertices().size() && v0 != v1)
+    {
+      edge = try_edge(v0, v1);
+    }
+  }
+  if (!edge.has_value())
+  {
+    KINDS_WARNING("flushPendingRadiusComplementarySplits: no triangle on edge pair="
+      << pending.intersection_pair_index << " verts=(" << v0 << "," << v1 << ") tri_count="
+      << mesh.getTriangleCount() << " t=" << pending.t);
+    return false;
+  }
+
+  std::optional<size_t> split_tri = find_tri(edge->first, edge->second);
+  if (!split_tri.has_value())
+  {
+    return false;
+  }
+  const size_t tri_corner0 = mesh.triangleCornerIndex(split_tri.value(), edge->first);
+  const size_t tri_corner1 = mesh.triangleCornerIndex(split_tri.value(), edge->second);
+  if (tri_corner0 == static_cast<size_t>(-1) || tri_corner1 == static_cast<size_t>(-1))
+  {
+    KINDS_WARNING("flushPendingRadiusComplementarySplits: triangleCornerIndex failed pair="
+      << pending.intersection_pair_index << " tri=" << split_tri.value());
+    return false;
+  }
+
+  const auto [new_vid, new_tri]
+    = mesh.splitTriangle(tri_corner0, tri_corner1, pending.mesh_position, split_meta, pending.t);
+  if (new_vid == static_cast<size_t>(-1) || new_tri == static_cast<size_t>(-1))
+  {
+    KINDS_WARNING("flushPendingRadiusComplementarySplits: splitTriangle failed pair="
+      << pending.intersection_pair_index);
+    return false;
+  }
+  KINDS_DEBUG("flushPendingRadiusComplementarySplits: pair=" << pending.intersection_pair_index << " tri="
+                                                               << split_tri.value() << " -> new_vid=" << new_vid
+                                                               << " new_tri=" << new_tri << " t=" << pending.t);
+  return true;
+}
+
+void SegmentBuilder::flushPendingRadiusComplementarySplitsForPair(size_t intersection_pair_index)
+{
+  if (intersection_pair_index == static_cast<size_t>(-1) || pending_radius_complementary_splits_.empty())
+  {
+    return;
+  }
+  std::vector<PendingRadiusComplementarySplit> remaining;
+  remaining.reserve(pending_radius_complementary_splits_.size());
+  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+  {
+    if (pending.intersection_pair_index != intersection_pair_index)
+    {
+      remaining.push_back(pending);
+      continue;
+    }
+    applyPendingRadiusComplementarySplit(pending, true);
+  }
+  pending_radius_complementary_splits_.swap(remaining);
+}
+
+void SegmentBuilder::flushPendingRadiusComplementarySplits()
+{
+  if (pending_radius_complementary_splits_.empty())
+  {
+    return;
+  }
+  KINDS_INFO("flushPendingRadiusComplementarySplits: applying " << pending_radius_complementary_splits_.size()
+                                                                << " deferred complementary split(s)");
+
+  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+  {
+    applyPendingRadiusComplementarySplit(pending, true);
+  }
+
+  pending_radius_complementary_splits_.clear();
+}
+
 size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, double event_time) const
 {
+  const auto live_pair = [this](size_t pair_idx) -> size_t { return preferLiveBoundaryMeshPair(pair_idx); };
+
   if (!start_intersection.has_value() && !end_intersection.has_value())
   {
     const std::string msg = "resolveIntersectionMeshPairIndex: both start_intersection and end_intersection are null.";
@@ -3521,13 +4471,13 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
       }
       if (list_first->next_segment_mesh_pair_index == list_second->prev_segment_mesh_pair_index)
       {
-        return list_first->next_segment_mesh_pair_index;
+        return live_pair(list_first->next_segment_mesh_pair_index);
       }
     }
 
     if (start_value->next_segment_mesh_pair_index == end_value->prev_segment_mesh_pair_index)
     {
-      return start_value->next_segment_mesh_pair_index;
+      return live_pair(start_value->next_segment_mesh_pair_index);
     }
 
     // Try to recover, perhaps they are swapped, but issue a warning since this should not happen
@@ -3539,7 +4489,7 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
         << ", end_next=" << end_value->next_segment_mesh_pair_index
         << ", end_prev=" << end_value->prev_segment_mesh_pair_index << ", voronoi_cell_id=" << voronoi_cell_id
         << ", event_time=" << event_time << ").");
-      return start_value->prev_segment_mesh_pair_index;
+      return live_pair(start_value->prev_segment_mesh_pair_index);
     }
 
     // One-sided link after radius boundary reset or stale crossing cleanup: trust the populated side.
@@ -3549,7 +4499,7 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
       KINDS_WARNING("resolveIntersectionMeshPairIndex: end prev unset; recovering from start next (start_next="
         << start_value->next_segment_mesh_pair_index << ", voronoi_cell_id=" << voronoi_cell_id
         << ", event_time=" << event_time << ").");
-      return start_value->next_segment_mesh_pair_index;
+      return live_pair(start_value->next_segment_mesh_pair_index);
     }
     if (end_value->prev_segment_mesh_pair_index != static_cast<size_t>(-1)
       && start_value->next_segment_mesh_pair_index == static_cast<size_t>(-1))
@@ -3557,7 +4507,7 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
       KINDS_WARNING("resolveIntersectionMeshPairIndex: start next unset; recovering from end prev (end_prev="
         << end_value->prev_segment_mesh_pair_index << ", voronoi_cell_id=" << voronoi_cell_id
         << ", event_time=" << event_time << ").");
-      return end_value->prev_segment_mesh_pair_index;
+      return live_pair(end_value->prev_segment_mesh_pair_index);
     }
 
     std::ostringstream oss;
@@ -3603,7 +4553,7 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
       return static_cast<size_t>(-1);
     }
 
-    return start_intersection.value()->next_segment_mesh_pair_index;
+    return live_pair(start_intersection.value()->next_segment_mesh_pair_index);
   }
   else // if(end_intersection.has_value())
   {
@@ -3635,7 +4585,7 @@ size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
       return static_cast<size_t>(-1);
     }
 
-    return end_intersection.value()->prev_segment_mesh_pair_index;
+    return live_pair(end_intersection.value()->prev_segment_mesh_pair_index);
   }
 }
 
@@ -3766,6 +4716,8 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       std::optional<size_t> snap_voronoi_vertex_id {};
       bool explicit_profile_position = false;
       std::optional<RadiusTransitionProjection> projection {};
+      std::optional<glm::dvec3> explicit_mesh_position {};
+      RadiusShiftedSiteCacheEntry* shifted_site_cache = nullptr;
     };
 
     auto crossing_or_site_endpoint
@@ -3783,21 +4735,22 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
             placement.conceptual_intersection, placement.position_intersection, old_pos, pos);
         }
         return { pos, placement, placement.snap_voronoi_vertex_id, placement.explicit_profile_position.has_value(),
-          placement.projection };
+          placement.projection, std::nullopt, nullptr };
       }
-      if (auto site_shifted
-        = radiusTransitionInterpolatedSitePosition(t, voronoi_cell_id, delaunay_edge_id, boundary_transition_shift);
-        site_shifted.has_value())
+      if (RadiusShiftedSiteCacheEntry* cache_entry
+        = getOrFillRadiusShiftedSiteCache(t, voronoi_cell_id, boundary_transition_shift);
+        cache_entry != nullptr)
       {
         const glm::dvec2 p_site = kin_del.getPointAt(t, voronoi_cell_id, false, false);
         KINDS_DEBUG("Radius boundary transition [startNewMeshFromIntersections_site]: cell="
           << voronoi_cell_id << " strip_d=" << delaunay_edge_id << " t=" << t << " old=(" << p_site.x << "," << p_site.y
-          << ") new=(" << site_shifted->position.x << "," << site_shifted->position.y << ")");
-        return { site_shifted->position, std::nullopt, site_shifted->snap_voronoi_vertex_id, false,
-          site_shifted->projection };
+          << ") new=(" << cache_entry->placement.position.x << "," << cache_entry->placement.position.y
+          << ") cache_mesh=" << (cache_entry->explicit_mesh_position.has_value() ? "yes" : "no"));
+        return { cache_entry->placement.position, std::nullopt, cache_entry->placement.snap_voronoi_vertex_id, false,
+          cache_entry->placement.projection, cache_entry->explicit_mesh_position, cache_entry };
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id, false, false);
-      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt, false, std::nullopt };
+      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt, false, std::nullopt, std::nullopt, nullptr };
     };
 
     const CrossingOrSiteEndpoint start_endpoint = crossing_or_site_endpoint(interval_start_crossing);
@@ -3811,12 +4764,23 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       MeshletVertexRuntimeInfo info;
       info.radius_shift_explicit_profile_position = endpoint.explicit_profile_position;
       info.radius_transition_projection = endpoint.projection;
+      info.explicit_mesh_position = endpoint.explicit_mesh_position;
       if (endpoint.placement.has_value())
       {
         info.position_intersection = endpoint.placement->position_intersection;
         info.conceptual_intersection = endpoint.placement->conceptual_intersection;
       }
       return info;
+    };
+
+    auto remember_shifted_site_mesh = [&](const CrossingOrSiteEndpoint& endpoint, size_t vertex_index)
+    {
+      if (endpoint.shifted_site_cache == nullptr)
+      {
+        return;
+      }
+      noteRadiusShiftedSiteMeshPosition(
+        *endpoint.shifted_site_cache, mesh.getVertices()[vertex_index], "startNewMeshFromIntersections");
     };
 
     std::string boundary_start_meta_left;
@@ -3856,11 +4820,16 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       same_endpoint ? std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 1.0))
                     : std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 0.0)),
       endpoint_runtime_info(start_endpoint));
+    remember_shifted_site_mesh(start_endpoint, start_vertex_index);
     const size_t end_vertex_index = same_endpoint
       ? start_vertex_index
       : addMeshletVertex(mesh, boundary_polygon, centroid, end_pos, voronoi_cell_id, t, false,
           end_endpoint.snap_voronoi_vertex_id, boundary_start_meta_right, glm::dvec3(0.0, 0.0, 1.0),
           endpoint_runtime_info(end_endpoint));
+    if (!same_endpoint)
+    {
+      remember_shifted_site_mesh(end_endpoint, end_vertex_index);
+    }
 
     std::list<MeshingData> local_segments;
     MeshingData seg { static_cast<int>(start_vertex_index), static_cast<int>(end_vertex_index),
@@ -4028,6 +4997,8 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     std::optional<size_t> snap_voronoi_vertex_id {};
     bool explicit_profile_position = false;
     std::optional<RadiusTransitionProjection> projection {};
+    std::optional<glm::dvec3> explicit_mesh_position {};
+    RadiusShiftedSiteCacheEntry* shifted_site_cache = nullptr;
   };
 
   auto crossing_or_site_endpoint
@@ -4035,19 +5006,21 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   {
     if (!input_ref.has_value())
     {
-      if (auto site_shifted = radiusTransitionInterpolatedSitePosition(
-            t, voronoi_cell_id, strip_delaunay_edge_id_for_site, boundary_transition_shift);
-        site_shifted.has_value())
+      if (RadiusShiftedSiteCacheEntry* cache_entry
+        = getOrFillRadiusShiftedSiteCache(t, voronoi_cell_id, boundary_transition_shift);
+        cache_entry != nullptr)
       {
         const glm::dvec2 p_site = kin_del.getPointAt(t, voronoi_cell_id, false, false);
         KINDS_DEBUG("Radius boundary transition [finishMeshFromIntersections_site]: cell="
           << voronoi_cell_id << " strip_d=" << strip_delaunay_edge_id_for_site << " t=" << t << " old=(" << p_site.x
-          << "," << p_site.y << ") new=(" << site_shifted->position.x << "," << site_shifted->position.y << ")");
-        return { site_shifted->position, std::nullopt, site_shifted->snap_voronoi_vertex_id, false,
-          site_shifted->projection };
+          << "," << p_site.y << ") new=(" << cache_entry->placement.position.x << ","
+          << cache_entry->placement.position.y
+          << ") cache_mesh=" << (cache_entry->explicit_mesh_position.has_value() ? "yes" : "no"));
+        return { cache_entry->placement.position, std::nullopt, cache_entry->placement.snap_voronoi_vertex_id, false,
+          cache_entry->placement.projection, cache_entry->explicit_mesh_position, cache_entry };
       }
       const glm::dvec2 p = kin_del.getPointAt(t, voronoi_cell_id, false, false);
-      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt, false, std::nullopt };
+      return { glm::dvec3(p.x, p.y, t), std::nullopt, std::nullopt, false, std::nullopt, std::nullopt, nullptr };
     }
 
     const RadiusBoundaryTransitionCrossingPlacement placement
@@ -4060,7 +5033,7 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
         placement.conceptual_intersection, placement.position_intersection, old_pos, pos);
     }
     return { pos, placement, placement.snap_voronoi_vertex_id, placement.explicit_profile_position.has_value(),
-      placement.projection };
+      placement.projection, std::nullopt, nullptr };
   };
 
   const CrossingOrSiteEndpoint start_endpoint = crossing_or_site_endpoint(start_intersection);
@@ -4076,12 +5049,23 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     MeshletVertexRuntimeInfo info;
     info.radius_shift_explicit_profile_position = endpoint.explicit_profile_position;
     info.radius_transition_projection = endpoint.projection;
+    info.explicit_mesh_position = endpoint.explicit_mesh_position;
     if (endpoint.placement.has_value())
     {
       info.position_intersection = endpoint.placement->position_intersection;
       info.conceptual_intersection = endpoint.placement->conceptual_intersection;
     }
     return info;
+  };
+
+  auto remember_shifted_site_mesh = [&](const CrossingOrSiteEndpoint& endpoint, size_t vertex_index)
+  {
+    if (endpoint.shifted_site_cache == nullptr)
+    {
+      return;
+    }
+    noteRadiusShiftedSiteMeshPosition(
+      *endpoint.shifted_site_cache, mesh.getVertices()[vertex_index], "finishMeshFromIntersections");
   };
 
   std::string boundary_finish_meta;
@@ -4120,11 +5104,16 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
     collapsed_finish_endpoints ? std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 1.0))
                                : std::optional<glm::dvec3>(glm::dvec3(1.0, 0.0, 0.0)),
     endpoint_runtime_info(start_endpoint));
+  remember_shifted_site_mesh(start_endpoint, new_start_vertex_index);
   const size_t new_end_vertex_index = collapsed_finish_endpoints
     ? new_start_vertex_index
     : addMeshletVertex(mesh, boundary_polygon, centroid, new_end_pos, voronoi_cell_id, t, false,
         end_snap_voronoi_vertex_id, boundary_finish_meta_right, glm::dvec3(0.0, 0.0, 1.0),
         endpoint_runtime_info(end_endpoint));
+  if (!collapsed_finish_endpoints)
+  {
+    remember_shifted_site_mesh(end_endpoint, new_end_vertex_index);
+  }
 
   size_t ordered_new_start_vertex_index = new_start_vertex_index;
   size_t ordered_new_end_vertex_index = new_end_vertex_index;
@@ -4684,7 +5673,7 @@ size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(
   }
   const size_t index = meshes.size();
   meshes.push_back(std::move(mesh));
-  regular_meshlet_completed_.push_back(false);
+  interior_meshlet_completed_.push_back(false);
   meshlet_export_suffixes.push_back(std::move(suffix));
   return index;
 }
@@ -4760,6 +5749,10 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(
 size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangle(
   VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata, int material_id)
 {
+  if (warnAndSkipIfMeshletCompleted(mesh, "addBoundaryIntervalTriangle", std::numeric_limits<double>::quiet_NaN()))
+  {
+    return static_cast<size_t>(-1);
+  }
   if (u >= mesh.getVertexCount() || v >= mesh.getVertexCount() || w >= mesh.getVertexCount())
   {
     KINDS_ERROR("Vertex index out of boundary-interval mesh range.");
@@ -5210,6 +6203,33 @@ SegmentBuilder::MeshIntersectionObjectSpaceResult SegmentBuilder::computeMeshInt
   return result;
 }
 
+std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>
+SegmentBuilder::findIncidentIntersectionOnDelaunayEdge(size_t voronoi_vertex_id, size_t delaunay_edge_id) const
+{
+  const auto& graph = kin_del.getGraph();
+  if (voronoi_vertex_id >= graph.faceSlotCount() || !graph.isLiveFace(voronoi_vertex_id))
+  {
+    return std::nullopt;
+  }
+  const auto& crossing_data = kin_del.getCrossingData();
+  for (size_t he : graph.face(voronoi_vertex_id).half_edges)
+  {
+    const size_t voronoi_edge_id = he / 2;
+    if (voronoi_edge_id >= crossing_data.voronoi_edge_intersections.size())
+    {
+      continue;
+    }
+    for (const auto& ref : crossing_data.voronoi_edge_intersections[voronoi_edge_id])
+    {
+      if (ref->delaunay_edge_id == delaunay_edge_id)
+      {
+        return ref;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 SegmentBuilder::MeshVoronoiVertexObjectSpaceResult SegmentBuilder::computeMeshVoronoiVertexObjectSpace(
   size_t voronoi_vertex_id, glm::dvec3 fallback_profile_vertex, size_t fallback_strand_id, double t) const
 {
@@ -5219,6 +6239,15 @@ SegmentBuilder::MeshVoronoiVertexObjectSpaceResult SegmentBuilder::computeMeshVo
   const auto& graph = kin_del.getGraph();
   if (voronoi_vertex_id >= graph.faceSlotCount() || !graph.isLiveFace(voronoi_vertex_id))
   {
+    return result;
+  }
+
+  // Crossing event: reuse the single position buffered in beforeEvent for this Voronoi vertex.
+  if (active_crossing_mesh_position_.has_value() && active_crossing_voronoi_vertex_id_.has_value()
+    && active_crossing_voronoi_vertex_id_.value() == voronoi_vertex_id)
+  {
+    result.position = active_crossing_mesh_position_.value();
+    result.from_crossing_event_buffer = true;
     return result;
   }
 
@@ -5449,12 +6478,18 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   includes_virtual_shift = false;
 
   const bool is_intersection_vertex = runtime_info.isIntersectionVertex();
+  const bool crossing_event_buffer = !is_flexible_placeholder
+    && activeCrossingEventBufferApplies(meshlet_voronoi_vertex_for_alpha_check, runtime_info.position_intersection);
   glm::dvec2 delaunay_xy(std::numeric_limits<double>::quiet_NaN());
   if (!is_flexible_placeholder)
   {
     if (runtime_info.explicit_delaunay_xy.has_value())
     {
       delaunay_xy = runtime_info.explicit_delaunay_xy.value();
+    }
+    else if (crossing_event_buffer && active_crossing_delaunay_xy_.has_value())
+    {
+      delaunay_xy = active_crossing_delaunay_xy_.value();
     }
     else if (meshlet_voronoi_vertex_for_alpha_check.has_value())
     {
@@ -5483,7 +6518,7 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
 
   std::optional<MeshIntersectionObjectSpaceResult> intersection_object_space;
   if (!is_flexible_placeholder && is_intersection_vertex && !radius_transition_projection
-    && !meshlet_voronoi_vertex_for_alpha_check.has_value())
+    && !meshlet_voronoi_vertex_for_alpha_check.has_value() && !crossing_event_buffer)
   {
     intersection_object_space
       = computeMeshIntersectionObjectSpace(runtime_info, glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
@@ -5499,10 +6534,14 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     }
     else
     {
-      // Prefer barycentric Voronoi placement (also used when radius transition snaps a site/crossing to a VV).
+      // Prefer barycentric Voronoi placement; the event VV reuses the crossing buffer.
       voronoi_object_space = computeMeshVoronoiVertexObjectSpace(
         meshlet_voronoi_vertex_for_alpha_check.value(), glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
       vertex = voronoi_object_space.value().position;
+      if (voronoi_object_space.value().from_crossing_event_buffer && active_crossing_delaunay_xy_.has_value())
+      {
+        delaunay_xy = active_crossing_delaunay_xy_.value();
+      }
     }
     if (!vertexPositionFinite(vertex))
     {
@@ -5513,13 +6552,25 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   }
   else if (!is_flexible_placeholder && radius_transition_projection)
   {
-    vertex = radiusTransitionProjectionPosition(runtime_info.radius_transition_projection.value(), t, true);
+    if (runtime_info.explicit_mesh_position.has_value())
+    {
+      vertex = runtime_info.explicit_mesh_position.value();
+    }
+    else
+    {
+      vertex = radiusTransitionProjectionPosition(runtime_info.radius_transition_projection.value(), t, true);
+    }
     if (!vertexPositionFinite(vertex))
     {
       KINDS_WARNING("addMeshletVertex: non-finite radius-transition projection at t="
         << t << "; falling back to site placement; " << formatStrandBranchLogInfo(strand_id, t));
       vertex = computeMeshSiteVertexPosition(glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
     }
+  }
+  else if (!is_flexible_placeholder && is_intersection_vertex && crossing_event_buffer
+    && active_crossing_mesh_position_.has_value())
+  {
+    vertex = active_crossing_mesh_position_.value();
   }
   else if (!is_flexible_placeholder && is_intersection_vertex && intersection_object_space.has_value())
   {
@@ -5681,6 +6732,11 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     else
     {
       builder.addSize("strand_id", strand_id);
+    }
+
+    if (crossing_event_buffer)
+    {
+      builder.addBool("crossing_event_buffered_vertex", true);
     }
 
     if (!metadata_callback_phase_.empty())
@@ -5860,6 +6916,12 @@ void SegmentBuilder::extendIntersectionMeshAtSharedCrossing(size_t neighbor_pair
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, bool append_flexible_placeholder,
   std::optional<size_t> skip_pair_idx)
 {
+  if (neighbor_pair_idx == static_cast<size_t>(-1)
+    || (skip_pair_idx.has_value() && neighbor_pair_idx == skip_pair_idx.value()))
+  {
+    return;
+  }
+  neighbor_pair_idx = preferLiveBoundaryMeshPair(neighbor_pair_idx);
   if (neighbor_pair_idx == static_cast<size_t>(-1)
     || (skip_pair_idx.has_value() && neighbor_pair_idx == skip_pair_idx.value()))
   {
@@ -8708,6 +9770,11 @@ void SegmentBuilder::finalize(double t)
     }
   }
 
+  // Radius complementary splits were queued when the target mid-interval meshlet was identified
+  // (often with only seed verts 0/1 and no triangles yet). Apply them now that strips have faces,
+  // before flexible resolution / dedupe / glue postprocess.
+  flushPendingRadiusComplementarySplits();
+
   // Natural branch endings at finalize time (including the tree top). Section events run on
   // [start, end), so finishers at the exclusive end_section are never capped in the section
   // callback — always seal them here. mesh_cap_at_end only seals strands truncated by a premature --end.
@@ -9842,7 +10909,6 @@ bool propagateUnmatchedInteriorsOntoPartner(VoronoiMesh& partner_mesh, std::vect
   (void)contributors_raw_json;
   (void)left_vid;
   (void)right_vid;
-  (void)physics_segment_id;
 
   auto log_propagate_call = [&](size_t count, const std::string& path_scheme, const char* note)
   {
@@ -10003,6 +11069,19 @@ bool propagateUnmatchedInteriorsOntoPartner(VoronoiMesh& partner_mesh, std::vect
       }
 
       const glm::dvec3& vertex = from_mesh.getVertices()[from_path[i]];
+      const double split_t = from_mesh.vertexKineticTime(from_path[i]);
+      const std::string split_meta = target_mesh.storeMetadata()
+        ? SegmentBuilder::MetadataBuilder()
+            .addString("event_type", "glue_align")
+            .addString("source", "propagated_interior")
+            .addString("pos", direction_label)
+            .addBool("split_triangle", true)
+            .addSize("meshlet_index", meshlet_index)
+            .addInt("physics_segment_id", physics_segment_id)
+            .addDouble("t", std::isfinite(split_t) ? split_t : vertex.z)
+            .addDouble("time", std::isfinite(split_t) ? split_t : vertex.z)
+            .build()
+        : std::string {};
       size_t closest_tri_index = find_closest_triangle_index(target_mesh, target_triangles, vertex);
       if (closest_tri_index == size_t(-1) || closest_tri_index + 1 >= target_path.size()
         || closest_tri_index >= target_triangles.size())
@@ -10028,7 +11107,8 @@ bool propagateUnmatchedInteriorsOntoPartner(VoronoiMesh& partner_mesh, std::vect
         continue;
       }
 
-      const auto [new_vid, new_tri] = target_mesh.splitTriangle(tri_vertex_id0, tri_vertex_id1, vertex);
+      const auto [new_vid, new_tri] = target_mesh.splitTriangle(tri_vertex_id0, tri_vertex_id1, vertex, split_meta,
+        std::isfinite(split_t) ? std::optional<double>(split_t) : std::nullopt);
       if (new_vid == size_t(-1) || new_tri == size_t(-1))
       {
         KINDS_ERROR("splitTriangle failed"
@@ -10065,11 +11145,11 @@ bool propagateUnmatchedInteriorsOntoPartner(VoronoiMesh& partner_mesh, std::vect
 
   // Source interiors → partner seam.
   propagation_count += propagate_path_interiors(partner_mesh, partner_path, partner_triangles, &partner_path_propagated,
-    source_mesh, source_path, /*from_skip=*/nullptr, "source→partner");
+    source_mesh, source_path, /*from_skip=*/nullptr, "source-->partner");
 
   // Partner interiors that were not inserted from the source → source seam.
   propagation_count += propagate_path_interiors(source_mesh, source_path, source_triangles, /*target_propagated=*/nullptr,
-    partner_mesh, partner_path, &partner_path_propagated, "partner→source");
+    partner_mesh, partner_path, &partner_path_propagated, "partner-->source");
 
   log_propagate_call(propagation_count, seam_scheme, propagation_count == 0 ? "no inserts" : nullptr);
   return propagation_count > 0;
@@ -10738,6 +11818,17 @@ std::vector<std::string> kinDS::SegmentBuilder::extractSegmentMeshletExportSuffi
   suffixes.reserve(segment_properties.size());
 
   std::vector<int> meshing_to_physics(segment_properties.size(), -1);
+  std::vector<int> meshing_to_strand(segment_properties.size(), -1);
+  for (size_t strand_id = 0; strand_id < strand_to_segment_indices.size(); ++strand_id)
+  {
+    for (size_t meshing_segment_id : strand_to_segment_indices[strand_id])
+    {
+      if (meshing_segment_id < meshing_to_strand.size())
+      {
+        meshing_to_strand[meshing_segment_id] = static_cast<int>(strand_id);
+      }
+    }
+  }
   {
     const auto& physics_map = kin_del.getStrandTree().getPhysicsStrandToSegmentIndices();
     const size_t strand_count = std::min(strand_to_segment_indices.size(), physics_map.size());
@@ -10757,8 +11848,12 @@ std::vector<std::string> kinDS::SegmentBuilder::extractSegmentMeshletExportSuffi
 
   for (size_t segment_id = 0; segment_id < segment_properties.size(); ++segment_id)
   {
-    // meshlet{N}_segment{N}_phys{P}: N is meshing/meshlet index; P is physics segment id.
+    // meshlet{N}_segment{N}_strand{S}_phys{P}: N is meshing/meshlet index; S strand; P physics segment.
     std::string suffix = std::string("_segment") + std::to_string(segment_id);
+    if (segment_id < meshing_to_strand.size() && meshing_to_strand[segment_id] >= 0)
+    {
+      suffix += "_strand" + std::to_string(meshing_to_strand[segment_id]);
+    }
     if (segment_id < meshing_to_physics.size() && meshing_to_physics[segment_id] >= 0)
     {
       suffix += "_phys" + std::to_string(meshing_to_physics[segment_id]);

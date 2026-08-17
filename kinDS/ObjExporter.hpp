@@ -513,7 +513,8 @@ class ObjExporter
   }
   static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, double uv_height_factor = 1.0,
     double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {},
-    bool include_metadata = false, bool include_vertex_colors = false, bool alternate_section_shading = false)
+    bool include_metadata = false, bool include_vertex_colors = false, bool alternate_section_shading = false,
+    bool write_obj_groups = true)
   {
     mesh.validateNormalCount("ObjExporter::writeMesh(" + obj_path.string() + ")");
     mesh.validateUVLayout("ObjExporter::writeMesh(" + obj_path.string() + ")");
@@ -604,7 +605,7 @@ class ObjExporter
     size_t group_count = mesh.getGroupOffsets().size();
     const std::string mesh_context = "writeMesh(" + obj_path.string() + ")";
 
-    if (group_count > 0)
+    if (write_obj_groups && group_count > 0)
     {
       validateGroupOffsets(mesh, mesh_context);
 
@@ -637,7 +638,7 @@ class ObjExporter
     }
     else
     {
-      // No groups defined, write all faces
+      // No groups defined (or group objects disabled), write all faces
       const size_t ub = mesh.getTriangles().size() / 3;
       validateFaceWriteRange(mesh, 0, ub, mesh_context);
       writeFaces(file, mesh, 0, ub, include_metadata, alternate_section_shading);

@@ -247,6 +247,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     segment_builder_.finishMesh(*it, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Subdivision,
       SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
   }
+  segment_builder_.markInteriorMeshletsCompletedForVoronoiCell(strand_id);
 
   size_t new_segment_id = segment_builder_.segment_properties.size();
 
@@ -310,6 +311,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
       interval.voronoi_cell_id, interval.start_intersection, interval.end_intersection, t);
     if (mesh_id != static_cast<size_t>(-1))
     {
+      segment_builder_.flushPendingRadiusComplementarySplitsForPair(mesh_id);
       segment_builder_.markBoundaryMeshletCompleted(mesh_id);
     }
   }
