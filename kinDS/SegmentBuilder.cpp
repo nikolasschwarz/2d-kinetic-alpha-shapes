@@ -21,11 +21,13 @@
 #include <cassert>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/norm.hpp>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -3800,18 +3802,27 @@ bool SegmentBuilder::midIntervalMatchesRadiusShiftAnchors(
 
 void SegmentBuilder::queuePendingRadiusComplementarySplit(size_t intersection_pair_index, size_t edge_a, size_t edge_b,
   const glm::dvec3& mesh_position, double t, size_t site_vertex_id, size_t target_delaunay_edge, bool from_shift,
-  std::optional<size_t> snap_voronoi_vertex_id, bool split_last_triangle)
+  std::optional<size_t> snap_voronoi_vertex_id, bool split_last_triangle, bool interior_strip,
+  std::optional<size_t> insert_voronoi_edge_id)
 {
-  intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
+  if (!interior_strip)
+  {
+    intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
+  }
   if (intersection_pair_index == static_cast<size_t>(-1))
   {
     return;
   }
-  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+  const size_t queue_size_before = pending_radius_complementary_splits_.size();
+  for (size_t i = 0; i < queue_size_before; ++i)
   {
-    if (pending.intersection_pair_index == intersection_pair_index)
+    const PendingRadiusComplementarySplit& pending = pending_radius_complementary_splits_[i];
+    if (pending.intersection_pair_index == intersection_pair_index && pending.interior_strip == interior_strip
+      && pending.target_delaunay_edge == target_delaunay_edge
+      && pending.insert_voronoi_edge_id == insert_voronoi_edge_id)
     {
       KINDS_DEBUG("Radius complementary queue skip: pair=" << intersection_pair_index
+                                                             << " interior=" << (interior_strip ? "true" : "false")
                                                              << " already pending site=" << site_vertex_id << " t=" << t);
       return;
     }
@@ -3826,12 +3837,15 @@ void SegmentBuilder::queuePendingRadiusComplementarySplit(size_t intersection_pa
   pending.target_delaunay_edge = target_delaunay_edge;
   pending.from_shift = from_shift;
   pending.split_last_triangle = split_last_triangle;
+  pending.interior_strip = interior_strip;
   pending.snap_voronoi_vertex_id = snap_voronoi_vertex_id;
+  pending.insert_voronoi_edge_id = insert_voronoi_edge_id;
   pending_radius_complementary_splits_.push_back(pending);
   KINDS_DEBUG("Radius complementary queue: pair=" << intersection_pair_index << " edge=(" << edge_a << "," << edge_b
                                                    << ") site=" << site_vertex_id << " target_d=" << target_delaunay_edge
                                                    << " from_shift=" << (from_shift ? "true" : "false")
                                                    << " split_last=" << (split_last_triangle ? "true" : "false")
+                                                   << " interior=" << (interior_strip ? "true" : "false")
                                                    << " mesh_pos=(" << mesh_position.x << "," << mesh_position.y << ","
                                                    << mesh_position.z << ") t=" << t);
 }
@@ -3959,15 +3973,6 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
     return;
   }
 
-  // Already queued from a fresh start of this mid-interval.
-  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
-  {
-    if (pending.intersection_pair_index == pair_idx)
-    {
-      return;
-    }
-  }
-
   const MeshingData& seg = intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front();
   if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
   {
@@ -3991,242 +3996,369 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
     noteRadiusShiftedSiteMeshPosition(*cache_entry, insert_pos, "complementary_queue_existing");
   }
 
+  {
+    for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+    {
+      if (pending.intersection_pair_index == pair_idx)
+      {
+        return;
+      }
+    }
+  }
+
   // Finished complementary (e.g. 1->2): split the closing edge of the finished strip (last triangle).
   queuePendingRadiusComplementarySplit(pair_idx, v0, v1, insert_pos, t, site_vertex_id, target_d, true, std::nullopt,
     true);
 }
 
-std::pair<bool, bool> SegmentBuilder::delaunayEdgeAdjacentInsideFlags(
-  size_t delaunay_edge_id, std::optional<size_t> override_face_id, bool override_inside) const
+std::optional<SegmentBuilder::InteriorStripSplitTarget> SegmentBuilder::findInteriorStripSplitTarget(
+  size_t voronoi_edge_id, KineticDelaunay::CrossingData::EdgeIntersectionRef crossing) const
 {
   const auto& graph = kin_del.getGraph();
-  const size_t he0 = 2 * delaunay_edge_id;
-  const size_t he1 = he0 + 1;
-  const size_t face_a = graph.halfEdge(he0).face;
-  const size_t face_b = graph.halfEdge(he1).face;
-  auto inside_of = [&](size_t face_id) -> bool
+  const size_t he_even = 2 * voronoi_edge_id;
+  if (he_even + 1 >= graph.halfEdgeSlotCount() || he_even >= half_edge_index_to_segment_mesh_pair_index.size())
   {
-    if (override_face_id.has_value() && face_id == override_face_id.value())
+    return std::nullopt;
+  }
+  const size_t pair_index = half_edge_index_to_segment_mesh_pair_index[he_even];
+  if (pair_index == static_cast<size_t>(-1) || pair_index >= segment_mesh_pair_last_left_and_right_vertex.size())
+  {
+    return std::nullopt;
+  }
+  const std::list<MeshingData>& strips = segment_mesh_pair_last_left_and_right_vertex[pair_index];
+  if (strips.empty())
+  {
+    return std::nullopt;
+  }
+
+  auto same_crossing = [&](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& a,
+                          KineticDelaunay::CrossingData::EdgeIntersectionRef b) -> bool
+  {
+    if (!a.has_value())
     {
-      return override_inside;
+      return false;
     }
-    return kin_del.getFaceInside(face_id);
+    return a.value() == b
+      || (a.value()->delaunay_edge_id == b->delaunay_edge_id && a.value()->voronoi_edge_id == b->voronoi_edge_id);
   };
-  return { inside_of(face_a), inside_of(face_b) };
-}
 
-SegmentBuilder::RadiusEdgeInsideTransition SegmentBuilder::classifyRadiusEdgeInsideTransition(
-  std::pair<bool, bool> pre_inside, std::pair<bool, bool> post_inside)
-{
-  const bool pre_io = pre_inside.first != pre_inside.second;
-  const bool pre_ii = pre_inside.first && pre_inside.second;
-  const bool post_io = post_inside.first != post_inside.second;
-  const bool post_ii = post_inside.first && post_inside.second;
-  if (pre_io && post_ii)
+  const size_t left_vv = graph.halfEdge(he_even).face;
+  std::vector<DirectedVoronoiEdgeCrossing> directed;
+  if (kin_del.getCrossingData().isVoronoiVertexRegistered(left_vv)
+    && voronoi_edge_id < kin_del.getCrossingData().voronoi_edge_intersections.size())
   {
-    return RadiusEdgeInsideTransition::IoToIi;
-  }
-  if (pre_ii && post_io)
-  {
-    return RadiusEdgeInsideTransition::IiToIo;
-  }
-  return RadiusEdgeInsideTransition::None;
-}
-
-std::optional<glm::dvec3> SegmentBuilder::resolveRadiusNonShiftComplementaryInsertPosition(double t,
-  size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* ctx) const
-{
-  if (ctx != nullptr && ctx->interior_voronoi_vertex_id.has_value())
-  {
-    const size_t vv = ctx->interior_voronoi_vertex_id.value();
-    return computeMeshVoronoiVertexObjectSpace(vv, glm::dvec3(0.0, 0.0, t), site_vertex_id, t).position;
-  }
-  return computeMeshSiteVertexPosition(glm::dvec3(0.0, 0.0, t), site_vertex_id, t);
-}
-
-void SegmentBuilder::maybeQueueRadiusNonShiftSplitForStartedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
-  size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
-  const RadiusBoundaryTransitionShiftContext* roles_ctx)
-{
-  intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
-  if (intersection_pair_index == static_cast<size_t>(-1) || mid_cell == static_cast<size_t>(-1))
-  {
-    return;
-  }
-  const auto pre = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, pre_affected_inside);
-  const auto post = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, post_affected_inside);
-  if (classifyRadiusEdgeInsideTransition(pre, post) != RadiusEdgeInsideTransition::IoToIi)
-  {
-    return;
+    const size_t left_tri = kin_del.getCrossingData().getContainingTriId(left_vv);
+    directed = orientCrossingsAlongVoronoiEdge(voronoi_edge_id, left_tri, false, he_even);
   }
 
-  const size_t site_id = mid_cell;
-  std::optional<size_t> snap_vv;
-  if (roles_ctx != nullptr && roles_ctx->interior_voronoi_vertex_id.has_value())
+  auto crossing_ordinal = [&](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> std::optional<size_t>
   {
-    snap_vv = roles_ctx->interior_voronoi_vertex_id;
-  }
-  const auto insert_pos = resolveRadiusNonShiftComplementaryInsertPosition(t, site_id, roles_ctx);
-  if (!insert_pos.has_value())
-  {
-    return;
-  }
-  KINDS_DEBUG("Radius non-shift IO→II: queue started mid pair=" << intersection_pair_index << " d_edge="
-                                                                << delaunay_edge_id << " site=" << site_id << " t=" << t);
-  queuePendingRadiusComplementarySplit(intersection_pair_index, 0, 1, insert_pos.value(), t, site_id, delaunay_edge_id,
-    false, snap_vv);
-}
-
-void SegmentBuilder::maybeQueueRadiusNonShiftSplitForFinishedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
-  size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
-  const RadiusBoundaryTransitionShiftContext* roles_ctx)
-{
-  intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
-  if (intersection_pair_index == static_cast<size_t>(-1) || mid_cell == static_cast<size_t>(-1))
-  {
-    return;
-  }
-  if (intersection_pair_index >= intersection_mesh_pair_last_left_and_right_vertex.size()
-    || intersection_mesh_pair_last_left_and_right_vertex[intersection_pair_index].empty())
-  {
-    return;
-  }
-  const auto pre = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, pre_affected_inside);
-  const auto post = delaunayEdgeAdjacentInsideFlags(delaunay_edge_id, affected_face_id, post_affected_inside);
-  if (classifyRadiusEdgeInsideTransition(pre, post) != RadiusEdgeInsideTransition::IiToIo)
-  {
-    return;
-  }
-
-  const MeshingData& seg = intersection_mesh_pair_last_left_and_right_vertex[intersection_pair_index].front();
-  if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
-  {
-    return;
-  }
-  const size_t v0 = static_cast<size_t>(seg.mesh_start_vertex_id);
-  const size_t v1 = static_cast<size_t>(seg.mesh_end_vertex_id);
-  if (v0 == v1)
-  {
-    return;
-  }
-
-  const size_t site_id = mid_cell;
-  std::optional<size_t> snap_vv;
-  if (roles_ctx != nullptr && roles_ctx->interior_voronoi_vertex_id.has_value())
-  {
-    snap_vv = roles_ctx->interior_voronoi_vertex_id;
-  }
-  const auto insert_pos = resolveRadiusNonShiftComplementaryInsertPosition(t, site_id, roles_ctx);
-  if (!insert_pos.has_value())
-  {
-    return;
-  }
-  KINDS_DEBUG("Radius non-shift II→IO: queue finished mid pair=" << intersection_pair_index << " d_edge="
-                                                                  << delaunay_edge_id << " site=" << site_id
-                                                                  << " edge=(" << v0 << "," << v1 << ") t=" << t);
-  queuePendingRadiusComplementarySplit(intersection_pair_index, v0, v1, insert_pos.value(), t, site_id, delaunay_edge_id,
-    false, snap_vv, true);
-}
-
-void SegmentBuilder::maybeQueueRadiusNonShiftSplitForExistingMid(
-  double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* roles_ctx)
-{
-  if (roles_ctx == nullptr || !roles_ctx->roles_valid)
-  {
-    return;
-  }
-  // Reuse remapped-anchor mid lookup from the shift path (neighbors still exist without shifting XY).
-  const size_t s0 = roles_ctx->source_delaunay_edges[0];
-  const size_t s1 = roles_ctx->source_delaunay_edges[1];
-  const size_t target_d = roles_ctx->target_delaunay_edge;
-
-  auto site_side_crossing = [&](size_t delaunay_edge_id) -> std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>
-  {
-    const auto& graph = kin_del.getGraph();
-    const size_t he_even = 2 * delaunay_edge_id;
-    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
-      = getBoundaryIntersectionsInBoundaryOrder(delaunay_edge_id);
-    if (refs.empty())
+    for (size_t i = 0; i < directed.size(); ++i)
     {
-      return std::nullopt;
-    }
-    const int o0 = graph.halfEdge(he_even).origin;
-    const int o1 = graph.halfEdge(he_even + 1).origin;
-    if (o0 >= 0 && static_cast<size_t>(o0) == site_vertex_id)
-    {
-      return refs.front();
-    }
-    if (o1 >= 0 && static_cast<size_t>(o1) == site_vertex_id)
-    {
-      return refs.back();
+      if (directed[i].ref == ref
+        || (directed[i].ref->delaunay_edge_id == ref->delaunay_edge_id
+          && directed[i].ref->voronoi_edge_id == ref->voronoi_edge_id))
+      {
+        return i;
+      }
     }
     return std::nullopt;
   };
 
-  const auto c0 = site_side_crossing(s0);
-  const auto c1 = site_side_crossing(s1);
-  if (!c0.has_value() || !c1.has_value())
+  const std::optional<size_t> crossing_ord = crossing_ordinal(crossing);
+  for (const MeshingData& strip : strips)
   {
-    return;
+    if (strip.mesh_start_vertex_id < 0 || strip.mesh_end_vertex_id < 0
+      || strip.mesh_start_vertex_id == strip.mesh_end_vertex_id)
+    {
+      continue;
+    }
+    if (same_crossing(strip.start_crossing, crossing) || same_crossing(strip.end_crossing, crossing))
+    {
+      continue;
+    }
+    bool contains = true;
+    if (crossing_ord.has_value())
+    {
+      const size_t idx = crossing_ord.value();
+      if (strip.start_half_edge_id < 0 && strip.end_half_edge_id < 0)
+      {
+        contains = true;
+      }
+      else if (strip.start_half_edge_id < 0)
+      {
+        const std::optional<size_t> end_ord
+          = strip.end_crossing.has_value() ? crossing_ordinal(strip.end_crossing.value()) : std::nullopt;
+        contains = !end_ord.has_value() || idx < end_ord.value();
+      }
+      else if (strip.end_half_edge_id < 0)
+      {
+        const std::optional<size_t> start_ord
+          = strip.start_crossing.has_value() ? crossing_ordinal(strip.start_crossing.value()) : std::nullopt;
+        contains = !start_ord.has_value() || idx > start_ord.value();
+      }
+      else
+      {
+        const std::optional<size_t> start_ord
+          = strip.start_crossing.has_value() ? crossing_ordinal(strip.start_crossing.value()) : std::nullopt;
+        const std::optional<size_t> end_ord
+          = strip.end_crossing.has_value() ? crossing_ordinal(strip.end_crossing.value()) : std::nullopt;
+        contains = start_ord.has_value() && end_ord.has_value() && idx > start_ord.value() && idx < end_ord.value();
+      }
+    }
+    if (!contains)
+    {
+      continue;
+    }
+    return InteriorStripSplitTarget { pair_index, static_cast<size_t>(strip.mesh_start_vertex_id),
+      static_cast<size_t>(strip.mesh_end_vertex_id) };
   }
-  const auto n0 = neighborIntersectionOnTargetAlongVoronoiEdge(c0.value(), target_d);
-  const auto n1 = neighborIntersectionOnTargetAlongVoronoiEdge(c1.value(), target_d);
-  if (!n0.has_value() || !n1.has_value())
-  {
-    return;
-  }
+  return std::nullopt;
+}
 
-  size_t pair_idx = static_cast<size_t>(-1);
-  if (n0.value()->next_segment_mesh_pair_index != static_cast<size_t>(-1)
-    && n0.value()->next_segment_mesh_pair_index == n1.value()->prev_segment_mesh_pair_index)
+namespace
+{
+double radiusStripEdgeParam(const glm::dvec3& p, const glm::dvec3& a, const glm::dvec3& b)
+{
+  const glm::dvec3 ab = b - a;
+  const double len2 = glm::dot(ab, ab);
+  if (len2 <= 1e-24)
   {
-    pair_idx = n0.value()->next_segment_mesh_pair_index;
+    return 0.5;
   }
-  else if (n1.value()->next_segment_mesh_pair_index != static_cast<size_t>(-1)
-    && n1.value()->next_segment_mesh_pair_index == n0.value()->prev_segment_mesh_pair_index)
+  return glm::dot(p - a, ab) / len2;
+}
+
+bool radiusVertexOnStripEdge(const glm::dvec3& p, const glm::dvec3& a, const glm::dvec3& b, double& s_out)
+{
+  const glm::dvec3 ab = b - a;
+  const double len2 = glm::dot(ab, ab);
+  s_out = radiusStripEdgeParam(p, a, b);
+  const double s_clamped = std::clamp(s_out, 0.0, 1.0);
+  const glm::dvec3 proj = a + s_clamped * ab;
+  const glm::dvec3 d = p - proj;
+  const double dist2 = glm::dot(d, d);
+  const double tol2 = std::max(1e-16, 1e-12 * std::max(len2, 1e-24));
+  return dist2 <= tol2 && s_out >= -1e-6 && s_out <= 1.0 + 1e-6;
+}
+
+/// After a prior insert on (@p v0,@p v1), that edge is gone. Pick the current colinear sub-edge that contains @p insert.
+std::optional<std::pair<size_t, size_t>> currentStripSubEdgeForInsert(
+  const VoronoiMesh& mesh, size_t v0, size_t v1, const glm::dvec3& insert)
+{
+  const auto& verts = mesh.getVertices();
+  if (v0 >= verts.size() || v1 >= verts.size() || v0 == v1)
   {
-    pair_idx = n1.value()->next_segment_mesh_pair_index;
+    return std::nullopt;
   }
-  if (pair_idx != static_cast<size_t>(-1))
+  const glm::dvec3 p0 = verts[v0];
+  const glm::dvec3 p1 = verts[v1];
+  std::vector<std::pair<double, size_t>> on_edge;
+  on_edge.emplace_back(0.0, v0);
+  on_edge.emplace_back(1.0, v1);
+  for (size_t i = 0; i < verts.size(); ++i)
   {
-    pair_idx = preferLiveBoundaryMeshPair(pair_idx);
+    if (i == v0 || i == v1)
+    {
+      continue;
+    }
+    double s = 0.0;
+    if (!radiusVertexOnStripEdge(verts[i], p0, p1, s))
+    {
+      continue;
+    }
+    if (s <= 1e-9 || s >= 1.0 - 1e-9)
+    {
+      continue;
+    }
+    on_edge.emplace_back(s, i);
   }
-  if (pair_idx == static_cast<size_t>(-1) || pair_idx >= intersection_mesh_pair_last_left_and_right_vertex.size()
-    || intersection_mesh_pair_last_left_and_right_vertex[pair_idx].empty())
+  std::sort(on_edge.begin(), on_edge.end(),
+    [](const std::pair<double, size_t>& a, const std::pair<double, size_t>& b) { return a.first < b.first; });
+  const double s_ins = std::clamp(radiusStripEdgeParam(insert, p0, p1), 0.0, 1.0);
+  for (size_t i = 0; i + 1 < on_edge.size(); ++i)
   {
+    if (s_ins + 1e-12 < on_edge[i].first)
+    {
+      break;
+    }
+    if (s_ins <= on_edge[i + 1].first + 1e-12)
+    {
+      const size_t a = on_edge[i].second;
+      const size_t b = on_edge[i + 1].second;
+      if (a != b)
+      {
+        return std::make_pair(a, b);
+      }
+    }
+  }
+  return std::nullopt;
+}
+} // namespace
+
+void SegmentBuilder::maybeQueueOrApplyRadiusNonShiftInteriorCrossingSplit(
+  KineticDelaunay::CrossingData::EdgeIntersectionRef crossing, double t, bool apply_immediately)
+{
+  const size_t voronoi_edge_id = crossing->voronoi_edge_id;
+  const std::optional<InteriorStripSplitTarget> target = findInteriorStripSplitTarget(voronoi_edge_id, crossing);
+  if (!target.has_value())
+  {
+    KINDS_DEBUG("Radius non-shift interior split: no strip on ve=" << voronoi_edge_id << " de="
+                                                                   << crossing->delaunay_edge_id << " t=" << t
+                                                                   << " immediate=" << (apply_immediately ? "true" : "false"));
     return;
   }
-  const MeshingData& seg = intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front();
-  if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0)
+  const glm::dvec3 insert_pos = getCrossingCoordsInMeshSpace(crossing, t);
+  if (!vertexPositionFinite(insert_pos))
   {
+    KINDS_WARNING("Radius non-shift interior split: non-finite insert on ve="
+      << voronoi_edge_id << " de=" << crossing->delaunay_edge_id << " t=" << t);
     return;
   }
-  const size_t v0 = static_cast<size_t>(seg.mesh_start_vertex_id);
-  const size_t v1 = static_cast<size_t>(seg.mesh_end_vertex_id);
-  if (v0 == v1)
+  KINDS_DEBUG("Radius non-shift interior split: ve=" << voronoi_edge_id << " de=" << crossing->delaunay_edge_id
+                                                     << " pair=" << target->segment_mesh_pair_index << " edge=("
+                                                     << target->edge_vertex_a << "," << target->edge_vertex_b
+                                                     << ") immediate=" << (apply_immediately ? "true" : "false")
+                                                     << " t=" << t);
+  if (apply_immediately)
   {
+    PendingRadiusComplementarySplit pending;
+    pending.intersection_pair_index = target->segment_mesh_pair_index;
+    pending.edge_vertex_a = target->edge_vertex_a;
+    pending.edge_vertex_b = target->edge_vertex_b;
+    pending.mesh_position = insert_pos;
+    pending.t = t;
+    pending.target_delaunay_edge = crossing->delaunay_edge_id;
+    pending.from_shift = false;
+    pending.split_last_triangle = true;
+    pending.interior_strip = true;
+    pending.insert_voronoi_edge_id = voronoi_edge_id;
+    applyPendingRadiusComplementarySplit(pending, true);
     return;
   }
-  const auto insert_pos = resolveRadiusNonShiftComplementaryInsertPosition(t, site_vertex_id, roles_ctx);
-  if (!insert_pos.has_value())
+  queuePendingRadiusComplementarySplit(target->segment_mesh_pair_index, target->edge_vertex_a, target->edge_vertex_b,
+    insert_pos, t, 0, crossing->delaunay_edge_id, false, std::nullopt, false, true, voronoi_edge_id);
+}
+
+void SegmentBuilder::applyOrQueueRadiusNonShiftInteriorCrossingSplits(
+  const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossings, double t, bool apply_immediately)
+{
+  struct Item
   {
-    return;
+    KineticDelaunay::CrossingData::EdgeIntersectionRef ref {};
+    InteriorStripSplitTarget target {};
+    glm::dvec3 pos {};
+    double s = 0.0;
+  };
+  std::vector<Item> items;
+  items.reserve(crossings.size());
+  for (KineticDelaunay::CrossingData::EdgeIntersectionRef crossing : crossings)
+  {
+    const std::optional<InteriorStripSplitTarget> target
+      = findInteriorStripSplitTarget(crossing->voronoi_edge_id, crossing);
+    if (!target.has_value())
+    {
+      KINDS_DEBUG("Radius non-shift interior split: no strip on ve=" << crossing->voronoi_edge_id << " de="
+                                                                     << crossing->delaunay_edge_id << " t=" << t
+                                                                     << " immediate=" << (apply_immediately ? "true" : "false"));
+      continue;
+    }
+    const glm::dvec3 insert_pos = getCrossingCoordsInMeshSpace(crossing, t);
+    if (!vertexPositionFinite(insert_pos))
+    {
+      KINDS_WARNING("Radius non-shift interior split: non-finite insert on ve="
+        << crossing->voronoi_edge_id << " de=" << crossing->delaunay_edge_id << " t=" << t);
+      continue;
+    }
+    Item item;
+    item.ref = crossing;
+    item.target = target.value();
+    item.pos = insert_pos;
+    if (item.target.segment_mesh_pair_index < meshes.size())
+    {
+      const auto& verts = meshes[item.target.segment_mesh_pair_index].getVertices();
+      if (item.target.edge_vertex_a < verts.size() && item.target.edge_vertex_b < verts.size())
+      {
+        item.s = radiusStripEdgeParam(
+          insert_pos, verts[item.target.edge_vertex_a], verts[item.target.edge_vertex_b]);
+      }
+    }
+    items.push_back(item);
   }
-  KINDS_DEBUG("Radius non-shift existing mid queue: pair=" << pair_idx << " site=" << site_vertex_id << " target_d="
-                                                             << target_d << " t=" << t);
-  queuePendingRadiusComplementarySplit(pair_idx, v0, v1, insert_pos.value(), t, site_vertex_id, target_d, false,
-    roles_ctx->interior_voronoi_vertex_id, true);
+  std::sort(items.begin(), items.end(), [](const Item& a, const Item& b)
+  {
+    if (a.target.segment_mesh_pair_index != b.target.segment_mesh_pair_index)
+    {
+      return a.target.segment_mesh_pair_index < b.target.segment_mesh_pair_index;
+    }
+    const auto a_edge = std::minmax(a.target.edge_vertex_a, a.target.edge_vertex_b);
+    const auto b_edge = std::minmax(b.target.edge_vertex_a, b.target.edge_vertex_b);
+    if (a_edge != b_edge)
+    {
+      return a_edge < b_edge;
+    }
+    if (a.s != b.s)
+    {
+      return a.s < b.s;
+    }
+    return a.ref->delaunay_edge_id < b.ref->delaunay_edge_id;
+  });
+  for (size_t i = 0; i < items.size(); ++i)
+  {
+    const Item& item = items[i];
+    const bool chained = i > 0 && items[i - 1].target.segment_mesh_pair_index == item.target.segment_mesh_pair_index
+      && std::minmax(items[i - 1].target.edge_vertex_a, items[i - 1].target.edge_vertex_b)
+        == std::minmax(item.target.edge_vertex_a, item.target.edge_vertex_b);
+    KINDS_DEBUG("Radius non-shift interior split: ve=" << item.ref->voronoi_edge_id << " de="
+                                                       << item.ref->delaunay_edge_id << " pair="
+                                                       << item.target.segment_mesh_pair_index << " edge=("
+                                                       << item.target.edge_vertex_a << "," << item.target.edge_vertex_b
+                                                       << ") s=" << item.s << " chained=" << (chained ? "true" : "false")
+                                                       << " immediate=" << (apply_immediately ? "true" : "false")
+                                                       << " t=" << t);
+    if (apply_immediately)
+    {
+      PendingRadiusComplementarySplit pending;
+      pending.intersection_pair_index = item.target.segment_mesh_pair_index;
+      pending.edge_vertex_a = item.target.edge_vertex_a;
+      pending.edge_vertex_b = item.target.edge_vertex_b;
+      pending.mesh_position = item.pos;
+      pending.t = t;
+      pending.target_delaunay_edge = item.ref->delaunay_edge_id;
+      pending.from_shift = false;
+      pending.split_last_triangle = true;
+      pending.interior_strip = true;
+      pending.insert_voronoi_edge_id = item.ref->voronoi_edge_id;
+      applyPendingRadiusComplementarySplit(pending, true);
+    }
+    else
+    {
+      queuePendingRadiusComplementarySplit(item.target.segment_mesh_pair_index, item.target.edge_vertex_a,
+        item.target.edge_vertex_b, item.pos, t, 0, item.ref->delaunay_edge_id, false, std::nullopt, false, true,
+        item.ref->voronoi_edge_id);
+    }
+  }
 }
 
 bool SegmentBuilder::applyPendingRadiusComplementarySplit(
   const PendingRadiusComplementarySplit& pending, bool allow_completed)
 {
-  if (pending.intersection_pair_index >= intersection_meshes.size())
+  const bool interior_strip = pending.interior_strip;
+  if (interior_strip)
+  {
+    if (pending.intersection_pair_index >= meshes.size())
+    {
+      KINDS_WARNING("flushPendingRadiusComplementarySplits: invalid interior pair=" << pending.intersection_pair_index);
+      return false;
+    }
+  }
+  else if (pending.intersection_pair_index >= intersection_meshes.size())
   {
     KINDS_WARNING("flushPendingRadiusComplementarySplits: invalid pair=" << pending.intersection_pair_index);
     return false;
   }
-  VoronoiMesh& mesh = intersection_meshes[pending.intersection_pair_index];
+  VoronoiMesh& mesh
+    = interior_strip ? meshes[pending.intersection_pair_index] : intersection_meshes[pending.intersection_pair_index];
   if (!allow_completed
     && warnAndSkipIfMeshletCompleted(mesh, "flushPendingRadiusComplementarySplits/splitTriangle", pending.t))
   {
@@ -4236,7 +4368,30 @@ bool SegmentBuilder::applyPendingRadiusComplementarySplit(
   size_t v0 = pending.edge_vertex_a;
   size_t v1 = pending.edge_vertex_b;
   bool prefer_last_triangle = pending.split_last_triangle;
-  if (prefer_last_triangle && pending.intersection_pair_index < intersection_mesh_pair_last_left_and_right_vertex.size()
+  if (prefer_last_triangle && interior_strip
+    && pending.intersection_pair_index < segment_mesh_pair_last_left_and_right_vertex.size()
+    && !segment_mesh_pair_last_left_and_right_vertex[pending.intersection_pair_index].empty())
+  {
+    for (const MeshingData& seg : segment_mesh_pair_last_left_and_right_vertex[pending.intersection_pair_index])
+    {
+      if (seg.mesh_start_vertex_id < 0 || seg.mesh_end_vertex_id < 0
+        || seg.mesh_start_vertex_id == seg.mesh_end_vertex_id)
+      {
+        continue;
+      }
+      const size_t s = static_cast<size_t>(seg.mesh_start_vertex_id);
+      const size_t e = static_cast<size_t>(seg.mesh_end_vertex_id);
+      if ((s == pending.edge_vertex_a && e == pending.edge_vertex_b)
+        || (s == pending.edge_vertex_b && e == pending.edge_vertex_a))
+      {
+        v0 = s;
+        v1 = e;
+        break;
+      }
+    }
+  }
+  else if (prefer_last_triangle && !interior_strip
+    && pending.intersection_pair_index < intersection_mesh_pair_last_left_and_right_vertex.size()
     && !intersection_mesh_pair_last_left_and_right_vertex[pending.intersection_pair_index].empty())
   {
     const MeshingData& seg
@@ -4265,11 +4420,14 @@ bool SegmentBuilder::applyPendingRadiusComplementarySplit(
     MetadataBuilder builder;
     builder.addString("event_type", boundaryEventTypeToString(BoundaryEventType::Radius))
       .addString("segment_action", boundarySegmentActionToString(BoundarySegmentAction::SegmentRemapped))
-      .addString("source", pending.snap_voronoi_vertex_id.has_value() ? "Voronoi vertex" : "site")
-      .addString("pos", pending.from_shift ? "complementary_shift" : "complementary_noshift")
+      .addString("source", pending.interior_strip ? "intersection"
+                                                 : (pending.snap_voronoi_vertex_id.has_value() ? "Voronoi vertex" : "site"))
+      .addString("pos", pending.from_shift ? "complementary_shift"
+                                          : (pending.interior_strip ? "interior_boundary_transition" : "complementary_noshift"))
       .addBool("split_triangle", true)
       .addBool("radius_shifted_corner", pending.from_shift)
       .addBool("radius_noshift_corner", !pending.from_shift)
+      .addBool("interior_strip", pending.interior_strip)
       .addSize("strand_id", pending.site_vertex_id)
       .addSize("target_delaunay_edge", pending.target_delaunay_edge)
       .addSize("intersection_pair_index", pending.intersection_pair_index)
@@ -4278,6 +4436,10 @@ bool SegmentBuilder::applyPendingRadiusComplementarySplit(
     if (pending.snap_voronoi_vertex_id.has_value())
     {
       builder.addSize("voronoi_vertex_id", pending.snap_voronoi_vertex_id.value());
+    }
+    if (pending.insert_voronoi_edge_id.has_value())
+    {
+      builder.addSize("voronoi_edge_id", pending.insert_voronoi_edge_id.value());
     }
     return builder.build();
   }();
@@ -4339,6 +4501,19 @@ bool SegmentBuilder::applyPendingRadiusComplementarySplit(
   };
 
   std::optional<std::pair<size_t, size_t>> edge = try_edge(v0, v1);
+  if (!edge.has_value())
+  {
+    const std::optional<std::pair<size_t, size_t>> sub
+      = currentStripSubEdgeForInsert(mesh, v0, v1, pending.mesh_position);
+    if (sub.has_value())
+    {
+      KINDS_DEBUG("flushPendingRadiusComplementarySplits: using sub-edge (" << sub->first << "," << sub->second
+                                                                            << ") of (" << v0 << "," << v1 << ") pair="
+                                                                            << pending.intersection_pair_index
+                                                                            << " t=" << pending.t);
+      edge = try_edge(sub->first, sub->second);
+    }
+  }
   if (!edge.has_value() && prefer_last_triangle)
   {
     prefer_last_triangle = false;
@@ -4347,6 +4522,15 @@ bool SegmentBuilder::applyPendingRadiusComplementarySplit(
     if (v0 < mesh.getVertices().size() && v1 < mesh.getVertices().size() && v0 != v1)
     {
       edge = try_edge(v0, v1);
+      if (!edge.has_value())
+      {
+        const std::optional<std::pair<size_t, size_t>> sub
+          = currentStripSubEdgeForInsert(mesh, v0, v1, pending.mesh_position);
+        if (sub.has_value())
+        {
+          edge = try_edge(sub->first, sub->second);
+        }
+      }
     }
   }
   if (!edge.has_value())
@@ -4391,18 +4575,27 @@ void SegmentBuilder::flushPendingRadiusComplementarySplitsForPair(size_t interse
   {
     return;
   }
-  std::vector<PendingRadiusComplementarySplit> remaining;
-  remaining.reserve(pending_radius_complementary_splits_.size());
-  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+  std::vector<PendingRadiusComplementarySplit> snapshot;
+  snapshot.swap(pending_radius_complementary_splits_);
+
+  std::vector<PendingRadiusComplementarySplit> kept;
+  kept.reserve(snapshot.size());
+  for (const PendingRadiusComplementarySplit& pending : snapshot)
   {
-    if (pending.intersection_pair_index != intersection_pair_index)
+    if (pending.interior_strip || pending.intersection_pair_index != intersection_pair_index)
     {
-      remaining.push_back(pending);
+      kept.push_back(pending);
       continue;
     }
     applyPendingRadiusComplementarySplit(pending, true);
   }
-  pending_radius_complementary_splits_.swap(remaining);
+  if (!pending_radius_complementary_splits_.empty())
+  {
+    kept.insert(kept.end(), std::make_move_iterator(pending_radius_complementary_splits_.begin()),
+      std::make_move_iterator(pending_radius_complementary_splits_.end()));
+    pending_radius_complementary_splits_.clear();
+  }
+  pending_radius_complementary_splits_ = std::move(kept);
 }
 
 void SegmentBuilder::flushPendingRadiusComplementarySplits()
@@ -4411,15 +4604,113 @@ void SegmentBuilder::flushPendingRadiusComplementarySplits()
   {
     return;
   }
-  KINDS_INFO("flushPendingRadiusComplementarySplits: applying " << pending_radius_complementary_splits_.size()
+  std::vector<PendingRadiusComplementarySplit> snapshot;
+  snapshot.swap(pending_radius_complementary_splits_);
+  KINDS_INFO("flushPendingRadiusComplementarySplits: applying " << snapshot.size()
                                                                 << " deferred complementary split(s)");
 
-  for (const PendingRadiusComplementarySplit& pending : pending_radius_complementary_splits_)
+  struct PendingSplitGroup
   {
-    applyPendingRadiusComplementarySplit(pending, true);
+    bool interior_strip = false;
+    size_t pair_index = 0;
+    std::vector<PendingRadiusComplementarySplit> items;
+  };
+  std::vector<PendingSplitGroup> groups;
+  groups.reserve(snapshot.size());
+  std::unordered_map<uint64_t, size_t> group_index;
+  group_index.reserve(snapshot.size());
+  auto group_key = [](bool interior_strip, size_t pair_index) -> uint64_t
+  {
+    return (static_cast<uint64_t>(interior_strip ? 1 : 0) << 63) | static_cast<uint64_t>(pair_index);
+  };
+  for (PendingRadiusComplementarySplit& pending : snapshot)
+  {
+    const uint64_t key = group_key(pending.interior_strip, pending.intersection_pair_index);
+    const auto found = group_index.find(key);
+    if (found == group_index.end())
+    {
+      group_index.emplace(key, groups.size());
+      PendingSplitGroup group;
+      group.interior_strip = pending.interior_strip;
+      group.pair_index = pending.intersection_pair_index;
+      group.items.push_back(std::move(pending));
+      groups.push_back(std::move(group));
+    }
+    else
+    {
+      groups[found->second].items.push_back(std::move(pending));
+    }
   }
 
-  pending_radius_complementary_splits_.clear();
+  auto sort_group_along_strip = [](std::vector<PendingRadiusComplementarySplit>& items, const VoronoiMesh& mesh)
+  {
+    if (items.size() < 2)
+    {
+      return;
+    }
+    std::sort(items.begin(), items.end(),
+      [&mesh](const PendingRadiusComplementarySplit& a, const PendingRadiusComplementarySplit& b)
+      {
+        const auto a_edge = std::minmax(a.edge_vertex_a, a.edge_vertex_b);
+        const auto b_edge = std::minmax(b.edge_vertex_a, b.edge_vertex_b);
+        if (a_edge != b_edge)
+        {
+          return a_edge < b_edge;
+        }
+        const auto& verts = mesh.getVertices();
+        const bool a_valid = a.edge_vertex_a < verts.size() && a.edge_vertex_b < verts.size();
+        const bool b_valid = b.edge_vertex_a < verts.size() && b.edge_vertex_b < verts.size();
+        if (a_valid != b_valid)
+        {
+          return a_valid > b_valid;
+        }
+        if (a_valid)
+        {
+          const glm::dvec3 p0 = verts[a.edge_vertex_a];
+          const glm::dvec3 p1 = verts[a.edge_vertex_b];
+          const double a_s = radiusStripEdgeParam(a.mesh_position, p0, p1);
+          const double b_s = radiusStripEdgeParam(b.mesh_position, p0, p1);
+          if (a_s != b_s)
+          {
+            return a_s < b_s;
+          }
+        }
+        if (a.target_delaunay_edge != b.target_delaunay_edge)
+        {
+          return a.target_delaunay_edge < b.target_delaunay_edge;
+        }
+        if (a.insert_voronoi_edge_id != b.insert_voronoi_edge_id)
+        {
+          return a.insert_voronoi_edge_id < b.insert_voronoi_edge_id;
+        }
+        return a.t < b.t;
+      });
+  };
+
+  for (PendingSplitGroup& group : groups)
+  {
+    if (group.interior_strip)
+    {
+      if (group.pair_index < meshes.size())
+      {
+        sort_group_along_strip(group.items, meshes[group.pair_index]);
+      }
+    }
+    else if (group.pair_index < intersection_meshes.size())
+    {
+      sort_group_along_strip(group.items, intersection_meshes[group.pair_index]);
+    }
+  }
+
+  // Independent meshlets can split in parallel; chained inserts on one strip stay sequential inside a group.
+  parallel_for(groups.size(),
+    [&](size_t group_i)
+    {
+      for (const PendingRadiusComplementarySplit& pending : groups[group_i].items)
+      {
+        applyPendingRadiusComplementarySplit(pending, true);
+      }
+    });
 }
 
 size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,

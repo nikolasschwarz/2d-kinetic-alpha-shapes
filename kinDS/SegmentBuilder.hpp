@@ -625,7 +625,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<glm::dvec3> explicit_mesh_position {};
   };
 
-  /// Deferred complementary-strip insert: recorded when the target mid-interval meshlet is known
+  /// Deferred complementary-strip insert: recorded when the target meshlet/strip is known
   /// (often freshly started with verts 0/1 and no triangles yet), applied in @ref finalize.
   struct PendingRadiusComplementarySplit
   {
@@ -641,14 +641,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// True: split the closing edge of a just-finished strip (last triangle).
     /// False: split the seed edge of a newly started strip (first triangle, verts 0/1).
     bool split_last_triangle = false;
+    /// True: @c intersection_pair_index refers to @c meshes / interior Voronoi-edge strip.
+    /// False: boundary-interval meshlet in @c intersection_meshes.
+    bool interior_strip = false;
     std::optional<size_t> snap_voronoi_vertex_id {};
-  };
-
-  enum class RadiusEdgeInsideTransition
-  {
-    None,
-    IoToIi, // inside/outside → inside/inside (edge leaves alpha boundary)
-    IiToIo // inside/inside → inside/outside (edge joins alpha boundary)
+    std::optional<size_t> insert_voronoi_edge_id {};
   };
 
   void clearRadiusShiftedSiteCache();
@@ -660,17 +657,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void noteRadiusShiftedSiteMeshPosition(
     RadiusShiftedSiteCacheEntry& entry, const glm::dvec3& mesh_position, const char* consumer_context);
 
-  /// Inside flags of the two Delaunay faces adjacent to undirected edge @p delaunay_edge_id.
-  /// When @p override_face_id is set, that face uses @p override_inside instead of the live flag.
-  std::pair<bool, bool> delaunayEdgeAdjacentInsideFlags(size_t delaunay_edge_id,
-    std::optional<size_t> override_face_id = std::nullopt, bool override_inside = false) const;
-  static RadiusEdgeInsideTransition classifyRadiusEdgeInsideTransition(
-    std::pair<bool, bool> pre_inside, std::pair<bool, bool> post_inside);
-
-  /// Mesh-space insert for non-shift complementary / IO↔II splits: interior VV if set, else site corner.
-  std::optional<glm::dvec3> resolveRadiusNonShiftComplementaryInsertPosition(double t, size_t site_vertex_id,
-    const RadiusBoundaryTransitionShiftContext* ctx) const;
-
   /// True when @p start/@p end are the two remapped shift-anchor crossings on @p ctx.target_delaunay_edge.
   bool midIntervalMatchesRadiusShiftAnchors(KineticDelaunay::CrossingData::EdgeIntersectionRef start,
     KineticDelaunay::CrossingData::EdgeIntersectionRef end, size_t site_vertex_id,
@@ -678,10 +664,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /// Queue a deferred split of edge (@p edge_a,@p edge_b) on @p intersection_pair_index (typically 0,1).
   /// @p split_last_triangle: finished/closing strip (last face) vs newly started strip (first face).
+  /// @p interior_strip: target @c meshes (Voronoi-edge strip) instead of @c intersection_meshes.
   void queuePendingRadiusComplementarySplit(size_t intersection_pair_index, size_t edge_a, size_t edge_b,
     const glm::dvec3& mesh_position, double t, size_t site_vertex_id, size_t target_delaunay_edge,
     bool from_shift = true, std::optional<size_t> snap_voronoi_vertex_id = std::nullopt,
-    bool split_last_triangle = false);
+    bool split_last_triangle = false, bool interior_strip = false,
+    std::optional<size_t> insert_voronoi_edge_id = std::nullopt);
 
   /// After @c startNewMeshFromIntersections of a target mid-interval: queue if it matches remapped anchors.
   void maybeQueueRadiusComplementarySplitForStartedMid(size_t intersection_pair_index,
@@ -692,19 +680,26 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void maybeQueueRadiusComplementarySplitForExistingMid(
     double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
 
-  /// Non-shift: after starting a mid-interval on edge @p delaunay_edge_id whose adjacent faces went IO→II.
-  void maybeQueueRadiusNonShiftSplitForStartedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
-    size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
-    const RadiusBoundaryTransitionShiftContext* roles_ctx);
-
-  /// Non-shift: after finishing a mid-interval on edge @p delaunay_edge_id whose adjacent faces went II→IO.
-  void maybeQueueRadiusNonShiftSplitForFinishedMid(size_t intersection_pair_index, size_t delaunay_edge_id,
-    size_t mid_cell, double t, size_t affected_face_id, bool pre_affected_inside, bool post_affected_inside,
-    const RadiusBoundaryTransitionShiftContext* roles_ctx);
-
-  /// Non-shift 1→2: complementary mid finished earlier on target; queue VV/site split once roles are known.
-  void maybeQueueRadiusNonShiftSplitForExistingMid(
-    double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* roles_ctx);
+  /// Interior Voronoi-edge strip whose current seed/top edge contains @p crossing as an interior point.
+  struct InteriorStripSplitTarget
+  {
+    size_t segment_mesh_pair_index = static_cast<size_t>(-1);
+    size_t edge_vertex_a = 0;
+    size_t edge_vertex_b = 1;
+  };
+  std::optional<InteriorStripSplitTarget> findInteriorStripSplitTarget(size_t voronoi_edge_id,
+    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing) const;
+  /// Non-shift: insert a crossing that left or joined the alpha boundary onto the interior strip of its Voronoi edge.
+  /// @p apply_immediately: II→IO after @c finishMesh (top triangle exists). Otherwise queue until @ref finalize
+  /// (IO→II seed edge; the first triangle exists only after later events).
+  void maybeQueueOrApplyRadiusNonShiftInteriorCrossingSplit(
+    KineticDelaunay::CrossingData::EdgeIntersectionRef crossing, double t, bool apply_immediately);
+  /// Non-shift IO↔II inserts, grouped by Voronoi-edge strip. Neighboring crossings that share one strip edge
+  /// (triangle between them flipped) are applied in order along that edge so the second split hits the correct
+  /// remaining sub-triangle. @p apply_immediately: II→IO after @c finishMesh; otherwise queue the seed-edge case
+  /// until @ref finalize.
+  void applyOrQueueRadiusNonShiftInteriorCrossingSplits(
+    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossings, double t, bool apply_immediately);
 
   /// Apply buffered complementary splits (before other intersection-mesh postprocess in @ref finalize).
   void flushPendingRadiusComplementarySplits();
