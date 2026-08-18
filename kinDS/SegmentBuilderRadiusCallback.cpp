@@ -2458,6 +2458,18 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     }
   }
 
+  const bool radius_shift_two_to_one
+    = radius_pre_boundary_edge_count_ == 2 && post_boundary_edge_count == 1;
+  const bool radius_shift_one_to_two
+    = radius_pre_boundary_edge_count_ == 1 && post_boundary_edge_count == 2;
+  if (radius_boundary_shift_arg != nullptr && radius_shift_shared_site.has_value() && radius_shift_one_to_two)
+  {
+    // 1->2: complementary mid was finished in beforeEvent on the old boundary (target_d). Split its top
+    // triangle now using the shifted corner site. 2->1 is buffered via started-mid after reseed.
+    segment_builder_.maybeQueueRadiusComplementarySplitForExistingMid(
+      t, radius_shift_shared_site.value(), radius_boundary_shift_arg);
+  }
+
   std::unordered_set<size_t> started_boundary_he_even;
   for (size_t he_id : affected_face_he)
   {
@@ -2514,7 +2526,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       const size_t mid_pair = segment_builder_.startNewMeshFromIntersections(
         mid_cell, t, refs[k], refs[k + 1], false, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
-      if (radius_boundary_shift_arg != nullptr && radius_shift_shared_site.has_value()
+      if (radius_boundary_shift_arg != nullptr && radius_shift_shared_site.has_value() && radius_shift_two_to_one
         && d_edge_id == radius_boundary_shift_arg->target_delaunay_edge)
       {
         segment_builder_.maybeQueueRadiusComplementarySplitForStartedMid(
@@ -2530,14 +2542,6 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         last_cell, t, refs.back(), std::nullopt, false, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
     }
-  }
-
-  if (radius_boundary_shift_arg != nullptr && radius_shift_shared_site.has_value())
-  {
-    // 1->2: complementary mid was finished earlier on the old boundary; queue it now that the
-    // shifted site exists. 2->1: no-op if already queued from the fresh target mid start above.
-    segment_builder_.maybeQueueRadiusComplementarySplitForExistingMid(
-      t, radius_shift_shared_site.value(), radius_boundary_shift_arg);
   }
 }
 } // namespace kinDS
