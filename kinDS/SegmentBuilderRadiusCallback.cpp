@@ -1262,7 +1262,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   const double t = radius->occurrence_time;
   const size_t runtime_branch_id = segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(radius->half_edge_id);
   const bool new_inside_state = segment_builder_.kin_del.getFaceInside(affected_face_id);
-  const bool orient_upwards = !new_inside_state; // inside -> outside transition should face +Z
+  const bool inside_to_outside = !new_inside_state; // post-flip outside <=> inside->outside transition
   const auto affected_face_he = graph.face(affected_face_id).half_edges;
 
   std::array<bool, 3> post_is_boundary_edge {};
@@ -2166,6 +2166,18 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         ids.push_back(segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid, vert.position, strand_for_vertex,
           t, false, vert.voronoi_vertex_id, radius_vertex_meta, std::nullopt, runtime_info));
       }
+      double signed_area2 = 0.0;
+      for (size_t i = 0; i < poly.size(); ++i)
+      {
+        const glm::dvec2 p0(poly[i].position.x, poly[i].position.y);
+        const glm::dvec2 p1(poly[(i + 1) % poly.size()].position.x, poly[(i + 1) % poly.size()].position.y);
+        signed_area2 += p0.x * p1.y - p1.x * p0.y;
+      }
+      constexpr double area_eps = 1e-12;
+      const bool polygon_ccw = signed_area2 > area_eps;
+      const bool orient_upwards = (std::abs(signed_area2) <= area_eps)
+        ? inside_to_outside
+        : (inside_to_outside ? polygon_ccw : !polygon_ccw);
       // Radius traced cell rings are convex — fan triangulation only (no ear-clip / plane geometry).
       segment_builder_.fanTriangulateConvexPolygon(mesh, ids, radius_triangulation_meta,
         SegmentBuilder::PendingSplitFallbackMeshletMaterialId, orient_upwards);
