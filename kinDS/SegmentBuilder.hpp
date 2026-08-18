@@ -646,6 +646,18 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     bool interior_strip = false;
     std::optional<size_t> snap_voronoi_vertex_id {};
     std::optional<size_t> insert_voronoi_edge_id {};
+
+    /// True only for a logic-error duplicate (same pair, time, site, insert, and related fields).
+    /// Delaunay-edge identity alone is not unique: many splits can share a target edge.
+    bool isExactDuplicateOf(const PendingRadiusComplementarySplit& other) const
+    {
+      return intersection_pair_index == other.intersection_pair_index && interior_strip == other.interior_strip
+        && t == other.t && site_vertex_id == other.site_vertex_id
+        && target_delaunay_edge == other.target_delaunay_edge && insert_voronoi_edge_id == other.insert_voronoi_edge_id
+        && split_last_triangle == other.split_last_triangle && from_shift == other.from_shift
+        && snap_voronoi_vertex_id == other.snap_voronoi_vertex_id && mesh_position.x == other.mesh_position.x
+        && mesh_position.y == other.mesh_position.y && mesh_position.z == other.mesh_position.z;
+    }
   };
 
   void clearRadiusShiftedSiteCache();
@@ -676,7 +688,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     KineticDelaunay::CrossingData::EdgeIntersectionRef start, KineticDelaunay::CrossingData::EdgeIntersectionRef end,
     double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
 
-  /// After one-null finish/start filled the cache: queue a finished complementary mid if it already exists.
+  /// After one-null finish/start filled the cache: split the finished complementary mid immediately when possible.
   void maybeQueueRadiusComplementarySplitForExistingMid(
     double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
 
