@@ -47,6 +47,10 @@ class TreeMesher
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
     /// When true, a failed meshlet intersection keeps the uncut meshlet; when false, replaces it with an empty mesh.
     bool keep_original_on_intersection_failure = true;
+    /// Seam vertices receive segment-meshlet UVs instead of clip-boundary UVs (editor intersection).
+    bool intersection_prefer_meshlet_uv_on_seam = false;
+    /// Clip-boundary-origin faces use interior (a,b,h) UVs; bark polar distance is treated as r=1.
+    bool intersection_boundary_faces_interior_uv = false;
     /// When false, skip JSON vertex/face metadata on meshlets (material_ids still stored for OBJ export).
     /// Default off; CLI @c --store-mesh-metadata / @c --no-store-mesh-metadata.
     /// @ref validate_mesh_vertex_sources implies metadata storage when enabled.
@@ -145,7 +149,8 @@ class TreeMesher
   void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
     std::optional<bool> transformed = std::nullopt, std::optional<size_t> max_exports = std::nullopt) const;
   bool meshletsTransformedAtConstruction() const { return settings.transform_mesh_at_construction; }
-  void truncateToBoundary(const VoronoiMesh& boundary_mesh);
+  /// Clip meshlets against @p boundary_mesh. Returns meshing-segment indices classified as OUTSIDE.
+  std::vector<size_t> truncateToBoundary(const VoronoiMesh& boundary_mesh);
   void fixFailedSegments(const MeshIntersection& boundary_intersector);
   std::pair<std::vector<float>, std::vector<float>> computeTopAndBottomBoundaryDistances(
     const std::vector<float>& boundary_distance_by_segment_id);

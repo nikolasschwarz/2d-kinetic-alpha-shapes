@@ -155,7 +155,7 @@ class VoronoiMesh
   // compute normals
   void computeNormals(NormalMode normal_mode = PerVertex);
 
-  std::array<double, 3> computeBarycentricCoordinates(size_t triangle_index, glm::dvec3& point) const;
+  std::array<double, 3> computeBarycentricCoordinates(size_t triangle_index, const glm::dvec3& point) const;
 
   // Methods to retrieve mesh data
   const std::vector<glm::dvec3>& getVertices() const;

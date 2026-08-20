@@ -1,6 +1,7 @@
 #include "MeshIntersection.hpp"
 
 #include "Logger.hpp"
+#include "glm/ext/scalar_constants.hpp"
 
 #include <array>
 #include <iostream>
@@ -476,6 +477,8 @@ void interpolateProperties(
     new_mesh.getUVIndices().resize(new_mesh.getTriangleCount() * 3, -1);
   }
 
+  const size_t triangle_corner_base = (new_mesh.getTriangleCount() - 1) * 3;
+
   // compute the barycentric coordinates of the new face with regard to the new one so we can interpolate properties
   for (size_t i = 0; i < 3; i++)
   {
@@ -495,13 +498,297 @@ void interpolateProperties(
         + barycentric_coords[2] * original_mesh.getUVs()[original_mesh.getUVIndices()[3 * original_face_id + 2]];
 
       size_t index = new_mesh.addUV(interpolated_uv);
-      new_mesh.getUVIndices()[new_mesh.getTriangleCount() * 3 - 3 + i] = index;
+      new_mesh.getUVIndices()[triangle_corner_base + i] = index;
     }
   }
 }
 
+#ifdef USE_CGAL
+class InputMeshSurfaceMatcher
+{
+ public:
+  explicit InputMeshSurfaceMatcher(const VoronoiMesh& mesh)
+  {
+    std::vector<int> neighbor_segments(mesh.getTriangleCount(), -1);
+    cgal_mesh_ = voronoiMeshToCgalMesh(mesh, neighbor_segments, 1);
+    tree_ = TreeCGAL(faces(cgal_mesh_.mesh).first, faces(cgal_mesh_.mesh).second, cgal_mesh_.mesh);
+    tree_.build();
+    tree_.accelerate_distance_queries();
+  }
+
+  MatchResult MatchPointOnSurface(const glm::dvec3& p, double epsilon) const
+  {
+    const CGAL::Surface_mesh<Point_CGAL>& mesh = cgal_mesh_.mesh;
+    Point_CGAL query(p[0], p[1], p[2]);
+
+    auto result = tree_.closest_point_and_primitive(query);
+    const Point_CGAL& closest = result.first;
+    CGAL::Surface_mesh<Point_CGAL>::Face_index f = result.second;
+    auto origin = cgal_mesh_.fidx[f];
+
+    double dist2 = CGAL::squared_distance(query, closest);
+    if (dist2 > epsilon * epsilon)
+    {
+      return {};
+    }
+
+    auto h = halfedge(f, mesh);
+    auto v0 = target(h, mesh);
+    h = next(h, mesh);
+    auto v1 = target(h, mesh);
+    h = next(h, mesh);
+    auto v2 = target(h, mesh);
+
+    const Point_CGAL& a = mesh.point(v0);
+    const Point_CGAL& b = mesh.point(v1);
+    const Point_CGAL& c = mesh.point(v2);
+
+    Kernel::Vector_3 v0v = b - a;
+    Kernel::Vector_3 v1v = c - a;
+    Kernel::Vector_3 v2v = query - a;
+
+    double d00 = v0v * v0v;
+    double d01 = v0v * v1v;
+    double d11 = v1v * v1v;
+    double d20 = v2v * v0v;
+    double d21 = v2v * v1v;
+
+    double denom = d00 * d11 - d01 * d01;
+    if (std::abs(denom) < 1e-14)
+    {
+      return {};
+    }
+
+    double v = (d11 * d20 - d01 * d21) / denom;
+    double w = (d00 * d21 - d01 * d20) / denom;
+    double u = 1.0 - v - w;
+
+    return { true, origin.face_id, u, v, w };
+  }
+
+ private:
+  MeshCGAL<Origin> cgal_mesh_;
+  TreeCGAL tree_;
+};
+
+glm::dvec2 computeProfileCentroid(const VoronoiMesh& mesh)
+{
+  const auto& vertices = mesh.getVertices();
+  if (vertices.empty())
+  {
+    return glm::dvec2(0.0);
+  }
+  glm::dvec2 sum(0.0);
+  for (const auto& vertex : vertices)
+  {
+    sum += glm::dvec2(vertex.x, vertex.y);
+  }
+  return sum / static_cast<double>(vertices.size());
+}
+
+std::optional<glm::dvec3> interpolateCornerUv(const VoronoiMesh& source_mesh, size_t source_face_id,
+  const std::array<double, 3>& barycentric_coords)
+{
+  if (!source_mesh.hasValidUVIndex(source_face_id * 3) || !source_mesh.hasValidUVIndex(source_face_id * 3 + 1)
+    || !source_mesh.hasValidUVIndex(source_face_id * 3 + 2))
+  {
+    return std::nullopt;
+  }
+
+  const auto& uvs = source_mesh.getUVs();
+  const auto& uv_indices = source_mesh.getUVIndices();
+  const size_t corner_base = source_face_id * 3;
+  glm::dvec3 interpolated_uv = barycentric_coords[0] * uvs[uv_indices[corner_base]]
+    + barycentric_coords[1] * uvs[uv_indices[corner_base + 1]]
+    + barycentric_coords[2] * uvs[uv_indices[corner_base + 2]];
+  return interpolated_uv;
+}
+
+glm::dvec3 barkAdjustedUvToInteriorAtUnitRadius(const glm::dvec3& bark_uv, const MeshIntersectionUvOptions& options)
+{
+  // Bark meshlets store circumferential coordinate in x (theta / 2pi, scaled by uv_circum_factor) and height in y.
+  // Interior meshlets use cartesian (a,b) at the profile plane plus height in z — see SegmentBuilder::interiorMeshUv.
+  const double angle = (bark_uv.x / options.uv_circum_factor) * (2.0 * glm::pi<double>());
+  const double radial_scale = options.texture_diameter * 0.5;
+  return glm::dvec3(0.5 + radial_scale * std::cos(angle), 0.5 + radial_scale * std::sin(angle), bark_uv.y);
+}
+
+std::optional<glm::dvec3> meshletUvAtPoint(const VoronoiMesh& meshlet_mesh, const InputMeshSurfaceMatcher& meshlet_matcher,
+  const glm::dvec3& position, double epsilon)
+{
+  const MatchResult match = meshlet_matcher.MatchPointOnSurface(position, epsilon);
+  if (!match.hit)
+  {
+    return std::nullopt;
+  }
+
+  const auto barycentric = std::array<double, 3> { match.u, match.v, match.w };
+  if (const std::optional<glm::dvec3> uv = interpolateCornerUv(meshlet_mesh, match.triangle_index, barycentric))
+  {
+    return uv;
+  }
+
+  const size_t face_base = match.triangle_index * 3;
+  const auto& triangles = meshlet_mesh.getTriangles();
+  if (face_base + 2 >= triangles.size())
+  {
+    return std::nullopt;
+  }
+
+  glm::dvec3 semantic_sum(0.0);
+  size_t valid_count = 0;
+  for (size_t corner = 0; corner < 3; ++corner)
+  {
+    const size_t vertex_index = triangles[face_base + corner];
+    if (const std::optional<glm::dvec3> semantic_uv = meshlet_mesh.vertexSemanticUv(vertex_index); semantic_uv.has_value())
+    {
+      semantic_sum += barycentric[corner] * semantic_uv.value();
+      ++valid_count;
+    }
+  }
+  if (valid_count == 0)
+  {
+    return std::nullopt;
+  }
+  return semantic_sum;
+}
+
+/// Bark UV of the nearest meshlet triangle corner on the surface (no barycentric blend — angle is not linear).
+std::optional<glm::dvec3> nearestBarkCornerUvAtPoint(const VoronoiMesh& meshlet_mesh,
+  const InputMeshSurfaceMatcher& meshlet_matcher, const std::vector<int>& neighbor_segments,
+  const glm::dvec3& position, double epsilon)
+{
+  const MatchResult match = meshlet_matcher.MatchPointOnSurface(position, epsilon);
+  if (!match.hit || match.triangle_index >= neighbor_segments.size() || neighbor_segments[match.triangle_index] != -2)
+  {
+    return std::nullopt;
+  }
+
+  const auto& triangles = meshlet_mesh.getTriangles();
+  const auto& vertices = meshlet_mesh.getVertices();
+  const size_t face_base = match.triangle_index * 3;
+  if (face_base + 2 >= triangles.size())
+  {
+    return std::nullopt;
+  }
+
+  size_t closest_corner = 0;
+  double closest_dist2 = std::numeric_limits<double>::infinity();
+  for (size_t corner = 0; corner < 3; ++corner)
+  {
+    const size_t vertex_index = triangles[face_base + corner];
+    if (vertex_index >= vertices.size())
+    {
+      continue;
+    }
+    const glm::dvec3 delta = vertices[vertex_index] - position;
+    const double dist2 = glm::dot(delta, delta);
+    if (dist2 < closest_dist2)
+    {
+      closest_dist2 = dist2;
+      closest_corner = corner;
+    }
+  }
+
+  const size_t corner_index = face_base + closest_corner;
+  if (meshlet_mesh.hasValidUVIndex(corner_index))
+  {
+    return meshlet_mesh.getUV(corner_index);
+  }
+  return meshlet_mesh.vertexSemanticUv(triangles[corner_index]);
+}
+
+glm::dvec3 interiorUvAtUnitRadiusFromPosition(const glm::dvec3& position, const glm::dvec2& profile_centroid,
+  const MeshIntersectionUvOptions& options)
+{
+  const glm::dvec2 delaunay_xy(position.x, position.y);
+  const double angle = std::atan2(profile_centroid.y - delaunay_xy.y, profile_centroid.x - delaunay_xy.x);
+  const double radial_scale = options.texture_diameter * 0.5;
+  const double t = position.z;
+  return glm::dvec3(0.5 + radial_scale * std::cos(angle), 0.5 + radial_scale * std::sin(angle),
+    t * options.uv_height_factor);
+}
+
+void interpolateBoundaryOriginProperties(const VoronoiMesh& boundary_mesh, const VoronoiMesh& meshlet_mesh,
+  VoronoiMesh& new_mesh, size_t boundary_face_id, std::array<size_t, 3> new_tri,
+  const InputMeshSurfaceMatcher& meshlet_matcher, const glm::dvec2& profile_centroid,
+  const MeshIntersectionUvOptions& uv_options, const std::vector<int>& meshlet_neighbor_segments)
+{
+  std::array<glm::dvec3, 3> old_normals;
+  bool boundary_has_uv = true;
+  for (size_t i = 0; i < 3; i++)
+  {
+    old_normals[i] = boundary_mesh.getNormal(boundary_face_id * 3 + i);
+    if (!boundary_mesh.hasValidUVIndex(boundary_face_id * 3 + i))
+    {
+      boundary_has_uv = false;
+    }
+  }
+
+  new_mesh.getUVIndices().resize(new_mesh.getTriangleCount() * 3, std::numeric_limits<size_t>::max());
+  const size_t triangle_corner_base = (new_mesh.getTriangleCount() - 1) * 3;
+
+  for (size_t i = 0; i < 3; i++)
+  {
+    const glm::dvec3& position = new_mesh.getVertices()[new_tri[i]];
+    const auto boundary_barycentric
+      = boundary_mesh.computeBarycentricCoordinates(boundary_face_id, position);
+
+    glm::dvec3 interpolated_normal = boundary_barycentric[0] * old_normals[0] + boundary_barycentric[1] * old_normals[1]
+      + boundary_barycentric[2] * old_normals[2];
+    new_mesh.addNormal(interpolated_normal);
+
+    std::optional<glm::dvec3> corner_uv;
+    if (uv_options.prefer_meshlet_uv_on_seam)
+    {
+      // Bark seam: take the bark corner UV and convert to interior (a,b,h) — no barycentric blend.
+      if (uv_options.boundary_faces_use_interior_uv)
+      {
+        if (const std::optional<glm::dvec3> bark_uv = nearestBarkCornerUvAtPoint(
+              meshlet_mesh, meshlet_matcher, meshlet_neighbor_segments, position, uv_options.seam_epsilon))
+        {
+          corner_uv = barkAdjustedUvToInteriorAtUnitRadius(bark_uv.value(), uv_options);
+        }
+      }
+      // Non-bark / general seam: barycentric UV from the matched segment-meshlet triangle.
+      if (!corner_uv.has_value())
+      {
+        corner_uv = meshletUvAtPoint(meshlet_mesh, meshlet_matcher, position, uv_options.seam_epsilon);
+      }
+    }
+
+    if (!corner_uv.has_value() && uv_options.boundary_faces_use_interior_uv)
+    {
+      if (boundary_has_uv)
+      {
+        if (const std::optional<glm::dvec3> bark_uv
+            = interpolateCornerUv(boundary_mesh, boundary_face_id, boundary_barycentric))
+        {
+          corner_uv = barkAdjustedUvToInteriorAtUnitRadius(bark_uv.value(), uv_options);
+        }
+      }
+      if (!corner_uv.has_value())
+      {
+        corner_uv = interiorUvAtUnitRadiusFromPosition(position, profile_centroid, uv_options);
+      }
+    }
+    else if (!corner_uv.has_value() && boundary_has_uv)
+    {
+      corner_uv = interpolateCornerUv(boundary_mesh, boundary_face_id, boundary_barycentric);
+    }
+
+    if (corner_uv.has_value())
+    {
+      const size_t index = new_mesh.addUV(corner_uv.value());
+      new_mesh.getUVIndices()[triangle_corner_base + i] = index;
+    }
+  }
+}
+#endif
+
 std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const VoronoiMesh& mesh,
-  const std::vector<int>& neighbor_segments, std::optional<size_t> meshlet_index, bool* failed)
+  const std::vector<int>& neighbor_segments, std::optional<size_t> meshlet_index, bool* failed,
+  const std::optional<MeshIntersectionUvOptions>& uv_options)
 {
   std::pair<VoronoiMesh, std::vector<int>> ret_val {
     VoronoiMesh(std::vector<std::string> {}, NormalMode::PerTriangleCorner), {}
@@ -537,6 +824,16 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const Voron
   }
 
 #ifdef USE_CGAL
+
+  const bool use_custom_uv = uv_options.has_value()
+    && (uv_options->prefer_meshlet_uv_on_seam || uv_options->boundary_faces_use_interior_uv);
+  std::optional<InputMeshSurfaceMatcher> meshlet_matcher;
+  std::optional<glm::dvec2> meshlet_profile_centroid;
+  if (use_custom_uv)
+  {
+    meshlet_matcher.emplace(mesh);
+    meshlet_profile_centroid = computeProfileCentroid(mesh);
+  }
 
   std::size_t add_face_failures = 0;
   MeshCGAL<Origin> input_mesh = voronoiMeshToCgalMesh(mesh, neighbor_segments, 1, &add_face_failures);
@@ -667,7 +964,15 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const Voron
     else if (origin.mesh_index == 0)
     {
       // Boundary/intersection faces: keep neighbor_segment = -1 (interior material).
-      interpolateProperties(boundary_mesh_voronoi, intersection_mesh, origin.face_id, tri);
+      if (use_custom_uv && meshlet_matcher.has_value() && meshlet_profile_centroid.has_value())
+      {
+        interpolateBoundaryOriginProperties(boundary_mesh_voronoi, mesh, intersection_mesh, origin.face_id, tri,
+          meshlet_matcher.value(), meshlet_profile_centroid.value(), uv_options.value(), neighbor_segments);
+      }
+      else
+      {
+        interpolateProperties(boundary_mesh_voronoi, intersection_mesh, origin.face_id, tri);
+      }
     }
     else if (origin.mesh_index < 0)
     {

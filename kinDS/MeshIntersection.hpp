@@ -125,6 +125,19 @@ struct MatchResult
   double u, v, w; // barycentric
 };
 
+/// Optional UV remapping applied after boolean intersection (e.g. editor clipping).
+struct MeshIntersectionUvOptions
+{
+  /// When true, output vertices lying on the original meshlet surface receive meshlet UVs (seam continuity).
+  bool prefer_meshlet_uv_on_seam = false;
+  /// When true, faces originating from the clip boundary use interior-style (a,b,h) UVs instead of bark (θ,h).
+  bool boundary_faces_use_interior_uv = false;
+  double texture_diameter = 0.9;
+  double uv_height_factor = 1.0;
+  double uv_circum_factor = 1.0;
+  double seam_epsilon = 1e-5;
+};
+
 class MeshIntersection
 {
  public:
@@ -137,10 +150,11 @@ class MeshIntersection
    * \param neighbor_segments Per-triangle neighbor segment indices for @p mesh.
    * \param meshlet_index Optional meshlet index included in failure log messages.
    * \param failed Optional out-flag set to true when intersection fails (non-manifold, self-intersecting, etc.).
+   * \param uv_options Optional UV remapping for seam / boundary-origin faces.
    */
   std::pair<VoronoiMesh, std::vector<int>> Intersect(const VoronoiMesh& mesh,
     const std::vector<int>& neighbor_segments = {}, std::optional<size_t> meshlet_index = std::nullopt,
-    bool* failed = nullptr);
+    bool* failed = nullptr, const std::optional<MeshIntersectionUvOptions>& uv_options = std::nullopt);
 
   MatchResult MatchPointOnSurface(const glm::dvec3& p, double epsilon = 1e-6) const;
 
