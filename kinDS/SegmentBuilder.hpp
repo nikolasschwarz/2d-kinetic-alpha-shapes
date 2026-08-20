@@ -1130,6 +1130,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     VoronoiMesh&& mesh, std::string suffix, double creation_kinetic_time = std::numeric_limits<double>::quiet_NaN());
 
  public:
+  double getUvHeightFactor() const { return uv_height_factor; }
+  double getUvCircumFactor() const { return uv_circum_factor; }
+  double getTextureDiameter() const { return texture_diameter; }
+
   /// One-line Voronoi meshlet diagnostics: dual edge id, pair slot, verts, tris, strip counts (@p extra_note optional).
   void meshletDiagnosticLogLine(const char* tag, size_t half_edge_id, double t, const char* extra_note = "") const;
 

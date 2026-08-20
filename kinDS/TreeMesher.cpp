@@ -251,7 +251,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
                                        << ") to " << obj_path.string() << ".");
 }
 
-void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
+std::vector<size_t> TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
 {
   // intersect all meshes with the boundary mesh and save the result
   // Build an AABB-tree of the boundary-mesh to prefilter
@@ -267,6 +267,22 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
 
   std::mutex failed_mutex;
   std::vector<std::pair<size_t, VoronoiMesh>> failed_meshlets;
+  std::vector<size_t> outside_meshlet_indices;
+
+  std::optional<kinDS::MeshIntersectionUvOptions> uv_options;
+  if (settings.intersection_prefer_meshlet_uv_on_seam || settings.intersection_boundary_faces_interior_uv)
+  {
+    kinDS::MeshIntersectionUvOptions options;
+    options.prefer_meshlet_uv_on_seam = settings.intersection_prefer_meshlet_uv_on_seam;
+    options.boundary_faces_use_interior_uv = settings.intersection_boundary_faces_interior_uv;
+    if (mesh_builder)
+    {
+      options.texture_diameter = mesh_builder->getTextureDiameter();
+      options.uv_height_factor = mesh_builder->getUvHeightFactor();
+      options.uv_circum_factor = mesh_builder->getUvCircumFactor();
+    }
+    uv_options = options;
+  }
 
   parallel_for(segment_meshlets.size(),
     [&](auto mesh_index)
@@ -296,7 +312,8 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
         {
           bool intersection_failed = false;
           auto [clipped_mesh, clipped_neighbors] = boundary_intersector.Intersect(
-            segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index], mesh_index, &intersection_failed);
+            segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index], mesh_index, &intersection_failed,
+            uv_options);
           if (intersection_failed)
           {
             std::lock_guard<std::mutex> lock(failed_mutex);
@@ -320,6 +337,10 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
         // fully outside, result is empty mesh
         segment_meshlets[mesh_index] = kinDS::VoronoiMesh();
         meshing_neighbor_indices[mesh_index] = {};
+        {
+          std::lock_guard<std::mutex> lock(failed_mutex);
+          outside_meshlet_indices.push_back(mesh_index);
+        }
         break;
 
       case kinDS::MeshIntersection::MeshRelation::UNDEFINED:
@@ -370,6 +391,9 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
   {
     fixFailedSegments(boundary_intersector);
   }
+
+  std::sort(outside_meshlet_indices.begin(), outside_meshlet_indices.end());
+  return outside_meshlet_indices;
 }
 
 void TreeMesher::fixFailedSegments(const MeshIntersection& boundary_intersector)

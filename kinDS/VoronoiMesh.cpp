@@ -1413,7 +1413,7 @@ void kinDS::VoronoiMesh::computeNormals(NormalMode normal_mode)
   validateNormalCount("VoronoiMesh::computeNormals");
 }
 
-std::array<double, 3> kinDS::VoronoiMesh::computeBarycentricCoordinates(size_t triangle_index, glm::dvec3& point) const
+std::array<double, 3> kinDS::VoronoiMesh::computeBarycentricCoordinates(size_t triangle_index, const glm::dvec3& point) const
 {
   return barycentricCoordinates(vertices[triangles[3 * triangle_index]], vertices[triangles[3 * triangle_index + 1]],
     vertices[triangles[3 * triangle_index + 2]], point);
