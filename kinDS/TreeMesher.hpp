@@ -79,6 +79,10 @@ class TreeMesher
     /// When true, also emit closing caps for strands still continuing past a premature @ref end_section
     /// (@c --end). Default false. Natural branch endings and the tree-top finalize always get caps regardless.
     bool mesh_cap_at_end = false;
+    /// When true, collect per-section runtime / event / topology statistics and write CSV after meshing.
+    bool collect_meshing_statistics = false;
+    /// Output path used when @ref collect_meshing_statistics is enabled.
+    std::filesystem::path meshing_statistics_csv_path = "meshing_statistics.csv";
 
     // for debugging purposes:
     bool debug_export_meshes = false;

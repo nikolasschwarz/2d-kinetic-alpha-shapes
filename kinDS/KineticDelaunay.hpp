@@ -388,6 +388,8 @@ class KineticDelaunay
   StrandTree branch_trajs;
   HalfEdgeDelaunayGraph graph;
   std::unique_ptr<KineticAlgorithm> kinetic_algorithm_;
+  Statistics statistics_;
+  bool collect_statistics_ = false;
   // Reused managers: one per event type.
   // Kept as pointers to avoid forcing complete manager types in this header.
   std::unique_ptr<FlipEventManager> flip_event_manager_;
@@ -756,6 +758,13 @@ class KineticDelaunay
   size_t getStartSection() const { return start_section_; }
   /// Exclusive kinetic stop / finalize time (defaults to @c getSectionCount(), i.e. tree height).
   size_t getEndSection() const;
+
+  Statistics& statistics() { return statistics_; }
+  const Statistics& statistics() const { return statistics_; }
+  void setCollectStatistics(bool enabled) { collect_statistics_ = enabled; }
+  bool collectStatistics() const { return collect_statistics_; }
+  /// Live non-dummy strands and alive runtime branches (excludes retired / phased-out).
+  std::pair<size_t, size_t> countLiveStrandsAndBranches() const;
 
   // Computes the Delaunay triangulation of the given splines
   void compute();

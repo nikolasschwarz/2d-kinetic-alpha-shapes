@@ -33,6 +33,7 @@ public:
   }
 
   void handleEvent() override;
+  KineticEventType eventType() const override { return KineticEventType::Radius; }
 };
 
 class KineticDelaunay::RadiusEventManager final : public KineticDelaunay::EventManager

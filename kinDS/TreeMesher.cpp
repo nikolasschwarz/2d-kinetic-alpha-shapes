@@ -658,8 +658,13 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << ", radius_vertex_shift_enabled="
                                                                                       << mesh_builder
                                                                                            ->radius_boundary_transition_shift_enabled);
+  kinetic_delaunay->setCollectStatistics(settings.collect_meshing_statistics);
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
+  if (settings.collect_meshing_statistics)
+  {
+    kinetic_delaunay->statistics().writeCsv(settings.meshing_statistics_csv_path);
+  }
   KINDS_INFO("Kinetic Delaunay Voronoi Meshing finished.");
 
   std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
