@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Statistics.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -26,12 +28,13 @@ class KineticAlgorithm
     uint64_t queue_sequence_ = 0;
 
     virtual void handleEvent() = 0;
+    virtual KineticEventType eventType() const = 0;
 
     double getTime() const { return occurrence_time; }
 
     void assignQueueSequence(uint64_t sequence) { queue_sequence_ = sequence; }
 
-   protected:
+  protected:
     Event(double occurrence_time, double creation_time, uint32_t queue_dispatch_order = 10u)
       : occurrence_time(occurrence_time)
       , creation_time(creation_time)
@@ -57,7 +60,7 @@ class KineticAlgorithm
     void setCallback(EventCallback* callback) { callback_ = callback; }
     EventCallback* getCallback() const { return callback_; }
 
-   private:
+  private:
     EventCallback* callback_ = nullptr;
   };
 
@@ -85,6 +88,7 @@ class KineticAlgorithm
   void clear();
   /// Process queued events in time order. If @p end_time is set, discard the remainder once the next
   /// event has @c occurrence_time >= @p end_time (that event is not executed).
-  void processEvents(std::optional<double> end_time = std::nullopt);
+  /// When @p statistics is set, each dequeued event is recorded before @c handleEvent.
+  void processEvents(std::optional<double> end_time = std::nullopt, Statistics* statistics = nullptr);
 };
 } // namespace kinDS

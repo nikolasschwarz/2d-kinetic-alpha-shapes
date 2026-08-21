@@ -21,6 +21,7 @@ class KineticDelaunay::SectionEvent final : public KineticDelaunay::Event
   }
 
   void handleEvent() override;
+  KineticEventType eventType() const override { return KineticEventType::Section; }
 };
 
 class KineticDelaunay::SectionEventManager final : public KineticDelaunay::EventManager

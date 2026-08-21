@@ -63,6 +63,7 @@ set(KINDS_SOURCES
     "kinDS/VisualDebugHighlight.cpp"
     "kinDS/SegmentBuilderVisualDebug.cpp"
     "kinDS/KineticAlgorithm.cpp"
+    "kinDS/Statistics.cpp"
     "kinDS/KineticDelaunay.cpp"
     "kinDS/KineticDelaunayFlipEvent.cpp"
     "kinDS/KineticDelaunayFlipEventTriggerDump.cpp"

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -1631,7 +1632,8 @@ void KineticDelaunay::precomputeStep(double t)
 
 void KineticDelaunay::handleEvents()
 {
-  kinetic_algorithm_->processEvents(static_cast<double>(getEndSection()));
+  kinetic_algorithm_->processEvents(
+    static_cast<double>(getEndSection()), collect_statistics_ ? &statistics_ : nullptr);
 }
 
 size_t KineticDelaunay::getBranchIndex(size_t strand_id, size_t t) const
@@ -6331,6 +6333,10 @@ void KineticDelaunay::compute()
 {
   const size_t start_section = getStartSection();
   const size_t end_section = getEndSection();
+  if (collect_statistics_)
+  {
+    statistics_.beginRun();
+  }
   section_event_manager_->computeEvents(static_cast<double>(start_section), static_cast<size_t>(-1));
   enqueueScheduledSubdivisionEvents();
   handleEvents();
@@ -6341,7 +6347,22 @@ void KineticDelaunay::compute()
 
   if (callback_manager_)
   {
-    callback_manager_->finalize(end_time);
+    if (collect_statistics_)
+    {
+      using Clock = std::chrono::steady_clock;
+      const Clock::time_point finalize_started = Clock::now();
+      callback_manager_->finalize(end_time);
+      const std::chrono::duration<double> finalize_elapsed = Clock::now() - finalize_started;
+      statistics_.addWallTimeSeconds(finalize_elapsed.count());
+    }
+    else
+    {
+      callback_manager_->finalize(end_time);
+    }
+  }
+  if (collect_statistics_)
+  {
+    statistics_.endRun();
   }
 }
 
@@ -6632,6 +6653,29 @@ bool KineticDelaunay::isStrandLiveInGraph(size_t strand_id) const
     return false;
   }
   return graph.incidentEdgesBegin(strand_id) != graph.incidentEdgesEnd(strand_id);
+}
+
+std::pair<size_t, size_t> KineticDelaunay::countLiveStrandsAndBranches() const
+{
+  size_t strand_count = 0;
+  const size_t vertex_count = graph.getVertexCount();
+  for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
+  {
+    if (isStrandLiveInGraph(strand_id))
+    {
+      ++strand_count;
+    }
+  }
+
+  size_t branch_count = 0;
+  for (size_t branch_id = 0; branch_id < runtime_branch_data_.alive.size(); ++branch_id)
+  {
+    if (runtime_branch_data_.alive[branch_id])
+    {
+      ++branch_count;
+    }
+  }
+  return { strand_count, branch_count };
 }
 
 std::vector<BoundaryPoint> KineticDelaunay::traverseBoundary(

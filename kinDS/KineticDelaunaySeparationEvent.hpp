@@ -38,6 +38,7 @@ class KineticDelaunay::SeparationEvent final : public KineticDelaunay::Event
   }
 
   void handleEvent() override;
+  KineticEventType eventType() const override { return KineticEventType::Separation; }
 };
 
 class KineticDelaunay::SeparationEventManager final : public KineticDelaunay::EventManager

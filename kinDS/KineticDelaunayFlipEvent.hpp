@@ -156,6 +156,7 @@ class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
   }
 
   void handleEvent() override;
+  KineticEventType eventType() const override { return KineticEventType::Flip; }
 };
 
 class KineticDelaunay::FlipEventManager final : public KineticDelaunay::EventManager

@@ -13,7 +13,7 @@ void KineticAlgorithm::clear()
   next_queue_sequence_ = 0;
 }
 
-void KineticAlgorithm::processEvents(std::optional<double> end_time)
+void KineticAlgorithm::processEvents(std::optional<double> end_time, Statistics* statistics)
 {
   while (!events_.empty())
   {
@@ -25,6 +25,10 @@ void KineticAlgorithm::processEvents(std::optional<double> end_time)
       break;
     }
     events_.pop();
+    if (statistics != nullptr)
+    {
+      statistics->onEvent(event->eventType(), event->occurrence_time);
+    }
     event->handleEvent();
   }
 }

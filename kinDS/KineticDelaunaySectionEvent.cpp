@@ -112,6 +112,12 @@ void KineticDelaunay::SectionEvent::handleEvent()
   kd->retireFinishedInputBranches(static_cast<double>(section_index));
   kd->post_split_frame_transitions_.expireBeforeHeight(section_index);
 
+  if (kd->collectStatistics())
+  {
+    const auto [strand_count, branch_count] = kd->countLiveStrandsAndBranches();
+    kd->statistics().setSectionTopology(section_index, strand_count, branch_count);
+  }
+
   // Look ahead to height section_index+1: if strands in a live component already sit on multiple input
   // branches there, hold the common frame through that endpoint before scheduling this section's events.
   kd->registerUpcomingPostSplitFrameTransitions(section_index);

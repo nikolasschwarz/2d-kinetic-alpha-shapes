@@ -26,6 +26,7 @@ class KineticDelaunay::SubdivisionEvent final : public KineticDelaunay::Event
   }
 
   void handleEvent() override;
+  KineticEventType eventType() const override { return KineticEventType::Subdivision; }
 };
 
 class KineticDelaunay::SubdivisionEventManager final : public KineticDelaunay::EventManager
