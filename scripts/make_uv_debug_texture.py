@@ -8,9 +8,11 @@ Corner colors (image / UV space, v=0 at top):
 
 Everywhere else is bilinearly interpolated between those corners.
 
-A dark-green grid is overlaid for UV orientation checks:
-  outer lines = 1px, inner lines = 2px, cells = 62x62.
-When tiled, adjacent outer 1px edges meet to form a 2px stroke.
+A dark-green grid is overlaid for UV orientation checks.
+Line thicknesses cycle 6,2,4,2,... along each axis. Each line is shared by
+adjacent cells (half counted toward each side), so every cell spans a fixed
+pitch. Default: 32 cells x 64px = 2048px, with e.g. a 6|2 cell laid out as
+3px line + 60px base + 1px line.
 """
 
 from __future__ import annotations
@@ -28,25 +30,32 @@ BOTTOM_LEFT = np.array([1.0, 0.0, 0.0])  # red
 BOTTOM_RIGHT = np.array([1.0, 1.0, 1.0])  # white
 GRID_COLOR = np.array([0.0, 0.35, 0.0])  # dark green
 
+DEFAULT_GRID = 32
+DEFAULT_CELL_PITCH = 64
+DEFAULT_LINE_PATTERN = (6, 2, 4, 2)
+
+
+def expected_size(grid_divisions: int, cell_pitch: int) -> int:
+    return grid_divisions * cell_pitch
+
 
 def make_texture(
     width: int,
     height: int,
-    grid_divisions: int = 8,
-    cell_size: int = 62,
-    outer_line_width: int = 1,
-    inner_line_width: int = 2,
+    grid_divisions: int = DEFAULT_GRID,
+    cell_pitch: int = DEFAULT_CELL_PITCH,
+    line_pattern: tuple[int, ...] = DEFAULT_LINE_PATTERN,
 ) -> np.ndarray:
-    expected = (
-        2 * outer_line_width
-        + grid_divisions * cell_size
-        + (grid_divisions - 1) * inner_line_width
-    )
+    if not line_pattern:
+        raise ValueError("line pattern must not be empty")
+    if any(w <= 0 or w % 2 != 0 for w in line_pattern):
+        raise ValueError(f"line widths must be positive even integers so halves are integral: {line_pattern}")
+
+    expected = expected_size(grid_divisions, cell_pitch)
     if width != expected or height != expected:
         raise ValueError(
             f"Size {width}x{height} does not match grid layout "
-            f"({grid_divisions} cells of {cell_size}px, outer={outer_line_width}px, "
-            f"inner={inner_line_width}px → expected {expected}px)."
+            f"({grid_divisions} cells x {cell_pitch}px pitch → expected {expected}px)."
         )
 
     # Pixel centers in [0, 1]
@@ -59,35 +68,40 @@ def make_texture(
     bottom = (1.0 - uu)[..., None] * BOTTOM_LEFT + uu[..., None] * BOTTOM_RIGHT
     rgb = (1.0 - vv)[..., None] * top + vv[..., None] * bottom
 
-    # Layout: [outer 1px][cell][inner 2px][cell]...[cell][outer 1px]
-    # When tiled, adjacent outer 1px lines meet to form a 2px stroke like the inners.
+    # One line per cell boundary. Line k (width pattern[k]) is centered on k*pitch.
+    # The wrap line (k=0) is split: half at the start, half at the end → seamless tile.
     def paint_axis_lines(paint_vertical: bool) -> None:
-        # Outer start
-        if paint_vertical:
-            rgb[:, 0:outer_line_width, :] = GRID_COLOR
-        else:
-            rgb[0:outer_line_width, :, :] = GRID_COLOR
+        for boundary_index in range(grid_divisions):
+            line_width = line_pattern[boundary_index % len(line_pattern)]
+            half = line_width // 2
+            center = boundary_index * cell_pitch
 
-        cursor = outer_line_width
-        for cell_index in range(grid_divisions):
-            cursor += cell_size
-            if cell_index < grid_divisions - 1:
+            if boundary_index == 0:
+                # Right half at the left edge, left half at the right edge.
+                segments = [(0, half), (width - half, width)] if paint_vertical else [
+                    (0, half),
+                    (height - half, height),
+                ]
+            else:
+                segments = [(center - half, center + half)]
+
+            for start, end in segments:
                 if paint_vertical:
-                    rgb[:, cursor : cursor + inner_line_width, :] = GRID_COLOR
+                    rgb[:, start:end, :] = GRID_COLOR
                 else:
-                    rgb[cursor : cursor + inner_line_width, :, :] = GRID_COLOR
-                cursor += inner_line_width
-
-        # Outer end
-        if paint_vertical:
-            rgb[:, width - outer_line_width : width, :] = GRID_COLOR
-        else:
-            rgb[height - outer_line_width : height, :, :] = GRID_COLOR
+                    rgb[start:end, :, :] = GRID_COLOR
 
     paint_axis_lines(paint_vertical=True)
     paint_axis_lines(paint_vertical=False)
 
     return np.clip(np.rint(rgb * 255.0), 0, 255).astype(np.uint8)
+
+
+def parse_pattern(text: str) -> tuple[int, ...]:
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError("line pattern must contain at least one width")
+    return tuple(int(p) for p in parts)
 
 
 def main() -> None:
@@ -99,37 +113,49 @@ def main() -> None:
         default=Path(__file__).with_name("uv_debug_texture.png"),
         help="Output PNG path",
     )
+    parser.add_argument("--grid", type=int, default=DEFAULT_GRID, help="Number of grid cells per axis")
+    parser.add_argument(
+        "--cell-pitch",
+        type=int,
+        default=DEFAULT_CELL_PITCH,
+        help="Full cell size in pixels including half of each bordering line",
+    )
+    parser.add_argument(
+        "--line-pattern",
+        type=parse_pattern,
+        default=DEFAULT_LINE_PATTERN,
+        help="Comma-separated repeating line widths (even), e.g. 6,2,4,2",
+    )
     parser.add_argument(
         "-s",
         "--size",
         type=int,
-        default=512,
-        help="Square texture size in pixels (must match grid layout)",
+        default=None,
+        help="Square texture size (optional; defaults to grid * cell-pitch)",
     )
     parser.add_argument("--width", type=int, default=None, help="Override width")
     parser.add_argument("--height", type=int, default=None, help="Override height")
-    parser.add_argument("--grid", type=int, default=8, help="Number of grid cells per axis")
-    parser.add_argument("--cell-size", type=int, default=62, help="Interior cell size in pixels")
-    parser.add_argument("--outer-width", type=int, default=1, help="Outer grid line thickness")
-    parser.add_argument("--inner-width", type=int, default=2, help="Inner grid line thickness")
     args = parser.parse_args()
 
-    width = args.width or args.size
-    height = args.height or args.size
+    computed = expected_size(args.grid, args.cell_pitch)
+    width = args.width or args.size or computed
+    height = args.height or args.size or computed
     image = Image.fromarray(
         make_texture(
             width,
             height,
             grid_divisions=args.grid,
-            cell_size=args.cell_size,
-            outer_line_width=args.outer_width,
-            inner_line_width=args.inner_width,
+            cell_pitch=args.cell_pitch,
+            line_pattern=args.line_pattern,
         ),
         mode="RGB",
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     image.save(args.output)
-    print(f"Wrote {args.output.resolve()} ({width}x{height})")
+    print(
+        f"Wrote {args.output.resolve()} ({width}x{height}), "
+        f"{args.grid} cells x {args.cell_pitch}px pitch, lines {args.line_pattern}"
+    )
 
 
 if __name__ == "__main__":

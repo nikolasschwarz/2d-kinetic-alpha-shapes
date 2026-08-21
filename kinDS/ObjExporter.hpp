@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -18,6 +19,57 @@
 
 namespace kinDS
 {
+
+/// GPU-style per-vertex / per-face attributes written as a sidecar `.json` (EcoSysLab meshlet export).
+/// Distinct from VoronoiMesh `#` comment metadata on vertices/faces.
+struct ObjExportGpuAttributes
+{
+  std::vector<glm::dvec4> color;
+  std::vector<double> boundary_distance;
+  std::vector<glm::dvec2> profile_position;
+  std::vector<glm::dvec2> profile_polar_coordinate;
+  std::vector<double> HC;
+  std::vector<double> HL;
+  std::vector<double> RW;
+  std::vector<double> RB;
+  std::vector<double> moisture;
+  std::vector<glm::dvec3> position0;
+  std::vector<glm::dvec3> direction0;
+  std::vector<double> root_distance;
+  std::vector<double> uv_3;
+  std::vector<bool> has_neighbor; // per triangle
+
+  bool empty() const
+  {
+    return color.empty() && boundary_distance.empty() && profile_position.empty() && profile_polar_coordinate.empty()
+      && HC.empty() && HL.empty() && RW.empty() && RB.empty() && moisture.empty() && position0.empty()
+      && direction0.empty() && root_distance.empty() && uv_3.empty() && has_neighbor.empty();
+  }
+
+  size_t vertexCount() const
+  {
+    return std::max({ color.size(), boundary_distance.size(), profile_position.size(), profile_polar_coordinate.size(),
+      HC.size(), HL.size(), RW.size(), RB.size(), moisture.size(), position0.size(), direction0.size(),
+      root_distance.size(), uv_3.size() });
+  }
+};
+
+struct ObjWriteOptions
+{
+  double uv_height_factor = 1.0;
+  double uv_circum_factor = 1.0;
+  /// Legacy simple JSON: only `boundary_distance` (used when @c gpu_attributes is empty).
+  std::vector<float> boundary_distances_by_vertex = {};
+  /// Full GPU-style JSON sidecar (preferred over @c boundary_distances_by_vertex when set and non-empty).
+  std::optional<ObjExportGpuAttributes> gpu_attributes = std::nullopt;
+  bool include_metadata = false;
+  bool include_vertex_colors = false;
+  bool alternate_section_shading = false;
+  bool write_obj_groups = true;
+  /// EcoSysLab-compatible OBJ: bark/interior face grouping, negate normal X, slim MTL.
+  bool framework_compatible = false;
+};
+
 class ObjExporter
 {
  private:
@@ -382,6 +434,52 @@ class ObjExporter
     }
   }
 
+  static void writeFacesFrameworkCompatible(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub)
+  {
+    validateFaceWriteRange(mesh, lb, ub, "writeFacesFrameworkCompatible");
+
+    const auto& indices = mesh.getTriangles();
+    const auto& material_ids = mesh.getMaterialIDs();
+
+    std::vector<size_t> bark_tris;
+    std::vector<size_t> interior_tris;
+    bark_tris.reserve(ub - lb);
+    interior_tris.reserve(ub - lb);
+    for (size_t tri = lb; tri < ub; ++tri)
+    {
+      const int material_id = (tri < material_ids.size()) ? material_ids[tri] : 1;
+      if (material_id == 0)
+      {
+        bark_tris.push_back(tri);
+      }
+      else
+      {
+        interior_tris.push_back(tri);
+      }
+    }
+
+    auto write_tri_faces = [&](const std::vector<size_t>& tris)
+    {
+      for (size_t tri : tris)
+      {
+        const size_t corner_base = 3 * tri;
+        file << "f";
+        for (size_t j = 0; j < 3; ++j)
+        {
+          const size_t corner = corner_base + j;
+          // vt/vn streams are emitted once per triangle corner in triangle order.
+          file << " " << (indices[corner] + 1) << "/" << (corner + 1) << "/" << (corner + 1);
+        }
+        file << "\n";
+      }
+    };
+
+    file << "usemtl bark\n";
+    write_tri_faces(bark_tris);
+    file << "usemtl interior\n";
+    write_tri_faces(interior_tris);
+  }
+
   static void writeMtl(const std::filesystem::path& mtl_path)
   {
     std::ofstream file(mtl_path);
@@ -469,52 +567,125 @@ class ObjExporter
     file.close();
   }
 
+  /// Slim MTL matching EcoSysLab meshlet export (bark + interior only).
+  static void writeFrameworkMtl(const std::filesystem::path& mtl_path)
+  {
+    std::ofstream file(mtl_path);
+    if (!file.is_open())
+    {
+      throw std::runtime_error("Failed to open MTL file");
+    }
+
+    file << "newmtl bark\n";
+    file << "Ka 0.2 0.1 0.05\n";
+    file << "Kd 0.4 0.25 0.1\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    file << "newmtl interior\n";
+    file << "Ka 0.8 0.8 0.8\n";
+    file << "Kd 0.8 0.8 0.8\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n";
+
+    file.close();
+  }
+
+  static std::string jsonVec2(const glm::dvec2& v)
+  {
+    return "[" + std::to_string(v.x) + ", " + std::to_string(v.y) + "]";
+  }
+
+  static std::string jsonVec3(const glm::dvec3& v)
+  {
+    return "[" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " + std::to_string(v.z) + "]";
+  }
+
+  static std::string jsonVec4(const glm::dvec4& v)
+  {
+    return "[" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " + std::to_string(v.z) + ", "
+      + std::to_string(v.w) + "]";
+  }
+
  public:
+  /// Legacy JSON with a single `boundary_distance` array.
   static void writeJson(const std::filesystem::path& json_path, const std::vector<float>& boundary_distances_by_vertex)
   {
-    std::ofstream file(json_path);
+    ObjExportGpuAttributes attrs;
+    attrs.boundary_distance.assign(boundary_distances_by_vertex.begin(), boundary_distances_by_vertex.end());
+    writeJson(json_path, attrs);
+  }
 
+  /// Framework-style GPU attribute JSON (EcoSysLab meshlet export schema).
+  static void writeJson(const std::filesystem::path& json_path, const ObjExportGpuAttributes& attrs)
+  {
+    std::ofstream file(json_path);
     if (!file.is_open())
     {
       throw std::runtime_error("Failed to open JSON file");
     }
 
-    auto write_values = [](std::ofstream& file, const std::string& key,
-                          const std::function<std::string(size_t index)>& get_value, size_t size, bool last = false)
+    struct Field
     {
-      file << "  \"" << key << "\": [\n";
-      for (size_t i = 0; i < size; ++i)
+      std::string key;
+      size_t size = 0;
+      std::function<std::string(size_t)> get_value;
+    };
+    std::vector<Field> fields;
+    auto add_field = [&](const std::string& key, size_t size, std::function<std::string(size_t)> get_value)
+    {
+      if (size == 0)
       {
-        file << "    " << get_value(i);
-        if (i < size - 1)
+        return;
+      }
+      fields.push_back(Field { key, size, std::move(get_value) });
+    };
+
+    add_field("color", attrs.color.size(), [&](size_t i) { return jsonVec4(attrs.color[i]); });
+    add_field("boundary_distance", attrs.boundary_distance.size(),
+      [&](size_t i) { return std::to_string(attrs.boundary_distance[i]); });
+    add_field("profile_position", attrs.profile_position.size(),
+      [&](size_t i) { return jsonVec2(attrs.profile_position[i]); });
+    add_field("profile_polar_coordinate", attrs.profile_polar_coordinate.size(),
+      [&](size_t i) { return jsonVec2(attrs.profile_polar_coordinate[i]); });
+    add_field("HC", attrs.HC.size(), [&](size_t i) { return std::to_string(attrs.HC[i]); });
+    add_field("HL", attrs.HL.size(), [&](size_t i) { return std::to_string(attrs.HL[i]); });
+    add_field("RW", attrs.RW.size(), [&](size_t i) { return std::to_string(attrs.RW[i]); });
+    add_field("RB", attrs.RB.size(), [&](size_t i) { return std::to_string(attrs.RB[i]); });
+    add_field("moisture", attrs.moisture.size(), [&](size_t i) { return std::to_string(attrs.moisture[i]); });
+    add_field("position0", attrs.position0.size(), [&](size_t i) { return jsonVec3(attrs.position0[i]); });
+    add_field("direction0", attrs.direction0.size(), [&](size_t i) { return jsonVec3(attrs.direction0[i]); });
+    add_field("root_distance", attrs.root_distance.size(),
+      [&](size_t i) { return std::to_string(attrs.root_distance[i]); });
+    add_field("uv_3", attrs.uv_3.size(), [&](size_t i) { return std::to_string(attrs.uv_3[i]); });
+    add_field("has_neighbor", attrs.has_neighbor.size(),
+      [&](size_t i) { return attrs.has_neighbor[i] ? "true" : "false"; });
+
+    file << "{\n";
+    for (size_t field_index = 0; field_index < fields.size(); ++field_index)
+    {
+      const Field& field = fields[field_index];
+      file << "  \"" << field.key << "\": [\n";
+      for (size_t i = 0; i < field.size; ++i)
+      {
+        file << "    " << field.get_value(i);
+        if (i + 1 < field.size)
         {
           file << ",";
         }
         file << "\n";
       }
-
-      if (!last)
+      file << "  ]";
+      if (field_index + 1 < fields.size())
       {
-        file << "  ],\n";
+        file << ",";
       }
-      else
-      {
-        file << "  ]\n";
-      }
-    };
-
-    file << "{\n";
-
-    write_values(
-      file, "boundary_distance", [&](size_t index) { return std::to_string(boundary_distances_by_vertex[index]); },
-      boundary_distances_by_vertex.size(), true);
-
+      file << "\n";
+    }
     file << "}\n";
   }
-  static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, double uv_height_factor = 1.0,
-    double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {},
-    bool include_metadata = false, bool include_vertex_colors = false, bool alternate_section_shading = false,
-    bool write_obj_groups = true)
+
+  static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, const ObjWriteOptions& options)
   {
     mesh.validateNormalCount("ObjExporter::writeMesh(" + obj_path.string() + ")");
     mesh.validateUVLayout("ObjExporter::writeMesh(" + obj_path.string() + ")");
@@ -526,20 +697,31 @@ class ObjExporter
     }
     std::filesystem::path mtl_path = obj_path;
     mtl_path.replace_extension(".mtl");
-    writeMtl(mtl_path);
+    if (options.framework_compatible)
+    {
+      writeFrameworkMtl(mtl_path);
+    }
+    else
+    {
+      writeMtl(mtl_path);
+    }
 
-    if (!boundary_distances_by_vertex.empty())
+    if (options.gpu_attributes.has_value() && !options.gpu_attributes->empty())
     {
       std::filesystem::path json_path = obj_path;
       json_path.replace_extension(".json");
-      writeJson(json_path, boundary_distances_by_vertex);
+      writeJson(json_path, options.gpu_attributes.value());
+    }
+    else if (!options.boundary_distances_by_vertex.empty())
+    {
+      std::filesystem::path json_path = obj_path;
+      json_path.replace_extension(".json");
+      writeJson(json_path, options.boundary_distances_by_vertex);
     }
 
-    // Write some metadata
     file << "# Exported by kinDS ObjExporter\n";
     file << "mtllib " << mtl_path.filename() << "\n\n";
 
-    // Write vertices
     file << "# Vertices\n";
     const auto& vertex_metadata = mesh.getVertexMetadata();
     const auto& vertex_colors = mesh.getVertexColors();
@@ -547,12 +729,12 @@ class ObjExporter
     {
       const auto& vertex = mesh.getVertices()[i];
       file << "v " << vertex[0] << " " << vertex[1] << " " << vertex[2];
-      if (include_vertex_colors && i < vertex_colors.size())
+      if (options.include_vertex_colors && i < vertex_colors.size())
       {
         const auto& c = vertex_colors[i];
         file << " " << c[0] << " " << c[1] << " " << c[2];
       }
-      if (include_metadata)
+      if (options.include_metadata)
       {
         const std::string metadata = (i < vertex_metadata.size()) ? vertex_metadata[i] : "{}";
         file << " # " << sanitizeInlineComment(metadata);
@@ -560,52 +742,91 @@ class ObjExporter
       file << "\n";
     }
 
-    // Write normals
-    file << "# Normals\n";
-    for (const auto& normal : mesh.getNormals())
+    if (options.framework_compatible)
     {
-      file << "vn " << normal[0] << " " << normal[1] << " " << normal[2] << "\n";
-    }
-
-    // Write UVs
-    file << "# UVs\n";
-    for (size_t i = 0; i < mesh.getTriangleCount(); i++)
-    {
-      int material = -1;
-
-      if (i < mesh.getMaterialIDs().size())
+      // Interleaved vt/vn per triangle corner (EcoSysLab style), with negated normal X.
+      file << "# Texture coordinates and normals\n";
+      for (size_t i = 0; i < mesh.getTriangleCount(); ++i)
       {
-        material = mesh.getMaterialIDs()[i];
-      }
-
-      for (size_t j = 0; j < 3; j++)
-      {
-        const size_t corner_index = 3 * i + j;
-        auto uv = mesh.hasValidUVIndex(corner_index) ? mesh.getUV(corner_index) : glm::dvec3(0.0);
-
-        if (material != -1)
+        int material = (i < mesh.getMaterialIDs().size()) ? mesh.getMaterialIDs()[i] : -1;
+        for (size_t j = 0; j < 3; ++j)
         {
-
+          const size_t corner_index = 3 * i + j;
+          auto uv = mesh.hasValidUVIndex(corner_index) ? mesh.getUV(corner_index) : glm::dvec3(0.0);
           if (material == 0)
           {
-            uv[0] *= uv_circum_factor;
-            uv[1] *= uv_height_factor;
+            uv[0] *= options.uv_circum_factor;
+            uv[1] *= options.uv_height_factor;
           }
-          else
+          else if (material != -1)
           {
-            uv[2] *= uv_height_factor;
+            uv[2] *= options.uv_height_factor;
           }
+
+          glm::dvec3 normal(0.0);
+          if (corner_index < mesh.getNormals().size())
+          {
+            normal = mesh.getNormals()[corner_index];
+          }
+          file << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
+          file << "vn " << (-normal[0]) << " " << normal[1] << " " << normal[2] << "\n";
         }
-        file << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
+      }
+    }
+    else
+    {
+      file << "# Normals\n";
+      for (const auto& normal : mesh.getNormals())
+      {
+        file << "vn " << normal[0] << " " << normal[1] << " " << normal[2] << "\n";
+      }
+
+      file << "# UVs\n";
+      for (size_t i = 0; i < mesh.getTriangleCount(); i++)
+      {
+        int material = -1;
+        if (i < mesh.getMaterialIDs().size())
+        {
+          material = mesh.getMaterialIDs()[i];
+        }
+        for (size_t j = 0; j < 3; j++)
+        {
+          const size_t corner_index = 3 * i + j;
+          auto uv = mesh.hasValidUVIndex(corner_index) ? mesh.getUV(corner_index) : glm::dvec3(0.0);
+          if (material != -1)
+          {
+            if (material == 0)
+            {
+              uv[0] *= options.uv_circum_factor;
+              uv[1] *= options.uv_height_factor;
+            }
+            else
+            {
+              uv[2] *= options.uv_height_factor;
+            }
+          }
+          file << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
+        }
       }
     }
 
-    // Write faces
     file << "# Faces\n";
     size_t group_count = mesh.getGroupOffsets().size();
     const std::string mesh_context = "writeMesh(" + obj_path.string() + ")";
 
-    if (write_obj_groups && group_count > 0)
+    auto write_face_range = [&](size_t lb, size_t ub)
+    {
+      if (options.framework_compatible)
+      {
+        writeFacesFrameworkCompatible(file, mesh, lb, ub);
+      }
+      else
+      {
+        writeFaces(file, mesh, lb, ub, options.include_metadata, options.alternate_section_shading);
+      }
+    };
+
+    if (options.write_obj_groups && group_count > 0)
     {
       validateGroupOffsets(mesh, mesh_context);
 
@@ -619,10 +840,9 @@ class ObjExporter
         size_t lb = mesh.getGroupOffsets()[group_index];
         size_t ub = mesh.getGroupOffsets()[group_index + 1];
         validateFaceWriteRange(mesh, lb, ub, mesh_context + " group " + std::to_string(group_index));
-        writeFaces(file, mesh, lb, ub, include_metadata, alternate_section_shading);
+        write_face_range(lb, ub);
       }
 
-      // Write the last group
       {
         const auto& names = mesh.getGroupNames();
         const size_t last_index = group_count - 1;
@@ -634,17 +854,34 @@ class ObjExporter
       size_t lb = mesh.getGroupOffsets().back();
       size_t ub = mesh.getTriangles().size() / 3;
       validateFaceWriteRange(mesh, lb, ub, mesh_context + " last group");
-      writeFaces(file, mesh, lb, ub, include_metadata, alternate_section_shading);
+      write_face_range(lb, ub);
     }
     else
     {
-      // No groups defined (or group objects disabled), write all faces
       const size_t ub = mesh.getTriangles().size() / 3;
       validateFaceWriteRange(mesh, 0, ub, mesh_context);
-      writeFaces(file, mesh, 0, ub, include_metadata, alternate_section_shading);
+      write_face_range(0, ub);
     }
 
     file.close();
+  }
+
+  /// Backward-compatible overload used by TreeMesher / CLI.
+  static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, double uv_height_factor = 1.0,
+    double uv_circum_factor = 1.0, const std::vector<float>& boundary_distances_by_vertex = {},
+    bool include_metadata = false, bool include_vertex_colors = false, bool alternate_section_shading = false,
+    bool write_obj_groups = true)
+  {
+    ObjWriteOptions options;
+    options.uv_height_factor = uv_height_factor;
+    options.uv_circum_factor = uv_circum_factor;
+    options.boundary_distances_by_vertex = boundary_distances_by_vertex;
+    options.include_metadata = include_metadata;
+    options.include_vertex_colors = include_vertex_colors;
+    options.alternate_section_shading = alternate_section_shading;
+    options.write_obj_groups = write_obj_groups;
+    options.framework_compatible = false;
+    writeMesh(mesh, obj_path, options);
   }
 
   static size_t parseObjFaceIndexToken(const std::string& token)

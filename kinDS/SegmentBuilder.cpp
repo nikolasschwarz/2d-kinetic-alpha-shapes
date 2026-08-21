@@ -11278,7 +11278,7 @@ void warnGlueMatchedPair(size_t meshlet_index, int physics_segment_id, const cha
       << "  matched1: source=" << formatContribLabel(contribs, source_mesh) << " vid=" << right_vid
       << " pos=" << formatVec3(right_pos) << " | partner=" << formatContribLabel(contribs, partner_mesh)
       << " vid=" << right_partner_vid << " pos=" << formatVec3(right_partner_pos) << "\n";
-  KINDS_WARNING(oss.str());
+  KINDS_DEBUG(oss.str());
 }
 
 /**
@@ -11345,7 +11345,7 @@ bool propagateUnmatchedInteriorsOntoPartner(VoronoiMesh& partner_mesh, std::vect
     {
       line << " [" << note << "]";
     }
-    KINDS_INFO("glue align: " << line.str());
+    KINDS_DEBUG("glue align: " << line.str());
     if (propagation_logs != nullptr)
     {
       propagation_logs->push_back(line.str());
@@ -11364,7 +11364,7 @@ bool propagateUnmatchedInteriorsOntoPartner(VoronoiMesh& partner_mesh, std::vect
     {
       enter << " path=" << enter_scheme;
     }
-    KINDS_INFO(enter.str());
+    KINDS_DEBUG(enter.str());
   }
 
   if (source_path.size() < 2 || partner_path.size() < 2)
@@ -11704,7 +11704,7 @@ void logGlueBoundaryWalks(const KineticDelaunay& kin_del, size_t meshlet_index, 
   std::ofstream out(filepath);
   if (!out)
   {
-    KINDS_WARNING("glue align: failed to open boundary vertex TXT " << filepath.generic_string());
+    KINDS_DEBUG("glue align: failed to open boundary vertex TXT " << filepath.generic_string());
   }
   else
   {
@@ -11971,11 +11971,11 @@ void logGlueBoundaryWalks(const KineticDelaunay& kin_del, size_t meshlet_index, 
     }
   }
 
-  KINDS_INFO(oss.str());
+  KINDS_DEBUG(oss.str());
   if (out)
   {
     out.close();
-    KINDS_INFO("glue align: wrote boundary vertex coordinates to " << filepath.generic_string());
+    KINDS_DEBUG("glue align: wrote boundary vertex coordinates to " << filepath.generic_string());
   }
 }
 
@@ -11989,7 +11989,7 @@ void alignGlueEdgesOnContribCopies(const KineticDelaunay& kin_del, std::vector<S
 
   if (glueAlignLogEnabled(meshlet_index))
   {
-    KINDS_INFO("glue align: entering computation for meshlet_index="
+    KINDS_DEBUG("glue align: entering computation for meshlet_index="
       << meshlet_index << " physics_segment_id=" << physics_segment_id << " contrib_count=" << contribs.size());
   }
 
@@ -12027,7 +12027,7 @@ void alignGlueEdgesOnContribCopies(const KineticDelaunay& kin_del, std::vector<S
     std::ofstream out(filepath, std::ios::app);
     if (!out)
     {
-      KINDS_WARNING("glue align: failed to append propagation paths to " << filepath.generic_string());
+      KINDS_DEBUG("glue align: failed to append propagation paths to " << filepath.generic_string());
     }
     else
     {
@@ -12036,8 +12036,8 @@ void alignGlueEdgesOnContribCopies(const KineticDelaunay& kin_del, std::vector<S
       {
         out << line << "\n";
       }
-      KINDS_INFO("glue align: appended " << propagation_logs.size() << " propagated path(s) to "
-                                         << filepath.generic_string());
+      KINDS_DEBUG("glue align: appended " << propagation_logs.size() << " propagated path(s) to "
+                                          << filepath.generic_string());
     }
   }
 
