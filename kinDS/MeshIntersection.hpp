@@ -128,9 +128,10 @@ struct MatchResult
 /// Optional UV remapping applied after boolean intersection (e.g. editor clipping).
 struct MeshIntersectionUvOptions
 {
-  /// When true, output vertices lying on the original meshlet surface receive meshlet UVs (seam continuity).
+  /// When true, clip-face seam vertices take UVs from adjacent meshlet-origin corners (or meshlet surface match).
   bool prefer_meshlet_uv_on_seam = false;
-  /// When true, faces originating from the clip boundary use interior-style (a,b,h) UVs instead of bark (θ,h).
+  /// When true, clip-boundary-origin faces use interior-style (a,b,h) UVs; bark seam UVs are converted.
+  /// Interior clip vertices are filled by harmonic interpolation over seam-delimited boundary manifolds.
   bool boundary_faces_use_interior_uv = false;
   double texture_diameter = 0.9;
   double uv_height_factor = 1.0;
