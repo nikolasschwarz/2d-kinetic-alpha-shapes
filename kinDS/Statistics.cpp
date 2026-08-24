@@ -3,7 +3,9 @@
 #include "Logger.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -126,6 +128,12 @@ void Statistics::setSectionTopology(size_t section_id, size_t strand_count, size
   row.branch_count = branch_count;
 }
 
+void Statistics::setTotalsTopology(size_t strand_count, size_t branch_count)
+{
+  totals_.strand_count = strand_count;
+  totals_.branch_count = branch_count;
+}
+
 void Statistics::addWallTimeSeconds(double seconds)
 {
   if (!run_active_ || !(seconds > 0.0) || !std::isfinite(seconds))
@@ -148,12 +156,50 @@ void Statistics::addWallTimeSeconds(double seconds)
   totals_.runtime_seconds += seconds;
 }
 
+std::filesystem::path Statistics::timestampedCsvPath(const std::filesystem::path& path)
+{
+  std::filesystem::path base = path.empty() ? std::filesystem::path("meshing_statistics.csv") : path;
+  if (base.has_filename() && base.filename() == ".")
+  {
+    base /= "meshing_statistics.csv";
+  }
+  else if (!base.has_filename())
+  {
+    base /= "meshing_statistics.csv";
+  }
+
+  const auto now = std::chrono::system_clock::now();
+  const std::time_t time = std::chrono::system_clock::to_time_t(now);
+  const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+  std::tm local {};
+#ifdef _WIN32
+  localtime_s(&local, &time);
+#else
+  localtime_r(&time, &local);
+#endif
+  std::ostringstream stamp;
+  stamp << std::put_time(&local, "%Y%m%d_%H%M%S") << '_' << std::setw(3) << std::setfill('0') << milliseconds.count();
+
+  std::string stem = base.stem().string();
+  if (stem.empty())
+  {
+    stem = "meshing_statistics";
+  }
+  std::string extension = base.extension().string();
+  if (extension.empty())
+  {
+    extension = ".csv";
+  }
+  return base.parent_path() / (stem + "_" + stamp.str() + extension);
+}
+
 bool Statistics::writeCsv(const std::filesystem::path& path) const
 {
-  std::ofstream out(path);
+  const std::filesystem::path unique_path = timestampedCsvPath(path);
+  std::ofstream out(unique_path);
   if (!out)
   {
-    KINDS_WARNING("Statistics: failed to open CSV " << path.generic_string());
+    KINDS_WARNING("Statistics: failed to open CSV " << unique_path.generic_string());
     return false;
   }
 
@@ -172,18 +218,12 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
       out << value.value();
     }
   };
-  auto write_row = [&](const std::string& id, const SectionStats& row, bool write_topology)
+  auto write_row = [&](const std::string& id, const SectionStats& row)
   {
     out << id << ',' << row.runtime_seconds << ',';
-    if (write_topology)
-    {
-      write_optional_size(row.strand_count);
-    }
+    write_optional_size(row.strand_count);
     out << ',';
-    if (write_topology)
-    {
-      write_optional_size(row.branch_count);
-    }
+    write_optional_size(row.branch_count);
     for (size_t i = 0; i < kineticEventTypeCount; ++i)
     {
       out << ',' << row.event_counts[i];
@@ -196,12 +236,11 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
     [](const SectionStats& a, const SectionStats& b) { return a.section_id < b.section_id; });
   for (const SectionStats& row : ordered)
   {
-    write_row(std::to_string(row.section_id), row, true);
+    write_row(std::to_string(row.section_id), row);
   }
-  // Topology is a snapshot per section; totals only accumulate runtime and event counts.
-  write_row("total", totals_, false);
+  write_row("total", totals_);
 
-  KINDS_INFO("Statistics: wrote meshing CSV to " << path.generic_string() << " (" << sections_.size()
+  KINDS_INFO("Statistics: wrote meshing CSV to " << unique_path.generic_string() << " (" << sections_.size()
                                                  << " section row(s) + total)");
   return true;
 }

@@ -31,7 +31,8 @@ const char* kineticEventTypeName(KineticEventType type);
  *
  * Section attribution uses @c floor(occurrence_time). Wall time for section @c i is the span from the first
  * dequeued event belonging to @c i until the first event of a later section (or @ref endRun / finalize).
- * Strand/branch snapshots are optional and recorded explicitly after section retirement.
+ * Strand/branch snapshots are optional: per-section rows record live topology after retirement;
+ * the totals row uses the full input strand inventory and all distinct input-tree branch IDs.
  */
 class Statistics
 {
@@ -41,9 +42,9 @@ class Statistics
     size_t section_id = 0;
     double runtime_seconds = 0.0;
     std::array<size_t, kineticEventTypeCount> event_counts {};
-    /// Live non-dummy strands after retirement at this section; unset until snapshotted.
+    /// Per section: live non-dummy strands after retirement. Totals: full input strand inventory.
     std::optional<size_t> strand_count {};
-    /// Alive runtime branches after retirement at this section; unset until snapshotted.
+    /// Per section: alive runtime branches after retirement. Totals: all input-tree branches (alive + retired).
     std::optional<size_t> branch_count {};
   };
 
@@ -63,6 +64,9 @@ class Statistics
   /// Snapshot live strand/branch counts for @p section_id (after phased-out strands are retired).
   void setSectionTopology(size_t section_id, size_t strand_count, size_t branch_count);
 
+  /// Totals-row topology: full strand inventory and all input-tree branches (alive + retired).
+  void setTotalsTopology(size_t strand_count, size_t branch_count);
+
   /// Add wall time to the current open section (and totals), e.g. @c SegmentBuilder::finalize.
   void addWallTimeSeconds(double seconds);
 
@@ -70,7 +74,12 @@ class Statistics
   const std::vector<SectionStats>& sections() const { return sections_; }
   const SectionStats& totals() const { return totals_; }
 
+  /// Insert a local timestamp before the extension so repeated writes never collide.
+  /// @c meshing_statistics.csv becomes @c meshing_statistics_YYYYMMDD_HHMMSS_mmm.csv.
+  static std::filesystem::path timestampedCsvPath(const std::filesystem::path& path);
+
   /// CSV: @c section_id,runtime_s,strand_count,branch_count,<event types...>; final @c total row.
+  /// Writes to a timestamped sibling of @p path so existing files are never overwritten.
   bool writeCsv(const std::filesystem::path& path) const;
 
  private:
