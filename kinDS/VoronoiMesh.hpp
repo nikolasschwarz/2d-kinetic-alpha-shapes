@@ -174,11 +174,21 @@ class VoronoiMesh
   std::vector<size_t>& getUVIndices();
 
   const std::vector<int>& getMaterialIDs() const { return material_ids; }
+  std::vector<int>& getMaterialIDs() { return material_ids; }
 
   const std::vector<std::string>& getMaterialNames() const { return material_names; }
   const std::vector<std::string>& getVertexMetadata() const { return vertex_metadata; }
+  std::vector<std::string>& getVertexMetadata() { return vertex_metadata; }
   const std::vector<std::string>& getFaceMetadata() const { return face_metadata; }
+  std::vector<std::string>& getFaceMetadata() { return face_metadata; }
   const std::vector<glm::dvec3>& getVertexColors() const { return vertex_colors; }
+  std::vector<glm::dvec3>& getVertexColors() { return vertex_colors; }
+  const std::vector<glm::dvec2>& getProfilePlaneXY() const { return profile_plane_xy_; }
+  std::vector<glm::dvec2>& getProfilePlaneXY() { return profile_plane_xy_; }
+  const std::vector<double>& getVertexKineticTimes() const { return vertex_kinetic_times_; }
+  std::vector<double>& getVertexKineticTimes() { return vertex_kinetic_times_; }
+  const std::vector<glm::dvec3>& getVertexSemanticUvs() const { return vertex_semantic_uvs_; }
+  std::vector<glm::dvec3>& getVertexSemanticUvs() { return vertex_semantic_uvs_; }
 
   std::vector<size_t> removeIsolatedVertices();
 
