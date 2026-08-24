@@ -6336,6 +6336,33 @@ void KineticDelaunay::compute()
   if (collect_statistics_)
   {
     statistics_.beginRun();
+    size_t total_strands = 0;
+    const size_t point_count = branch_trajs.getPoints().size();
+    for (size_t strand_id = 0; strand_id < point_count; ++strand_id)
+    {
+      if (!isDummyBoundary(strand_id))
+      {
+        ++total_strands;
+      }
+    }
+    size_t total_branches = 0;
+    {
+      std::unordered_set<size_t> unique_input_branches;
+      const auto& branch_indices = branch_trajs.getBranchIndices();
+      for (size_t strand_id = 0; strand_id < branch_indices.size(); ++strand_id)
+      {
+        if (isDummyBoundary(strand_id))
+        {
+          continue;
+        }
+        for (size_t branch_id : branch_indices[strand_id])
+        {
+          unique_input_branches.insert(branch_id);
+        }
+      }
+      total_branches = unique_input_branches.size();
+    }
+    statistics_.setTotalsTopology(total_strands, total_branches);
   }
   section_event_manager_->computeEvents(static_cast<double>(start_section), static_cast<size_t>(-1));
   enqueueScheduledSubdivisionEvents();

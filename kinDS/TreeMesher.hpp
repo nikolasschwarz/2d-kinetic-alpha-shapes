@@ -81,7 +81,8 @@ class TreeMesher
     bool mesh_cap_at_end = false;
     /// When true, collect per-section runtime / event / topology statistics and write CSV after meshing.
     bool collect_meshing_statistics = false;
-    /// Output path used when @ref collect_meshing_statistics is enabled.
+    /// Base output path used when @ref collect_meshing_statistics is enabled.
+    /// A timestamp is inserted into the filename at write time so runs never overwrite each other.
     std::filesystem::path meshing_statistics_csv_path = "meshing_statistics.csv";
 
     // for debugging purposes:
@@ -153,8 +154,18 @@ class TreeMesher
   void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
     std::optional<bool> transformed = std::nullopt, std::optional<size_t> max_exports = std::nullopt) const;
   bool meshletsTransformedAtConstruction() const { return settings.transform_mesh_at_construction; }
-  /// Clip meshlets against @p boundary_mesh. Returns meshing-segment indices classified as OUTSIDE.
-  std::vector<size_t> truncateToBoundary(const VoronoiMesh& boundary_mesh);
+
+  /// Result of @ref truncateToBoundary: outside meshlet indices plus classification counts.
+  struct BoundaryTruncateResult
+  {
+    std::vector<size_t> outside_meshlet_indices;
+    size_t inside_count = 0;
+    size_t intersecting_count = 0;
+    size_t outside_count = 0;
+  };
+
+  /// Clip meshlets against @p boundary_mesh. Returns OUTSIDE indices and inside/intersect/outside counts.
+  BoundaryTruncateResult truncateToBoundary(const VoronoiMesh& boundary_mesh);
   void fixFailedSegments(const MeshIntersection& boundary_intersector);
   std::pair<std::vector<float>, std::vector<float>> computeTopAndBottomBoundaryDistances(
     const std::vector<float>& boundary_distance_by_segment_id);
