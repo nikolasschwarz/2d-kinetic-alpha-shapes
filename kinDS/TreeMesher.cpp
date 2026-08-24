@@ -90,7 +90,11 @@ TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::
 void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
   std::optional<bool> transformed, std::optional<size_t> max_exports) const
 {
-  if (!mesh_builder)
+  if (!mesh_builder && export_mode == MeshletExportMode::Raw)
+  {
+    throw std::runtime_error("exportMeshlets: Raw mode requires a live meshing run.");
+  }
+  if (!mesh_builder && segment_meshlets.empty())
   {
     throw std::runtime_error("exportMeshlets: meshing has not been run yet.");
   }
@@ -99,7 +103,7 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
   // Explicit profile-space export (@c transformed == false), e.g. CLI --untransformed — not merely
   // "skip export transform because meshlets were already transformed at construction".
   const bool untransformed_export = transformed.has_value() && !transformed.value();
-  const bool include_metadata = mesh_builder->store_mesh_metadata;
+  const bool include_metadata = mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata;
 
   std::vector<VoronoiMesh> meshlets_to_export;
   std::vector<std::string> export_suffixes;
@@ -124,6 +128,10 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     VoronoiMesh mesh = meshlets_to_export[i];
     if (apply_export_transform)
     {
+      if (!mesh_builder)
+      {
+        throw std::runtime_error("exportMeshlets: export transform requires a live meshing run.");
+      }
       const size_t strand_id = export_mode == MeshletExportMode::Raw
         ? mesh_builder->strandIdForRawMeshlet(i)
         : mesh_builder->strandIdForSegment(i);
@@ -717,6 +725,9 @@ void TreeMesher::mapMeshingToPhysicsSegmentIndices()
       meshing_to_physics_segment_indices[meshing_segment_id] = physics_segment_id;
     }
   }
+
+  meshing_strand_to_segment_indices_ = meshing_strand_to_segment_indices;
+  has_meshing_strand_to_segment_indices_ = true;
 }
 
 const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm(bool visual_debug)
@@ -773,6 +784,10 @@ const std::vector<std::vector<size_t>>& kinDS::TreeMesher::getMeshingStrandToSeg
   if (mesh_builder)
   {
     return mesh_builder->getStrandToSegmentIndices();
+  }
+  if (has_meshing_strand_to_segment_indices_)
+  {
+    return meshing_strand_to_segment_indices_;
   }
 
   throw std::runtime_error("Strand to segment indices are not available before running the meshing algorithm.");

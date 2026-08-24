@@ -118,6 +118,9 @@ class TreeMesher
   std::vector<std::string> segment_meshlet_export_suffixes;
   std::vector<std::vector<int>> meshing_neighbor_indices; // for each mesh, the neighbor mesh index for each triangle
   std::vector<size_t> meshing_to_physics_segment_indices;
+  std::vector<std::vector<size_t>> meshing_strand_to_segment_indices_;
+  bool has_meshing_strand_to_segment_indices_ = false;
+
   Settings settings;
   std::function<void(size_t, std::function<void(size_t)>)> parallel_for;
   bool mesh_vertex_source_validation_passed_ = true;
@@ -130,15 +133,24 @@ class TreeMesher
   const std::vector<VoronoiMesh>& runMeshingAlgorithm(bool visual_debug = false);
   const VoronoiMesh& getBoundaryMesh() const;
   const std::vector<std::vector<int>>& getMeshingNeighborIndices() const;
+  std::vector<std::vector<int>>& getMeshingNeighborIndices() { return meshing_neighbor_indices; }
   const std::vector<size_t>& getMeshingToPhysicsSegmentIndices() const;
+  void setMeshingToPhysicsSegmentIndices(std::vector<size_t> indices)
+  {
+    meshing_to_physics_segment_indices = std::move(indices);
+  }
   const std::vector<std::vector<size_t>>& getMeshingStrandToSegmentIndices() const;
+  void setMeshingStrandToSegmentIndices(std::vector<std::vector<size_t>> indices)
+  {
+    meshing_strand_to_segment_indices_ = std::move(indices);
+    has_meshing_strand_to_segment_indices_ = true;
+  }
   const std::vector<size_t>& getBoundaryVertexToStrandId() const;
   void transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const glm::dmat4& root_transform = glm::dmat4(1));
   void transformToWorldSpace(
     VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform = glm::dmat4(1)) const;
   const std::vector<VoronoiMesh>& getSegmentMeshlets() const { return segment_meshlets; }
   std::vector<VoronoiMesh>& getSegmentMeshlets() { return segment_meshlets; }
-  std::vector<std::vector<int>>& getMeshingNeighborIndices() { return meshing_neighbor_indices; }
   Settings& getSettings() { return settings; }
   const Settings& getSettings() const { return settings; }
   void setSettings(const Settings& new_settings) { settings = new_settings; }
