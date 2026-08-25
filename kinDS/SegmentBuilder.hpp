@@ -855,8 +855,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
-    const std::optional<glm::dvec3>& debug_color = std::nullopt,
-    const MeshletVertexRuntimeInfo& runtime_info = {});
+    const std::optional<glm::dvec3>& debug_color = std::nullopt);
+  size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
+    const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
+    std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check, const std::string& metadata,
+    const std::optional<glm::dvec3>& debug_color, const MeshletVertexRuntimeInfo& runtime_info);
 
   /// Effective strip corner for triangles: latest flexible on @p left_side, else fixed @c mesh_start / @c mesh_end.
   size_t intersectionStripEffectiveVertexIndex(const MeshingData& seg, bool left_side) const;
@@ -958,7 +961,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   int closingMeshAppendVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position,
     bool includes_virtual_shift, std::optional<size_t> voronoi_vertex_for_alpha_check = std::nullopt,
-    const std::string& metadata = "{}", const MeshletVertexRuntimeInfo& runtime_info = {});
+    const std::string& metadata = "{}");
+  int closingMeshAppendVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
+    const glm::dvec2& centroid, size_t strand_id, double t, const glm::dvec3& position, bool includes_virtual_shift,
+    std::optional<size_t> voronoi_vertex_for_alpha_check, const std::string& metadata,
+    const MeshletVertexRuntimeInfo& runtime_info);
 
   /**
    * @brief Finds the CrossingData intersection record for a Voronoi/Delaunay edge pair.

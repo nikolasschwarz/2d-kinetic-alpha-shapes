@@ -6857,6 +6857,16 @@ SegmentBuilder::MeshVoronoiVertexObjectSpaceResult SegmentBuilder::computeMeshVo
 size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
   const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
   std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check, const std::string& metadata,
+  const std::optional<glm::dvec3>& debug_color)
+{
+  // Clang rejects nested-type NSDMIs used as default args of the enclosing class; forward here instead.
+  return addMeshletVertex(mesh, boundary_polygon, centroid, vertex, strand_id, t, includes_virtual_shift,
+    meshlet_voronoi_vertex_for_alpha_check, metadata, debug_color, MeshletVertexRuntimeInfo {});
+}
+
+size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
+  const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
+  std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check, const std::string& metadata,
   const std::optional<glm::dvec3>& debug_color, const MeshletVertexRuntimeInfo& runtime_info)
 {
   if (warnAndSkipIfMeshletCompleted(mesh, "addMeshletVertex", t))
@@ -7952,6 +7962,15 @@ size_t kinDS::SegmentBuilder::closingMeshCountStrandIncidentEdges(size_t strand_
     ++num;
   }
   return num;
+}
+
+int kinDS::SegmentBuilder::closingMeshAppendVertex(VoronoiMesh& mesh,
+  const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
+  const glm::dvec3& position, bool includes_virtual_shift, std::optional<size_t> voronoi_vertex_for_alpha_check,
+  const std::string& metadata)
+{
+  return closingMeshAppendVertex(mesh, boundary_polygon, centroid, strand_id, t, position, includes_virtual_shift,
+    voronoi_vertex_for_alpha_check, metadata, MeshletVertexRuntimeInfo {});
 }
 
 int kinDS::SegmentBuilder::closingMeshAppendVertex(VoronoiMesh& mesh,

@@ -497,14 +497,14 @@ class ObjExporter
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    // Green material (regular meshes emitted by radius events).
+    // Green material (regular / interior Voronoi-edge strip meshlets).
     file << "newmtl green\n";
     file << "Ka 0.6 0.6 0.1\n";
     file << "Kd 0.9 0.85 0.2\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    // Pending-split mixed-branch radius fallback.
+    // Pending-split mixed-branch radius fallback (reserved; non-shift radius cell fans use brown).
     file << "newmtl light_blue\n";
     file << "Ka 0.15 0.35 0.5\n";
     file << "Kd 0.35 0.75 1.0\n";
