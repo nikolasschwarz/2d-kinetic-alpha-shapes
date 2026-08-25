@@ -459,22 +459,22 @@ kinDS::MeshIntersection::MeshIntersection(const VoronoiMesh& static_mesh)
 void interpolateProperties(
   const VoronoiMesh& original_mesh, VoronoiMesh& new_mesh, size_t original_face_id, std::array<size_t, 3> new_tri)
 {
-  std::array<size_t, 3> old_tri;
+  // Per-triangle-corner normals/UVs from the originating face. Shared seam vertices keep distinct
+  // normals on adjacent faces because each corner stores its own value (PerTriangleCorner).
+  // New corner positions may not match original vertices, so attributes use barycentric weights
+  // of the new point in the original triangle.
   std::array<glm::dvec3, 3> old_normals;
 
   bool interpolate_uv = true;
   for (size_t i = 0; i < 3; i++)
   {
-    old_tri[i] = original_mesh.getTriangles()[3 * original_face_id + i];
     old_normals[i] = original_mesh.getNormal(3 * original_face_id + i);
-    // KINDS_DEBUG("Old tri id " << i << ": " << old_tri[i]);
     if (!original_mesh.hasValidUVIndex(3 * original_face_id + i))
     {
       interpolate_uv = false;
     }
   }
 
-  // KINDS_DEBUG("interpolate_uv: " << interpolate_uv);
   if (interpolate_uv)
   {
     new_mesh.getUVIndices().resize(new_mesh.getTriangleCount() * 3, -1);
@@ -482,25 +482,28 @@ void interpolateProperties(
 
   const size_t triangle_corner_base = (new_mesh.getTriangleCount() - 1) * 3;
 
-  // compute the barycentric coordinates of the new face with regard to the new one so we can interpolate properties
   for (size_t i = 0; i < 3; i++)
   {
-    auto barycentric_coords
+    const auto barycentric_coords
       = original_mesh.computeBarycentricCoordinates(original_face_id, new_mesh.getVertices()[new_tri[i]]);
 
-    // compute new normals and UVs by interpolating from old mesh
     glm::dvec3 interpolated_normal = barycentric_coords[0] * old_normals[0] + barycentric_coords[1] * old_normals[1]
       + barycentric_coords[2] * old_normals[2];
-    size_t normal_index = new_mesh.addNormal(interpolated_normal);
+    const double normal_length = glm::length(interpolated_normal);
+    if (normal_length > 1e-12)
+    {
+      interpolated_normal /= normal_length;
+    }
+    new_mesh.addNormal(interpolated_normal);
 
     if (interpolate_uv)
     {
-      auto interpolated_uv
+      const auto interpolated_uv
         = barycentric_coords[0] * original_mesh.getUVs()[original_mesh.getUVIndices()[3 * original_face_id]]
         + barycentric_coords[1] * original_mesh.getUVs()[original_mesh.getUVIndices()[3 * original_face_id + 1]]
         + barycentric_coords[2] * original_mesh.getUVs()[original_mesh.getUVIndices()[3 * original_face_id + 2]];
 
-      size_t index = new_mesh.addUV(interpolated_uv);
+      const size_t index = new_mesh.addUV(interpolated_uv);
       new_mesh.getUVIndices()[triangle_corner_base + i] = index;
     }
   }
@@ -674,7 +677,8 @@ enum class IntersectionFaceOrigin : uint8_t
   Synthetic = 2
 };
 
-/// Normals only for boundary-origin faces. UVs are filled in @ref fillBoundaryOriginUvsFromSeamManifolds.
+/// Normals only for boundary-origin faces (barycentric from the boundary triangle's corner normals).
+/// UVs are filled later in @ref fillBoundaryOriginUvsFromSeamManifolds.
 void interpolateBoundaryOriginNormals(const VoronoiMesh& boundary_mesh, VoronoiMesh& new_mesh, size_t boundary_face_id,
   std::array<size_t, 3> new_tri)
 {
@@ -690,10 +694,37 @@ void interpolateBoundaryOriginNormals(const VoronoiMesh& boundary_mesh, VoronoiM
   {
     const glm::dvec3& position = new_mesh.getVertices()[new_tri[i]];
     const auto boundary_barycentric = boundary_mesh.computeBarycentricCoordinates(boundary_face_id, position);
-    const glm::dvec3 interpolated_normal = boundary_barycentric[0] * old_normals[0]
+    glm::dvec3 interpolated_normal = boundary_barycentric[0] * old_normals[0]
       + boundary_barycentric[1] * old_normals[1] + boundary_barycentric[2] * old_normals[2];
+    const double normal_length = glm::length(interpolated_normal);
+    if (normal_length > 1e-12)
+    {
+      interpolated_normal /= normal_length;
+    }
     new_mesh.addNormal(interpolated_normal);
   }
+}
+
+void addGeometricCornerNormals(VoronoiMesh& new_mesh, std::array<size_t, 3> new_tri)
+{
+  const auto& vertices = new_mesh.getVertices();
+  const glm::dvec3& p0 = vertices[new_tri[0]];
+  const glm::dvec3& p1 = vertices[new_tri[1]];
+  const glm::dvec3& p2 = vertices[new_tri[2]];
+  glm::dvec3 face_normal = glm::cross(p1 - p0, p2 - p0);
+  const double normal_length = glm::length(face_normal);
+  if (normal_length > 1e-12)
+  {
+    face_normal /= normal_length;
+  }
+  else
+  {
+    face_normal = glm::dvec3(0.0, 1.0, 0.0);
+  }
+  // Keep PerTriangleCorner buffer aligned (one normal per corner).
+  new_mesh.addNormal(face_normal);
+  new_mesh.addNormal(face_normal);
+  new_mesh.addNormal(face_normal);
 }
 
 std::optional<glm::dvec3> seamUvFromMeshletCorners(const VoronoiMesh& intersection_mesh,
@@ -1149,11 +1180,14 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const Voron
     }
     else if (origin.mesh_index < 0)
     {
-      // Synthetic faces from repair (e.g. small hole fills): interior material, no property interp.
+      // Synthetic faces from repair (e.g. small hole fills): no source mesh to sample.
+      // Still write geometric corner normals so PerTriangleCorner stays 1:1 with corners.
+      addGeometricCornerNormals(intersection_mesh, tri);
     }
     else
     {
       KINDS_WARNING("Invalid origin mesh index: " << origin.mesh_index << meshlet_suffix());
+      addGeometricCornerNormals(intersection_mesh, tri);
     }
 
     face_origins.push_back(face_origin);
