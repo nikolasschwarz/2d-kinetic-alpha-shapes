@@ -108,6 +108,11 @@ class StrandTree
   {
     return physics_strand_to_segment_indices;
   }
+  std::vector<std::vector<int>>& getPhysicsStrandToSegmentIndices() { return physics_strand_to_segment_indices; }
+  void setPhysicsStrandToSegmentIndices(std::vector<std::vector<int>> indices)
+  {
+    physics_strand_to_segment_indices = std::move(indices);
+  }
   const std::vector<std::vector<glm::dmat4>>& getTransformsByHeightAndBranch() const
   {
     return transforms_by_height_and_branch;
