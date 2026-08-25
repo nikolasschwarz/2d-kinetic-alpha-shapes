@@ -2115,7 +2115,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         radius_triangulation_meta = SegmentBuilder::MetadataBuilder()
                                       .addString("event_type", "radius_event")
-                                      .addString("mesh_type", "regular")
+                                      .addString("mesh_type", "bark")
                                       .addString("segment_action", "new_segment")
                                       .addDouble("time", t)
                                       .addDouble("t", t)
@@ -2141,7 +2141,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
           SegmentBuilder::MetadataBuilder builder;
           builder.addString("event_type", "radius_event")
             .addString("source", source)
-            .addString("mesh_type", "regular")
+            .addString("mesh_type", "bark")
             .addString("segment_action", "new_segment")
             .addDouble("time", t)
             .addDouble("t", t)
@@ -2179,8 +2179,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         ? inside_to_outside
         : (inside_to_outside ? polygon_ccw : !polygon_ccw);
       // Radius traced cell rings are convex — fan triangulation only (no ear-clip / plane geometry).
+      // Non-shift radius cell fans close the bark surface of the transitioning Delaunay triangle.
       segment_builder_.fanTriangulateConvexPolygon(mesh, ids, radius_triangulation_meta,
-        SegmentBuilder::PendingSplitFallbackMeshletMaterialId, orient_upwards);
+        SegmentBuilder::BoundaryIntervalMeshletMaterialId, orient_upwards);
       if (ids.size() < 3)
       {
         KINDS_WARNING("Radius: traced cell polygon has fewer than three vertices; no triangles emitted for cell "
