@@ -144,7 +144,7 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
     event_handler->afterEvent(*this);
   }
 
-  kd->validateSitesInsideConvexHull("RadiusEvent:afterEvent", t);
+  kd->validateSitesInsideConvexHull("RadiusEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

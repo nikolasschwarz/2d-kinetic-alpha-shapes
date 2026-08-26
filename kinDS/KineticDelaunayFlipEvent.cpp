@@ -421,10 +421,8 @@ void KineticDelaunay::FlipEvent::handleEvent()
     if (log_flip_diag)
     {
       KINDS_MONITOR("Flip handleEvent SKIP (he_id=" << half_edge_id << ", delaunay_edge=" << (half_edge_id / 2)
-                                                 << ", occurrence_t=" << std::setprecision(17) << t
-                                                 << ", infinitesimal_t=" << infinitesimal_t
-                                                 << ", creation_t=" << creation_time.real_time
-                                                 << "+inf=" << creation_time.infinitesimal_time << "): " << reason);
+                                                 << ", occurrence_t=" << std::setprecision(17) << occurrence_time
+                                                 << ", creation_t=" << creation_time << "): " << reason);
     }
   };
 
@@ -459,12 +457,10 @@ void KineticDelaunay::FlipEvent::handleEvent()
       : EventTime(std::numeric_limits<double>::quiet_NaN());
     KINDS_MONITOR("Flip handleEvent ENTER (he_id=" << half_edge_id << "/" << (half_edge_id ^ 1)
                                                 << ", delaunay_edge=" << quad_id << ", occurrence_t="
-                                                << std::setprecision(17) << t
-                                                << ", creation_t=" << creation_time.real_time
-                                                << "+inf=" << creation_time.infinitesimal_time << ", he_live="
+                                                << std::setprecision(17) << occurrence_time
+                                                << ", creation_t=" << creation_time << ", he_live="
                                                 << (graph.isLiveHalfEdge(half_edge_id) ? "true" : "false")
-                                                << ", quadrilateral_last_updated=" << quad_last.real_time
-                                                << "+inf=" << quad_last.infinitesimal_time << ")");
+                                                << ", quadrilateral_last_updated=" << quad_last << ")");
   }
 
   // Outdated if the flip edge was tombstoned (e.g. after a branch split).
@@ -492,7 +488,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
   if (log_flip_diag)
   {
     KINDS_MONITOR("Flip handleEvent PROCEED (he_id=" << half_edge_id << ", occurrence_t=" << std::setprecision(17)
-                                                  << t << ")");
+                                                  << occurrence_time << ")");
   }
 
   // Before modifying the topology, store the face id for each half-edge in the quadrilateral
@@ -567,7 +563,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
         const bool untransformed_collinear = raw_collinearity_metric <= flip_boundary_collinearity_eps;
 
         KINDS_WARNING("Flip sanity FAIL boundary collinearity (he_id="
-          << half_edge_id << ", occurrence_t=" << std::setprecision(17) << t
+          << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
           << ", creation_t=" << creation_time
           << ", transformed_collinearity_metric=" << collinearity_metric
           << ", untransformed_collinearity_metric=" << raw_collinearity_metric << ", eps="
@@ -585,7 +581,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
         const double raw_collinearity_metric = normalizedTriangleCollinearityMetric(pa_raw, pb_raw, pc_raw);
 
         KINDS_MONITOR("Flip sanity OK boundary collinearity (he_id="
-          << half_edge_id << ", occurrence_t=" << std::setprecision(17) << t
+          << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
           << ", creation_t=" << creation_time
           << ", transformed_collinearity_metric=" << collinearity_metric
           << ", untransformed_collinearity_metric=" << raw_collinearity_metric << ")");
@@ -623,7 +619,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
         = shared_frame_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
 
       KINDS_WARNING("Flip sanity FAIL Voronoi coincidence (he_id="
-        << half_edge_id << ", occurrence_t=" << std::setprecision(17) << t
+        << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
         << ", creation_t=" << creation_time << ", faces " << face_id << " and " << twin_face_id
         << ", transformed_voronoi_distance=" << voronoi_vertex_distance
         << ", untransformed_circumcenter_distance=" << raw_circumcenter_distance
@@ -653,7 +649,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
         = glm::distance(transformed_left_cc, transformed_right_cc);
 
       KINDS_MONITOR("Flip sanity OK Voronoi coincidence (he_id="
-        << half_edge_id << ", occurrence_t=" << std::setprecision(17) << t
+        << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
         << ", creation_t=" << creation_time
         << ", transformed_voronoi_distance=" << voronoi_vertex_distance
         << ", untransformed_circumcenter_distance=" << raw_circumcenter_distance
@@ -781,7 +777,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
   // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
   kd->validateVoronoiVertexIteratorInvariants("FlipEvent:afterEvent", t);
   kd->validateCrossingIntersectionInvariants("FlipEvent:afterEvent", t);
-  kd->validateSitesInsideConvexHull("FlipEvent:afterEvent", t);
+  kd->validateSitesInsideConvexHull("FlipEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

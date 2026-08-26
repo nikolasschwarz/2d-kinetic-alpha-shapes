@@ -788,7 +788,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
       KINDS_DEBUG("Crossing handleEvent SKIP (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
                                                               << ", delaunay_edge=" << (half_edge_id / 2)
                                                               << ", occurrence_t=" << std::setprecision(17)
-                                                              << t << ", creation_t=" << creation_time.real_time << "+inf=" << creation_time.infinitesimal_time
+                                                              << occurrence_time << ", creation_t=" << creation_time
                                                               << "): " << reason);
     }
   };
@@ -836,16 +836,15 @@ void KineticDelaunay::CrossingEvent::handleEvent()
     KINDS_DEBUG("Crossing handleEvent ENTER (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
                                                              << ", delaunay_edge=" << (half_edge_id / 2)
                                                              << ", occurrence_t=" << std::setprecision(17)
-                                                             << t << ", creation_t=" << creation_time.real_time << "+inf=" << creation_time.infinitesimal_time
+                                                             << occurrence_time << ", creation_t=" << creation_time
                                                              << ", registered=" << (registered ? "true" : "false")
                                                              << ", containing_tri="
                                                              << (containing_tri.has_value()
                                                                    ? std::to_string(*containing_tri)
                                                                    : std::string("n/a"))
-                                                             << ", last_crossing=" << last_crossing.real_time << "+inf=" << last_crossing.infinitesimal_time
+                                                             << ", last_crossing=" << last_crossing
                                                              << ", containing_face_last_updated="
-                                                             << containing_last_updated.real_time
-                                                             << "+inf=" << containing_last_updated.infinitesimal_time
+                                                             << containing_last_updated
                                                              << ", he_live="
                                                              << (graph.isLiveHalfEdge(half_edge_id) ? "true" : "false")
                                                              << ")");
@@ -890,7 +889,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
     KINDS_DEBUG("Crossing handleEvent PROCEED (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
                                                                << ", containing_tri=" << containing_tri_id
                                                                << ", occurrence_t=" << std::setprecision(17)
-                                                               << t << ")");
+                                                               << occurrence_time << ")");
   }
 
   auto* event_handler = kd->crossing_event_manager_->getCallback();
@@ -923,7 +922,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
   // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
   kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", t);
   kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", t);
-  kd->validateSitesInsideConvexHull("CrossingEvent:afterEvent", t);
+  kd->validateSitesInsideConvexHull("CrossingEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

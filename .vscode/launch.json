@@ -62,9 +62,7 @@
         "--log-add",
         "monitor",
         "--cutoff",
-        "3",
-        "--start",
-        "30"
+        "3"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -94,9 +92,7 @@
         "--log-add",
         "monitor",
         "--cutoff",
-        "3",
-        "--start",
-        "19"
+        "3"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -125,9 +121,7 @@
         "--log-add",
         "monitor",
         "--cutoff",
-        "3",
-        "--start",
-        "31"
+        "3"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

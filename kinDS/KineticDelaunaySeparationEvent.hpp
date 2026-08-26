@@ -7,16 +7,17 @@
 namespace kinDS
 {
 /**
- * \brief Scheduled mesh event: apply branch separation geometry for a pending component split.
+ * \brief Scheduled event: apply a pending branch graph cut / infinitesimal separation finalize.
  *
- * Does not change the Delaunay triangulation; triggers @ref KineticDelaunay::EventCallback hooks (typically
- * @ref SegmentBuilderSeparationCallback).
+ * When enqueued at the same real time as a @ref RadiusEvent with @ref after_radius_dispatch_order, runs after
+ * radius afterEvent meshing so the Delaunay graph is still intact for ring-walk / strip closing.
+ * Triggers @ref KineticDelaunay::EventCallback hooks (typically @ref SegmentBuilderSeparationCallback).
  */
 class KineticDelaunay::SeparationEvent final : public KineticDelaunay::Event
 {
  public:
   static constexpr uint32_t scheduled_iteration_dispatch_order = 15u;
-  /// Runs after @ref RadiusEvent (30) at the same occurrence time when enqueued from @ref notePendingBranchSplit.
+  /// Runs after @ref RadiusEvent (30) at the same occurrence time when enqueued for a deferred convex cut.
   static constexpr uint32_t after_radius_dispatch_order = 35u;
 
   static double scheduledOccurrenceTime(double split_time)
@@ -28,12 +29,19 @@ class KineticDelaunay::SeparationEvent final : public KineticDelaunay::Event
   size_t parent_component_id = static_cast<size_t>(-1);
   double split_time = 0.0;
 
-  SeparationEvent(KineticDelaunay* kd, double occurrence_time, size_t parent_component_id, double split_time,
-    double creation_time, uint32_t dispatch_order = scheduled_iteration_dispatch_order)
+  SeparationEvent(KineticDelaunay* kd, EventTime occurrence_time, size_t parent_component_id, double split_time,
+    EventTime creation_time, uint32_t dispatch_order = scheduled_iteration_dispatch_order)
     : KineticDelaunay::Event(occurrence_time, creation_time, dispatch_order)
     , kd_(kd)
     , parent_component_id(parent_component_id)
     , split_time(split_time)
+  {
+  }
+
+  SeparationEvent(KineticDelaunay* kd, double occurrence_time, size_t parent_component_id, double split_time,
+    double creation_time, uint32_t dispatch_order = scheduled_iteration_dispatch_order)
+    : SeparationEvent(kd, EventTime(occurrence_time), parent_component_id, split_time, EventTime(creation_time),
+        dispatch_order)
   {
   }
 

@@ -376,7 +376,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool warnAndSkipIfMeshletCompleted(const VoronoiMesh& mesh, const char* operation, double t) const;
   bool isBoundaryMeshletCompleted(size_t meshlet_index) const;
   /// If @p pair_idx names a meshlet retired by subdivision, return the newest live pair with the same
-  /// interval (cell + MeshingData crossings / metadata edges). Otherwise return @p pair_idx.
+  /// interval metadata (cell + start/end Delaunay edges). Otherwise return @p pair_idx.
   size_t preferLiveBoundaryMeshPair(size_t pair_idx) const;
   void markInteriorMeshletCompleted(size_t meshlet_index);
   void markBoundaryMeshletCompleted(size_t meshlet_index);
@@ -560,6 +560,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     BoundaryEventType event_type = BoundaryEventType::Section,
     BoundarySegmentAction segment_action = BoundarySegmentAction::SegmentCompleted,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+  /// Same as the resolve overload, but uses a caller-known @p intersection_pair_index (no re-resolve).
+  void finishMeshFromIntersections(size_t voronoi_cell_id, double t,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
+    std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, BoundaryEventType event_type,
+    BoundarySegmentAction segment_action, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
+    size_t intersection_pair_index);
 
   /// Adjacent crossing on the same Voronoi-edge list whose Delaunay edge is @p target_delaunay_edge.
   /// Uses @p crossing_ref's cached @c voronoi_ref; caller must only invoke for source-edge intersections.
@@ -669,7 +675,15 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void noteRadiusShiftedSiteMeshPosition(
     RadiusShiftedSiteCacheEntry& entry, const glm::dvec3& mesh_position, const char* consumer_context);
 
-  /// True when @p start/@p end are the two remapped shift-anchor crossings on @p ctx.target_delaunay_edge.
+  /**
+   * @brief True when @p start/@p end are the two remapped shift-anchor crossings on @c ctx.target_delaunay_edge.
+   *
+   * @details A Delaunay boundary edge with crossings @c refs ordered along the boundary is partitioned into
+   * intervals @c [null,refs.front()], @c [refs[k],refs[k+1]] for each consecutive pair, and
+   * @c [refs.back(),null]. The consecutive @c [refs[k],refs[k+1]] pieces are the mid-intervals (as opposed to the
+   * one-null end intervals). For radius boundary-transition shift, the complementary mid-interval is the one whose
+   * endpoints are exactly the two projected anchor crossings on the surviving / target Delaunay edge.
+   */
   bool midIntervalMatchesRadiusShiftAnchors(KineticDelaunay::CrossingData::EdgeIntersectionRef start,
     KineticDelaunay::CrossingData::EdgeIntersectionRef end, size_t site_vertex_id,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, double t);
@@ -683,14 +697,42 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     bool split_last_triangle = false, bool interior_strip = false,
     std::optional<size_t> insert_voronoi_edge_id = std::nullopt);
 
-  /// After @c startNewMeshFromIntersections of a target mid-interval: queue if it matches remapped anchors.
+  /**
+   * @brief Queue a complementary insert on a mid-interval strip that was just started (2→1 radius shift).
+   *
+   * @details After reseeding @c target_delaunay_edge, @c startNewMeshFromIntersections creates a fresh boundary
+   * meshlet for each mid-interval @c [crossing,crossing]. When that interval is the shift complementary mid
+   * (see @ref midIntervalMatchesRadiusShiftAnchors), this queues a split of its seed edge (mesh verts 0–1) that
+   * inserts the shifted shared-site corner. The strip usually has no triangles yet, so the split is deferred until
+   * @ref flushPendingRadiusComplementarySplits / finalize.
+   *
+   * @param intersection_pair_index New @c intersection_meshes pair from @c startNewMeshFromIntersections.
+   * @param start,@p end Mid-interval endpoints (ordered along the boundary).
+   * @param site_vertex_id Shared Delaunay site of the two source boundary edges (shift junction).
+   */
   void maybeQueueRadiusComplementarySplitForStartedMid(size_t intersection_pair_index,
     KineticDelaunay::CrossingData::EdgeIntersectionRef start, KineticDelaunay::CrossingData::EdgeIntersectionRef end,
     double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
 
-  /// After one-null finish/start filled the cache: split the finished complementary mid immediately when possible.
-  void maybeQueueRadiusComplementarySplitForExistingMid(
-    double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
+  /**
+   * @brief Split (or queue) the complementary mid-interval strip that already existed before a 1→2 radius shift.
+   *
+   * @details On 1→2, @c beforeEvent finished the mid-interval meshlet on the old single boundary edge
+   * (@c target_delaunay_edge). After the event that edge leaves the alpha boundary, so CrossingData
+   * @c prev/@c next links are cleared before this runs — do not rely on link lookup. Instead pass the
+   * pair indices captured while finishing that edge (@p finished_one_edge_pair_indices); this picks the
+   * complementary mid among them (both endpoints on @c target_d matching the remapped shift anchors),
+   * then applies @ref applyPendingRadiusComplementarySplit immediately (@c split_last_triangle), or
+   * queues it for finalize if the immediate apply fails.
+   *
+   * Contrasts with @ref maybeQueueRadiusComplementarySplitForStartedMid (2→1 / newly started seed edge).
+   *
+   * @param site_vertex_id Shared Delaunay site of the two source boundary edges (shift junction).
+   * @param finished_one_edge_pair_indices Meshlets finished on the pre-flip single boundary edge.
+   */
+  void maybeQueueRadiusComplementarySplitForExistingMid(double t, size_t site_vertex_id,
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
+    const std::vector<size_t>& finished_one_edge_pair_indices);
 
   /// Interior Voronoi-edge strip whose current seed/top edge contains @p crossing as an interior point.
   struct InteriorStripSplitTarget
@@ -1089,12 +1131,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * Uses @ref VoronoiMesh::triangulationPlaneXY (Delaunay space when meshes are object-space transformed).
    * @param polygon Vertex index ring into @p mesh.
    * @param orient_upwards If true, emits CCW XY triangles; otherwise emits CW triangles.
-   * @param occurrence_time Optional kinetic time for failure/split debug dumps (path + TXT header).
+   * @param occurrence_time Optional kinetic @ref EventTime for failure/split debug dumps (path + TXT header).
    * @param runtime_branch_id Optional runtime branch for failure/split debug dump folder naming.
    */
   void triangulateSimplePolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
     const std::string& metadata = "{}", int material_id = RegularMeshletMaterialId, bool orient_upwards = true,
-    std::optional<double> occurrence_time = std::nullopt, std::optional<size_t> runtime_branch_id = std::nullopt);
+    std::optional<EventTime> occurrence_time = std::nullopt, std::optional<size_t> runtime_branch_id = std::nullopt);
 
   /**
    * @brief Fan-triangulates a convex polygon ring (no geometric tests).

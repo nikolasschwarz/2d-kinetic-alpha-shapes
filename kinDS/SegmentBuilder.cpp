@@ -171,30 +171,23 @@ bool triangulationPlaneXYEqual(const VoronoiMesh& mesh, size_t vertex_a, size_t 
   return a.x == b.x && a.y == b.y;
 }
 
-double resolveTriangulateSimplePolygonDebugTime(const VoronoiMesh& mesh, std::optional<double> occurrence_time)
+EventTime resolveTriangulateSimplePolygonDebugTime(const VoronoiMesh& mesh, std::optional<EventTime> occurrence_time)
 {
-  if (occurrence_time.has_value() && std::isfinite(occurrence_time.value()))
+  if (occurrence_time.has_value() && std::isfinite(occurrence_time->real_time))
   {
-    return occurrence_time.value();
+    return *occurrence_time;
   }
-  return mesh.getCreationKineticTime();
+  return EventTime(mesh.getCreationKineticTime());
 }
 
 std::filesystem::path makeTriangulateSimplePolygonDebugPath(const KineticDelaunay& kin_del, const VoronoiMesh& mesh,
-  const char* tag, const char* extension, std::optional<double> occurrence_time,
+  const char* tag, const char* extension, std::optional<EventTime> occurrence_time,
   std::optional<size_t> runtime_branch_id)
 {
   static size_t debug_counter = 0;
   ++debug_counter;
 
-  const EventTime kinetic_time = [&]() -> EventTime
-  {
-    if (occurrence_time.has_value() && std::isfinite(*occurrence_time))
-    {
-      return EventTime(*occurrence_time);
-    }
-    return EventTime(mesh.getCreationKineticTime());
-  }();
+  const EventTime kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
   const bool svg_export = extension != nullptr && std::string_view(extension) == ".svg";
   const std::string time_token
     = svg_export ? formatDebugExportTimeToken(kinetic_time) : formatDebugExportTimeToken(kinetic_time.real_time);
@@ -267,7 +260,7 @@ void appendTriangulateSimplePolygonVertexSourceFields(std::ostream& out, const s
 
 void writeTriangulateSimplePolygonDebugTxt(const KineticDelaunay& kin_del, const VoronoiMesh& mesh,
   const std::filesystem::path& filepath, const char* tag,
-  const std::vector<std::pair<std::string, std::vector<size_t>>>& rings, std::optional<double> occurrence_time,
+  const std::vector<std::pair<std::string, std::vector<size_t>>>& rings, std::optional<EventTime> occurrence_time,
   std::optional<size_t> runtime_branch_id)
 {
   std::ofstream out(filepath);
@@ -277,12 +270,12 @@ void writeTriangulateSimplePolygonDebugTxt(const KineticDelaunay& kin_del, const
     return;
   }
 
-  const double kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
+  const EventTime kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
   const auto& stored_vertices = mesh.getVertices();
   const auto& vertex_metadata = mesh.getVertexMetadata();
 
   out << "# tag=" << tag << '\n';
-  out << "# occurrence_time=" << formatDebugExportTime(kinetic_time) << '\n';
+  out << "# occurrence_time=" << kinetic_time << '\n';
   out << "# runtime_branch_id="
       << (runtime_branch_id.has_value() ? std::to_string(runtime_branch_id.value()) : "unresolved") << '\n';
   out << "# equality=exact profile_xy (triangulationPlaneXY), not mesh vertex id\n";
@@ -390,7 +383,7 @@ std::vector<std::vector<size_t>> splitPolygonAtRepeatedVertices(
 }
 
 void writeTriangulateSimplePolygonFailSvg(KineticDelaunay& kin_del, VoronoiMesh& mesh,
-  const std::vector<size_t>& polygon_vertices, std::optional<double> occurrence_time,
+  const std::vector<size_t>& polygon_vertices, std::optional<EventTime> occurrence_time,
   std::optional<size_t> runtime_branch_id)
 {
   if (polygon_vertices.size() < 3)
@@ -398,7 +391,7 @@ void writeTriangulateSimplePolygonFailSvg(KineticDelaunay& kin_del, VoronoiMesh&
     return;
   }
 
-  const double kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
+  const EventTime kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
 
   // Common event-style kinetic SVG with sites / intersections / VVs from the failed polygon highlighted.
   {
@@ -3259,6 +3252,22 @@ void SegmentBuilder::markBoundaryMeshletCompleted(size_t meshlet_index)
     boundary_meshlet_completed_.resize(intersection_meshes.size(), false);
   }
   boundary_meshlet_completed_[meshlet_index] = true;
+
+  // Drop live CrossingData prev/next advertisements of this retired pair. Never dereference
+  // MeshingData::{start,end}_crossing — those iterators may be value-initialized or orphaned after
+  // CrossingData erase/rebuild while the optional is still engaged.
+  auto& crossing_data = kin_del.getCrossingDataMutable();
+  for (KineticDelaunay::CrossingData::VoronoiDelaunayEdgeIntersection& node : crossing_data.edge_intersections)
+  {
+    if (node.prev_segment_mesh_pair_index == meshlet_index)
+    {
+      node.prev_segment_mesh_pair_index = static_cast<size_t>(-1);
+    }
+    if (node.next_segment_mesh_pair_index == meshlet_index)
+    {
+      node.next_segment_mesh_pair_index = static_cast<size_t>(-1);
+    }
+  }
 }
 
 bool SegmentBuilder::isBoundaryMeshletCompleted(size_t meshlet_index) const
@@ -3277,61 +3286,25 @@ size_t SegmentBuilder::preferLiveBoundaryMeshPair(size_t pair_idx) const
     return pair_idx;
   }
 
-  size_t cell = static_cast<size_t>(-1);
-  size_t start_d = static_cast<size_t>(-1);
-  size_t end_d = static_cast<size_t>(-1);
-  if (pair_idx < intersection_mesh_pair_metadata.size())
+  // Match replacement strips by metadata only. Do not read MeshingData crossing iterators — they can be
+  // singular/orphaned after CrossingData mutations (same class of bug as markBoundaryMeshletCompleted).
+  if (pair_idx >= intersection_mesh_pair_metadata.size())
   {
-    cell = intersection_mesh_pair_metadata[pair_idx].voronoi_cell_id;
-    start_d = intersection_mesh_pair_metadata[pair_idx].start_delaunay_edge_id;
-    end_d = intersection_mesh_pair_metadata[pair_idx].end_delaunay_edge_id;
+    return pair_idx;
   }
-
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_crossing;
-  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_crossing;
-  if (pair_idx < intersection_mesh_pair_last_left_and_right_vertex.size()
-    && !intersection_mesh_pair_last_left_and_right_vertex[pair_idx].empty())
-  {
-    const MeshingData& stale = intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front();
-    start_crossing = stale.start_crossing;
-    end_crossing = stale.end_crossing;
-  }
-
-  auto crossings_match = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& a,
-                           const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& b) -> bool
-  {
-    if (!a.has_value() && !b.has_value())
-    {
-      return true;
-    }
-    return a.has_value() && b.has_value() && a.value() == b.value();
-  };
-  auto interval_matches = [&](const MeshingData& seg) -> bool
-  {
-    return (crossings_match(seg.start_crossing, start_crossing) && crossings_match(seg.end_crossing, end_crossing))
-      || (crossings_match(seg.start_crossing, end_crossing) && crossings_match(seg.end_crossing, start_crossing));
-  };
+  const size_t cell = intersection_mesh_pair_metadata[pair_idx].voronoi_cell_id;
+  const size_t start_d = intersection_mesh_pair_metadata[pair_idx].start_delaunay_edge_id;
+  const size_t end_d = intersection_mesh_pair_metadata[pair_idx].end_delaunay_edge_id;
 
   for (size_t i = intersection_meshes.size(); i-- > 0;)
   {
-    if (i == pair_idx || isBoundaryMeshletCompleted(i))
+    if (i == pair_idx || isBoundaryMeshletCompleted(i) || i >= intersection_mesh_pair_metadata.size())
     {
       continue;
     }
-    bool meta_ok = false;
-    if (i < intersection_mesh_pair_metadata.size())
-    {
-      const auto& meta = intersection_mesh_pair_metadata[i];
-      meta_ok = meta.voronoi_cell_id == cell && meta.start_delaunay_edge_id == start_d
-        && meta.end_delaunay_edge_id == end_d;
-    }
-    bool interval_ok = false;
-    if (i < intersection_mesh_pair_last_left_and_right_vertex.size()
-      && !intersection_mesh_pair_last_left_and_right_vertex[i].empty())
-    {
-      interval_ok = interval_matches(intersection_mesh_pair_last_left_and_right_vertex[i].front());
-    }
-    if (meta_ok || interval_ok)
+    const auto& meta = intersection_mesh_pair_metadata[i];
+    if (meta.voronoi_cell_id == cell && meta.start_delaunay_edge_id == start_d
+      && meta.end_delaunay_edge_id == end_d)
     {
       KINDS_DEBUG("preferLiveBoundaryMeshPair: pair " << pair_idx << " retired after subdivision; using live pair " << i);
       return i;
@@ -3785,6 +3758,7 @@ bool SegmentBuilder::midIntervalMatchesRadiusShiftAnchors(
   KineticDelaunay::CrossingData::EdgeIntersectionRef start, KineticDelaunay::CrossingData::EdgeIntersectionRef end,
   size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, double t)
 {
+  // "Mid-interval" = consecutive [crossing,crossing] segment on a Delaunay boundary edge (not a one-null end).
   RadiusShiftedSiteCacheEntry* cache_entry
     = getOrFillRadiusShiftedSiteCache(t, site_vertex_id, boundary_transition_shift);
   if (cache_entry == nullptr || !cache_entry->placement.projection.has_value())
@@ -3863,6 +3837,8 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForStartedMid(size_t inte
   KineticDelaunay::CrossingData::EdgeIntersectionRef start, KineticDelaunay::CrossingData::EdgeIntersectionRef end,
   double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
+  // 2→1 radius shift: a new mid-interval meshlet was just seeded on target_d between the remapped anchors.
+  // Queue a split of its seed edge (verts 0,1) that inserts the shifted shared-site corner (usually deferred).
   intersection_pair_index = preferLiveBoundaryMeshPair(intersection_pair_index);
   if (intersection_pair_index == static_cast<size_t>(-1) || boundary_transition_shift == nullptr)
   {
@@ -3893,9 +3869,12 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForStartedMid(size_t inte
     boundary_transition_shift->target_delaunay_edge);
 }
 
-void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
-  double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
+void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(double t, size_t site_vertex_id,
+  const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
+  const std::vector<size_t>& finished_one_edge_pair_indices)
 {
+  // 1→2: complementary mid on target_d finished in beforeEvent. Alpha-boundary leave clears CrossingData
+  // prev/next before afterEvent — use finish-time candidate pair indices instead of link lookup.
   const auto format_crossing_ref
     = [](KineticDelaunay::CrossingData::EdgeIntersectionRef ref) -> std::string
   {
@@ -3915,8 +3894,7 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
   const auto log_finished_mid = [&](const char* outcome, size_t boundary_meshlet_id = static_cast<size_t>(-1),
                                    const MeshingData* seg = nullptr,
                                    const std::optional<std::string>& anchor0 = std::nullopt,
-                                   const std::optional<std::string>& anchor1 = std::nullopt,
-                                   size_t link_pair_idx = static_cast<size_t>(-1), bool as_debug = false)
+                                   const std::optional<std::string>& anchor1 = std::nullopt, bool as_debug = false)
   {
     std::ostringstream oss;
     oss << "Radius complementary finished-mid: " << outcome << " t=" << t << " site=" << site_vertex_id;
@@ -3944,17 +3922,7 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
       }
     }
     oss << " voronoi_cell=" << voronoi_cell << " owner_segment=" << owner_segment << " start_d=" << start_d
-        << " end_d=" << end_d;
-    if (link_pair_idx != static_cast<size_t>(-1))
-    {
-      oss << " link_pair=" << link_pair_idx;
-      if (link_pair_idx < intersection_mesh_pair_metadata.size())
-      {
-        const auto& link_meta = intersection_mesh_pair_metadata[link_pair_idx];
-        oss << " link_voronoi_cell=" << link_meta.voronoi_cell_id << " link_owner_segment=" << link_meta.owner_segment_id
-            << " link_start_d=" << link_meta.start_delaunay_edge_id << " link_end_d=" << link_meta.end_delaunay_edge_id;
-      }
-    }
+        << " end_d=" << end_d << " candidates=" << finished_one_edge_pair_indices.size();
     if (seg != nullptr)
     {
       oss << " strip_edge=(" << seg->mesh_start_vertex_id << "," << seg->mesh_end_vertex_id << ")";
@@ -4017,23 +3985,13 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
   auto crossings_match = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& a,
                            KineticDelaunay::CrossingData::EdgeIntersectionRef b) -> bool
   {
-    return a.has_value() && a.value() == b;
+    if (!a.has_value())
+    {
+      return false;
+    }
+    return a.value() == b
+      || (a.value()->delaunay_edge_id == b->delaunay_edge_id && a.value()->voronoi_edge_id == b->voronoi_edge_id);
   };
-
-  size_t pair_idx = static_cast<size_t>(-1);
-  size_t link_pair_idx = static_cast<size_t>(-1);
-  if (remapped0->next_segment_mesh_pair_index != static_cast<size_t>(-1)
-    && remapped0->next_segment_mesh_pair_index == remapped1->prev_segment_mesh_pair_index)
-  {
-    pair_idx = remapped0->next_segment_mesh_pair_index;
-    link_pair_idx = pair_idx;
-  }
-  else if (remapped1->next_segment_mesh_pair_index != static_cast<size_t>(-1)
-    && remapped1->next_segment_mesh_pair_index == remapped0->prev_segment_mesh_pair_index)
-  {
-    pair_idx = remapped1->next_segment_mesh_pair_index;
-    link_pair_idx = pair_idx;
-  }
 
   auto segment_matches = [&](const MeshingData& seg) -> bool
   {
@@ -4050,41 +4008,67 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
       || (crossings_match(seg.start_crossing, remapped1) && crossings_match(seg.end_crossing, remapped0));
   };
 
-  if (pair_idx != static_cast<size_t>(-1))
+  auto candidate_is_target_mid = [&](size_t pair_idx) -> bool
   {
-    if (pair_idx >= intersection_mesh_pair_last_left_and_right_vertex.size()
-      || intersection_mesh_pair_last_left_and_right_vertex[pair_idx].empty()
-      || !segment_matches(intersection_mesh_pair_last_left_and_right_vertex[pair_idx].front()))
+    if (pair_idx >= intersection_mesh_pair_metadata.size())
     {
-      pair_idx = static_cast<size_t>(-1);
+      return false;
+    }
+    const auto& meta = intersection_mesh_pair_metadata[pair_idx];
+    return meta.start_delaunay_edge_id == target_d && meta.end_delaunay_edge_id == target_d;
+  };
+
+  size_t pair_idx = static_cast<size_t>(-1);
+  // Prefer a unique target-d mid from the beforeEvent finish list (metadata only — no MeshingData iterators).
+  {
+    size_t sole_target_mid = static_cast<size_t>(-1);
+    size_t target_mid_count = 0;
+    for (size_t candidate : finished_one_edge_pair_indices)
+    {
+      if (candidate_is_target_mid(candidate) && candidate < intersection_meshes.size()
+        && candidate < intersection_mesh_pair_last_left_and_right_vertex.size()
+        && !intersection_mesh_pair_last_left_and_right_vertex[candidate].empty())
+      {
+        ++target_mid_count;
+        sole_target_mid = candidate;
+      }
+    }
+    if (target_mid_count == 1)
+    {
+      pair_idx = sole_target_mid;
     }
   }
+  // Multiple mids on the finished edge: narrow by remapped shift anchors (content id, not CrossingData links).
   if (pair_idx == static_cast<size_t>(-1))
   {
-    for (size_t i = intersection_mesh_pair_last_left_and_right_vertex.size(); i-- > 0;)
+    for (size_t candidate : finished_one_edge_pair_indices)
     {
-      if (intersection_mesh_pair_last_left_and_right_vertex[i].empty())
+      if (candidate == static_cast<size_t>(-1) || candidate >= intersection_meshes.size()
+        || candidate >= intersection_mesh_pair_last_left_and_right_vertex.size()
+        || intersection_mesh_pair_last_left_and_right_vertex[candidate].empty())
       {
         continue;
       }
-      const MeshingData& candidate = intersection_mesh_pair_last_left_and_right_vertex[i].front();
-      if (!candidate.start_crossing.has_value() || !candidate.end_crossing.has_value())
+      if (!candidate_is_target_mid(candidate))
       {
         continue;
       }
-      if (midIntervalMatchesRadiusShiftAnchors(candidate.start_crossing.value(), candidate.end_crossing.value(),
-            site_vertex_id, boundary_transition_shift, t)
-        || segment_matches(candidate))
+      const MeshingData& candidate_seg = intersection_mesh_pair_last_left_and_right_vertex[candidate].front();
+      if (segment_matches(candidate_seg)
+        || (candidate_seg.start_crossing.has_value() && candidate_seg.end_crossing.has_value()
+          && midIntervalMatchesRadiusShiftAnchors(candidate_seg.start_crossing.value(),
+               candidate_seg.end_crossing.value(), site_vertex_id, boundary_transition_shift, t)))
       {
-        pair_idx = i;
+        pair_idx = candidate;
         break;
       }
     }
   }
+
   if (pair_idx == static_cast<size_t>(-1) || pair_idx >= intersection_meshes.size())
   {
     log_finished_mid("failed (no matching boundary meshlet)", static_cast<size_t>(-1), nullptr, anchor0_str,
-      anchor1_str, link_pair_idx);
+      anchor1_str);
     return;
   }
 
@@ -4133,10 +4117,9 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(
     }
   }
 
-  // Finished complementary (e.g. 1->2): split the closing edge of the finished strip (last triangle) now.
   if (applyPendingRadiusComplementarySplit(pending, true))
   {
-    log_finished_mid("applied immediately", pair_idx, &seg, anchor0_str, anchor1_str, static_cast<size_t>(-1), true);
+    log_finished_mid("applied immediately", pair_idx, &seg, anchor0_str, anchor1_str, true);
     return;
   }
 
@@ -5327,6 +5310,23 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, BoundaryEventType event_type,
   BoundarySegmentAction segment_action, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift)
 {
+  if (!start_intersection.has_value() && !end_intersection.has_value())
+  {
+    throw std::runtime_error("finishMeshFromIntersections requires at least one intersection reference.");
+  }
+
+  const size_t intersection_pair_index
+    = resolveIntersectionMeshPairIndex(voronoi_cell_id, start_intersection, end_intersection, t);
+  finishMeshFromIntersections(voronoi_cell_id, t, start_intersection, end_intersection, event_type, segment_action,
+    boundary_transition_shift, intersection_pair_index);
+}
+
+void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double t,
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_intersection,
+  std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_intersection, BoundaryEventType event_type,
+  BoundarySegmentAction segment_action, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
+  size_t intersection_pair_index)
+{
   // voronoi_cell_id is the strand site (Delaunay vertex), not a Voronoi vertex (Delaunay face).
   // Validate circumcenters only via the intersection Voronoi-edge endpoints below.
   if (start_intersection.has_value())
@@ -5344,9 +5344,6 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   {
     throw std::runtime_error("finishMeshFromIntersections requires at least one intersection reference.");
   }
-
-  const size_t intersection_pair_index
-    = resolveIntersectionMeshPairIndex(voronoi_cell_id, start_intersection, end_intersection, t);
 
   if (intersection_pair_index == static_cast<size_t>(-1) || intersection_pair_index >= intersection_meshes.size()
     || intersection_pair_index >= intersection_mesh_pair_last_left_and_right_vertex.size())
@@ -9341,7 +9338,7 @@ void kinDS::SegmentBuilder::closingMeshLogUnmatchedOrderedSegments(
 }
 
 void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
-  const std::string& metadata, int material_id, bool orient_upwards, std::optional<double> occurrence_time,
+  const std::string& metadata, int material_id, bool orient_upwards, std::optional<EventTime> occurrence_time,
   std::optional<size_t> runtime_branch_id)
 {
   constexpr double eps = 1e-12;

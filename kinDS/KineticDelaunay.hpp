@@ -56,6 +56,9 @@ struct PendingBranchSplit
   /// radius outside→inside component consolidate). Reactivation clears this flag when the same input-branch
   /// split is noted again.
   bool on_hiatus = false;
+  /// True after a same-t @ref SeparationEvent with @c after_radius_dispatch_order has been enqueued to apply the
+  /// graph cut once radius (and other lower-order) handlers at this time finish. Dedups re-activate calls.
+  bool cut_event_queued = false;
   /// Sorted unique input-branch ids spanned by the pending pieces (identity for hiatus reactivation).
   std::vector<size_t> input_branch_ids;
 };
@@ -504,8 +507,9 @@ class KineticDelaunay
   void handleSeparationEventAtTime(size_t parent_component_id, double t);
   /// Apply the in-place graph cut (or retriangulation) for one pending parent *runtime branch* only.
   void applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id);
-  /// Activate frozen-site virtual separation (or cut immediately if seams are already convex).
-  void activateInfinitesimalSeparationOrApplyCut(size_t parent_component_id, double t);
+  /// Activate frozen-site virtual separation, or handle convex seams: enqueue a same-t @ref SeparationEvent when
+  /// @p apply_cut_now is false, otherwise apply the graph cut immediately.
+  void activateInfinitesimalSeparationOrApplyCut(size_t parent_component_id, double t, bool apply_cut_now = false);
   /// Recompute flip/radius/crossing for all cross-piece simplices using virtual site trajectories.
   /// Used to seed the infinitesimal event queue on activate; post-event refresh uses the same local
   /// neighbor paradigm as regular events (under @ref ScopedInfinitesimalEventCompute).
@@ -766,8 +770,9 @@ class KineticDelaunay
   /// otherwise each site uses @p apply_reference_transform with its native reference branch (or local support).
   glm::dvec2 computeSeparationDirection(const PendingBranchSplit& split, double t, bool apply_reference_transform,
     std::optional<size_t> shared_reference_branch = std::nullopt) const;
-  /// Activate infinitesimal separation or apply the graph cut immediately if seams are already convex.
-  /// Replaces the former SeparationEvent ramp schedule.
+  /// After a pending split is noted: if seams are already convex, enqueue a same-t @ref SeparationEvent
+  /// (@ref SeparationEvent::after_radius_dispatch_order) so the graph cut runs after radius meshing; otherwise
+  /// start infinitesimal virtual separation immediately (graph stays connected).
   void maybeScheduleSeparationOrApplyPendingSplit(size_t parent_component_id, double split_time);
 
   /// Pending split data keyed by the parent component id, if recorded.
@@ -1000,7 +1005,7 @@ class KineticDelaunay
   /// Off by default; enable via CLI @c --check-sites-in-hull. Failures log @c KINDS_WARNING (possible bad flip).
   void setSitesInsideConvexHullCheckEnabled(bool enabled);
   bool sitesInsideConvexHullCheckEnabled() const;
-  void validateSitesInsideConvexHull(const char* context, double t) const;
+  void validateSitesInsideConvexHull(const char* context, EventTime t) const;
   /// Bounds-checked diagnostic id queries; invalid ids are ignored by monitor logging.
   bool isDiagnosticsStrandIdValid(size_t strand_id) const;
   bool isDiagnosticsFaceIdValid(size_t face_id) const;

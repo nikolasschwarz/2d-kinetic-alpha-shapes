@@ -2803,14 +2803,15 @@ glm::dvec2 KineticDelaunay::computeSeparationDirection(const PendingBranchSplit&
   return new_centroid.value() - old_centroid.value();
 }
 
-// Activate infinitesimal virtual separation (or cut immediately). Formerly enqueued a SeparationEvent ramp.
+// After a pending split is noted: defer convex cuts via SeparationEvent (after radius), else start virtual separation.
 void KineticDelaunay::maybeScheduleSeparationOrApplyPendingSplit(
   size_t parent_component_id, double split_time)
 {
-  activateInfinitesimalSeparationOrApplyCut(parent_component_id, split_time);
+  activateInfinitesimalSeparationOrApplyCut(parent_component_id, split_time, /*apply_cut_now=*/false);
 }
 
-void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(size_t parent_component_id, double t)
+void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(
+  size_t parent_component_id, double t, bool apply_cut_now)
 {
   PendingBranchSplit* split = nullptr;
   {
@@ -2842,11 +2843,42 @@ void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(size_t parent_co
 
   if (pendingSplitSeamsAreConvex(parent_component_id, t))
   {
+    if (!apply_cut_now)
+    {
+      if (split->cut_event_queued)
+      {
+        KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id
+                                                                            << " convex at t=" << t
+                                                                            << "; SeparationEvent already queued");
+        return;
+      }
+      if (!kinetic_algorithm_)
+      {
+        KINDS_WARNING("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id
+                                                                              << " convex at t=" << t
+                                                                              << " but no kinetic algorithm; applying cut now");
+        ++split->infinitesimal_epoch;
+        split->infinitesimal_active = false;
+        split->cut_event_queued = false;
+        applyPendingRuntimeBranchSplit(t, split->parent_runtime_branch);
+        return;
+      }
+      const EventTime occurrence = eventTimeAt(t);
+      KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id
+                                                                          << " already convex at t=" << occurrence
+                                                                          << "; enqueueing SeparationEvent after radius");
+      split->cut_event_queued = true;
+      kinetic_algorithm_->enqueueEvent(std::make_shared<SeparationEvent>(this, occurrence, parent_component_id, t,
+        occurrence, SeparationEvent::after_radius_dispatch_order));
+      return;
+    }
+
     KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id
                                                                         << " already convex at t=" << t
                                                                         << "; applying graph split");
     ++split->infinitesimal_epoch;
     split->infinitesimal_active = false;
+    split->cut_event_queued = false;
     applyPendingRuntimeBranchSplit(t, split->parent_runtime_branch);
     return;
   }
@@ -2854,6 +2886,7 @@ void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(size_t parent_co
   ++split->infinitesimal_epoch;
   split->infinitesimal_active = true;
   split->infinitesimal_t_event = t;
+  split->cut_event_queued = false;
   KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id << " t=" << t
                                                                       << " epoch=" << split->infinitesimal_epoch
                                                                       << " dir=" << glm::to_string(split->separation_direction));
@@ -3264,8 +3297,8 @@ void KineticDelaunay::logSplitTransformOrthonormalityDiagnostic(size_t parent_co
 
 void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, double t)
 {
-  // Legacy SeparationEvent entry point: redirect to instantaneous infinitesimal separation.
-  activateInfinitesimalSeparationOrApplyCut(parent_component_id, t);
+  // SeparationEvent finalize: apply the graph cut when seams are convex (do not re-enqueue).
+  activateInfinitesimalSeparationOrApplyCut(parent_component_id, t, /*apply_cut_now=*/true);
 }
 
 void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id)
@@ -4519,13 +4552,14 @@ void KineticDelaunay::validateVoronoiVertexIteratorInvariants(const char* contex
   crossing_data.validateVoronoiVertexIteratorInvariants(context, graph, this, t);
 }
 
-void KineticDelaunay::validateSitesInsideConvexHull(const char* context, double t) const
+void KineticDelaunay::validateSitesInsideConvexHull(const char* context, EventTime occurrence_time) const
 {
   if (!sites_inside_convex_hull_check_enabled_)
   {
     return;
   }
 
+  const double t = occurrence_time.real_time;
   constexpr double kHullContainmentEps = 1e-9;
   const auto cross2 = [](const glm::dvec2& u, const glm::dvec2& v) { return u.x * v.y - u.y * v.x; };
   const auto signed_area2 = [&](const std::vector<glm::dvec2>& poly)
@@ -4584,7 +4618,7 @@ void KineticDelaunay::validateSitesInsideConvexHull(const char* context, double 
     if (start_he == static_cast<size_t>(-1))
     {
       KINDS_WARNING("Sites-in-hull check (" << (context ? context : "?") << "): component " << component_index
-                                           << " at t=" << t << " has no outside convex-hull half-edge");
+                                           << " at t=" << occurrence_time << " has no outside convex-hull half-edge");
       continue;
     }
 
@@ -4596,7 +4630,7 @@ void KineticDelaunay::validateSitesInsideConvexHull(const char* context, double 
       if (origin < 0)
       {
         KINDS_WARNING("Sites-in-hull check (" << (context ? context : "?") << "): infinite origin on hull he="
-                                             << he_id << " at t=" << t);
+                                             << he_id << " at t=" << occurrence_time);
         hull_vertex_ids.clear();
         break;
       }
@@ -4605,7 +4639,7 @@ void KineticDelaunay::validateSitesInsideConvexHull(const char* context, double 
       if (!graph.isLiveHalfEdge(he_id) || !graph.isOnConvexBoundaryOutside(he_id))
       {
         KINDS_WARNING("Sites-in-hull check (" << (context ? context : "?") << "): broken hull walk from he="
-                                             << start_he << " at t=" << t);
+                                             << start_he << " at t=" << occurrence_time);
         hull_vertex_ids.clear();
         break;
       }
@@ -4646,7 +4680,7 @@ void KineticDelaunay::validateSitesInsideConvexHull(const char* context, double 
 
       KINDS_WARNING("Sites-in-hull FAIL (" << (context ? context : "?") << "): site " << site_id
                                           << " outside graph convex hull of component " << component_index
-                                          << " at t=" << std::setprecision(17) << t << " pos=(" << site_p.x << ","
+                                          << " at t=" << std::setprecision(17) << occurrence_time << " pos=(" << site_p.x << ","
                                           << site_p.y << ") worst_edge_cross=" << worst_cross
                                           << " (possible incorrect CCW flip)");
     }
