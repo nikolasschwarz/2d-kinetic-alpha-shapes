@@ -601,7 +601,72 @@ std::vector<double> KineticDelaunay::findEvents(
   return found_event_times;
 }
 
-void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
+std::vector<double> KineticDelaunay::findVirtualEvents(
+  Polynomial& event_trigger, double min_x, bool only_positive_to_negative)
+{
+  if (event_trigger.degree() == -1)
+  {
+    return {};
+  }
+
+  event_trigger.trim();
+  auto zeros = event_trigger.realRoots();
+  std::vector<double> filtered_sorted_zeros;
+
+  for (const auto& root : zeros)
+  {
+    if (std::isnan(root) || !std::isfinite(root))
+    {
+      continue;
+    }
+    if (root > min_x)
+    {
+      filtered_sorted_zeros.push_back(root);
+    }
+  }
+
+  if (filtered_sorted_zeros.empty())
+  {
+    return {};
+  }
+
+  std::sort(filtered_sorted_zeros.begin(), filtered_sorted_zeros.end());
+
+  std::vector<double> interval_signs(filtered_sorted_zeros.size() + 1);
+  double test_point = (min_x + filtered_sorted_zeros[0]) * 0.5;
+  if (!(test_point > min_x))
+  {
+    test_point = filtered_sorted_zeros[0] - std::max(1e-9, std::abs(filtered_sorted_zeros[0]) * 1e-12);
+  }
+  interval_signs[0] = event_trigger(test_point) > 0.0 ? 1.0 : -1.0;
+
+  for (size_t i = 0; i < filtered_sorted_zeros.size(); ++i)
+  {
+    const double next_bound = (i + 1 < filtered_sorted_zeros.size())
+      ? filtered_sorted_zeros[i + 1]
+      : (filtered_sorted_zeros[i] + 1.0);
+    test_point = (filtered_sorted_zeros[i] + next_bound) * 0.5;
+    interval_signs[i + 1] = event_trigger(test_point) > 0.0 ? 1.0 : -1.0;
+  }
+
+  std::vector<double> found_event_times;
+  for (size_t i = 0; i < filtered_sorted_zeros.size(); ++i)
+  {
+    if (interval_signs[i] == interval_signs[i + 1])
+    {
+      continue;
+    }
+    if (only_positive_to_negative && interval_signs[i] < 0.0)
+    {
+      continue;
+    }
+    found_event_times.push_back(filtered_sorted_zeros[i]);
+  }
+  return found_event_times;
+}
+
+void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t,
+  std::optional<InfinitesimalComputeContext> infinitesimal)
 {
   // Find which side of he_id is on the outside of the convex hull
   size_t face0 = graph.halfEdge(he_id).face;
@@ -768,16 +833,17 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t)
   recompute_voronoi_vertices.insert(face1);
   for (size_t voronoi_vertex : recompute_voronoi_vertices)
   {
-    crossing_event_manager_->computeEvents(t, voronoi_vertex);
+    crossing_event_manager_->computeEvents(t, voronoi_vertex, infinitesimal);
     if (voronoi_vertex < crossing_data.last_crossing.size())
     {
-      crossing_data.last_crossing[voronoi_vertex] = t;
+      crossing_data.last_crossing[voronoi_vertex]
+        = infinitesimal.has_value() ? EventTime(t, infinitesimal->min_infinitesimal_t) : EventTime(t);
     }
   }
 }
 
-void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
-  size_t quad_index, double t, const std::map<size_t, size_t>& pre_flip_quad_faces)
+void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, double t,
+  const std::map<size_t, size_t>& pre_flip_quad_faces, std::optional<InfinitesimalComputeContext> infinitesimal)
 {
   size_t he_id = quad_index * 2;
   size_t face_id0 = graph.halfEdge(he_id).face;
@@ -1325,10 +1391,11 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(
   recompute_voronoi_vertices.insert(face_id1);
   for (size_t voronoi_vertex : recompute_voronoi_vertices)
   {
-    crossing_event_manager_->computeEvents(t, voronoi_vertex);
+    crossing_event_manager_->computeEvents(t, voronoi_vertex, infinitesimal);
     if (voronoi_vertex < crossing_data.last_crossing.size())
     {
-      crossing_data.last_crossing[voronoi_vertex] = t;
+      crossing_data.last_crossing[voronoi_vertex]
+        = infinitesimal.has_value() ? EventTime(t, infinitesimal->min_infinitesimal_t) : EventTime(t);
     }
   }
 }
@@ -1342,7 +1409,7 @@ void KineticDelaunay::growGraphSlotArrays()
   }
   if (face_last_updated.size() < face_slots)
   {
-    face_last_updated.resize(face_slots, 0.0);
+    face_last_updated.resize(face_slots, EventTime{});
   }
   crossing_data.growTo(face_slots);
   crossing_data.growEdgeSlotsTo(graph.halfEdgeSlotCount() / 2);
@@ -1350,7 +1417,7 @@ void KineticDelaunay::growGraphSlotArrays()
   const size_t quad_slots = graph.halfEdgeSlotCount() / 2;
   if (quadrilateral_last_updated.size() < quad_slots)
   {
-    quadrilateral_last_updated.resize(quad_slots, 0.0);
+    quadrilateral_last_updated.resize(quad_slots, EventTime{});
   }
 }
 
@@ -1859,6 +1926,11 @@ size_t KineticDelaunay::sharedReferenceBranchForEventTrigger(
 Trajectory<2> KineticDelaunay::getSitePiecePolynomialForEventStrands(size_t strand_id, size_t section,
   double schedule_time, const std::vector<size_t>& event_strand_ids) const
 {
+  if (computing_infinitesimal_events_)
+  {
+    return buildInfinitesimalSiteTrajectory(strand_id, infinitesimal_schedule_t_, event_strand_ids);
+  }
+
   const double event_interval_upper_bound = eventIntervalUpperBound(schedule_time);
   Trajectory<2> base;
 
@@ -1889,7 +1961,9 @@ Trajectory<2> KineticDelaunay::getSitePiecePolynomialForEventStrands(size_t stra
     base = branch_trajs.getLocalPiecePolynomial(strand_id, section);
   }
 
-  return addSeparationOffsetToPiecePolynomial(base, strand_id, section, schedule_time);
+  // Kinetic separation ramp removed: infinitesimal virtual offset is handled via buildInfinitesimalSiteTrajectory.
+  (void)schedule_time;
+  return base;
 }
 
 glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, size_t reference_branch,
@@ -2393,11 +2467,14 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
     pending_branch_splits_.registerStrandsForSplit(hiatus_parent, new_components);
     assignPendingSplitChildRuntimeBranches(
       *hiatus_split, hiatus_parent, split_component_ids, branch_section, split_time, /*allow_allocate=*/false);
-    refreshPendingSplitSeparationCentroids(hiatus_parent);
+    refreshPendingSplitSeparationCentroids(hiatus_parent, split_time);
     KINDS_DEBUG("Pending split parent_component_id=" << hiatus_parent << " parent_runtime="
                                                      << hiatus_split->parent_runtime_branch
                                                      << " reactivated from hiatus at t=" << split_time
                                                      << " (noted_parent=" << parent_component_id << ")");
+    // Clear active so activate re-enters virtual separation / cut at this time.
+    hiatus_split->infinitesimal_active = false;
+    activateInfinitesimalSeparationOrApplyCut(hiatus_parent, split_time);
     return;
   }
 
@@ -2426,7 +2503,7 @@ void KineticDelaunay::notePendingBranchSplit(size_t parent_component_id, double 
     registerPostSplitFrameTransition(parent_component_id, split_time, pre_split_parent_strands);
   }
 
-  refreshPendingSplitSeparationCentroids(parent_component_id);
+  refreshPendingSplitSeparationCentroids(parent_component_id, split_time);
 }
 
 size_t KineticDelaunay::pendingSplitBranchSection(double split_time) const
@@ -2615,7 +2692,7 @@ void KineticDelaunay::assignPendingSplitChildRuntimeBranches(PendingBranchSplit&
   }
 }
 
-void KineticDelaunay::refreshPendingSplitSeparationCentroids(size_t parent_component_id)
+void KineticDelaunay::refreshPendingSplitSeparationCentroids(size_t parent_component_id, double t)
 {
   auto it = pending_branch_splits_.by_parent_.find(parent_component_id);
   if (it == pending_branch_splits_.by_parent_.end() || it->second.split_component_ids.size() < 2)
@@ -2624,44 +2701,45 @@ void KineticDelaunay::refreshPendingSplitSeparationCentroids(size_t parent_compo
   }
 
   PendingBranchSplit& split = it->second;
-  const auto weightedCentroid = [&](size_t begin, size_t end) -> std::optional<glm::dvec2>
+  // Store direction in native-transformed Delaunay ambient space (matches getPointAt / SVG offsets).
+  const glm::dvec2 dir
+    = computeSeparationDirection(split, t, /*apply_reference_transform=*/true, /*shared_reference_branch=*/std::nullopt);
+  if (glm::dot(dir, dir) <= 0.0)
   {
-    glm::dvec2 weighted_sum(0.0);
-    double total_weight = 0.0;
+    return;
+  }
+
+  // Keep centroids for diagnostics in the same frame as the stored direction.
+  const auto piece_centroid = [&](size_t begin, size_t end) -> std::optional<glm::dvec2>
+  {
+    glm::dvec2 sum(0.0);
+    double weight = 0.0;
     for (size_t i = begin; i < end; ++i)
     {
       const size_t component_id = split.split_component_ids[i];
-      if (component_id >= component_data.component_centroids.size()
-        || component_id >= component_data.components.size())
+      if (component_id >= component_data.components.size())
       {
         continue;
       }
-
-      double weight = 0.0;
       for (size_t strand_id : component_data.components[component_id])
       {
-        if (!isDummyBoundary(strand_id))
+        if (isDummyBoundary(strand_id))
         {
-          ++weight;
+          continue;
         }
+        sum += getPointAt(strand_id, t, /*apply_reference_transform=*/true, /*include_virtual_offset=*/false);
+        weight += 1.0;
       }
-      if (weight <= 0.0)
-      {
-        continue;
-      }
-
-      weighted_sum += weight * component_data.component_centroids[component_id];
-      total_weight += weight;
     }
-    if (total_weight <= 0.0)
+    if (weight <= 0.0)
     {
       return std::nullopt;
     }
-    return weighted_sum / total_weight;
+    return sum / weight;
   };
 
-  const std::optional<glm::dvec2> old_centroid = weightedCentroid(0, 1);
-  const std::optional<glm::dvec2> new_centroid = weightedCentroid(1, split.split_component_ids.size());
+  const std::optional<glm::dvec2> old_centroid = piece_centroid(0, 1);
+  const std::optional<glm::dvec2> new_centroid = piece_centroid(1, split.split_component_ids.size());
   if (old_centroid.has_value() && new_centroid.has_value())
   {
     split.old_branch_centroid = old_centroid.value();
@@ -2670,26 +2748,244 @@ void KineticDelaunay::refreshPendingSplitSeparationCentroids(size_t parent_compo
   }
 }
 
-// Enqueue separation at split_time (after any remaining radius events at that time) instead of handling
-// inline — the radius callback may still be mutating mesh/graph state that the split depends on.
+glm::dvec2 KineticDelaunay::computeSeparationDirection(const PendingBranchSplit& split, double t,
+  bool apply_reference_transform, std::optional<size_t> shared_reference_branch) const
+{
+  const auto eval = [&](size_t strand_id) -> glm::dvec2
+  {
+    if (shared_reference_branch.has_value())
+    {
+      return getPointAtWithReferenceBranch(
+        strand_id, t, *shared_reference_branch, apply_reference_transform, /*include_virtual_offset=*/false);
+    }
+    return getPointAt(strand_id, t, apply_reference_transform, /*include_virtual_offset=*/false);
+  };
+
+  const auto piece_centroid = [&](size_t begin, size_t end) -> std::optional<glm::dvec2>
+  {
+    glm::dvec2 sum(0.0);
+    double weight = 0.0;
+    for (size_t i = begin; i < end; ++i)
+    {
+      const size_t component_id = split.split_component_ids[i];
+      if (component_id >= component_data.components.size())
+      {
+        continue;
+      }
+      for (size_t strand_id : component_data.components[component_id])
+      {
+        if (isDummyBoundary(strand_id))
+        {
+          continue;
+        }
+        sum += eval(strand_id);
+        weight += 1.0;
+      }
+    }
+    if (weight <= 0.0)
+    {
+      return std::nullopt;
+    }
+    return sum / weight;
+  };
+
+  if (split.split_component_ids.size() < 2)
+  {
+    return split.separation_direction;
+  }
+
+  const std::optional<glm::dvec2> old_centroid = piece_centroid(0, 1);
+  const std::optional<glm::dvec2> new_centroid = piece_centroid(1, split.split_component_ids.size());
+  if (!old_centroid.has_value() || !new_centroid.has_value())
+  {
+    return split.separation_direction;
+  }
+  return new_centroid.value() - old_centroid.value();
+}
+
+// Activate infinitesimal virtual separation (or cut immediately). Formerly enqueued a SeparationEvent ramp.
 void KineticDelaunay::maybeScheduleSeparationOrApplyPendingSplit(
   size_t parent_component_id, double split_time)
 {
-  const PendingBranchSplit* split = pending_branch_splits_.findByParent(parent_component_id);
-  if (split == nullptr || split->on_hiatus || split->split_component_ids.size() < 2)
+  activateInfinitesimalSeparationOrApplyCut(parent_component_id, split_time);
+}
+
+void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(size_t parent_component_id, double t)
+{
+  PendingBranchSplit* split = nullptr;
+  {
+    auto it = pending_branch_splits_.by_parent_.find(parent_component_id);
+    if (it == pending_branch_splits_.by_parent_.end())
+    {
+      return;
+    }
+    split = &it->second;
+  }
+  if (split->split_component_ids.size() < 2)
   {
     return;
   }
-  // Reactivated / already-driving pending splits keep their existing separation schedule.
-  if (split->separation_trajectory_active)
+  if (split->on_hiatus)
+  {
+    KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id
+                                                                        << " on hiatus at t=" << t << "; skipping");
+    return;
+  }
+  if (split->infinitesimal_active)
+  {
+    // Already driving virtual separation; only attempt finalize (do not reset the epoch schedule).
+    maybeFinalizeInfinitesimalSeparation(parent_component_id, t);
+    return;
+  }
+
+  refreshPendingSplitSeparationCentroids(parent_component_id, t);
+
+  if (pendingSplitSeamsAreConvex(parent_component_id, t))
+  {
+    KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id
+                                                                        << " already convex at t=" << t
+                                                                        << "; applying graph split");
+    ++split->infinitesimal_epoch;
+    split->infinitesimal_active = false;
+    applyPendingRuntimeBranchSplit(t, split->parent_runtime_branch);
+    return;
+  }
+
+  ++split->infinitesimal_epoch;
+  split->infinitesimal_active = true;
+  split->infinitesimal_t_event = t;
+  KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id << " t=" << t
+                                                                      << " epoch=" << split->infinitesimal_epoch
+                                                                      << " dir=" << glm::to_string(split->separation_direction));
+  // Seed the virtual event queue for the seam region (same local post-event paradigm applies afterward).
+  recomputeEventsAfterInfinitesimalSeparation(parent_component_id, t, /*min_virtual_x=*/0.0);
+}
+
+bool KineticDelaunay::maybeFinalizeInfinitesimalSeparation(size_t parent_component_id, double t)
+{
+  auto it = pending_branch_splits_.by_parent_.find(parent_component_id);
+  if (it == pending_branch_splits_.by_parent_.end())
+  {
+    return false;
+  }
+  PendingBranchSplit& split = it->second;
+  if (split.on_hiatus || !split.infinitesimal_active || split.split_component_ids.size() < 2)
+  {
+    return false;
+  }
+  if (!pendingSplitSeamsAreConvex(parent_component_id, t))
+  {
+    return false;
+  }
+
+  KINDS_DEBUG("maybeFinalizeInfinitesimalSeparation: parent_component_id=" << parent_component_id << " t=" << t
+                                                                           << " epoch=" << split.infinitesimal_epoch
+                                                                           << "; applying graph split");
+  ++split.infinitesimal_epoch;
+  split.infinitesimal_active = false;
+  applyPendingRuntimeBranchSplit(t, split.parent_runtime_branch);
+  return true;
+}
+
+KineticDelaunay::ScopedInfinitesimalEventCompute::ScopedInfinitesimalEventCompute(
+  KineticDelaunay& kd, size_t parent_component_id, double t, double min_virtual_x)
+  : kd_(kd)
+  , previous_computing_(kd.computing_infinitesimal_events_)
+  , previous_min_x_(kd.infinitesimal_recompute_min_x_)
+  , previous_schedule_t_(kd.infinitesimal_schedule_t_)
+  , previous_parent_(kd.infinitesimal_schedule_parent_)
+  , previous_epoch_(kd.infinitesimal_schedule_epoch_)
+{
+  const PendingBranchSplit* split = kd_.pending_branch_splits_.findByParent(parent_component_id);
+  if (split == nullptr || !split->infinitesimal_active || split->on_hiatus)
+  {
+    return;
+  }
+  active_ = true;
+  kd_.computing_infinitesimal_events_ = true;
+  kd_.infinitesimal_recompute_min_x_ = min_virtual_x;
+  kd_.infinitesimal_schedule_t_ = t;
+  kd_.infinitesimal_schedule_parent_ = parent_component_id;
+  kd_.infinitesimal_schedule_epoch_ = split->infinitesimal_epoch;
+}
+
+KineticDelaunay::ScopedInfinitesimalEventCompute::~ScopedInfinitesimalEventCompute()
+{
+  if (!active_)
+  {
+    return;
+  }
+  kd_.computing_infinitesimal_events_ = previous_computing_;
+  kd_.infinitesimal_recompute_min_x_ = previous_min_x_;
+  kd_.infinitesimal_schedule_t_ = previous_schedule_t_;
+  kd_.infinitesimal_schedule_parent_ = previous_parent_;
+  kd_.infinitesimal_schedule_epoch_ = previous_epoch_;
+}
+
+void KineticDelaunay::recomputeEventsAfterInfinitesimalSeparation(
+  size_t parent_component_id, double t, double min_virtual_x)
+{
+  const PendingBranchSplit* split = pending_branch_splits_.findByParent(parent_component_id);
+  if (split == nullptr || !split->infinitesimal_active || split->on_hiatus)
   {
     return;
   }
 
-  KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
-                                                   << " enqueueing separation at t=" << split_time);
-  kinetic_algorithm_->enqueueEvent(std::make_shared<SeparationEvent>(this, split_time, parent_component_id,
-    split_time, split_time, SeparationEvent::after_radius_dispatch_order));
+  std::unordered_set<size_t> affected_quads;
+  std::unordered_set<size_t> affected_faces;
+  collectSeparationRecomputeTargets(parent_component_id, affected_quads, affected_faces);
+  growGraphSlotArrays();
+
+  const InfinitesimalComputeContext infinitesimal { min_virtual_x, parent_component_id };
+  const EventTime stamp(t, min_virtual_x);
+
+  for (size_t quad_id : affected_quads)
+  {
+    if (quad_id < quadrilateral_last_updated.size())
+    {
+      quadrilateral_last_updated[quad_id] = stamp;
+    }
+    flip_event_manager_->computeEvents(t, quad_id, infinitesimal);
+  }
+
+  for (size_t face_id : affected_faces)
+  {
+    if (face_id < face_last_updated.size())
+    {
+      face_last_updated[face_id] = stamp;
+    }
+    const size_t he_id = graph.face(face_id).half_edges[0];
+    radius_event_manager_->computeEvents(t, he_id, infinitesimal);
+
+    const auto stamp_voronoi_crossing_invalidation = [&](size_t voronoi_vertex_id)
+    {
+      if (voronoi_vertex_id < crossing_data.last_crossing.size())
+      {
+        crossing_data.last_crossing[voronoi_vertex_id] = stamp;
+      }
+    };
+
+    const auto recompute_crossing_for_voronoi_vertex = [&](size_t voronoi_vertex_id)
+    {
+      if (!crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
+      {
+        return;
+      }
+      stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
+      crossing_event_manager_->computeEvents(t, voronoi_vertex_id, infinitesimal);
+    };
+
+    recompute_crossing_for_voronoi_vertex(face_id);
+    for (size_t voronoi_vertex_id : crossing_data.getVoronoiVerticesInTri(face_id))
+    {
+      if (voronoi_vertex_id == face_id)
+      {
+        stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
+        continue;
+      }
+      recompute_crossing_for_voronoi_vertex(voronoi_vertex_id);
+    }
+  }
 }
 
 namespace
@@ -2801,10 +3097,10 @@ void KineticDelaunay::debugSeparationTrackedFlipProbe(
   const PendingBranchSplit* split = pending_branch_splits_.findByParent(parent_component_id);
   if (split != nullptr)
   {
-    KINDS_DEBUG("Separation flip probe: iteration=" << split->separation_iteration << " t0=" << split->separation_t0
-                                                    << " te=" << split->separation_te << " active="
-                                                    << split->separation_trajectory_active << " scale="
-                                                    << separation_offset_scale_);
+    KINDS_DEBUG("Separation flip probe: infinitesimal_active=" << split->infinitesimal_active
+                                                    << " epoch=" << split->infinitesimal_epoch
+                                                    << " t_event=" << split->infinitesimal_t_event << " dir="
+                                                    << glm::to_string(split->separation_direction));
   }
 
   for (size_t site_id : { kSeparationDebugSiteA, kSeparationDebugSiteB })
@@ -2968,52 +3264,8 @@ void KineticDelaunay::logSplitTransformOrthonormalityDiagnostic(size_t parent_co
 
 void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, double t)
 {
-  logSplitTransformOrthonormalityDiagnostic(parent_component_id, t);
-  debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_before", kSeparationDebugEvenHalfEdge);
-
-  const PendingBranchSplit* split = pending_branch_splits_.findByParent(parent_component_id);
-  if (split == nullptr || split->split_component_ids.size() < 2)
-  {
-    debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
-    return;
-  }
-
-  // On hiatus the pieces are no longer a well-formed finalize candidate (e.g. after component consolidate).
-  // Keep driving separation / virtual offset, but do not run the convex-seam → graph-cut finalize path.
-  if (!split->on_hiatus && pendingSplitSeamsAreConvex(parent_component_id, t))
-  {
-    KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
-                                                   << " parent_runtime=" << split->parent_runtime_branch
-                                                   << " has convex seam outlines at t=" << t
-                                                   << "; applying graph split");
-    // No separation-trajectory recompute here: the graph cut/retriangulation path refreshes events.
-    // Cut by parent runtime branch — a branch may span multiple kinetic components.
-    applyPendingRuntimeBranchSplit(t, split->parent_runtime_branch);
-    debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
-    return;
-  }
-
-  if (split->on_hiatus)
-  {
-    KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
-                                                    << " on hiatus at t=" << t
-                                                    << "; skipping finalize, continuing separation");
-  }
-
-  if (!split->separation_trajectory_active)
-  {
-    KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
-                                                    << " requires separation schedule at t=" << t);
-    startSeparationSchedule(parent_component_id, t);
-  }
-  else
-  {
-    KINDS_DEBUG("Pending split parent_component_id=" << parent_component_id
-                                                    << " continuing separation schedule at t=" << t);
-    continueSeparationSchedule(parent_component_id, t);
-  }
-
-  debugSeparationTrackedFlipProbe(parent_component_id, t, "handle_after", kSeparationDebugEvenHalfEdge);
+  // Legacy SeparationEvent entry point: redirect to instantaneous infinitesimal separation.
+  activateInfinitesimalSeparationOrApplyCut(parent_component_id, t);
 }
 
 void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id)
@@ -3050,9 +3302,9 @@ void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_run
   }
   else
   {
-    // Pass occurrence time only for full visual-debug dumps (not --error-files alone).
-    const std::optional<double> branch_split_debug_time
-      = isVisualDebugEnabled() ? std::optional<double>(t) : std::nullopt;
+    // Pass occurrence EventTime only for full visual-debug dumps (not --error-files alone).
+    const std::optional<EventTime> branch_split_debug_time
+      = isVisualDebugEnabled() ? std::optional<EventTime>(eventTimeAt(t)) : std::nullopt;
     // Cut only this parent runtime branch's pending children. Other pending-split child ids are collapsed in the
     // cut map so untargeted branches are not severed.
     const std::vector<size_t> cut_map = buildRuntimeBranchCutMapForParent(parent_runtime_branch_id);
@@ -3165,34 +3417,6 @@ void KineticDelaunay::completePendingRuntimeBranchSplit(size_t parent_runtime_br
   logRuntimeBranchEvent(t, line.str());
 }
 
-void KineticDelaunay::startSeparationSchedule(size_t parent_component_id, double segment_start_time)
-{
-  PendingBranchSplit& split = pending_branch_splits_.getOrCreate(parent_component_id);
-  split.separation_iteration = 0;
-  split.separation_t0 = segment_start_time;
-  split.separation_te = SeparationEvent::scheduledOccurrenceTime(segment_start_time);
-  split.separation_trajectory_active = true;
-
-  recomputeEventsAfterSeparationTrajectory(parent_component_id, segment_start_time);
-
-  kinetic_algorithm_->enqueueEvent(std::make_shared<SeparationEvent>(this, split.separation_te, parent_component_id,
-    segment_start_time, segment_start_time));
-}
-
-void KineticDelaunay::continueSeparationSchedule(size_t parent_component_id, double segment_start_time)
-{
-  PendingBranchSplit& split = pending_branch_splits_.getOrCreate(parent_component_id);
-  ++split.separation_iteration;
-  split.separation_t0 = segment_start_time;
-  split.separation_te = SeparationEvent::scheduledOccurrenceTime(segment_start_time);
-  split.separation_trajectory_active = true;
-
-  recomputeEventsAfterSeparationTrajectory(parent_component_id, segment_start_time);
-
-  kinetic_algorithm_->enqueueEvent(std::make_shared<SeparationEvent>(this, split.separation_te, parent_component_id,
-    segment_start_time, segment_start_time));
-}
-
 const PendingBranchSplit* KineticDelaunay::activeSeparationForStrand(size_t strand_id) const
 {
   if (strand_id >= component_data.component_map.size())
@@ -3204,7 +3428,7 @@ const PendingBranchSplit* KineticDelaunay::activeSeparationForStrand(size_t stra
   for (const auto& entry : pending_branch_splits_.by_parent_)
   {
     const PendingBranchSplit& split = entry.second;
-    if (!split.separation_trajectory_active || split.split_component_ids.size() < 2)
+    if (!split.infinitesimal_active || split.split_component_ids.size() < 2)
     {
       continue;
     }
@@ -3221,141 +3445,104 @@ const PendingBranchSplit* KineticDelaunay::activeSeparationForStrand(size_t stra
   return nullptr;
 }
 
+const PendingBranchSplit* KineticDelaunay::infinitesimalSplitForStrand(size_t strand_id) const
+{
+  if (strand_id >= component_data.component_map.size())
+  {
+    return nullptr;
+  }
+
+  const size_t component_id = component_data.component_map[strand_id];
+  for (const auto& entry : pending_branch_splits_.by_parent_)
+  {
+    const PendingBranchSplit& split = entry.second;
+    if (!split.infinitesimal_active || split.split_component_ids.size() < 2)
+    {
+      continue;
+    }
+    for (size_t piece_id : split.split_component_ids)
+    {
+      if (piece_id == component_id)
+      {
+        return &split;
+      }
+    }
+  }
+  return nullptr;
+}
+
 glm::dvec2 KineticDelaunay::separationOffsetAt(size_t strand_id, double t) const
 {
   const PendingBranchSplit* split = activeSeparationForStrand(strand_id);
-  if (split == nullptr || split->separation_te <= split->separation_t0)
+  if (split == nullptr || !split->infinitesimal_active)
   {
     return glm::dvec2(0.0, 0.0);
   }
+  // Direction must live in the same ambient space as getPointAt(..., transform=true).
+  const glm::dvec2 dir
+    = computeSeparationDirection(*split, t, /*apply_reference_transform=*/true, /*shared_reference_branch=*/std::nullopt);
+  return current_infinitesimal_t_ * dir;
+}
 
-  double alpha = 0.0;
-  if (t >= split->separation_te)
+Trajectory<2> KineticDelaunay::buildInfinitesimalSiteTrajectory(
+  size_t strand_id, double t_event, const std::vector<size_t>& event_strand_ids) const
+{
+  // Match kinetic event frame policy: shared transformed frame when the trigger spans multiple input
+  // branches, otherwise local support coordinates. Separation direction is computed in that same frame.
+  const double event_interval_upper_bound = eventIntervalUpperBound(t_event);
+  const bool use_shared_frame = !event_strand_ids.empty()
+    && eventTriggerUsesSharedTransformedFrame(event_strand_ids, event_interval_upper_bound);
+
+  std::optional<size_t> shared_reference_branch;
+  bool apply_reference_transform = false;
+  if (use_shared_frame)
   {
-    alpha = 1.0;
-  }
-  else if (t > split->separation_t0)
-  {
-    alpha = (t - split->separation_t0) / (split->separation_te - split->separation_t0);
+    shared_reference_branch
+      = sharedReferenceBranchForEventTrigger(event_strand_ids, event_interval_upper_bound);
+    apply_reference_transform = true;
   }
 
-  return separation_offset_scale_
-    * (static_cast<double>(split->separation_iteration) + alpha) * split->separation_direction;
+  const auto eval_frozen = [&](size_t sid) -> glm::dvec2
+  {
+    if (shared_reference_branch.has_value())
+    {
+      return getPointAtWithReferenceBranch(
+        sid, t_event, *shared_reference_branch, apply_reference_transform, /*include_virtual_offset=*/false);
+    }
+    return getPointAt(sid, t_event, apply_reference_transform, /*include_virtual_offset=*/false);
+  };
+
+  const glm::dvec2 p = eval_frozen(strand_id);
+
+  Trajectory<2> result;
+  const PendingBranchSplit* child_split = activeSeparationForStrand(strand_id);
+  if (child_split != nullptr)
+  {
+    const glm::dvec2 dir = computeSeparationDirection(
+      *child_split, t_event, apply_reference_transform, shared_reference_branch);
+    for (int dim = 0; dim < 2; ++dim)
+    {
+      result[dim] = POLYNOMIAL(p[dim] + dir[dim] * x);
+    }
+  }
+  else
+  {
+    for (int dim = 0; dim < 2; ++dim)
+    {
+      result[dim] = POLYNOMIAL(p[dim]);
+    }
+  }
+  return result;
 }
 
 Trajectory<2> KineticDelaunay::addSeparationOffsetToPiecePolynomial(
   const Trajectory<2>& base, size_t strand_id, size_t section, double schedule_time) const
 {
-  const PendingBranchSplit* split = activeSeparationForStrand(strand_id);
-  if (split == nullptr || split->separation_te <= split->separation_t0)
-  {
-    return base;
-  }
-
-  const double section_start = static_cast<double>(section);
-  const double x0 = split->separation_t0 - section_start;
-  const double x1 = split->separation_te - section_start;
-  const double span = split->separation_te - split->separation_t0;
-  const double i = static_cast<double>(split->separation_iteration);
-
-  Trajectory<2> result = base;
-  if (schedule_time >= split->separation_te - std::numeric_limits<double>::epsilon())
-  {
-    for (int dim = 0; dim < 2; ++dim)
-    {
-      const double offset = separation_offset_scale_ * split->separation_direction[dim] * (i + 1.0);
-      result[dim] = result[dim] + POLYNOMIAL(offset);
-    }
-    return result;
-  }
-
-  if (x1 <= x0 + std::numeric_limits<double>::epsilon())
-  {
-    for (int dim = 0; dim < 2; ++dim)
-    {
-      const double offset = separation_offset_scale_ * split->separation_direction[dim] * i;
-      if (offset != 0.0)
-      {
-        result[dim] = result[dim] + POLYNOMIAL(offset);
-      }
-    }
-    return result;
-  }
-
-  for (int dim = 0; dim < 2; ++dim)
-  {
-    const double dir = separation_offset_scale_ * split->separation_direction[dim];
-    const double c0 = dir * (i - x0 / span);
-    const double c1 = dir / span;
-    result[dim] = result[dim] + POLYNOMIAL(c0 + c1 * x);
-  }
-  return result;
-}
-
-void KineticDelaunay::recomputeEventsAfterSeparationTrajectory(size_t parent_component_id, double t)
-{
-  // Recompute only simplices whose sites sit on differently shifted pending pieces (retained vs separated).
-  // Uniform translation leaves inCircle/ccw/radius roots unchanged, so same-shift quads/faces are skipped.
-  std::unordered_set<size_t> affected_quads;
-  std::unordered_set<size_t> affected_faces;
-  collectSeparationRecomputeTargets(parent_component_id, affected_quads, affected_faces);
-
-  growGraphSlotArrays();
-
-  for (size_t quad_id : affected_quads)
-  {
-    // Stamp before enqueue so any mid-ramp schedules (creation_time < t) are discarded on handle.
-    if (quad_id < quadrilateral_last_updated.size())
-    {
-      quadrilateral_last_updated[quad_id] = t;
-    }
-    flip_event_manager_->computeEvents(t, quad_id);
-  }
-
-  for (size_t face_id : affected_faces)
-  {
-    if (face_id < face_last_updated.size())
-    {
-      face_last_updated[face_id] = t;
-    }
-    const size_t he_id = graph.face(face_id).half_edges[0];
-    radius_event_manager_->computeEvents(t, he_id);
-
-    const auto stamp_voronoi_crossing_invalidation = [&](size_t voronoi_vertex_id)
-    {
-      if (voronoi_vertex_id < crossing_data.last_crossing.size())
-      {
-        crossing_data.last_crossing[voronoi_vertex_id] = t;
-      }
-    };
-
-    const auto recompute_crossing_for_voronoi_vertex = [&](size_t voronoi_vertex_id)
-    {
-      if (!crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
-      {
-        return;
-      }
-      stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
-      crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
-    };
-
-    // Dual Voronoi vertex for this Delaunay triangle.
-    recompute_crossing_for_voronoi_vertex(face_id);
-
-    // Voronoi vertices contained in this triangle.
-    for (size_t voronoi_vertex_id : crossing_data.getVoronoiVerticesInTri(face_id))
-    {
-      if (voronoi_vertex_id == face_id)
-      {
-        // Self-contained dual: already rescheduled above; still ensure the invalidation stamp.
-        stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
-        continue;
-      }
-      recompute_crossing_for_voronoi_vertex(voronoi_vertex_id);
-    }
-  }
-
-  debugSeparationTrackedFlipProbe(parent_component_id, t, "recompute_after", kSeparationDebugEvenHalfEdge);
+  // Kinetic-time ramp removed; virtual offset is applied only via buildInfinitesimalSiteTrajectory.
+  (void)strand_id;
+  (void)section;
+  (void)schedule_time;
+  return base;
 }
 
 void KineticDelaunay::collectSeparationRecomputeTargets(size_t parent_component_id,
@@ -3505,19 +3692,10 @@ std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment> KineticDelaunay
 
 std::optional<double> KineticDelaunay::separationRampEndSectionFraction(size_t strand_id, size_t section) const
 {
-  const PendingBranchSplit* split = activeSeparationForStrand(strand_id);
-  if (split == nullptr || !split->separation_trajectory_active || split->separation_te <= split->separation_t0)
-  {
-    return std::nullopt;
-  }
-
-  const double ramp_end_fraction = split->separation_te - static_cast<double>(section);
-  if (ramp_end_fraction <= std::numeric_limits<double>::epsilon()
-    || ramp_end_fraction >= 1.0 - std::numeric_limits<double>::epsilon())
-  {
-    return std::nullopt;
-  }
-  return ramp_end_fraction;
+  // Kinetic-time separation ramp removed; no mid-section ramp endpoint.
+  (void)strand_id;
+  (void)section;
+  return std::nullopt;
 }
 
 std::optional<PendingBranchSplit> KineticDelaunay::getPendingBranchSplit(size_t parent_component_id) const
@@ -4980,8 +5158,9 @@ void kinDS::assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
         : std::nullopt;
       const std::vector<size_t>* explicit_branches
         = endpoint_runtime_branch_ids.empty() ? nullptr : &endpoint_runtime_branch_ids;
-      writeSegmentBuilderVisualDebugSvg(true, kd_mut, graph, t, "error", descriptor.str(), highlight,
-        preferred_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, explicit_branches);
+      writeSegmentBuilderVisualDebugSvg(true, kd_mut, graph, kd_mut.eventTimeAt(t), "error", descriptor.str(),
+        highlight, preferred_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
+        explicit_branches);
     }
   }
 }
@@ -5316,8 +5495,8 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
   crossing_data.init(graph.faceSlotCount());
 
   face_inside.resize(graph.faceSlotCount(), false);
-  quadrilateral_last_updated.resize(graph.halfEdgeSlotCount() / 2, 0.0);
-  face_last_updated.resize(graph.faceSlotCount(), 0.0);
+  quadrilateral_last_updated.resize(graph.halfEdgeSlotCount() / 2, EventTime{});
+  face_last_updated.resize(graph.faceSlotCount(), EventTime{});
 
   // Bootstrap component_map from the per-branch triangulation so getPointAt works during face initialization.
   computeComponentData(bootstrap_t);
@@ -5648,11 +5827,12 @@ void exportCrossingInvariantFailureDebugSvg(
 
   const std::vector<glm::dvec2> points = kd.getPointsAt(t);
   const std::string filename
-    = formatDebugExportTimeToken(t) + "_crossing_invariant_FAIL_" + sanitizeContextForFilename(context) + ".svg";
+    = formatDebugExportTimeToken(kd.eventTimeAt(t)) + "_crossing_invariant_FAIL_"
+    + sanitizeContextForFilename(context) + ".svg";
   const auto& containing_tri_ids = kd.getCrossingData().getContainingTriIds();
   const auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
 
-  KINDS_ERROR("Writing crossing invariant failure debug SVG at t=" << t << ": " << filename);
+  KINDS_ERROR("Writing crossing invariant failure debug SVG at t=" << kd.eventTimeAt(t) << ": " << filename);
   HalfEdgeDelaunayGraphToSVG::write(points, kd.getGraph(), filename, 0.1, &kd.getFacesInside(), true,
     &containing_tri_ids, &intersection_debug_data, &highlight);
 }

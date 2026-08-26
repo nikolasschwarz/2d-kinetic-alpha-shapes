@@ -34,6 +34,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -186,9 +187,19 @@ std::filesystem::path makeTriangulateSimplePolygonDebugPath(const KineticDelauna
   static size_t debug_counter = 0;
   ++debug_counter;
 
-  const double kinetic_time = resolveTriangulateSimplePolygonDebugTime(mesh, occurrence_time);
-  const std::string filename = formatDebugExportTimeToken(kinetic_time) + "_triangulateSimplePolygon_" + tag + "_"
-    + std::to_string(debug_counter) + extension;
+  const EventTime kinetic_time = [&]() -> EventTime
+  {
+    if (occurrence_time.has_value() && std::isfinite(*occurrence_time))
+    {
+      return EventTime(*occurrence_time);
+    }
+    return EventTime(mesh.getCreationKineticTime());
+  }();
+  const bool svg_export = extension != nullptr && std::string_view(extension) == ".svg";
+  const std::string time_token
+    = svg_export ? formatDebugExportTimeToken(kinetic_time) : formatDebugExportTimeToken(kinetic_time.real_time);
+  const std::string filename
+    = time_token + "_triangulateSimplePolygon_" + tag + "_" + std::to_string(debug_counter) + extension;
 
   const std::string branch_folder = runtime_branch_id.has_value()
     ? ("branch" + std::to_string(runtime_branch_id.value()))
@@ -9939,7 +9950,7 @@ void kinDS::SegmentBuilder::splitComponent(
   }
 
   // Refresh separation centroids now that polygon centroids are available, then enqueue separation.
-  kin_del.refreshPendingSplitSeparationCentroids(component_id);
+  kin_del.refreshPendingSplitSeparationCentroids(component_id, t);
   kin_del.maybeScheduleSeparationOrApplyPendingSplit(component_id, t);
 }
 

@@ -50,7 +50,10 @@ class KineticDelaunay::SeparationEventManager final : public KineticDelaunay::Ev
   }
 
   /// Separation events are enqueued when a pending branch split is recorded; nothing incremental.
-  void computeEvents(double /*t*/, size_t /*event_id*/) override { }
+  void computeEvents(double /*t*/, size_t /*event_id*/,
+    std::optional<InfinitesimalComputeContext> /*infinitesimal*/ = std::nullopt) override
+  {
+  }
 
  private:
   KineticDelaunay* kd_;

@@ -112,7 +112,7 @@ struct KineticDelaunay::CrossingData
   EdgeIntersectionRefListSlots delaunay_edge_intersections;
 
   /// Last time a crossing was handled for this Voronoi vertex, or its crossing events were rescheduled/invalidated.
-  std::vector<double> last_crossing;
+  std::vector<EventTime> last_crossing;
 
   struct VoronoiDelaunayEdgeIntersection
   {
@@ -138,7 +138,7 @@ struct KineticDelaunay::CrossingData
     voronoi_vertex_to_containing_tri_id.resize(face_count, invalid_containing_tri_id);
     ensureTriListSlots(face_count);
     voronoi_vertex_to_iterator.resize(face_count);
-    last_crossing.resize(face_count, 0.0);
+    last_crossing.resize(face_count, EventTime{});
   }
 
   void growEdgeSlotsTo(size_t delaunay_edge_count)
@@ -159,7 +159,7 @@ struct KineticDelaunay::CrossingData
     voronoi_vertex_to_iterator.resize(face_count);
 
     last_crossing.clear();
-    last_crossing.resize(face_count, 0.0);
+    last_crossing.resize(face_count, EventTime{});
   }
 
   bool isVoronoiVertexRegistered(size_t voronoi_vertex_id) const
@@ -357,7 +357,8 @@ class KineticDelaunay::CrossingEventManager final : public KineticDelaunay::Even
   {
   }
 
-  void computeEvents(double t, size_t event_id) override;
+  void computeEvents(double t, size_t event_id,
+    std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt) override;
 
   // Expose crossing data to the KineticDelaunay orchestration code and to events.
   CrossingData& getCrossingDataMutable() { return crossing_data_; }

@@ -137,9 +137,9 @@ std::string chronologicalPhaseToken(const char* phase)
   return std::string(phase) == "before" ? "!before" : phase;
 }
 
-std::string visualDebugSvgRelativePath(double occurrence_time, const char* phase, const std::string& event_descriptor,
+std::string visualDebugSvgRelativePath(EventTime occurrence_time, const char* phase, const std::string& event_descriptor,
   std::optional<size_t> runtime_branch_id, const std::optional<std::filesystem::path>& output_root,
-  std::optional<double> creation_time)
+  std::optional<EventTime> creation_time)
 {
   std::string basename = formatDebugExportTimeToken(occurrence_time) + "_segmentbuilder_"
     + chronologicalPhaseToken(phase) + "_" + event_descriptor;
@@ -395,16 +395,21 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
 } // namespace
 
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
-  double occurrence_time, const char* phase, const std::string& event_descriptor,
+  EventTime occurrence_time, const char* phase, const std::string& event_descriptor,
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id,
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments,
   const std::vector<std::vector<glm::dvec2>>* seam_outlines, const std::vector<size_t>* explicit_runtime_branch_ids,
-  std::optional<double> creation_time, bool fan_out_active_runtime_branches)
+  std::optional<EventTime> creation_time, bool fan_out_active_runtime_branches)
 {
   if (!visual_debug)
   {
     return;
   }
+
+  // Site / VV positions go through getPointInDelaunaySpace → separationOffsetAt, which reads
+  // current_infinitesimal_t_. Bind it to this export's EventTime so before/after SVGs match the
+  // filename's _i… token even if the event handler has already cleared the handle-path value.
+  const KineticDelaunay::ScopedCurrentInfinitesimalTime infinitesimal_shift(kin_del, occurrence_time);
 
   const bool separate_pending_splits = kin_del.visualDebugSeparatePendingSplits();
 
