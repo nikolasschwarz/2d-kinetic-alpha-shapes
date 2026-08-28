@@ -900,6 +900,65 @@ class ObjExporter
     return static_cast<size_t>(index > 0 ? index - 1 : index);
   }
 
+  struct ObjFaceCornerIndices
+  {
+    size_t vertex_index = 0;
+    size_t texcoord_index = std::numeric_limits<size_t>::max();
+    size_t normal_index = std::numeric_limits<size_t>::max();
+  };
+
+  static size_t parseObjIndexToken(const std::string& token, const size_t start, const size_t end, const size_t absolute_count)
+  {
+    if (start >= end)
+    {
+      return std::numeric_limits<size_t>::max();
+    }
+    const long index = std::stol(token.substr(start, end - start));
+    if (index == 0)
+    {
+      throw std::runtime_error("ObjExporter::readMesh: face index 0 is invalid in OBJ (indices are 1-based).");
+    }
+    if (index > 0)
+    {
+      return static_cast<size_t>(index - 1);
+    }
+    if (absolute_count < static_cast<size_t>(-index))
+    {
+      throw std::runtime_error("ObjExporter::readMesh: negative face index out of range.");
+    }
+    return absolute_count + static_cast<size_t>(index);
+  }
+
+  static ObjFaceCornerIndices parseObjFaceCornerToken(const std::string& token, const size_t vertex_count,
+    const size_t texcoord_count, const size_t normal_count)
+  {
+    const size_t slash1 = token.find('/');
+    ObjFaceCornerIndices corner;
+    if (slash1 == std::string::npos)
+    {
+      corner.vertex_index = parseObjIndexToken(token, 0, token.size(), vertex_count);
+      return corner;
+    }
+
+    corner.vertex_index = parseObjIndexToken(token, 0, slash1, vertex_count);
+    const size_t slash2 = token.find('/', slash1 + 1);
+    if (slash2 == std::string::npos)
+    {
+      corner.texcoord_index = parseObjIndexToken(token, slash1 + 1, token.size(), texcoord_count);
+      return corner;
+    }
+
+    if (slash2 > slash1 + 1)
+    {
+      corner.texcoord_index = parseObjIndexToken(token, slash1 + 1, slash2, texcoord_count);
+    }
+    if (slash2 + 1 < token.size())
+    {
+      corner.normal_index = parseObjIndexToken(token, slash2 + 1, token.size(), normal_count);
+    }
+    return corner;
+  }
+
   static VoronoiMesh readMesh(const std::filesystem::path& obj_path)
   {
     std::ifstream file(obj_path);
@@ -910,8 +969,16 @@ class ObjExporter
 
     std::vector<glm::dvec3> positions;
     positions.reserve(1024);
+    std::vector<glm::dvec3> obj_texcoords;
+    obj_texcoords.reserve(1024);
+    std::vector<glm::dvec3> obj_normals;
+    obj_normals.reserve(1024);
 
     VoronoiMesh mesh({ "boundary" }, NoNormals);
+    std::vector<glm::dvec3> imported_corner_normals;
+    imported_corner_normals.reserve(4096);
+    bool has_any_face_normal_index = false;
+    bool all_face_corners_have_normals = true;
 
     std::string line;
     while (std::getline(file, line))
@@ -932,33 +999,69 @@ class ObjExporter
         iss >> x >> y >> z;
         positions.emplace_back(x, y, z);
       }
+      else if (tag == "vt")
+      {
+        double u = 0.0;
+        double v = 0.0;
+        iss >> u >> v;
+        obj_texcoords.emplace_back(u, v, 0.0);
+      }
+      else if (tag == "vn")
+      {
+        double nx = 0.0;
+        double ny = 0.0;
+        double nz = 0.0;
+        iss >> nx >> ny >> nz;
+        obj_normals.emplace_back(nx, ny, nz);
+      }
       else if (tag == "f")
       {
-        std::vector<size_t> face_vertices;
+        std::vector<ObjFaceCornerIndices> face_corners;
         std::string token;
         while (iss >> token)
         {
-          face_vertices.push_back(parseObjFaceIndexToken(token));
+          face_corners.push_back(
+            parseObjFaceCornerToken(token, positions.size(), obj_texcoords.size(), obj_normals.size()));
         }
 
-        if (face_vertices.size() < 3)
+        if (face_corners.size() < 3)
         {
           continue;
         }
 
-        for (size_t i = 1; i + 1 < face_vertices.size(); ++i)
+        for (size_t i = 1; i + 1 < face_corners.size(); ++i)
         {
-          const size_t i0 = face_vertices[0];
-          const size_t i1 = face_vertices[i];
-          const size_t i2 = face_vertices[i + 1];
-          if (i0 >= positions.size() || i1 >= positions.size() || i2 >= positions.size())
+          const ObjFaceCornerIndices& c0 = face_corners[0];
+          const ObjFaceCornerIndices& c1 = face_corners[i];
+          const ObjFaceCornerIndices& c2 = face_corners[i + 1];
+          if (c0.vertex_index >= positions.size() || c1.vertex_index >= positions.size()
+            || c2.vertex_index >= positions.size())
           {
             throw std::runtime_error("ObjExporter::readMesh: face references out-of-range vertex index.");
           }
-          const size_t v0 = mesh.addVertex(positions[i0]);
-          const size_t v1 = mesh.addVertex(positions[i1]);
-          const size_t v2 = mesh.addVertex(positions[i2]);
+
+          const size_t v0 = mesh.addVertex(positions[c0.vertex_index]);
+          const size_t v1 = mesh.addVertex(positions[c1.vertex_index]);
+          const size_t v2 = mesh.addVertex(positions[c2.vertex_index]);
           mesh.addTriangle(v0, v1, v2, 0);
+
+          const ObjFaceCornerIndices* triangle_corners[3] = { &c0, &c1, &c2 };
+          for (const ObjFaceCornerIndices* corner : triangle_corners)
+          {
+            if (corner->normal_index != std::numeric_limits<size_t>::max())
+            {
+              has_any_face_normal_index = true;
+              if (corner->normal_index >= obj_normals.size())
+              {
+                throw std::runtime_error("ObjExporter::readMesh: face references out-of-range normal index.");
+              }
+              imported_corner_normals.push_back(obj_normals[corner->normal_index]);
+            }
+            else
+            {
+              all_face_corners_have_normals = false;
+            }
+          }
         }
       }
     }
@@ -969,11 +1072,29 @@ class ObjExporter
     }
 
     mesh.mergeDuplicateVertices(1e-6);
-    if (mesh.orientFacesAwayFromCentroid())
+    const bool flipped = mesh.orientFacesAwayFromCentroid();
+    if (flipped)
     {
       KINDS_INFO("Loaded mesh was flipped to orient faces away from centroid: " << obj_path.string());
     }
-    mesh.computeNormals(PerTriangleCorner);
+
+    const bool use_imported_normals = has_any_face_normal_index && all_face_corners_have_normals
+      && imported_corner_normals.size() == mesh.getTriangles().size();
+    if (use_imported_normals)
+    {
+      if (flipped)
+      {
+        for (glm::dvec3& normal : imported_corner_normals)
+        {
+          normal = -normal;
+        }
+      }
+      mesh.setCornerNormals(std::move(imported_corner_normals));
+    }
+    else
+    {
+      mesh.computeNormalsWithCreaseAngle(30.0);
+    }
     return mesh;
   }
 };

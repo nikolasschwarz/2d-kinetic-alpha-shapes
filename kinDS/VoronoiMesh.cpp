@@ -1402,15 +1402,151 @@ void kinDS::VoronoiMesh::computeNormals(NormalMode normal_mode)
   }
   else if (normal_mode == PerTriangleCorner)
   {
-    std::vector<glm::dvec3> vertex_normals = computeVertexNormals();
-    normals.resize(triangles.size(), glm::dvec3 { 0.0, 0.0, 0.0 });
-
-    for (size_t i = 0; i < triangles.size(); i++)
-    {
-      normals[i] = vertex_normals[triangles[i]];
-    }
+    computeNormalsWithCreaseAngle(30.0);
+    return;
   }
   validateNormalCount("VoronoiMesh::computeNormals");
+}
+
+void kinDS::VoronoiMesh::setCornerNormals(std::vector<glm::dvec3> corner_normals)
+{
+  if (corner_normals.size() != triangles.size())
+  {
+    throw std::runtime_error("VoronoiMesh::setCornerNormals: expected " + std::to_string(triangles.size())
+      + " corner normals, got " + std::to_string(corner_normals.size()));
+  }
+  normal_mode = PerTriangleCorner;
+  normals = std::move(corner_normals);
+  validateNormalCount("VoronoiMesh::setCornerNormals");
+}
+
+void kinDS::VoronoiMesh::computeNormalsWithCreaseAngle(const double crease_angle_degrees)
+{
+  normal_mode = PerTriangleCorner;
+  const size_t triangle_count = getTriangleCount();
+  normals.assign(triangles.size(), glm::dvec3(0.0));
+  if (triangle_count == 0)
+  {
+    return;
+  }
+
+  const double cos_threshold = std::cos(glm::radians(crease_angle_degrees));
+
+  std::vector<glm::dvec3> face_normals(triangle_count);
+  for (size_t triangle_index = 0; triangle_index < triangle_count; ++triangle_index)
+  {
+    const size_t i0 = triangles[3 * triangle_index];
+    const size_t i1 = triangles[3 * triangle_index + 1];
+    const size_t i2 = triangles[3 * triangle_index + 2];
+    glm::dvec3 normal = glm::cross(vertices[i1] - vertices[i0], vertices[i2] - vertices[i0]);
+    face_normals[triangle_index] = glm::length2(normal) > 1e-24 ? glm::normalize(normal) : glm::dvec3(0.0, 1.0, 0.0);
+  }
+
+  std::vector<std::vector<std::pair<size_t, int>>> vertex_corners(vertices.size());
+  for (size_t triangle_index = 0; triangle_index < triangle_count; ++triangle_index)
+  {
+    for (int corner = 0; corner < 3; ++corner)
+    {
+      vertex_corners[triangles[3 * triangle_index + corner]].emplace_back(triangle_index, corner);
+    }
+  }
+
+  const auto edge_neighbor = [&](const size_t triangle_index, const int corner, const int step) -> size_t {
+    return triangles[3 * triangle_index + (corner + step + 3) % 3];
+  };
+
+  for (size_t vertex_index = 0; vertex_index < vertices.size(); ++vertex_index)
+  {
+    const auto& corners = vertex_corners[vertex_index];
+    const size_t corner_count = corners.size();
+    if (corner_count == 0)
+    {
+      continue;
+    }
+
+    std::vector<std::vector<size_t>> adjacency(corner_count);
+    for (size_t i = 0; i < corner_count; ++i)
+    {
+      const auto [triangle_i, corner_i] = corners[i];
+      const size_t edge_a = edge_neighbor(triangle_i, corner_i, 1);
+      const size_t edge_b = edge_neighbor(triangle_i, corner_i, 2);
+      for (size_t j = i + 1; j < corner_count; ++j)
+      {
+        const auto [triangle_j, corner_j] = corners[j];
+        if (triangle_i == triangle_j)
+        {
+          continue;
+        }
+        const size_t edge_c = edge_neighbor(triangle_j, corner_j, 1);
+        const size_t edge_d = edge_neighbor(triangle_j, corner_j, 2);
+        const bool shares_edge = edge_a == edge_c || edge_a == edge_d || edge_b == edge_c || edge_b == edge_d;
+        if (!shares_edge)
+        {
+          continue;
+        }
+        if (glm::dot(face_normals[triangle_i], face_normals[triangle_j]) >= cos_threshold)
+        {
+          adjacency[i].push_back(j);
+          adjacency[j].push_back(i);
+        }
+      }
+    }
+
+    std::vector<int> component(corner_count, -1);
+    int component_count = 0;
+    std::vector<int> stack;
+    for (size_t i = 0; i < corner_count; ++i)
+    {
+      if (component[i] >= 0)
+      {
+        continue;
+      }
+      component[i] = component_count;
+      stack.push_back(static_cast<int>(i));
+      while (!stack.empty())
+      {
+        const int current = stack.back();
+        stack.pop_back();
+        for (const size_t neighbor : adjacency[current])
+        {
+          if (component[neighbor] < 0)
+          {
+            component[neighbor] = component_count;
+            stack.push_back(static_cast<int>(neighbor));
+          }
+        }
+      }
+      ++component_count;
+    }
+
+    std::vector<glm::dvec3> averaged(component_count, glm::dvec3(0.0));
+    std::vector<int> counts(component_count, 0);
+    for (size_t i = 0; i < corner_count; ++i)
+    {
+      const int comp = component[i];
+      averaged[comp] += face_normals[corners[i].first];
+      ++counts[comp];
+    }
+    for (int comp = 0; comp < component_count; ++comp)
+    {
+      if (counts[comp] > 0 && glm::length2(averaged[comp]) > 1e-24)
+      {
+        averaged[comp] = glm::normalize(averaged[comp]);
+      }
+      else
+      {
+        averaged[comp] = glm::dvec3(0.0, 1.0, 0.0);
+      }
+    }
+
+    for (size_t i = 0; i < corner_count; ++i)
+    {
+      const auto [triangle_index, corner] = corners[i];
+      normals[3 * triangle_index + corner] = averaged[component[i]];
+    }
+  }
+
+  validateNormalCount("VoronoiMesh::computeNormalsWithCreaseAngle");
 }
 
 std::array<double, 3> kinDS::VoronoiMesh::computeBarycentricCoordinates(size_t triangle_index, const glm::dvec3& point) const

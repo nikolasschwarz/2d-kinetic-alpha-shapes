@@ -154,6 +154,10 @@ class VoronoiMesh
 
   // compute normals
   void computeNormals(NormalMode normal_mode = PerVertex);
+  /// Per-triangle-corner normals with smoothing only across edges below @p crease_angle_degrees.
+  void computeNormalsWithCreaseAngle(double crease_angle_degrees = 30.0);
+  /// Assign imported per-corner normals (size must equal @ref triangles.size()).
+  void setCornerNormals(std::vector<glm::dvec3> corner_normals);
 
   std::array<double, 3> computeBarycentricCoordinates(size_t triangle_index, const glm::dvec3& point) const;
 
