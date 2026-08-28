@@ -121,7 +121,9 @@
         "--log-add",
         "monitor",
         "--cutoff",
-        "3"
+        "3",
+        "--start",
+        "10"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

@@ -134,6 +134,8 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
         buffered_flip_mesh_position_ = object_space.position;
         buffered_flip_delaunay_xy_ = glm::dvec2(
           segment_builder_.computeVoronoiVertex(graph.face(canonical_vv).half_edges[0], flip->occurrence_time));
+        segment_builder_.noteBufferedVoronoiVertexMesh(
+          canonical_vv, flip->occurrence_time, object_space.position, buffered_flip_delaunay_xy_);
       }
     }
   }

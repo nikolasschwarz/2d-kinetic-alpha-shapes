@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <glm/gtx/exterior_product.hpp>
@@ -845,6 +846,75 @@ namespace
 bool vertexPositionFinite(const glm::dvec3& p);
 }
 
+uint64_t SegmentBuilder::meshVertexKineticTimeBits(double t)
+{
+  uint64_t bits = 0;
+  static_assert(sizeof(bits) == sizeof(t));
+  std::memcpy(&bits, &t, sizeof(t));
+  return bits;
+}
+
+std::optional<SegmentBuilder::BufferedVoronoiVertexMeshEntry> SegmentBuilder::findBufferedVoronoiVertexMesh(
+  size_t voronoi_vertex_id, double t) const
+{
+  const BufferedVoronoiVertexMeshKey key { voronoi_vertex_id, meshVertexKineticTimeBits(t) };
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const auto it = buffered_voronoi_vertex_mesh_positions_.find(key);
+  if (it == buffered_voronoi_vertex_mesh_positions_.end())
+  {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+SegmentBuilder::BufferedVoronoiVertexMeshEntry SegmentBuilder::noteBufferedVoronoiVertexMesh(
+  size_t voronoi_vertex_id, double t, const glm::dvec3& mesh_position, std::optional<glm::dvec2> delaunay_xy) const
+{
+  const BufferedVoronoiVertexMeshKey key { voronoi_vertex_id, meshVertexKineticTimeBits(t) };
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const auto it = buffered_voronoi_vertex_mesh_positions_.find(key);
+  if (it != buffered_voronoi_vertex_mesh_positions_.end())
+  {
+    if (!it->second.delaunay_xy.has_value() && delaunay_xy.has_value())
+    {
+      it->second.delaunay_xy = delaunay_xy;
+    }
+    return it->second;
+  }
+  BufferedVoronoiVertexMeshEntry entry;
+  entry.mesh_position = mesh_position;
+  entry.delaunay_xy = std::move(delaunay_xy);
+  buffered_voronoi_vertex_mesh_positions_.emplace(key, entry);
+  return entry;
+}
+
+std::optional<glm::dvec3> SegmentBuilder::findBufferedIntersectionMesh(
+  size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const
+{
+  const BufferedIntersectionMeshKey key { delaunay_edge_id, voronoi_edge_id, meshVertexKineticTimeBits(t) };
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const auto it = buffered_intersection_mesh_positions_.find(key);
+  if (it == buffered_intersection_mesh_positions_.end())
+  {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+glm::dvec3 SegmentBuilder::noteBufferedIntersectionMesh(
+  size_t delaunay_edge_id, size_t voronoi_edge_id, double t, const glm::dvec3& mesh_position) const
+{
+  const BufferedIntersectionMeshKey key { delaunay_edge_id, voronoi_edge_id, meshVertexKineticTimeBits(t) };
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const auto it = buffered_intersection_mesh_positions_.find(key);
+  if (it != buffered_intersection_mesh_positions_.end())
+  {
+    return it->second;
+  }
+  buffered_intersection_mesh_positions_.emplace(key, mesh_position);
+  return mesh_position;
+}
+
 void SegmentBuilder::beginActiveCrossingEvent(
   size_t voronoi_vertex_id, size_t delaunay_edge_id, double t, size_t strand_id)
 {
@@ -875,9 +945,24 @@ void SegmentBuilder::beginActiveCrossingEvent(
       = computeMeshIntersectionObjectSpace(runtime_info, fallback_profile, strand_id, t);
     if (vertexPositionFinite(inter.position))
     {
-      active_crossing_mesh_position_ = inter.position;
+      glm::dvec3 shared = inter.position;
+      if (const std::optional<BufferedVoronoiVertexMeshEntry> vv_buf
+        = findBufferedVoronoiVertexMesh(voronoi_vertex_id, t))
+      {
+        shared = vv_buf->mesh_position;
+      }
+      else if (const std::optional<glm::dvec3> inter_buf = findBufferedIntersectionMesh(
+                 coincidence.value()->delaunay_edge_id, coincidence.value()->voronoi_edge_id, t))
+      {
+        shared = inter_buf.value();
+      }
       active_crossing_delaunay_xy_
         = glm::dvec2(getCrossingCoordsInDelaunaySpace(kin_del, coincidence.value(), t));
+      const BufferedVoronoiVertexMeshEntry vv_entry
+        = noteBufferedVoronoiVertexMesh(voronoi_vertex_id, t, shared, active_crossing_delaunay_xy_);
+      active_crossing_mesh_position_ = vv_entry.mesh_position;
+      noteBufferedIntersectionMesh(
+        coincidence.value()->delaunay_edge_id, coincidence.value()->voronoi_edge_id, t, vv_entry.mesh_position);
       KINDS_DEBUG("beginActiveCrossingEvent: buffered vv=" << voronoi_vertex_id << " de=" << delaunay_edge_id
         << " from intersection ve=" << coincidence.value()->voronoi_edge_id
         << " d_param=" << coincidence.value()->delaunay_edge_param << " t=" << t);
@@ -892,6 +977,7 @@ void SegmentBuilder::beginActiveCrossingEvent(
   if (vertexPositionFinite(voronoi.position))
   {
     active_crossing_mesh_position_ = voronoi.position;
+    noteBufferedVoronoiVertexMesh(voronoi_vertex_id, t, voronoi.position, active_crossing_delaunay_xy_);
     KINDS_DEBUG("beginActiveCrossingEvent: buffered vv=" << voronoi_vertex_id << " de=" << delaunay_edge_id
       << " from barycentric Voronoi vertex t=" << t);
     return;
@@ -3675,6 +3761,7 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
 
 void SegmentBuilder::clearRadiusShiftedSiteCache()
 {
+  const std::lock_guard<std::mutex> lock(radius_shifted_site_cache_mutex_);
   radius_shifted_site_cache_.clear();
 }
 
@@ -3700,6 +3787,7 @@ SegmentBuilder::RadiusShiftedSiteCacheEntry* SegmentBuilder::getOrFillRadiusShif
   }
 
   const RadiusShiftedSiteCacheKey key = makeRadiusShiftedSiteCacheKey(site_vertex_id, *boundary_transition_shift);
+  const std::lock_guard<std::mutex> lock(radius_shifted_site_cache_mutex_);
   if (auto it = radius_shifted_site_cache_.find(key); it != radius_shifted_site_cache_.end())
   {
     KINDS_DEBUG("RadiusShiftedSiteCache reuse: site=" << site_vertex_id << " sources=(" << key.source_edge_lo << ","
@@ -3736,6 +3824,7 @@ SegmentBuilder::RadiusShiftedSiteCacheEntry* SegmentBuilder::getOrFillRadiusShif
 void SegmentBuilder::noteRadiusShiftedSiteMeshPosition(
   RadiusShiftedSiteCacheEntry& entry, const glm::dvec3& mesh_position, const char* consumer_context)
 {
+  const std::lock_guard<std::mutex> lock(radius_shifted_site_cache_mutex_);
   if (!entry.explicit_mesh_position.has_value())
   {
     entry.explicit_mesh_position = mesh_position;
@@ -4819,15 +4908,15 @@ void SegmentBuilder::flushPendingRadiusComplementarySplits()
     }
   }
 
-  // Independent meshlets can split in parallel; chained inserts on one strip stay sequential inside a group.
-  parallel_for(groups.size(),
-    [&](size_t group_i)
+  // Keep complementary splits sequential: entries share @c radius_shifted_site_cache_ and returning
+  // pointers into that map is not safe across concurrent emplace/rehash.
+  for (size_t group_i = 0; group_i < groups.size(); ++group_i)
+  {
+    for (const PendingRadiusComplementarySplit& pending : groups[group_i].items)
     {
-      for (const PendingRadiusComplementarySplit& pending : groups[group_i].items)
-      {
-        applyPendingRadiusComplementarySplit(pending, true);
-      }
-    });
+      applyPendingRadiusComplementarySplit(pending, true);
+    }
+  }
 }
 
 size_t SegmentBuilder::resolveIntersectionMeshPairIndex(size_t voronoi_cell_id,
@@ -6544,8 +6633,27 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
 glm::dvec3 SegmentBuilder::getCrossingCoordsInMeshSpace(
   KineticDelaunay::CrossingData::EdgeIntersectionRef intersection, double t) const
 {
-  kinDS::ensureCrossingIntersectionParamUpToDate(const_cast<KineticDelaunay&>(kin_del), intersection, t);
   const auto& ir = *intersection;
+  const BufferedIntersectionMeshKey key { ir.delaunay_edge_id, ir.voronoi_edge_id, meshVertexKineticTimeBits(t) };
+  {
+    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    if (const auto it = buffered_intersection_mesh_positions_.find(key);
+      it != buffered_intersection_mesh_positions_.end())
+    {
+      return it->second;
+    }
+  }
+
+  // Param refresh mutates CrossingData — serialize with the buffer lock so parallel section finishes
+  // cannot tear-update the same intersection while another thread interpolates it.
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  if (const auto it = buffered_intersection_mesh_positions_.find(key);
+    it != buffered_intersection_mesh_positions_.end())
+  {
+    return it->second;
+  }
+
+  kinDS::ensureCrossingIntersectionParamUpToDate(const_cast<KineticDelaunay&>(kin_del), intersection, t);
   const size_t d_he0 = 2 * ir.delaunay_edge_id;
   const size_t d_he1 = d_he0 + 1;
   const auto& graph = kin_del.getGraph();
@@ -6574,6 +6682,7 @@ glm::dvec3 SegmentBuilder::getCrossingCoordsInMeshSpace(
   {
     return glm::dvec3(std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), t);
   }
+  buffered_intersection_mesh_positions_.emplace(key, pos);
   return pos;
 }
 
@@ -6596,6 +6705,14 @@ SegmentBuilder::MeshIntersectionObjectSpaceResult SegmentBuilder::computeMeshInt
       "computeMeshIntersectionObjectSpace: intersection placement has no position_intersection.");
   }
   const auto ref = runtime_info.position_intersection.value();
+  // Buffer by the placement-determining crossing (position_intersection), not the conceptual pre-shift
+  // pair — radius boundary transitions remap conceptual → target while mesh coords follow position_*.
+  if (const std::optional<glm::dvec3> buffered
+    = findBufferedIntersectionMesh(ref->delaunay_edge_id, ref->voronoi_edge_id, t))
+  {
+    result.position = buffered.value();
+    return result;
+  }
   result.position = getCrossingCoordsInMeshSpace(ref, t);
   if (!vertexPositionFinite(result.position))
   {
@@ -6622,6 +6739,11 @@ SegmentBuilder::MeshIntersectionObjectSpaceResult SegmentBuilder::computeMeshInt
     }
   }
 
+  if (vertexPositionFinite(result.position))
+  {
+    result.position
+      = noteBufferedIntersectionMesh(ref->delaunay_edge_id, ref->voronoi_edge_id, t, result.position);
+  }
   return result;
 }
 
@@ -6668,8 +6790,17 @@ SegmentBuilder::MeshVoronoiVertexObjectSpaceResult SegmentBuilder::computeMeshVo
   if (active_crossing_mesh_position_.has_value() && active_crossing_voronoi_vertex_id_.has_value()
     && active_crossing_voronoi_vertex_id_.value() == voronoi_vertex_id)
   {
-    result.position = active_crossing_mesh_position_.value();
+    result.position = noteBufferedVoronoiVertexMesh(
+      voronoi_vertex_id, t, active_crossing_mesh_position_.value(), active_crossing_delaunay_xy_)
+                        .mesh_position;
     result.from_crossing_event_buffer = true;
+    return result;
+  }
+
+  if (const std::optional<BufferedVoronoiVertexMeshEntry> buffered
+    = findBufferedVoronoiVertexMesh(voronoi_vertex_id, t))
+  {
+    result.position = buffered->mesh_position;
     return result;
   }
 
@@ -6791,7 +6922,7 @@ SegmentBuilder::MeshVoronoiVertexObjectSpaceResult SegmentBuilder::computeMeshVo
       return result;
     }
 
-    result.position = mesh_pos;
+    result.position = noteBufferedVoronoiVertexMesh(voronoi_vertex_id, t, mesh_pos).mesh_position;
     return result;
   }
 
@@ -6858,7 +6989,7 @@ SegmentBuilder::MeshVoronoiVertexObjectSpaceResult SegmentBuilder::computeMeshVo
     return result;
   }
 
-  result.position = mesh_pos;
+  result.position = noteBufferedVoronoiVertexMesh(voronoi_vertex_id, t, mesh_pos).mesh_position;
   return result;
 }
 
@@ -6959,20 +7090,44 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   std::optional<MeshVoronoiVertexObjectSpaceResult> voronoi_object_space;
   if (!is_flexible_placeholder && meshlet_voronoi_vertex_for_alpha_check.has_value())
   {
+    const size_t voronoi_vertex_id = meshlet_voronoi_vertex_for_alpha_check.value();
     if (runtime_info.explicit_mesh_position.has_value())
     {
       // Flip (and similar): reuse mesh-space coords buffered before topology/strand reassignment.
-      vertex = runtime_info.explicit_mesh_position.value();
+      const BufferedVoronoiVertexMeshEntry buffered = noteBufferedVoronoiVertexMesh(voronoi_vertex_id, t,
+        runtime_info.explicit_mesh_position.value(),
+        runtime_info.explicit_delaunay_xy.has_value() ? runtime_info.explicit_delaunay_xy
+                                                      : (std::isfinite(delaunay_xy.x) ? std::optional<glm::dvec2>(delaunay_xy)
+                                                                                     : std::nullopt));
+      vertex = buffered.mesh_position;
+      if (buffered.delaunay_xy.has_value())
+      {
+        delaunay_xy = buffered.delaunay_xy.value();
+      }
+    }
+    else if (const std::optional<BufferedVoronoiVertexMeshEntry> buffered
+      = findBufferedVoronoiVertexMesh(voronoi_vertex_id, t))
+    {
+      vertex = buffered->mesh_position;
+      if (buffered->delaunay_xy.has_value())
+      {
+        delaunay_xy = buffered->delaunay_xy.value();
+      }
     }
     else
     {
       // Prefer barycentric Voronoi placement; the event VV reuses the crossing buffer.
       voronoi_object_space = computeMeshVoronoiVertexObjectSpace(
-        meshlet_voronoi_vertex_for_alpha_check.value(), glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
+        voronoi_vertex_id, glm::dvec3(profile_xy.x, profile_xy.y, t), strand_id, t);
       vertex = voronoi_object_space.value().position;
       if (voronoi_object_space.value().from_crossing_event_buffer && active_crossing_delaunay_xy_.has_value())
       {
         delaunay_xy = active_crossing_delaunay_xy_.value();
+      }
+      if (vertexPositionFinite(vertex))
+      {
+        noteBufferedVoronoiVertexMesh(voronoi_vertex_id, t, vertex,
+          std::isfinite(delaunay_xy.x) ? std::optional<glm::dvec2>(delaunay_xy) : std::nullopt);
       }
     }
     if (!vertexPositionFinite(vertex))
@@ -8254,6 +8409,19 @@ void kinDS::SegmentBuilder::onGraphCutApplied(double t, size_t prev_face_slots, 
 }
 
 void kinDS::SegmentBuilder::onBeforeComponentGraphSplit(double /*t*/) { }
+
+void kinDS::SegmentBuilder::onInfinitesimalSeparationActivated(size_t parent_component_id, double t)
+{
+  if (diagnostics)
+  {
+    kin_del.logDiagnosticsMonitoredCrossingContainingTriangle(t, "infinitesimal_separation_activated");
+  }
+  if (separation_callback_)
+  {
+    separation_callback_->writeSeparationVisualDebugSvg(
+      parent_component_id, EventTime(t), "before_infinitesimal_recompute");
+  }
+}
 
 glm::dvec3 kinDS::SegmentBuilder::closingMeshVoronoiDelaunayCrossingPosition(
   double t, size_t voronoi_edge_id, size_t delaunay_edge_id) const

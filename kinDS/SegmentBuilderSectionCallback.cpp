@@ -18,6 +18,10 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
 
   const double t = static_cast<double>(index);
   auto& graph = segment_builder_.kin_del.getGraph();
+  if (segment_builder_.diagnostics)
+  {
+    segment_builder_.kin_del.logDiagnosticsMonitoredCrossingContainingTriangle(t, "section_event_before");
+  }
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "before",
     "section_" + std::to_string(index),
     VisualDebugHighlight::forSectionBoundary(
@@ -115,6 +119,7 @@ void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)
   {
     segment_builder_.kin_del.validateAllFaceInsideStatesAtTime(t, "section_event");
     segment_builder_.logDiagnosticsMonitoredFaceInsideState(t, "section_event");
+    segment_builder_.kin_del.logDiagnosticsMonitoredCrossingContainingTriangle(t, "section_event");
   }
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "after",
     "section_" + std::to_string(index),

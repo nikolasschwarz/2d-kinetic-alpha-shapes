@@ -42,12 +42,12 @@ std::optional<size_t> runtimeBranchForPendingSplitParent(const KineticDelaunay& 
 } // namespace
 
 void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
-  const KineticDelaunay::SeparationEvent& separation, const char* phase) const
+  size_t parent_component_id, EventTime occurrence_time, const char* phase,
+  std::optional<EventTime> creation_time) const
 {
   KineticDelaunay& kin_del = segment_builder_.kin_del;
   const HalfEdgeDelaunayGraph& graph = kin_del.getGraph();
-  const size_t parent_component_id = separation.parent_component_id;
-  const double t = separation.occurrence_time;
+  const double t = occurrence_time.real_time;
 
   const std::optional<PendingBranchSplit> split = kin_del.getPendingBranchSplit(parent_component_id);
   const size_t iteration = split ? static_cast<size_t>(split->infinitesimal_epoch) : 0;
@@ -107,9 +107,16 @@ void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
     = !svg_branch_ids.empty() ? std::optional<size_t>(svg_branch_ids.front()) : parent_branch;
   const std::vector<size_t>* explicit_branches = svg_branch_ids.empty() ? nullptr : &svg_branch_ids;
 
-  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, kin_del, graph, t, phase,
+  writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, kin_del, graph, occurrence_time, phase,
     separationEventDescriptor(parent_component_id, iteration), highlight, preferred, &offset_segments, &seam_outlines,
-    explicit_branches, separation.creation_time);
+    explicit_branches, creation_time);
+}
+
+void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
+  const KineticDelaunay::SeparationEvent& separation, const char* phase) const
+{
+  writeSeparationVisualDebugSvg(
+    separation.parent_component_id, separation.occurrence_time, phase, separation.creation_time);
 }
 
 void SegmentBuilderSeparationCallback::beforeEvent(KineticDelaunay::Event& e)
@@ -120,6 +127,12 @@ void SegmentBuilderSeparationCallback::beforeEvent(KineticDelaunay::Event& e)
     return;
   }
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
+
+  if (segment_builder_.diagnostics)
+  {
+    segment_builder_.kin_del.logDiagnosticsMonitoredCrossingContainingTriangle(
+      separation->occurrence_time.real_time, "separation_event_before");
+  }
 
   writeSeparationVisualDebugSvg(*separation, "before");
 }
@@ -136,6 +149,8 @@ void SegmentBuilderSeparationCallback::afterEvent(KineticDelaunay::Event& e)
   if (segment_builder_.diagnostics)
   {
     segment_builder_.logDiagnosticsMonitoredFaceInsideState(separation->occurrence_time, "separation_event");
+    segment_builder_.kin_del.logDiagnosticsMonitoredCrossingContainingTriangle(
+      separation->occurrence_time.real_time, "separation_event_after");
   }
 
   writeSeparationVisualDebugSvg(*separation, "after");

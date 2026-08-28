@@ -35,6 +35,11 @@ static glm::dvec2 triangleIncenter(const glm::dvec2& A, const glm::dvec2& B, con
   return (a * A + b * B + c * C) / sum;
 }
 
+static glm::dvec2 triangleCentroid(const glm::dvec2& A, const glm::dvec2& B, const glm::dvec2& C)
+{
+  return (A + B + C) / 3.0;
+}
+
 class HalfEdgeDelaunayGraphToSVG
 {
  public:
@@ -537,6 +542,10 @@ class HalfEdgeDelaunayGraphToSVG
       std::string text;
       svg::Color color;
       double font_size;
+      std::string font_family = "Verdana";
+      std::string font_style;
+      double rotation_degrees = 0.0;
+      bool center_on_origin = false;
       Label(double x_, double y_, std::string text_, const svg::Color& color_, double font_size_)
         : x(x_)
         , y(y_)
@@ -551,6 +560,9 @@ class HalfEdgeDelaunayGraphToSVG
 
     constexpr double label_unit = 0.01 * label_scale;
     const double label_font_size = label_unit;
+    const double triangle_id_font_size = (2.0 / 3.0) * label_font_size;
+    const svg::Color triangle_id_color(64, 64, 64); // dark gray
+    constexpr double triangle_id_rotation_deg = -45.0; // 45° upwards in SVG screen space
     const double label_pad_sm = 0.5 * label_unit;
     const double label_pad_inf_face = 3.0 * label_unit;
     const double label_pad_he_along = label_unit;
@@ -560,23 +572,6 @@ class HalfEdgeDelaunayGraphToSVG
     const double label_bbox_margin = label_unit;
 
     const bool selective = highlight != nullptr;
-
-    std::unordered_set<size_t> delaunay_face_label_ids;
-    if (selective)
-    {
-      for (size_t face_id : highlight->delaunay_faces)
-      {
-        delaunay_face_label_ids.insert(face_id);
-        for (size_t he : graph.face(face_id).half_edges)
-        {
-          const int neighbor_face = graph.halfEdge(he ^ 1).face;
-          if (neighbor_face >= 0)
-          {
-            delaunay_face_label_ids.insert(static_cast<size_t>(neighbor_face));
-          }
-        }
-      }
-    }
 
     const svg::Color dim_inside_face(210, 235, 210);
     const svg::Color dim_outside_face(240, 215, 215);
@@ -621,12 +616,14 @@ class HalfEdgeDelaunayGraphToSVG
       return affected ? hi_outside_face : dim_outside_face;
     };
 
-    auto label_delaunay_face = [&](size_t face_id, double x, double y, const svg::Color& color)
+    auto label_delaunay_face = [&](size_t face_id, double x, double y)
     {
-      if (!selective || delaunay_face_label_ids.find(face_id) != delaunay_face_label_ids.end())
-      {
-        labels.push_back(Label(x, y, std::to_string(face_id), color, label_font_size));
-      }
+      Label label(x, y, std::to_string(face_id), triangle_id_color, triangle_id_font_size);
+      label.font_family = "cursive";
+      label.font_style = "italic";
+      label.rotation_degrees = triangle_id_rotation_deg;
+      label.center_on_origin = true;
+      labels.push_back(std::move(label));
     };
 
     auto label_delaunay_vertex = [&](size_t vertex_id, const svg::Color& color)
@@ -747,7 +744,7 @@ class HalfEdgeDelaunayGraphToSVG
           glm::dvec2 edge_normal(edge_dir.y, -edge_dir.x);
           glm::dvec2 label_pos = midpoint + label_pad_inf_face * edge_normal;
 
-          label_delaunay_face(face_id, label_pos.x, label_pos.y, svg::Color(svg::Color::Black));
+          label_delaunay_face(face_id, label_pos.x, label_pos.y);
         }
 
         continue;
@@ -771,8 +768,8 @@ class HalfEdgeDelaunayGraphToSVG
            << svg::Point(face_vertices[2][0], face_vertices[2][1]);
       doc << face;
 
-      glm::dvec2 incenter = triangleIncenter(face_vertices[0], face_vertices[1], face_vertices[2]);
-      label_delaunay_face(face_id, incenter[0], incenter[1], svg::Color(svg::Color::White));
+      const glm::dvec2 centroid = triangleCentroid(face_vertices[0], face_vertices[1], face_vertices[2]);
+      label_delaunay_face(face_id, centroid[0], centroid[1]);
     }
 
     // Draw edges
@@ -1218,7 +1215,9 @@ class HalfEdgeDelaunayGraphToSVG
       {
         continue;
       }
-      doc << svg::Text(svg::Point(label.x, label.y), label.text, svg::Fill(label.color), svg::Font(label.font_size));
+      doc << svg::Text(svg::Point(label.x, label.y), label.text, svg::Fill(label.color),
+        svg::Font(label.font_size, label.font_family, label.font_style), svg::Stroke(), label.rotation_degrees,
+        label.center_on_origin);
     }
 
     KINDS_DEBUG("Wrote SVG: " << filename);

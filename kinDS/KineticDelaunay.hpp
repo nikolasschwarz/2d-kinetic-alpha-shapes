@@ -187,6 +187,12 @@ class KineticDelaunay
     virtual void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
     /// Invoked immediately before a targeted pending runtime-branch graph cut in @ref applyPendingRuntimeBranchSplit.
     virtual void onBeforeComponentGraphSplit(double t) { (void)t; }
+    /// Invoked when frozen-site infinitesimal separation becomes active (before virtual event recompute).
+    virtual void onInfinitesimalSeparationActivated(size_t parent_component_id, double t)
+    {
+      (void)parent_component_id;
+      (void)t;
+    }
   };
 
   class FlipEvent;
@@ -987,11 +993,12 @@ class KineticDelaunay
   static constexpr size_t kDiagnosticsMonitoredFaceId = kDiagnosticsMonitorDisabledId;
   /// Debug target: Voronoi vertex whose crossing-event trigger roots are traced.
   /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
-  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = kDiagnosticsMonitorDisabledId;
-  /// Debug target: undirected Delaunay edge id highlighted in crossing trigger logs.
+  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = 1734;
+  /// Debug target: undirected Delaunay edge id highlighted in crossing trigger logs (optional; not a filter when disabled).
   /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
   static constexpr size_t kDiagnosticsMonitoredCrossingDelaunayEdgeId = kDiagnosticsMonitorDisabledId;
-  /// Suspected missed crossing time; crossing diagnostics are constrained to its scheduling window [floor(t), floor(t)+1).
+  /// Suspected missed crossing time; crossing diagnostics use inclusive window [@ref kDiagnosticsMonitoredCrossingTime,
+  /// @ref kDiagnosticsMonitoredCrossingTime + 1] so section-event recomputes at the lower bound are included.
   static constexpr double kDiagnosticsMonitoredCrossingTime = 10.0;
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
@@ -1012,6 +1019,9 @@ class KineticDelaunay
   bool isDiagnosticsHalfEdgeIdValid(size_t half_edge_id) const;
   bool isDiagnosticsMonitoredFaceValid() const;
   bool isDiagnosticsMonitoredCrossingValid() const;
+  /// When diagnostics + monitored VV are enabled, log stored containing triangle vs
+  /// @ref findContainingTriForVoronoiVertex (same as initialization) at @p t.
+  void logDiagnosticsMonitoredCrossingContainingTriangle(double t, const char* context) const;
   void validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const;
   void validateAllFaceInsideStatesAtTime(double t, const char* context) const;
   void logFaceInsideStateAtTime(size_t face_id, double t, const char* context) const;

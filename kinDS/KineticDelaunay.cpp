@@ -2890,6 +2890,10 @@ void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(
   KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id << " t=" << t
                                                                       << " epoch=" << split->infinitesimal_epoch
                                                                       << " dir=" << glm::to_string(split->separation_direction));
+  if (callback_manager_)
+  {
+    callback_manager_->onInfinitesimalSeparationActivated(parent_component_id, t);
+  }
   // Seed the virtual event queue for the seam region (same local post-event paradigm applies afterward).
   recomputeEventsAfterInfinitesimalSeparation(parent_component_id, t, /*min_virtual_x=*/0.0);
 }

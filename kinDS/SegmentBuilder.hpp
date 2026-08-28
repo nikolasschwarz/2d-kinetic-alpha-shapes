@@ -9,6 +9,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <tuple>
 #include <unordered_map>
@@ -492,6 +493,65 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void endActiveCrossingEvent();
   bool activeCrossingEventBufferApplies(std::optional<size_t> voronoi_vertex_id,
     const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& intersection) const;
+  /// Bit-exact kinetic time key (matches Validator mesh-vertex source grouping).
+  static uint64_t meshVertexKineticTimeBits(double t);
+  /// First-wins mesh/Delaunay coords for a Voronoi vertex at a kinetic time (avoids recomputation drift).
+  struct BufferedVoronoiVertexMeshKey
+  {
+    size_t voronoi_vertex_id = static_cast<size_t>(-1);
+    uint64_t kinetic_time_bits = 0;
+    bool operator==(const BufferedVoronoiVertexMeshKey& other) const noexcept
+    {
+      return voronoi_vertex_id == other.voronoi_vertex_id && kinetic_time_bits == other.kinetic_time_bits;
+    }
+  };
+  struct BufferedVoronoiVertexMeshKeyHash
+  {
+    size_t operator()(const BufferedVoronoiVertexMeshKey& key) const noexcept
+    {
+      size_t h = std::hash<size_t> {}(key.voronoi_vertex_id);
+      h ^= std::hash<uint64_t> {}(key.kinetic_time_bits) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+  struct BufferedVoronoiVertexMeshEntry
+  {
+    glm::dvec3 mesh_position {};
+    std::optional<glm::dvec2> delaunay_xy {};
+  };
+  /// First-wins mesh coords for the placement-determining Voronoi–Delaunay intersection at a kinetic time
+  /// (@c position_intersection / metadata @c delaunay_edge_id+@c voronoi_edge_id — not conceptual pre-shift ids).
+  struct BufferedIntersectionMeshKey
+  {
+    size_t delaunay_edge_id = static_cast<size_t>(-1);
+    size_t voronoi_edge_id = static_cast<size_t>(-1);
+    uint64_t kinetic_time_bits = 0;
+    bool operator==(const BufferedIntersectionMeshKey& other) const noexcept
+    {
+      return delaunay_edge_id == other.delaunay_edge_id && voronoi_edge_id == other.voronoi_edge_id
+        && kinetic_time_bits == other.kinetic_time_bits;
+    }
+  };
+  struct BufferedIntersectionMeshKeyHash
+  {
+    size_t operator()(const BufferedIntersectionMeshKey& key) const noexcept
+    {
+      size_t h = std::hash<size_t> {}(key.delaunay_edge_id);
+      h ^= std::hash<size_t> {}(key.voronoi_edge_id) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      h ^= std::hash<uint64_t> {}(key.kinetic_time_bits) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+  /// Thread-safe lookup (section/finishMesh paths run under @c parallel_for).
+  std::optional<BufferedVoronoiVertexMeshEntry> findBufferedVoronoiVertexMesh(
+    size_t voronoi_vertex_id, double t) const;
+  /// First-wins store; returns the canonical entry by value (safe across concurrent inserts).
+  BufferedVoronoiVertexMeshEntry noteBufferedVoronoiVertexMesh(size_t voronoi_vertex_id, double t,
+    const glm::dvec3& mesh_position, std::optional<glm::dvec2> delaunay_xy = std::nullopt) const;
+  std::optional<glm::dvec3> findBufferedIntersectionMesh(
+    size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
+  glm::dvec3 noteBufferedIntersectionMesh(
+    size_t delaunay_edge_id, size_t voronoi_edge_id, double t, const glm::dvec3& mesh_position) const;
   glm::dvec2 meshVirtualShiftForStrand(size_t strand_id, double t) const;
   void applyMeshVirtualShiftToProfileVertex(
     glm::dvec3& vertex, glm::dvec2& profile_xy, size_t strand_id, double t, bool& includes_virtual_shift) const;
@@ -765,7 +825,18 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Cleared at the start of each radius beforeEvent / afterEvent phase.
   std::unordered_map<RadiusShiftedSiteCacheKey, RadiusShiftedSiteCacheEntry, RadiusShiftedSiteCacheKeyHash>
     radius_shifted_site_cache_;
+  /// Guards @c radius_shifted_site_cache_ for complementary-split @c parallel_for / shared site keys.
+  mutable std::mutex radius_shifted_site_cache_mutex_;
   std::vector<PendingRadiusComplementarySplit> pending_radius_complementary_splits_;
+  /// Persistent first-wins mesh positions keyed like Validator source groups (id + bit-exact t).
+  /// Guarded: @c SectionCallback / other finish paths mutate these from @c parallel_for workers.
+  /// Recursive: mesh placement helpers may nest find/note while holding the lock.
+  mutable std::recursive_mutex buffered_mesh_vertex_positions_mutex_;
+  mutable std::unordered_map<BufferedVoronoiVertexMeshKey, BufferedVoronoiVertexMeshEntry,
+    BufferedVoronoiVertexMeshKeyHash>
+    buffered_voronoi_vertex_mesh_positions_;
+  mutable std::unordered_map<BufferedIntersectionMeshKey, glm::dvec3, BufferedIntersectionMeshKeyHash>
+    buffered_intersection_mesh_positions_;
 
   glm::dvec3 radiusTransitionProjectionPosition(
     const RadiusTransitionProjection& projection, double t, bool mesh_space) const;
@@ -1235,6 +1306,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) override;
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) override;
   void onBeforeComponentGraphSplit(double t) override;
+  void onInfinitesimalSeparationActivated(size_t parent_component_id, double t) override;
 
   void finalize(double t) override;
 

@@ -400,15 +400,20 @@ class Stroke : public Serializeable
 class Font : public Serializeable
 {
  public:
-  explicit Font(double size = 12, std::string const& family = "Verdana")
+  explicit Font(double size = 12, std::string const& family = "Verdana", std::string const& style = "")
     : size(size)
     , family(family)
+    , style(style)
   {
   }
   std::string toString(Layout const& layout) const override
   {
     std::stringstream ss;
     ss << attribute("font-size", translateScale(size, layout)) << attribute("font-family", family);
+    if (!style.empty())
+    {
+      ss << attribute("font-style", style);
+    }
     return ss.str();
   }
 
@@ -417,6 +422,7 @@ class Font : public Serializeable
  private:
   double size;
   std::string family;
+  std::string style;
 };
 
 class Shape : public Serializeable
@@ -853,11 +859,13 @@ class Text : public Shape
 {
  public:
   Text(Point const& origin, std::string const& content, Fill const& fill = Fill(), Font const& font = Font(),
-    Stroke const& stroke = Stroke())
+    Stroke const& stroke = Stroke(), double rotation_degrees = 0.0, bool center_on_origin = false)
     : Shape(fill, stroke)
     , origin(origin)
     , content(content)
     , font(font)
+    , rotation_degrees(rotation_degrees)
+    , center_on_origin(center_on_origin)
   {
   }
   std::string toString(Layout const& layout) const override
@@ -871,22 +879,40 @@ class Text : public Shape
     switch (layout.origin)
     {
     case Layout::TopLeft:
-      y += bbox.size.height;
+      if (!center_on_origin)
+      {
+        y += bbox.size.height;
+      }
       break;
     case Layout::TopRight:
-      x -= bbox.size.width;
-      y += bbox.size.height;
+      if (!center_on_origin)
+      {
+        x -= bbox.size.width;
+        y += bbox.size.height;
+      }
       break;
     case Layout::BottomRight:
-      x -= bbox.size.width;
+      if (!center_on_origin)
+      {
+        x -= bbox.size.width;
+      }
       break;
     case Layout::BottomLeft:
       // No adjustment needed
       break;
     }
 
-    ss << elemStart("text") << attribute("x", x) << attribute("y", y) << fill.toString(layout)
-       << stroke.toString(layout) << font.toString(layout) << ">" << content << elemEnd("text");
+    ss << elemStart("text") << attribute("x", x) << attribute("y", y);
+    if (center_on_origin)
+    {
+      ss << attribute("text-anchor", "middle") << attribute("dominant-baseline", "middle");
+    }
+    if (rotation_degrees != 0.0)
+    {
+      ss << "transform=\"rotate(" << rotation_degrees << " " << x << " " << y << ")\" ";
+    }
+    ss << fill.toString(layout) << stroke.toString(layout) << font.toString(layout) << ">" << content
+       << elemEnd("text");
     return ss.str();
   }
   void offset(Point const& offset) override
@@ -907,6 +933,8 @@ class Text : public Shape
   Point origin;
   std::string content;
   Font font;
+  double rotation_degrees;
+  bool center_on_origin;
 
   double measureTextWidth(std::string const& text, Font const& font) const
   {

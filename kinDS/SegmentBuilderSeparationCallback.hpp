@@ -4,6 +4,7 @@
 #include "KineticDelaunaySeparationEvent.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace kinDS
@@ -20,6 +21,10 @@ class SegmentBuilderSeparationCallback final : public KineticDelaunay::EventCall
 
   void beforeEvent(KineticDelaunay::Event& e) override;
   void afterEvent(KineticDelaunay::Event& e) override;
+
+  /// Visual-debug SVG for a pending/active separation (SeparationEvent or infinitesimal activation).
+  void writeSeparationVisualDebugSvg(size_t parent_component_id, EventTime occurrence_time, const char* phase,
+    std::optional<EventTime> creation_time = std::nullopt) const;
 
  private:
   SegmentBuilder& segment_builder_;

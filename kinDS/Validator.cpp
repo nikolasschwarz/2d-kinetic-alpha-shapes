@@ -14,6 +14,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -42,12 +43,6 @@ void ensureValidationLogOpen()
 void writeValidationLog(const char* level, const std::string& message)
 {
   ensureValidationLogOpen();
-  if (!validation_log_file.is_open())
-  {
-    std::cerr << "[validation][" << level << "] " << message << std::endl;
-    return;
-  }
-
   const std::time_t now = std::time(nullptr);
   std::tm timeinfo {};
 #if defined(_WIN32)
@@ -57,8 +52,34 @@ void writeValidationLog(const char* level, const std::string& message)
 #endif
   char timestamp[20];
   std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  const std::string prefix = std::string("[") + timestamp + "] [" + level + "] ";
 
-  validation_log_file << '[' << timestamp << "] [" << level << "] " << message << '\n';
+  auto write_lines = [&](std::ostream& out)
+  {
+    size_t start = 0;
+    while (start <= message.size())
+    {
+      const size_t end = message.find('\n', start);
+      const std::string_view line
+        = end == std::string::npos
+        ? std::string_view(message).substr(start)
+        : std::string_view(message).substr(start, end - start);
+      out << prefix << line << '\n';
+      if (end == std::string::npos)
+      {
+        break;
+      }
+      start = end + 1;
+    }
+  };
+
+  if (!validation_log_file.is_open())
+  {
+    write_lines(std::cerr);
+    return;
+  }
+
+  write_lines(validation_log_file);
   validation_log_file.flush();
 }
 
@@ -234,6 +255,7 @@ struct MeshVertexSourceRecord
   std::string meshlet_label;
   size_t vertex_index = static_cast<size_t>(-1);
   glm::dvec3 world_position {};
+  std::string metadata;
 };
 
 uint64_t kineticTimeKeyBits(double t)
@@ -279,24 +301,27 @@ std::optional<MeshVertexSourceKey> meshVertexSourceKeyFromMetadata(const std::st
     || metadataSizeField(metadata, "delaunay_edge_id").has_value()
     || metadataSizeField(metadata, "crossing_delaunay_edge_id").has_value())
   {
-    std::optional<size_t> delaunay_edge_id = metadataSizeField(metadata, "conceptual_delaunay_edge_id");
-    if (!delaunay_edge_id.has_value())
-    {
-      delaunay_edge_id = metadataSizeField(metadata, "delaunay_edge_id");
-    }
+    // Key on the placement-determining crossing (delaunay_edge_id / voronoi_edge_id). Conceptual ids are
+    // the pre-shift source edge pair and must not merge distinct shifted positions (false negatives) or
+    // force shifted verts to share an unshifted buffer entry.
+    std::optional<size_t> delaunay_edge_id = metadataSizeField(metadata, "delaunay_edge_id");
     if (!delaunay_edge_id.has_value())
     {
       delaunay_edge_id = metadataSizeField(metadata, "crossing_delaunay_edge_id");
     }
-
-    std::optional<size_t> voronoi_edge_id = metadataSizeField(metadata, "conceptual_voronoi_edge_id");
-    if (!voronoi_edge_id.has_value())
+    if (!delaunay_edge_id.has_value())
     {
-      voronoi_edge_id = metadataSizeField(metadata, "voronoi_edge_id");
+      delaunay_edge_id = metadataSizeField(metadata, "conceptual_delaunay_edge_id");
     }
+
+    std::optional<size_t> voronoi_edge_id = metadataSizeField(metadata, "voronoi_edge_id");
     if (!voronoi_edge_id.has_value())
     {
       voronoi_edge_id = metadataSizeField(metadata, "crossing_voronoi_edge_id");
+    }
+    if (!voronoi_edge_id.has_value())
+    {
+      voronoi_edge_id = metadataSizeField(metadata, "conceptual_voronoi_edge_id");
     }
 
     if (!delaunay_edge_id.has_value() || !voronoi_edge_id.has_value())
@@ -399,7 +424,8 @@ MeshVertexSourceValidationResult validateMeshVertexSourceRecords(
       ++result.inconsistent_source_count;
       writeValidationLog("WARNING",
         "non-finite reference position for " + describeMeshVertexSourceKey(key) + " at "
-          + records.front().meshlet_label + " v" + std::to_string(records.front().vertex_index));
+          + records.front().meshlet_label + " v" + std::to_string(records.front().vertex_index)
+          + (records.front().metadata.empty() ? "" : (" metadata=" + records.front().metadata)));
       for (const MeshVertexSourceRecord& record : records)
       {
         result.discrepancies.push_back(MeshVertexSourceDiscrepancy { record.meshlet_index, record.vertex_index });
@@ -427,12 +453,25 @@ MeshVertexSourceValidationResult validateMeshVertexSourceRecords(
     ++result.inconsistent_source_count;
     std::ostringstream oss;
     oss << "inconsistent world positions for " << describeMeshVertexSourceKey(key) << " (max_distance="
-        << numberLiteral(max_distance) << ", tolerance=" << numberLiteral(position_tolerance) << "):";
-    for (const MeshVertexSourceRecord& record : records)
+        << numberLiteral(max_distance) << ", tolerance=" << numberLiteral(position_tolerance) << ", occurrences="
+        << records.size() << "):";
+    for (size_t record_index = 0; record_index < records.size(); ++record_index)
     {
+      const MeshVertexSourceRecord& record = records[record_index];
       result.discrepancies.push_back(MeshVertexSourceDiscrepancy { record.meshlet_index, record.vertex_index });
-      oss << " [" << record.meshlet_label << " v" << record.vertex_index << " pos=(" << numberLiteral(record.world_position.x)
-          << "," << numberLiteral(record.world_position.y) << "," << numberLiteral(record.world_position.z) << ")]";
+      const double distance_from_reference = glm::length(record.world_position - reference);
+      oss << "\n  [" << record_index << "] " << record.meshlet_label << " v" << record.vertex_index
+          << " dist_from_first=" << numberLiteral(distance_from_reference) << " pos=("
+          << numberLiteral(record.world_position.x) << "," << numberLiteral(record.world_position.y) << ","
+          << numberLiteral(record.world_position.z) << ")";
+      if (!record.metadata.empty())
+      {
+        oss << "\n      metadata=" << record.metadata;
+      }
+      else
+      {
+        oss << "\n      metadata=<empty>";
+      }
     }
     writeValidationLog("WARNING", oss.str());
   }
@@ -487,8 +526,8 @@ MeshVertexSourceValidationResult Validator::validateMeshVertexSourcesHaveConsist
         continue;
       }
 
-      buckets[key.value()].push_back(
-        MeshVertexSourceRecord { meshlet_index, label, vertex_index, vertices[vertex_index] });
+      buckets[key.value()].push_back(MeshVertexSourceRecord {
+        meshlet_index, label, vertex_index, vertices[vertex_index], vertex_metadata[vertex_index] });
     }
   }
 
