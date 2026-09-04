@@ -167,10 +167,12 @@ class TreeMesher
     std::optional<bool> transformed = std::nullopt, std::optional<size_t> max_exports = std::nullopt) const;
   bool meshletsTransformedAtConstruction() const { return settings.transform_mesh_at_construction; }
 
-  /// Result of @ref truncateToBoundary: outside meshlet indices plus classification counts.
+  /// Result of @ref truncateToBoundary: outside/intersecting meshlet indices plus classification counts.
   struct BoundaryTruncateResult
   {
     std::vector<size_t> outside_meshlet_indices;
+    /// Meshlets whose pre-check was INTERSECTING and that produced a non-empty clipped result.
+    std::vector<size_t> intersecting_meshlet_indices;
     size_t inside_count = 0;
     size_t intersecting_count = 0;
     size_t outside_count = 0;

@@ -245,6 +245,20 @@ class VoronoiMesh
   /// Empty string if unset; otherwise a stable fragment for filenames, e.g. `_t0.000000` or `_t3.500000`.
   std::string creationKineticTimeFilenameSuffix() const;
 
+  /// Result of @ref splitIntoConnectedComponents.
+  struct ConnectedComponentMeshes
+  {
+    std::vector<VoronoiMesh> meshes;
+    /// Per-component face neighbor tags (one int per triangle), copied from @p face_neighbors.
+    std::vector<std::vector<int>> face_neighbors;
+  };
+
+  /// Split @p mesh into triangle-connected components (faces share an undirected edge).
+  /// If there is at most one non-empty component, returns empty @c meshes (caller keeps the original).
+  /// @p face_neighbors is optional; when non-empty it must have one entry per triangle.
+  static ConnectedComponentMeshes splitIntoConnectedComponents(
+    const VoronoiMesh& mesh, const std::vector<int>& face_neighbors = {});
+
   // debug methods
   void checkForDegenerateTriangles() const;
 

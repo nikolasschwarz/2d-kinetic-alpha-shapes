@@ -277,6 +277,7 @@ TreeMesher::BoundaryTruncateResult TreeMesher::truncateToBoundary(const VoronoiM
   std::mutex failed_mutex;
   std::vector<std::pair<size_t, VoronoiMesh>> failed_meshlets;
   std::vector<size_t> outside_meshlet_indices;
+  std::vector<size_t> intersecting_meshlet_indices;
   std::atomic<size_t> inside_count { 0 };
   std::atomic<size_t> intersecting_count { 0 };
   std::atomic<size_t> outside_count { 0 };
@@ -342,6 +343,11 @@ TreeMesher::BoundaryTruncateResult TreeMesher::truncateToBoundary(const VoronoiM
           {
             segment_meshlets[mesh_index] = std::move(clipped_mesh);
             meshing_neighbor_indices[mesh_index] = std::move(clipped_neighbors);
+            if (segment_meshlets[mesh_index].getTriangleCount() > 0)
+            {
+              std::lock_guard<std::mutex> lock(failed_mutex);
+              intersecting_meshlet_indices.push_back(mesh_index);
+            }
           }
         }
         break;
@@ -407,8 +413,10 @@ TreeMesher::BoundaryTruncateResult TreeMesher::truncateToBoundary(const VoronoiM
   }
 
   std::sort(outside_meshlet_indices.begin(), outside_meshlet_indices.end());
+  std::sort(intersecting_meshlet_indices.begin(), intersecting_meshlet_indices.end());
   BoundaryTruncateResult result;
   result.outside_meshlet_indices = std::move(outside_meshlet_indices);
+  result.intersecting_meshlet_indices = std::move(intersecting_meshlet_indices);
   result.inside_count = inside_count.load(std::memory_order_relaxed);
   result.intersecting_count = intersecting_count.load(std::memory_order_relaxed);
   result.outside_count = outside_count.load(std::memory_order_relaxed);

@@ -1946,3 +1946,208 @@ void kinDS::VoronoiMesh::checkForDegenerateTriangles() const
   if (degenerate_faces != 0)
     std::cerr << "Degenerate triangles: " << degenerate_faces << "/" << (triangles.size() / 3) << "\n";
 }
+
+VoronoiMesh::ConnectedComponentMeshes VoronoiMesh::splitIntoConnectedComponents(
+  const VoronoiMesh& mesh, const std::vector<int>& face_neighbors)
+{
+  ConnectedComponentMeshes result;
+  const size_t face_count = mesh.getTriangleCount();
+  if (face_count == 0)
+  {
+    return result;
+  }
+  if (!face_neighbors.empty() && face_neighbors.size() != face_count)
+  {
+    throw std::runtime_error("VoronoiMesh::splitIntoConnectedComponents: face_neighbors size mismatch.");
+  }
+
+  const auto& tris = mesh.getTriangles();
+  // Build undirected edge -> face adjacency.
+  std::unordered_map<uint64_t, std::vector<size_t>> edge_to_faces;
+  edge_to_faces.reserve(face_count * 3);
+  auto pack_edge = [](size_t a, size_t b) -> uint64_t {
+    if (a > b)
+    {
+      std::swap(a, b);
+    }
+    return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+  };
+  for (size_t face = 0; face < face_count; ++face)
+  {
+    const size_t i0 = tris[face * 3 + 0];
+    const size_t i1 = tris[face * 3 + 1];
+    const size_t i2 = tris[face * 3 + 2];
+    edge_to_faces[pack_edge(i0, i1)].push_back(face);
+    edge_to_faces[pack_edge(i1, i2)].push_back(face);
+    edge_to_faces[pack_edge(i2, i0)].push_back(face);
+  }
+
+  std::vector<std::vector<size_t>> face_adj(face_count);
+  for (const auto& [edge, faces] : edge_to_faces)
+  {
+    (void)edge;
+    for (size_t a = 0; a < faces.size(); ++a)
+    {
+      for (size_t b = a + 1; b < faces.size(); ++b)
+      {
+        face_adj[faces[a]].push_back(faces[b]);
+        face_adj[faces[b]].push_back(faces[a]);
+      }
+    }
+  }
+
+  std::vector<int> component_of(face_count, -1);
+  std::vector<std::vector<size_t>> components;
+  for (size_t seed = 0; seed < face_count; ++seed)
+  {
+    if (component_of[seed] >= 0)
+    {
+      continue;
+    }
+    const int comp_id = static_cast<int>(components.size());
+    components.emplace_back();
+    std::vector<size_t> stack;
+    stack.push_back(seed);
+    component_of[seed] = comp_id;
+    while (!stack.empty())
+    {
+      const size_t face = stack.back();
+      stack.pop_back();
+      components.back().push_back(face);
+      for (const size_t nb : face_adj[face])
+      {
+        if (component_of[nb] < 0)
+        {
+          component_of[nb] = comp_id;
+          stack.push_back(nb);
+        }
+      }
+    }
+  }
+
+  if (components.size() <= 1)
+  {
+    return result;
+  }
+
+  const auto& src_verts = mesh.getVertices();
+  const auto& src_normals = mesh.getNormals();
+  const auto& src_uvs = mesh.getUVs();
+  const auto& src_uv_indices = mesh.getUVIndices();
+  const auto& src_material_ids = mesh.getMaterialIDs();
+  const auto& src_vertex_meta = mesh.getVertexMetadata();
+  const auto& src_face_meta = mesh.getFaceMetadata();
+  const auto& src_colors = mesh.getVertexColors();
+  const auto& src_profile = mesh.getProfilePlaneXY();
+  const auto& src_kinetic = mesh.getVertexKineticTimes();
+  const auto& src_semantic = mesh.getVertexSemanticUvs();
+  const NormalMode mode = mesh.getNormalMode();
+
+  result.meshes.reserve(components.size());
+  result.face_neighbors.reserve(components.size());
+
+  for (const auto& faces : components)
+  {
+    VoronoiMesh out(mesh.getMaterialNames(), mode);
+    out.setStoreMetadata(mesh.storeMetadata());
+    out.setCreationKineticTime(mesh.getCreationKineticTime());
+
+    std::unordered_map<size_t, size_t> vertex_remap;
+    vertex_remap.reserve(faces.size() * 2);
+    std::vector<int> out_neighbors;
+    out_neighbors.reserve(faces.size());
+
+    auto ensure_vertex = [&](size_t old_vid) -> size_t {
+      const auto it = vertex_remap.find(old_vid);
+      if (it != vertex_remap.end())
+      {
+        return it->second;
+      }
+      const glm::dvec3& p = src_verts[old_vid];
+      const std::string meta
+        = (old_vid < src_vertex_meta.size()) ? src_vertex_meta[old_vid] : std::string("{}");
+      const glm::dvec3 color = (old_vid < src_colors.size()) ? src_colors[old_vid] : glm::dvec3(1.0);
+      const size_t new_vid = out.addVertex(p, meta, color);
+      if (old_vid < src_profile.size())
+      {
+        out.setProfilePlanePosition(new_vid, src_profile[old_vid]);
+      }
+      if (old_vid < src_kinetic.size())
+      {
+        out.setVertexKineticTime(new_vid, src_kinetic[old_vid]);
+      }
+      if (old_vid < src_semantic.size())
+      {
+        out.setVertexSemanticUv(new_vid, src_semantic[old_vid]);
+      }
+      out.setVertexFlexible(new_vid, mesh.isVertexFlexible(old_vid));
+      if (mode == NormalMode::PerVertex && old_vid < src_normals.size())
+      {
+        if (out.getNormals().size() <= new_vid)
+        {
+          out.addNormal(src_normals[old_vid]);
+        }
+        else
+        {
+          out.replaceNormal(new_vid, src_normals[old_vid]);
+        }
+      }
+      vertex_remap.emplace(old_vid, new_vid);
+      return new_vid;
+    };
+
+    for (const size_t face : faces)
+    {
+      const size_t c0 = face * 3 + 0;
+      const size_t c1 = face * 3 + 1;
+      const size_t c2 = face * 3 + 2;
+      const size_t v0 = ensure_vertex(tris[c0]);
+      const size_t v1 = ensure_vertex(tris[c1]);
+      const size_t v2 = ensure_vertex(tris[c2]);
+
+      size_t uv0 = std::numeric_limits<size_t>::max();
+      size_t uv1 = std::numeric_limits<size_t>::max();
+      size_t uv2 = std::numeric_limits<size_t>::max();
+      if (c2 < src_uv_indices.size())
+      {
+        auto map_uv = [&](size_t old_uv) -> size_t {
+          if (old_uv == std::numeric_limits<size_t>::max() || old_uv >= src_uvs.size())
+          {
+            return std::numeric_limits<size_t>::max();
+          }
+          return out.addUV(src_uvs[old_uv]);
+        };
+        uv0 = map_uv(src_uv_indices[c0]);
+        uv1 = map_uv(src_uv_indices[c1]);
+        uv2 = map_uv(src_uv_indices[c2]);
+      }
+
+      const int material_id = (face < src_material_ids.size()) ? src_material_ids[face] : -1;
+      const std::string face_meta = (face < src_face_meta.size()) ? src_face_meta[face] : std::string("{}");
+      out.addTriangle(v0, v1, v2, uv0, uv1, uv2, material_id, face_meta);
+
+      if (mode == NormalMode::PerTriangleCorner)
+      {
+        if (c0 < src_normals.size())
+        {
+          out.addNormal(src_normals[c0]);
+        }
+        if (c1 < src_normals.size())
+        {
+          out.addNormal(src_normals[c1]);
+        }
+        if (c2 < src_normals.size())
+        {
+          out.addNormal(src_normals[c2]);
+        }
+      }
+
+      out_neighbors.push_back(face < face_neighbors.size() ? face_neighbors[face] : -1);
+    }
+
+    result.meshes.push_back(std::move(out));
+    result.face_neighbors.push_back(std::move(out_neighbors));
+  }
+
+  return result;
+}
