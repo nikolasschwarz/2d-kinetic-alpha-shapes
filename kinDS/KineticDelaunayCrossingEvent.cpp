@@ -834,33 +834,6 @@ void KineticDelaunay::CrossingEvent::handleEvent()
     }
   };
 
-  if (is_infinitesimal)
-  {
-    bool epoch_ok = false;
-    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
-    {
-      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
-      {
-        epoch_ok = true;
-        break;
-      }
-    }
-    if (!epoch_ok)
-    {
-      log_skip("stale infinitesimal epoch");
-      return;
-    }
-    kd->current_infinitesimal_t_ = infinitesimal_t;
-  }
-
-  const auto clear_infinitesimal = [&]()
-  {
-    if (is_infinitesimal)
-    {
-      kd->current_infinitesimal_t_ = 0.0;
-    }
-  };
-
   if (log_crossing_diag)
   {
     const bool registered = kd->crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id);
@@ -890,6 +863,33 @@ void KineticDelaunay::CrossingEvent::handleEvent()
                                                              << (graph.isLiveHalfEdge(half_edge_id) ? "true" : "false")
                                                              << ")");
   }
+
+  if (is_infinitesimal)
+  {
+    bool epoch_ok = false;
+    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
+    {
+      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
+      {
+        epoch_ok = true;
+        break;
+      }
+    }
+    if (!epoch_ok)
+    {
+      log_skip("stale infinitesimal epoch");
+      return;
+    }
+    kd->current_infinitesimal_t_ = infinitesimal_t;
+  }
+
+  const auto clear_infinitesimal = [&]()
+  {
+    if (is_infinitesimal)
+    {
+      kd->current_infinitesimal_t_ = 0.0;
+    }
+  };
 
   // Check if the event is still valid
   if (creation_time < kd->crossing_data.last_crossing[voronoi_vertex_id])

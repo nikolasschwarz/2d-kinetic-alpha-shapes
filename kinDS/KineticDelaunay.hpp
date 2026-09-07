@@ -993,7 +993,7 @@ class KineticDelaunay
   static constexpr size_t kDiagnosticsMonitoredFaceId = kDiagnosticsMonitorDisabledId;
   /// Debug target: Voronoi vertex whose crossing-event trigger roots are traced.
   /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
-  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = 1734;
+  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = 1608;
   /// Debug target: undirected Delaunay edge id highlighted in crossing trigger logs (optional; not a filter when disabled).
   /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
   static constexpr size_t kDiagnosticsMonitoredCrossingDelaunayEdgeId = kDiagnosticsMonitorDisabledId;
