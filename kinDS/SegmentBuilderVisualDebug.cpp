@@ -409,6 +409,11 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   {
     return;
   }
+  // Time window applies only to full --debug-files runs (not forced error-dump callers).
+  if (kin_del.isVisualDebugEnabled() && !kin_del.shouldExportVisualDebugAt(occurrence_time.real_time))
+  {
+    return;
+  }
 
   // Site / VV positions go through getPointInDelaunaySpace → separationOffsetAt, which reads
   // current_infinitesimal_t_. Bind it to this export's EventTime so before/after SVGs match the

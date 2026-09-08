@@ -48,8 +48,8 @@ size_t runtimeBranchIdForFlipEdge(const KineticDelaunay& kin_del, const HalfEdge
   return kin_del.getRuntimeBranchIdForHalfEdge(flip_half_edge_id);
 }
 
-void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const HalfEdgeDelaunayGraph& graph,
-  const KineticDelaunay::FlipEvent& flip, const char* phase)
+void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const KineticDelaunay& kin_del,
+  const HalfEdgeDelaunayGraph& graph, const KineticDelaunay::FlipEvent& flip, const char* phase)
 {
   if (!segment_builder.diagnostics)
   {
@@ -59,25 +59,38 @@ void logFlipMonitoredEdgeDiagnostics(SegmentBuilder& segment_builder, const Half
   const bool in_monitored_window = std::isfinite(flip_t)
     && flip_t >= std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime)
     && flip_t < std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime) + 1.0;
-  // Match KineticDelaunay flip diagnostics: only the monitored edge inside [floor(t), floor(t)+1).
-  // Disabled monitor id (-1) never matches unset/invalid edges.
-  if (!in_monitored_window
-    || !KineticDelaunay::matchesDiagnosticsMonitorId(
-         flip.half_edge_id / 2, KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId))
+  // Match KineticDelaunay flip diagnostics: edge-id and/or site-pair monitor inside [floor(t), floor(t)+1),
+  // filtered by @ref KineticDelaunay::kDiagnosticsMonitoredFlipSchedulePass.
+  const bool infinitesimal_pass = flip.occurrence_time.infinitesimal_time > 0.0;
+  if (!in_monitored_window || !kin_del.matchesDiagnosticsMonitoredFlipHalfEdge(flip.half_edge_id)
+    || !KineticDelaunay::diagnosticsSchedulePassEnabled(
+         KineticDelaunay::kDiagnosticsMonitoredFlipSchedulePass, infinitesimal_pass))
   {
     return;
   }
 
+  const size_t delaunay_edge_id = flip.half_edge_id / 2;
+  const int origin = graph.halfEdge(flip.half_edge_id).origin;
+  const int destination = graph.destination(flip.half_edge_id);
+
   std::ostringstream ctx;
   ctx << "flip_" << phase << "_he" << flip.half_edge_id << "_window_t"
-      << "_d" << KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId;
-  segment_builder.logDiagnosticsMonitoredDelaunayEdgeState(flip.occurrence_time, ctx.str().c_str(),
-    KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId);
+      << "_d" << delaunay_edge_id;
+  if (origin >= 0 && destination >= 0)
+  {
+    ctx << "_sites" << origin << "_" << destination;
+  }
+  segment_builder.logDiagnosticsMonitoredDelaunayEdgeState(flip.occurrence_time, ctx.str().c_str(), delaunay_edge_id);
 
   std::ostringstream quad_oss;
-  quad_oss << "flip monitored-edge context " << phase << " flip_he=" << flip.half_edge_id << " t="
-           << flip.occurrence_time << " quad_edges=[";
-  const auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(flip.half_edge_id / 2);
+  quad_oss << "flip monitored-edge context " << phase << " flip_he=" << flip.half_edge_id
+           << " delaunay_edge=" << delaunay_edge_id;
+  if (origin >= 0 && destination >= 0)
+  {
+    quad_oss << " sites=[" << origin << "," << destination << "]";
+  }
+  quad_oss << " t=" << flip.occurrence_time << " quad_edges=[";
+  const auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(delaunay_edge_id);
   for (size_t i = 0; i < quad_he_ids.size(); ++i)
   {
     if (i > 0)
@@ -145,7 +158,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     VisualDebugHighlight::forFlip(graph, flip->half_edge_id), runtime_branch_id,
     /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
     flip->creation_time, /*fan_out_active_runtime_branches=*/false, flip->eventId());
-  logFlipMonitoredEdgeDiagnostics(segment_builder_, graph, *flip, "before");
+  logFlipMonitoredEdgeDiagnostics(segment_builder_, segment_builder_.kin_del, graph, *flip, "before");
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
 
@@ -271,7 +284,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     segment_builder_.kin_del.validateFlipAdjacentFaceInsideConsistency(flip->half_edge_id, flip->occurrence_time);
     segment_builder_.logDiagnosticsMonitoredFaceInsideState(flip->occurrence_time, "flip_event");
   }
-  logFlipMonitoredEdgeDiagnostics(segment_builder_, graph, *flip, "after_pre_refresh");
+  logFlipMonitoredEdgeDiagnostics(segment_builder_, segment_builder_.kin_del, graph, *flip, "after_pre_refresh");
 
   int vertex = graph.halfEdge(flip->half_edge_id).origin;
   if (vertex == -1)
@@ -482,7 +495,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   }
 
   segment_builder_.refreshCrossingRefsForAllStrips();
-  logFlipMonitoredEdgeDiagnostics(segment_builder_, graph, *flip, "after_post_refresh");
+  logFlipMonitoredEdgeDiagnostics(segment_builder_, segment_builder_.kin_del, graph, *flip, "after_post_refresh");
 
   // Force-recompute crossing params on every Delaunay edge of the flipped quad and restore list order.
   // Params stamped at this same timestamp before the flip can still be geometrically wrong; mesh-pair

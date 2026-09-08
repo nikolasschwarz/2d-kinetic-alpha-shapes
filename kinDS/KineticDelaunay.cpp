@@ -1553,7 +1553,7 @@ void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, si
 
 void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots,
   bool update_runtime_branch_map, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result,
-  const std::unordered_set<size_t>* additional_flip_quads)
+  const std::unordered_set<size_t>* additional_flip_quads, bool refresh_flip_events)
 {
   growGraphSlotArrays();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
@@ -1590,7 +1590,7 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
 
   crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
 
-  if (split_result != nullptr)
+  if (refresh_flip_events && split_result != nullptr)
   {
     refreshEventsAfterGraphCut(t, *split_result, additional_flip_quads);
   }
@@ -1706,6 +1706,31 @@ void KineticDelaunay::precomputeStep(double t)
   {
     crossing_event_manager_->computeEvents(t, tri_id);
   }
+}
+
+void KineticDelaunay::rescheduleAllFlipRadiusCrossingEvents(double t)
+{
+  growGraphSlotArrays();
+  const EventTime stamp(t);
+  for (EventTime& last : quadrilateral_last_updated)
+  {
+    last = stamp;
+  }
+  for (EventTime& last : face_last_updated)
+  {
+    last = stamp;
+  }
+  for (EventTime& last : crossing_data.last_crossing)
+  {
+    last = stamp;
+  }
+
+  KINDS_INFO("Full flip/radius/crossing reschedule after cut t=" << t << " live_edges="
+                                                                << graph.liveDelaunayEdgeCount()
+                                                                << " live_faces=" << graph.liveFaceCount());
+
+  // Stamp first so queued events with creation < EventTime(t) are skipped; new schedules use creation == stamp.
+  precomputeStep(t);
 }
 
 void KineticDelaunay::handleEvents()
@@ -2150,6 +2175,39 @@ void KineticDelaunay::setVisualDebugEnabled(bool enabled)
 bool KineticDelaunay::isVisualDebugEnabled() const
 {
   return visual_debug_enabled_;
+}
+
+void KineticDelaunay::setVisualDebugTimeRange(std::optional<double> lower, std::optional<double> upper)
+{
+  visual_debug_time_lower_ = lower;
+  visual_debug_time_upper_ = upper;
+}
+
+const std::optional<double>& KineticDelaunay::getVisualDebugTimeLower() const
+{
+  return visual_debug_time_lower_;
+}
+
+const std::optional<double>& KineticDelaunay::getVisualDebugTimeUpper() const
+{
+  return visual_debug_time_upper_;
+}
+
+bool KineticDelaunay::shouldExportVisualDebugAt(double real_time) const
+{
+  if (!visual_debug_enabled_)
+  {
+    return false;
+  }
+  if (visual_debug_time_lower_.has_value() && !(real_time >= *visual_debug_time_lower_))
+  {
+    return false;
+  }
+  if (visual_debug_time_upper_.has_value() && !(real_time <= *visual_debug_time_upper_))
+  {
+    return false;
+  }
+  return true;
 }
 
 void KineticDelaunay::setErrorFilesEnabled(bool enabled)
@@ -2926,58 +2984,17 @@ bool KineticDelaunay::maybeFinalizeInfinitesimalSeparation(size_t parent_compone
     return false;
   }
 
-  // Capture seam targets before the cut clears pending-split topology bookkeeping.
-  std::unordered_set<size_t> affected_quads;
-  std::unordered_set<size_t> affected_faces;
-  collectSeparationRecomputeTargets(parent_component_id, affected_quads, affected_faces);
-
   KINDS_DEBUG("maybeFinalizeInfinitesimalSeparation: parent_component_id=" << parent_component_id << " t=" << t
                                                                            << " epoch=" << split.infinitesimal_epoch
                                                                            << "; applying graph split");
   ++split.infinitesimal_epoch;
   split.infinitesimal_active = false;
-  // Union mixed-shift seam quads into the cut flip refresh so each undirected edge is
-  // computeEvents'd once (cut hull/cap edges ∪ separation seam quads).
-  applyPendingRuntimeBranchSplit(t, split.parent_runtime_branch, &affected_quads);
+  // Cut without localized flip refresh; full primary reschedule covers every live primitive.
+  applyPendingRuntimeBranchSplit(t, split.parent_runtime_branch, nullptr, /*refresh_flip_events=*/false);
 
-  // Radius / crossing for surviving mixed-shift faces (cut refresh is flip-only).
-  growGraphSlotArrays();
-  for (size_t face_id : affected_faces)
-  {
-    if (!graph.isLiveFace(face_id))
-    {
-      continue;
-    }
-    const size_t he_id = graph.face(face_id).half_edges[0];
-    radius_event_manager_->computeEvents(t, he_id);
-    if (face_id < face_last_updated.size())
-    {
-      face_last_updated[face_id] = EventTime(t);
-    }
-
-    const auto recompute_crossing_for_voronoi_vertex = [&](size_t voronoi_vertex_id)
-    {
-      if (!crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
-      {
-        return;
-      }
-      crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
-      if (voronoi_vertex_id < crossing_data.last_crossing.size())
-      {
-        crossing_data.last_crossing[voronoi_vertex_id] = EventTime(t);
-      }
-    };
-
-    recompute_crossing_for_voronoi_vertex(face_id);
-    for (size_t voronoi_vertex_id : crossing_data.getVoronoiVerticesInTri(face_id))
-    {
-      if (voronoi_vertex_id == face_id)
-      {
-        continue;
-      }
-      recompute_crossing_for_voronoi_vertex(voronoi_vertex_id);
-    }
-  }
+  // Ensure primary creation stamps are EventTime(t) (not leftover infinitesimal from the handler).
+  current_infinitesimal_t_ = 0.0;
+  rescheduleAllFlipRadiusCrossingEvents(t);
   return true;
 }
 
@@ -3347,8 +3364,8 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
   activateInfinitesimalSeparationOrApplyCut(parent_component_id, t, /*apply_cut_now=*/true);
 }
 
-void KineticDelaunay::applyPendingRuntimeBranchSplit(
-  double t, size_t parent_runtime_branch_id, const std::unordered_set<size_t>* additional_flip_quads)
+void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id,
+  const std::unordered_set<size_t>* additional_flip_quads, bool refresh_flip_events)
 {
   if (parent_runtime_branch_id == RuntimeBranchData::no_branch)
   {
@@ -3379,8 +3396,8 @@ void KineticDelaunay::applyPendingRuntimeBranchSplit(
     graph.update(graph.getVertexCount(), component_data.components,
       [this, t](size_t v) { return getPointAt(v, t); });
     onGraphRetriangulated(t, prev_face_slots, prev_he_slots);
-    // No RuntimeBranchSplitResult / cut flip refresh — schedule optional seam quads here.
-    if (additional_flip_quads != nullptr)
+    // No RuntimeBranchSplitResult / cut flip refresh — schedule optional seam quads here when requested.
+    if (refresh_flip_events && additional_flip_quads != nullptr)
     {
       growGraphSlotArrays();
       for (size_t quad_id : *additional_flip_quads)
@@ -3401,13 +3418,14 @@ void KineticDelaunay::applyPendingRuntimeBranchSplit(
   {
     // Pass occurrence EventTime only for full visual-debug dumps (not --error-files alone).
     const std::optional<EventTime> branch_split_debug_time
-      = isVisualDebugEnabled() ? std::optional<EventTime>(eventTimeAt(t)) : std::nullopt;
+      = shouldExportVisualDebugAt(t) ? std::optional<EventTime>(eventTimeAt(t)) : std::nullopt;
     // Cut only this parent runtime branch's pending children. Other pending-split child ids are collapsed in the
     // cut map so untargeted branches are not severed.
     const std::vector<size_t> cut_map = buildRuntimeBranchCutMapForParent(parent_runtime_branch_id);
     const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult split_result = graph.applyRuntimeBranchSplit(
       cut_map, [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time);
-    onGraphCutApplied(t, prev_face_slots, prev_he_slots, false, &split_result, additional_flip_quads);
+    onGraphCutApplied(
+      t, prev_face_slots, prev_he_slots, false, &split_result, additional_flip_quads, refresh_flip_events);
   }
 
   completePendingRuntimeBranchSplit(parent_runtime_branch_id, t);
@@ -5115,10 +5133,11 @@ void kinDS::assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
   constexpr double param_range_eps = 1e-9;
   if (!isDelaunayEdgeParamInExpectedWarningRange(kd, intersection.delaunay_edge_id, param, param_range_eps))
   {
+    const EventTime full_t = (kd != nullptr) ? kd->eventTimeAt(t) : EventTime(t);
     KINDS_WARNING((context != nullptr ? context : "assignCrossingIntersectionDelaunayParam")
       << ": delaunay_edge_param outside expected range "
       << delaunayEdgeParamExpectedRangeDescription(kd, intersection.delaunay_edge_id) << " param=" << param << " de="
-      << intersection.delaunay_edge_id << " ve=" << intersection.voronoi_edge_id << " t=" << t
+      << intersection.delaunay_edge_id << " ve=" << intersection.voronoi_edge_id << " t=" << full_t
       << (near_voronoi_vertex.has_value() ? (" near_vv=" + std::to_string(near_voronoi_vertex.value())) : std::string())
       << (opposite_voronoi_vertex.has_value()
             ? (" opposite_vv=" + std::to_string(opposite_voronoi_vertex.value()))
@@ -6253,7 +6272,8 @@ void KineticDelaunay::CrossingData::validateIntersectionInvariants(
         constexpr double param_range_eps = 1e-9;
         if (!isDelaunayEdgeParamInExpectedWarningRange(kd, ref->delaunay_edge_id, recomputed_d_param, param_range_eps))
         {
-          KINDS_WARNING("validateIntersectionInvariants(" << ctx << ", t=" << t
+          const EventTime full_t = (kd != nullptr) ? kd->eventTimeAt(t) : EventTime(t);
+          KINDS_WARNING("validateIntersectionInvariants(" << ctx << ", t=" << full_t
             << "): recomputed Delaunay-edge parameter is outside expected range "
             << delaunayEdgeParamExpectedRangeDescription(kd, ref->delaunay_edge_id)
             << " for delaunay_edge_intersections[" << d_id << "] list index " << list_index << "; entry="

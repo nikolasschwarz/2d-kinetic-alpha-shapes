@@ -6,6 +6,7 @@
 #include "Polynomial.hpp"
 #include "ProgressBar.hpp"
 #include "StrandTree.hpp"
+#include "Trajectory.hpp"
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -444,6 +445,9 @@ class KineticDelaunay
   std::optional<std::filesystem::path> visual_debug_output_root_;
   bool visual_debug_enabled_ = false;
   bool error_files_enabled_ = false;
+  /// Inclusive real-time window for visual-debug exports; empty = no filter (all times).
+  std::optional<double> visual_debug_time_lower_;
+  std::optional<double> visual_debug_time_upper_;
   /// When true, visual-debug SVGs use pending split-off child runtime branch folders (and own strand sets) as soon as
   /// a radius event notes the pending split — not only after the graph cut.
   bool visual_debug_separate_pending_splits_ = false;
@@ -471,6 +475,9 @@ class KineticDelaunay
     std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt);
 
   void precomputeStep(double t);
+  /// Invalidate queued flip/radius/crossing schedules (@ref EventTime(@p t) watermarks) and reschedule all live
+  /// primitives. Used after an infinitesimal separation cut when local seam targets are insufficient.
+  void rescheduleAllFlipRadiusCrossingEvents(double t);
 
   /**
    * Piecewise-linear site motion on [@p section, @p section + 1] using @ref StrandTree::getPiecePolynomial with the
@@ -512,8 +519,9 @@ class KineticDelaunay
   bool pendingSplitSeamsAreConvex(size_t parent_component_id, double t) const;
   void handleSeparationEventAtTime(size_t parent_component_id, double t);
   /// Apply the in-place graph cut (or retriangulation) for one pending parent *runtime branch* only.
+  /// When @p refresh_flip_events is false, skip @ref refreshEventsAfterGraphCut (caller will full-reschedule).
   void applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id,
-    const std::unordered_set<size_t>* additional_flip_quads = nullptr);
+    const std::unordered_set<size_t>* additional_flip_quads = nullptr, bool refresh_flip_events = true);
   /// Activate frozen-site virtual separation, or handle convex seams: enqueue a same-t @ref SeparationEvent when
   /// @p apply_cut_now is false, otherwise apply the graph cut immediately.
   void activateInfinitesimalSeparationOrApplyCut(size_t parent_component_id, double t, bool apply_cut_now = false);
@@ -522,8 +530,8 @@ class KineticDelaunay
   /// neighbor paradigm as regular events (under @ref ScopedInfinitesimalEventCompute).
   /// Roots are scheduled at kinetic @p t with @c infinitesimal_t in (@p min_virtual_x, +inf).
   void recomputeEventsAfterInfinitesimalSeparation(size_t parent_component_id, double t, double min_virtual_x);
-  /// If seams are convex and not on hiatus: bump epoch, apply graph cut (unioning seam flip quads into
-  /// the cut flip refresh), then primary-reschedule surviving seam radius/crossing events.
+  /// If seams are convex and not on hiatus: bump epoch, apply graph cut, then
+  /// @ref rescheduleAllFlipRadiusCrossingEvents (invalidate + full primary reschedule).
   bool maybeFinalizeInfinitesimalSeparation(size_t parent_component_id, double t);
   void collectSeparationRecomputeTargets(size_t parent_component_id, std::unordered_set<size_t>& affected_quads,
     std::unordered_set<size_t>& affected_faces) const;
@@ -558,7 +566,7 @@ class KineticDelaunay
   /// targeted pending parent via @ref completePendingRuntimeBranchSplit. Optional live-graph remap is off by default.
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots, bool update_runtime_branch_map = false,
     const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result = nullptr,
-    const std::unordered_set<size_t>* additional_flip_quads = nullptr);
+    const std::unordered_set<size_t>* additional_flip_quads = nullptr, bool refresh_flip_events = true);
   /// After a graph cut, recompute flip events once for the union of:
   /// (1) infinite edges that bordered live+tombstoned faces,
   /// (2) finite capped outer edges, and
@@ -669,6 +677,12 @@ class KineticDelaunay
   /// When true, emit full visual-debug artifacts (segmentbuilder-driven SVGs, branch-split dumps, …).
   void setVisualDebugEnabled(bool enabled);
   bool isVisualDebugEnabled() const;
+  /// Inclusive real-time window for @ref shouldExportVisualDebugAt. Pass nullopts to clear (export all times).
+  void setVisualDebugTimeRange(std::optional<double> lower, std::optional<double> upper);
+  const std::optional<double>& getVisualDebugTimeLower() const;
+  const std::optional<double>& getVisualDebugTimeUpper() const;
+  /// True when visual debug is enabled and @p real_time lies in the optional export window.
+  bool shouldExportVisualDebugAt(double real_time) const;
   /// When true, emit failure SVG/TXT dumps (@c --error-files). Also implied by @ref isVisualDebugEnabled.
   void setErrorFilesEnabled(bool enabled);
   bool isErrorFilesEnabled() const;
@@ -996,11 +1010,35 @@ class KineticDelaunay
       && candidate_id == monitor_id;
   }
 
+  /// Bitmask selecting which kinetic schedule passes emit diagnostics (primary real-time vs infinitesimal).
+  enum class DiagnosticsSchedulePass : unsigned
+  {
+    None = 0,
+    Primary = 1u << 0,
+    Infinitesimal = 1u << 1,
+    Both = (1u << 0) | (1u << 1),
+  };
+
+  friend constexpr DiagnosticsSchedulePass operator|(DiagnosticsSchedulePass a, DiagnosticsSchedulePass b)
+  {
+    return static_cast<DiagnosticsSchedulePass>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+  }
+  friend constexpr DiagnosticsSchedulePass operator&(DiagnosticsSchedulePass a, DiagnosticsSchedulePass b)
+  {
+    return static_cast<DiagnosticsSchedulePass>(static_cast<unsigned>(a) & static_cast<unsigned>(b));
+  }
+  static constexpr bool diagnosticsSchedulePassEnabled(DiagnosticsSchedulePass mask, bool infinitesimal_pass)
+  {
+    const DiagnosticsSchedulePass bit
+      = infinitesimal_pass ? DiagnosticsSchedulePass::Infinitesimal : DiagnosticsSchedulePass::Primary;
+    return (mask & bit) != DiagnosticsSchedulePass::None;
+  }
+
   /// Set to @ref kDiagnosticsMonitorDisabledId to disable face monitoring.
   static constexpr size_t kDiagnosticsMonitoredFaceId = kDiagnosticsMonitorDisabledId;
   /// Debug target: Voronoi vertex whose crossing-event trigger roots are traced.
   /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
-  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = 1608;
+  static constexpr size_t kDiagnosticsMonitoredCrossingVoronoiVertexId = kDiagnosticsMonitorDisabledId;//1608;
   /// Debug target: undirected Delaunay edge id highlighted in crossing trigger logs (optional; not a filter when disabled).
   /// Set to @ref kDiagnosticsMonitorDisabledId to disable.
   static constexpr size_t kDiagnosticsMonitoredCrossingDelaunayEdgeId = kDiagnosticsMonitorDisabledId;
@@ -1010,9 +1048,19 @@ class KineticDelaunay
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
   /// Directed half-edge 1158 ⇒ undirected edge 579 (also matches twin 1159).
+  /// Set to @ref kDiagnosticsMonitorDisabledId to disable edge-id matching.
   static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = kDiagnosticsMonitorDisabledId;//36 / 2;
+  /// Optional alternate flip monitor: undirected edge connecting these two site (strand) indices.
+  /// Both must be enabled (not @ref kDiagnosticsMonitorDisabledId); order does not matter.
+  /// Matched in addition to @ref kDiagnosticsMonitoredFlipDelaunayEdgeId (either criterion is enough).
+  static constexpr size_t kDiagnosticsMonitoredFlipSiteA = 39;
+  static constexpr size_t kDiagnosticsMonitoredFlipSiteB = 337;
   /// Flip create/discard / trigger-root logging is constrained to [floor(t), floor(t)+1).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
+  static constexpr double kDiagnosticsMonitoredFlipTime = 15.0;
+  /// Which schedule passes emit flip diagnostics (@ref DiagnosticsSchedulePass bitmask).
+  static constexpr DiagnosticsSchedulePass kDiagnosticsMonitoredFlipSchedulePass = DiagnosticsSchedulePass::Infinitesimal;
+  /// True when @p he_id's undirected edge matches the flip edge-id monitor and/or the site-pair monitor.
+  bool matchesDiagnosticsMonitoredFlipHalfEdge(size_t he_id) const;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
   /// Optional per-event sanity check: all live sites lie inside the graph convex hull (same topology as SVG).
@@ -1038,9 +1086,11 @@ class KineticDelaunay
   /// Log all real roots, sign changes, and findEvents filter/enqueue decisions for one crossing trigger.
   void logCrossingEventTriggerRoots(size_t voronoi_vertex_id, size_t he_id, size_t edge_index, double t,
     double min_fraction, const Polynomial& event_trigger, bool only_positive_to_negative) const;
-  /// Log all real roots, sign changes, and findEvents filter/enqueue decisions for one flip trigger.
+  /// Log site trajectories, all real roots, sign changes, and findEvents filter/enqueue decisions for one flip trigger.
   /// @p trigger_predicate is @c "ccw" (convex-boundary) or @c "inCircle" (interior).
+  /// @p traj_strand_ids must align with @p trajectories (same order used to build the trigger).
   void logFlipEventTriggerRoots(size_t he_id, double t, double min_fraction, const Polynomial& event_trigger,
+    const std::vector<size_t>& traj_strand_ids, const std::vector<Trajectory<2>>& trajectories,
     const char* trigger_pass, const char* trigger_predicate) const;
 };
 } // namespace kinDS

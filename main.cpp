@@ -503,8 +503,12 @@ static void print_usage(const char* program_name)
             << "  --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off).\n"
             << "                            Natural branch endings and tree-top caps are always produced.\n"
             << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)\n"
-            << "  --debug-files [path]      Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
+            << "  --debug-files [path] [lower] [upper]\n"
+            << "                            Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
             << "                            and error dumps). Optional output directory (default: cwd).\n"
+            << "                            Optional inclusive real-time bounds limit which events are exported:\n"
+            << "                            <lower> <upper>, <path> <lower>, <path> <lower> <upper>, or omit for all times.\n"
+            << "                            A leading numeric token is treated as a bound (not a path).\n"
             << "                            Off by default.\n"
             << "  --svg-separate-pending-splits\n"
             << "                            With --debug-files: write pending split-off child branches into their own\n"
@@ -530,6 +534,7 @@ static void print_usage(const char* program_name)
             << "  " << program_name << " --log-file output.log --demo\n"
             << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
             << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
+            << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
             << "  " << program_name << " --export-mode combined --mesh strandtree.txt combined.obj\n";
 }
 
@@ -673,7 +678,9 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   const std::string& validate_log_path, bool alternate_section_shading, size_t start_section,
   std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end, double alpha_cutoff,
   bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
-  const std::optional<std::filesystem::path>& visual_debug_output_root, bool check_sites_inside_convex_hull)
+  const std::optional<std::filesystem::path>& visual_debug_output_root,
+  const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
+  bool check_sites_inside_convex_hull)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -721,6 +728,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().error_files = error_files || visual_debug;
     mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
     mesher.getSettings().check_sites_inside_convex_hull = check_sites_inside_convex_hull;
+    mesher.getSettings().visual_debug_time_lower = visual_debug_time_lower;
+    mesher.getSettings().visual_debug_time_upper = visual_debug_time_upper;
     if (visual_debug_output_root.has_value())
     {
       mesher.getSettings().visual_debug_output_root = visual_debug_output_root;
@@ -736,7 +745,16 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
         = visual_debug_output_root.value_or(std::filesystem::current_path());
       if (visual_debug)
       {
-        std::cout << "Debug files: enabled (root=" << debug_root.string() << ")" << std::endl;
+        std::cout << "Debug files: enabled (root=" << debug_root.string() << ")";
+        if (visual_debug_time_lower.has_value() || visual_debug_time_upper.has_value())
+        {
+          std::cout << " time_window=["
+                    << (visual_debug_time_lower.has_value() ? std::to_string(*visual_debug_time_lower) : "-inf")
+                    << ", "
+                    << (visual_debug_time_upper.has_value() ? std::to_string(*visual_debug_time_upper) : "+inf")
+                    << "]";
+        }
+        std::cout << std::endl;
         if (visual_debug_separate_pending_splits)
         {
           std::cout << "SVG separate pending splits: enabled" << std::endl;
@@ -868,6 +886,8 @@ int main(int argc, char* argv[])
   bool mesh_error_files = false;
   bool mesh_visual_debug_separate_pending_splits = false;
   std::optional<std::filesystem::path> mesh_visual_debug_output_root;
+  std::optional<double> mesh_visual_debug_time_lower;
+  std::optional<double> mesh_visual_debug_time_upper;
   bool mesh_check_sites_inside_convex_hull = false;
 
   int arg_idx = 1;
@@ -1100,18 +1120,111 @@ int main(int argc, char* argv[])
     else if (arg == "--debug-files")
     {
       mesh_visual_debug = true;
-      // Optional directory: consume next arg only if it is present and not another option/command.
-      if (arg_idx + 1 < argc)
+      // Optional trailing args. Numeric tokens are time bounds; a non-numeric first token is a path.
+      // Forms: (none) | <path> | <lower> | <lower> <upper> | <path> <lower> | <path> <lower> <upper>
+      auto try_parse_finite_double = [](const std::string& text, double& out) -> bool
+      {
+        try
+        {
+          size_t consumed = 0;
+          const double parsed = std::stod(text, &consumed);
+          if (consumed != text.size() || !std::isfinite(parsed))
+          {
+            return false;
+          }
+          out = parsed;
+          return true;
+        }
+        catch (const std::exception&)
+        {
+          return false;
+        }
+      };
+
+      std::vector<std::string> extras;
+      while (arg_idx + 1 < argc && extras.size() < 3)
       {
         const std::string next = argv[arg_idx + 1];
-        if (!next.empty() && next[0] != '-')
+        if (next.empty() || next[0] == '-')
         {
-          mesh_visual_debug_output_root = std::filesystem::path(next);
-          arg_idx += 2;
-          continue;
+          break;
+        }
+        extras.push_back(next);
+        ++arg_idx;
+      }
+      ++arg_idx;
+
+      if (extras.size() == 1)
+      {
+        double lower = 0.0;
+        if (try_parse_finite_double(extras[0], lower))
+        {
+          mesh_visual_debug_time_lower = lower;
+        }
+        else
+        {
+          mesh_visual_debug_output_root = std::filesystem::path(extras[0]);
         }
       }
-      arg_idx += 1;
+      else if (extras.size() == 2)
+      {
+        double first_num = 0.0;
+        double second_num = 0.0;
+        const bool first_is_number = try_parse_finite_double(extras[0], first_num);
+        const bool second_is_number = try_parse_finite_double(extras[1], second_num);
+        if (first_is_number && second_is_number)
+        {
+          if (!(first_num <= second_num))
+          {
+            std::cerr << "Error: --debug-files lower bound must be <= upper bound." << std::endl;
+            print_usage(argv[0]);
+            return 1;
+          }
+          mesh_visual_debug_time_lower = first_num;
+          mesh_visual_debug_time_upper = second_num;
+        }
+        else if (!first_is_number && second_is_number)
+        {
+          mesh_visual_debug_output_root = std::filesystem::path(extras[0]);
+          mesh_visual_debug_time_lower = second_num;
+        }
+        else
+        {
+          std::cerr << "Error: --debug-files with two arguments expects <lower> <upper> or <path> <lower>."
+                    << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+      }
+      else if (extras.size() == 3)
+      {
+        double lower = 0.0;
+        double upper = 0.0;
+        if (try_parse_finite_double(extras[0], lower))
+        {
+          std::cerr << "Error: --debug-files <path> <lower> <upper> expects a non-numeric path as the first argument."
+                    << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+        if (!try_parse_finite_double(extras[1], lower) || !try_parse_finite_double(extras[2], upper))
+        {
+          std::cerr << "Error: --debug-files expects <path> <lower> <upper> with finite numeric bounds."
+                    << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+        if (!(lower <= upper))
+        {
+          std::cerr << "Error: --debug-files lower bound must be <= upper bound." << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+        mesh_visual_debug_output_root = std::filesystem::path(extras[0]);
+        mesh_visual_debug_time_lower = lower;
+        mesh_visual_debug_time_upper = upper;
+      }
+      continue;
     }
     else if (arg == "--svg-separate-pending-splits")
     {
@@ -1223,8 +1336,8 @@ int main(int argc, char* argv[])
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
           mesh_validate_log_path, mesh_alternate_section_shading, mesh_start_section, mesh_end_section,
           mesh_cap_at_start, mesh_cap_at_end, mesh_alpha_cutoff, mesh_visual_debug, mesh_error_files,
-          mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root,
-          mesh_check_sites_inside_convex_hull))
+          mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root, mesh_visual_debug_time_lower,
+          mesh_visual_debug_time_upper, mesh_check_sites_inside_convex_hull))
     {
       return 1;
     }

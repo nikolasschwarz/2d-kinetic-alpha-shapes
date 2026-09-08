@@ -103,6 +103,9 @@ class TreeMesher
     /// event that notes the split) instead of only after the graph cut. CLI @c --svg-separate-pending-splits.
     bool visual_debug_separate_pending_splits = false;
     std::optional<std::filesystem::path> visual_debug_output_root;
+    /// Inclusive real-time window for visual-debug SVG/TXT exports (CLI @c --debug-files … lower upper).
+    std::optional<double> visual_debug_time_lower;
+    std::optional<double> visual_debug_time_upper;
     /// When true, after each kinetic event verify live sites lie inside the graph convex hull.
     /// Default off; CLI @c --check-sites-in-hull.
     bool check_sites_inside_convex_hull = false;

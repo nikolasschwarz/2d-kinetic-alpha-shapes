@@ -6,6 +6,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -13,6 +14,33 @@
 #include "Logger.hpp"
 
 using namespace kinDS;
+
+bool KineticDelaunay::matchesDiagnosticsMonitoredFlipHalfEdge(size_t he_id) const
+{
+  if (matchesDiagnosticsMonitorId(he_id / 2, kDiagnosticsMonitoredFlipDelaunayEdgeId))
+  {
+    return true;
+  }
+  if (!isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredFlipSiteA)
+    || !isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredFlipSiteB))
+  {
+    return false;
+  }
+  if (!isDiagnosticsHalfEdgeIdValid(he_id))
+  {
+    return false;
+  }
+  const int origin = graph.halfEdge(he_id).origin;
+  const int destination = graph.destination(he_id);
+  if (origin < 0 || destination < 0)
+  {
+    return false;
+  }
+  const size_t site_a = static_cast<size_t>(origin);
+  const size_t site_b = static_cast<size_t>(destination);
+  return (site_a == kDiagnosticsMonitoredFlipSiteA && site_b == kDiagnosticsMonitoredFlipSiteB)
+    || (site_a == kDiagnosticsMonitoredFlipSiteB && site_b == kDiagnosticsMonitoredFlipSiteA);
+}
 
 namespace
 {
@@ -55,43 +83,111 @@ std::pair<double, double> signChangeAtRoot(const Polynomial& event_trigger, doub
   return { sign_before, sign_after };
 }
 
-bool shouldLogFlipDiagnostics(const KineticDelaunay& kd, size_t he_id, double schedule_t)
+bool shouldLogFlipDiagnostics(const KineticDelaunay& kd, size_t he_id, double schedule_t, bool infinitesimal_pass)
 {
   return kd.diagnosticsEnabled()
-    && KineticDelaunay::matchesDiagnosticsMonitorId(he_id / 2, KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId)
+    && kd.matchesDiagnosticsMonitoredFlipHalfEdge(he_id)
+    && KineticDelaunay::diagnosticsSchedulePassEnabled(
+         KineticDelaunay::kDiagnosticsMonitoredFlipSchedulePass, infinitesimal_pass)
     && schedule_t >= std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime)
     && schedule_t < std::floor(KineticDelaunay::kDiagnosticsMonitoredFlipTime) + 1.0;
 }
 
+/// High-precision coefficient dump for monitored flip polys; warns when any coeff is below abs/rel epsilon.
+void logMonitoredPolynomialDetail(const char* label, const Polynomial& poly_in)
+{
+  Polynomial poly = poly_in;
+  if (poly.degree() >= 0)
+  {
+    poly.trim();
+  }
+
+  const Eigen::VectorXd& coeffs = poly.getCoefficients();
+  std::ostringstream summary;
+  summary << std::setprecision(std::numeric_limits<double>::max_digits10) << "    " << label
+          << " degree=" << poly.degree() << " coeff_count=" << coeffs.size() << " readable=" << poly;
+  KINDS_MONITOR(summary.str());
+
+  if (coeffs.size() == 0)
+  {
+    return;
+  }
+
+  constexpr double kTinyPolyCoeffAbsEps = 1e-12;
+  constexpr double kTinyPolyCoeffRelEps = 1e-10;
+  double max_abs = 0.0;
+  for (Eigen::Index i = 0; i < coeffs.size(); ++i)
+  {
+    max_abs = std::max(max_abs, std::abs(coeffs[i]));
+  }
+  const double tiny_thresh = std::max(kTinyPolyCoeffAbsEps, kTinyPolyCoeffRelEps * max_abs);
+
+  bool any_tiny = false;
+  for (Eigen::Index i = 0; i < coeffs.size(); ++i)
+  {
+    const double c = coeffs[i];
+    const bool tiny = std::abs(c) < tiny_thresh;
+    any_tiny = any_tiny || tiny;
+    std::ostringstream coeff_line;
+    coeff_line << std::setprecision(std::numeric_limits<double>::max_digits10) << "      " << label << " coeff[x^"
+               << i << "]=" << c << " abs=" << std::abs(c) << (tiny ? " **TINY**" : "");
+    KINDS_MONITOR(coeff_line.str());
+  }
+
+  if (any_tiny)
+  {
+    const Eigen::Index lead_i = coeffs.size() - 1;
+    std::ostringstream warn;
+    warn << std::setprecision(std::numeric_limits<double>::max_digits10) << "    WARNING tiny coefficient(s) in "
+         << label << " degree=" << poly.degree() << " leading_coeff=" << coeffs[lead_i]
+         << " abs_leading=" << std::abs(coeffs[lead_i]) << " max_abs=" << max_abs << " tiny_thresh=" << tiny_thresh
+         << " (abs_eps=" << kTinyPolyCoeffAbsEps << ", rel_eps=" << kTinyPolyCoeffRelEps << ")";
+    KINDS_MONITOR(warn.str());
+  }
+}
+
 void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedule_t, double min_fraction,
   const Polynomial& event_trigger_in, const char* trigger_pass, const char* trigger_predicate, bool virtual_mode,
-  double frozen_real_t)
+  double frozen_real_t, bool include_header, bool include_roots)
 {
   Polynomial event_trigger = event_trigger_in;
   const size_t section = static_cast<size_t>(schedule_t);
   const size_t delaunay_edge_id = he_id / 2;
   const double root_min = min_fraction;
 
-  const EventTime schedule_event_time(schedule_t, virtual_mode ? root_min : 0.0);
-  std::ostringstream header;
-  header << "  flip trigger roots **MONITORED_EDGE** (he_id=" << he_id << ", delaunay_edge=" << delaunay_edge_id
-         << ", schedule_t=" << schedule_event_time << ", section=" << section
-         << ", " << (virtual_mode ? "min_infinitesimal_t=" : "min_fraction=") << root_min
-         << ", pass=" << trigger_pass << ", predicate=" << trigger_predicate
-         << ", trigger_degree=" << event_trigger.degree() << ")";
-  if (virtual_mode)
+  if (include_header)
   {
-    header << ", virtual=true, frozen_real_t=" << frozen_real_t;
+    const EventTime schedule_event_time(schedule_t, virtual_mode ? root_min : 0.0);
+    std::ostringstream header;
+    header << "  flip trigger roots **MONITORED_EDGE** (he_id=" << he_id << ", delaunay_edge=" << delaunay_edge_id
+           << ", schedule_t=" << schedule_event_time << ", section=" << section
+           << ", " << (virtual_mode ? "min_infinitesimal_t=" : "min_fraction=") << root_min
+           << ", pass=" << trigger_pass << ", flip_predicate=" << trigger_predicate
+           << " (" << (std::string(trigger_predicate) == "ccw" ? "convex-boundary ccw" : "interior inCircle") << ")"
+           << ", trigger_degree=" << event_trigger.degree()
+           << ", on_convex_boundary=" << (kd.getGraph().isOnConvexBoundary(he_id) ? "true" : "false")
+           << ", outside_convex_boundary=" << (kd.getGraph().isOutsideConvexBoundary(he_id) ? "true" : "false")
+           << ")";
+    if (virtual_mode)
+    {
+      header << ", virtual=true, frozen_real_t=" << frozen_real_t;
+    }
+    KINDS_MONITOR(header.str());
   }
-  KINDS_MONITOR(header.str());
 
-  if (event_trigger.degree() == -1)
+  if (!include_roots)
   {
-    KINDS_MONITOR("    trigger empty (degree -1) predicate=" << trigger_predicate);
     return;
   }
 
-  event_trigger.trim();
+  if (event_trigger.degree() == -1)
+  {
+    KINDS_MONITOR("    trigger empty (degree -1) flip_predicate=" << trigger_predicate);
+    return;
+  }
+
+  logMonitoredPolynomialDetail("trigger_polynomial", event_trigger);
+
   const auto zeros = event_trigger.realRoots();
   if (zeros.empty())
   {
@@ -177,14 +273,111 @@ void logFlipTriggerRoots(const KineticDelaunay& kd, size_t he_id, double schedul
 } // namespace
 
 void KineticDelaunay::logFlipEventTriggerRoots(size_t he_id, double t, double min_fraction,
-  const Polynomial& event_trigger, const char* trigger_pass, const char* trigger_predicate) const
+  const Polynomial& event_trigger, const std::vector<size_t>& traj_strand_ids,
+  const std::vector<Trajectory<2>>& trajectories, const char* trigger_pass, const char* trigger_predicate) const
 {
-  if (!shouldLogFlipDiagnostics(*this, he_id, t))
+  const bool infinitesimal_pass = computing_infinitesimal_events_;
+  if (!shouldLogFlipDiagnostics(*this, he_id, t, infinitesimal_pass))
   {
     return;
   }
+
+  // Header (predicate / hull) → per-site trigger-input polys → trigger poly + roots.
   logFlipTriggerRoots(*this, he_id, t, min_fraction, event_trigger, trigger_pass, trigger_predicate,
-    computing_infinitesimal_events_, infinitesimal_schedule_t_);
+    infinitesimal_pass, infinitesimal_schedule_t_, /*include_header=*/true, /*include_roots=*/false);
+
+  const size_t count = std::min(traj_strand_ids.size(), trajectories.size());
+  const size_t future_input_section = pendingSplitBranchSection(t);
+  const double event_interval_upper_bound = eventIntervalUpperBound(t);
+  const bool use_shared_frame
+    = !traj_strand_ids.empty() && eventTriggerUsesSharedTransformedFrame(traj_strand_ids, event_interval_upper_bound);
+  std::optional<size_t> shared_reference_branch;
+  if (use_shared_frame)
+  {
+    shared_reference_branch = sharedReferenceBranchForEventTrigger(traj_strand_ids, event_interval_upper_bound);
+  }
+
+  // These trajectories are exactly the push_traj() inputs to ccw/inCircle in build_trigger
+  // (via getSitePiecePolynomialForEventStrands → primary piece or buildInfinitesimalSiteTrajectory).
+  {
+    std::ostringstream intro;
+    intro << "    trigger_input_site_polys count=" << count << " pass=" << trigger_pass
+          << " flip_predicate=" << trigger_predicate
+          << " poly_param=" << (infinitesimal_pass ? "infinitesimal_t" : "section_fraction")
+          << " source="
+          << (infinitesimal_pass ? "buildInfinitesimalSiteTrajectory(p + eps*dir)"
+                                 : "getSitePiecePolynomialForEventStrands(section piece)")
+          << " shared_frame=" << (use_shared_frame ? "true" : "false");
+    if (shared_reference_branch.has_value())
+    {
+      intro << " shared_reference_branch=" << *shared_reference_branch;
+    }
+    KINDS_MONITOR(intro.str());
+  }
+
+  for (size_t i = 0; i < count; ++i)
+  {
+    const size_t strand_id = traj_strand_ids[i];
+    const PendingBranchSplit* child_split = activeSeparationForStrand(strand_id);
+    const bool separated = child_split != nullptr;
+    glm::dvec2 virtual_shift(0.0);
+    if (separated)
+    {
+      virtual_shift = computeSeparationDirection(
+        *child_split, t, use_shared_frame, shared_reference_branch);
+    }
+
+    size_t runtime_branch = RuntimeBranchData::no_branch;
+    if (strand_id < runtime_branch_data_.branch_map.size())
+    {
+      runtime_branch = runtime_branch_data_.branch_map[strand_id];
+    }
+    const size_t unsplit_runtime = unsplitRuntimeBranchId(runtime_branch);
+    const bool pending_child = runtime_branch_data_.isPendingSplitChild(runtime_branch);
+    const size_t future_input_branch = branch_trajs.getBranchIndex(strand_id, future_input_section);
+
+    std::ostringstream line;
+    line << std::setprecision(17) << "    trigger_input_site[" << i << "] strand=" << strand_id
+         << " role=" << (separated ? "separated" : "retained_or_uninvolved")
+         << " pass=" << trigger_pass << " flip_predicate=" << trigger_predicate
+         << " (" << (std::string(trigger_predicate) == "ccw" ? "convex-boundary ccw" : "interior inCircle") << ")"
+         << " runtime_branch=" << runtime_branch << " unsplit_runtime_branch=" << unsplit_runtime
+         << " pending_split_child=" << (pending_child ? "true" : "false")
+         << " future_input_branch=" << future_input_branch << " future_input_section=" << future_input_section
+         << " virtual_shift=(" << virtual_shift.x << "," << virtual_shift.y << ")";
+    if (child_split != nullptr)
+    {
+      line << " parent_runtime_branch=" << child_split->parent_runtime_branch
+           << " split_parent_component=" << child_split->parent_component_id;
+    }
+    KINDS_MONITOR(line.str());
+
+    {
+      const std::string x_label
+        = "trigger_input_site[" + std::to_string(i) + "].x strand=" + std::to_string(strand_id)
+        + " pass=" + std::string(trigger_pass);
+      logMonitoredPolynomialDetail(x_label.c_str(), trajectories[i][0]);
+    }
+    {
+      const std::string y_label
+        = "trigger_input_site[" + std::to_string(i) + "].y strand=" + std::to_string(strand_id)
+        + " pass=" + std::string(trigger_pass);
+      logMonitoredPolynomialDetail(y_label.c_str(), trajectories[i][1]);
+    }
+  }
+  if (count == 0)
+  {
+    KINDS_MONITOR("    trigger_input_site WARNING no site trajectories used for trigger");
+  }
+  if (traj_strand_ids.size() != trajectories.size())
+  {
+    KINDS_MONITOR("    trigger_input_site WARNING strand_count=" << traj_strand_ids.size()
+                                                                 << " traj_count=" << trajectories.size()
+                                                                 << " (mismatched)");
+  }
+
+  logFlipTriggerRoots(*this, he_id, t, min_fraction, event_trigger, trigger_pass, trigger_predicate,
+    infinitesimal_pass, infinitesimal_schedule_t_, /*include_header=*/false, /*include_roots=*/true);
 }
 
 void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
@@ -207,21 +400,25 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
   const float fraction = t - section;
 
   size_t he_id = quad_id * 2;
-  const bool log_flip_diag = shouldLogFlipDiagnostics(*kd, he_id, t);
+  const bool virtual_mode = infinitesimal.has_value();
+  const bool log_flip_diag = shouldLogFlipDiagnostics(*kd, he_id, t, virtual_mode);
   const std::vector<size_t> quad_strand_ids = collectFlipQuadrilateralStrandIds(graph, he_id);
 
-  const bool virtual_mode = infinitesimal.has_value();
   const double root_min = virtual_mode ? kd->infinitesimal_recompute_min_x_ : static_cast<double>(fraction);
   if (log_flip_diag)
   {
     const EventTime schedule_event_time(t, virtual_mode ? root_min : 0.0);
     std::ostringstream header;
     header << "Flip computeEvents monitor (he_id=" << he_id << "/" << (he_id ^ 1) << ", delaunay_edge=" << quad_id
+           << ", sites=[" << graph.halfEdge(he_id).origin << "," << graph.destination(he_id) << "]"
            << ", schedule_t=" << schedule_event_time << ", section=" << section
            << ", " << (virtual_mode ? "min_infinitesimal_t=" : "min_fraction=") << root_min
            << ", event_interval_upper_bound=" << eventIntervalUpperBound(t)
            << ", pass=" << (virtual_mode ? "infinitesimal" : "primary")
            << ", monitored_flip_t=" << KineticDelaunay::kDiagnosticsMonitoredFlipTime
+           << ", monitored_flip_edge=" << KineticDelaunay::kDiagnosticsMonitoredFlipDelaunayEdgeId
+           << ", monitored_flip_sites=[" << KineticDelaunay::kDiagnosticsMonitoredFlipSiteA << ","
+           << KineticDelaunay::kDiagnosticsMonitoredFlipSiteB << "]"
            << ", he_live=" << (graph.isLiveHalfEdge(he_id) ? "true" : "false")
            << ", on_convex_boundary=" << (graph.isOnConvexBoundary(he_id) ? "true" : "false")
            << ", outside_convex_boundary=" << (graph.isOutsideConvexBoundary(he_id) ? "true" : "false")
@@ -242,8 +439,10 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
   }
 
   const auto build_trigger = [&](size_t active_he_id, double schedule_time, Polynomial& event_trigger_out,
-                                 std::vector<Trajectory<2>>& trajs_out, const char*& predicate_out) {
+                                 std::vector<Trajectory<2>>& trajs_out, std::vector<size_t>& traj_strand_ids_out,
+                                 const char*& predicate_out) {
     trajs_out.clear();
+    traj_strand_ids_out.clear();
     std::vector<size_t> trigger_strand_ids;
     const auto append_trigger_strand = [&](int vertex) {
       if (vertex < 0)
@@ -256,8 +455,10 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
         trigger_strand_ids.push_back(strand_id);
       }
     };
-    const auto piece_for_trigger = [&](size_t strand_id, double schedule_time) {
-      return kd->getSitePiecePolynomialForEventStrands(strand_id, section, schedule_time, trigger_strand_ids);
+    const auto push_traj = [&](int vertex, double schedule_time) {
+      const size_t strand_id = static_cast<size_t>(vertex);
+      traj_strand_ids_out.push_back(strand_id);
+      trajs_out.push_back(kd->getSitePiecePolynomialForEventStrands(strand_id, section, schedule_time, trigger_strand_ids));
     };
 
     if (graph.isOnConvexBoundary(active_he_id) || graph.isOutsideConvexBoundary(active_he_id))
@@ -287,9 +488,9 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
         append_trigger_strand(vertex);
       }
 
-      trajs_out.push_back(piece_for_trigger(static_cast<size_t>(filtered_indices[0]), schedule_time));
-      trajs_out.push_back(piece_for_trigger(static_cast<size_t>(filtered_indices[1]), schedule_time));
-      trajs_out.push_back(piece_for_trigger(static_cast<size_t>(filtered_indices[2]), schedule_time));
+      push_traj(filtered_indices[0], schedule_time);
+      push_traj(filtered_indices[1], schedule_time);
+      push_traj(filtered_indices[2], schedule_time);
       event_trigger_out = ccw(trajs_out[0][0], trajs_out[0][1], trajs_out[1][0], trajs_out[1][1], trajs_out[2][0],
         trajs_out[2][1]);
       return;
@@ -304,22 +505,24 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
     {
       append_trigger_strand(vertex);
     }
-    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(a), schedule_time));
-    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(b), schedule_time));
-    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(c), schedule_time));
-    trajs_out.push_back(piece_for_trigger(static_cast<size_t>(d), schedule_time));
+    push_traj(a, schedule_time);
+    push_traj(b, schedule_time);
+    push_traj(c, schedule_time);
+    push_traj(d, schedule_time);
     event_trigger_out = inCircle(trajs_out[0][0], trajs_out[0][1], trajs_out[1][0], trajs_out[1][1], trajs_out[2][0],
       trajs_out[2][1], trajs_out[3][0], trajs_out[3][1]);
   };
 
-  const auto enqueue_flip_roots = [&](const std::vector<Trajectory<2>>& trajs, Polynomial& event_trigger,
+  const auto enqueue_flip_roots = [&](const std::vector<Trajectory<2>>& trajs,
+                                    const std::vector<size_t>& traj_strand_ids, Polynomial& event_trigger,
                                     double min_fraction, size_t enqueue_he_id, double creation_time,
                                     const char* trigger_pass, const char* trigger_predicate) {
     const bool virtual_mode = kd->computing_infinitesimal_events_;
     const double root_min = virtual_mode ? kd->infinitesimal_recompute_min_x_ : min_fraction;
     if (log_flip_diag)
     {
-      kd->logFlipEventTriggerRoots(enqueue_he_id, t, root_min, event_trigger, trigger_pass, trigger_predicate);
+      kd->logFlipEventTriggerRoots(
+        enqueue_he_id, t, root_min, event_trigger, traj_strand_ids, trajs, trigger_pass, trigger_predicate);
     }
 
     if (event_trigger.degree() < 0)
@@ -398,10 +601,11 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
 
   Polynomial event_trigger;
   std::vector<Trajectory<2>> trajs;
+  std::vector<size_t> traj_strand_ids;
   const char* trigger_predicate = "inCircle";
-  build_trigger(he_id, t, event_trigger, trajs, trigger_predicate);
+  build_trigger(he_id, t, event_trigger, trajs, traj_strand_ids, trigger_predicate);
   const char* trigger_pass = kd->computing_infinitesimal_events_ ? "infinitesimal" : "primary";
-  enqueue_flip_roots(trajs, event_trigger, fraction, he_id, t, trigger_pass, trigger_predicate);
+  enqueue_flip_roots(trajs, traj_strand_ids, event_trigger, fraction, he_id, t, trigger_pass, trigger_predicate);
 }
 
 void KineticDelaunay::FlipEvent::handleEvent()
@@ -416,7 +620,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
   const double t = occurrence_time.real_time;
   const double infinitesimal_t = occurrence_time.infinitesimal_time;
   const bool is_infinitesimal = infinitesimal_t > 0.0;
-  const bool log_flip_diag = shouldLogFlipDiagnostics(*kd, half_edge_id, t);
+  const bool log_flip_diag = shouldLogFlipDiagnostics(*kd, half_edge_id, t, is_infinitesimal);
   const auto log_skip = [&](const char* reason)
   {
     if (log_flip_diag)
@@ -524,7 +728,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
     event_handler->beforeEvent(*this);
   }
 
-  if (kd->isVisualDebugEnabled() && kd->getVisualDebugOutputRoot().has_value()
+  if (kd->shouldExportVisualDebugAt(t) && kd->getVisualDebugOutputRoot().has_value()
     && shouldDumpFlipPolynomialsForEvent(*kd, t, half_edge_id))
   {
     const FlipEventTriggerDump dump = buildFlipEventTriggerDump(*kd, half_edge_id, creation_time.real_time);
@@ -790,8 +994,8 @@ void KineticDelaunay::FlipEvent::handleEvent()
     }
   }
 
-  // Local neighbor recompute. Infinitesimal flips stay on the virtual timeline only; primary
-  // seam reschedule runs after finalize. Dual primary here stamped EventTime(t) over virtual
+  // Local neighbor recompute. Infinitesimal flips stay on the virtual timeline only; full primary
+  // reschedule runs after finalize. Dual primary here stamped EventTime(t) over virtual
   // watermarks and resurrected stale seed events as duplicate infinitesimal handles.
   {
     size_t next1 = graph.halfEdge(half_edge_id).next;

@@ -118,6 +118,7 @@
         "--section-shading",
         "--debug-files",
         "debug_output",
+        "15",
         "--log-add",
         "monitor",
         "--cutoff",

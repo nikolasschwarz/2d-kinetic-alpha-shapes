@@ -343,11 +343,10 @@ void logCrossingCandidateSelection(const KineticDelaunay& kd, size_t voronoi_ver
   }
   else
   {
-    const EventTime creation_time = virtual_mode
-      ? EventTime(kd.infinitesimal_schedule_t_, kd.infinitesimal_recompute_min_x_)
-      : kd.eventTimeAt(schedule_t);
+    const EventTime creation_time = virtual_mode ? EventTime(frozen_real_t, root_min) : kd.eventTimeAt(schedule_t);
+    const auto& graph = kd.getGraph();
     const size_t target_tri_id
-      = kd.graph.isLiveHalfEdge(selected_he_id) ? kd.graph.halfEdge(selected_he_id ^ 1).face : size_t(-1);
+      = graph.isLiveHalfEdge(selected_he_id) ? graph.halfEdge(selected_he_id ^ 1).face : size_t(-1);
     std::ostringstream queued;
     queued << "  crossing event queued";
     if (virtual_mode)
@@ -998,7 +997,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
         break;
       }
     }
-    // Finalize first: cut succeeds → primary seam reschedule happens inside finalize; no local recompute.
+    // Finalize first: cut succeeds → full primary reschedule inside finalize; no local recompute.
     if (parent_component_id != static_cast<size_t>(-1)
       && kd->maybeFinalizeInfinitesimalSeparation(parent_component_id, t))
     {
