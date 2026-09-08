@@ -4,6 +4,7 @@
 #include "KineticDelaunaySeparationEvent.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -24,7 +25,7 @@ class SegmentBuilderSeparationCallback final : public KineticDelaunay::EventCall
 
   /// Visual-debug SVG for a pending/active separation (SeparationEvent or infinitesimal activation).
   void writeSeparationVisualDebugSvg(size_t parent_component_id, EventTime occurrence_time, const char* phase,
-    std::optional<EventTime> creation_time = std::nullopt) const;
+    std::optional<EventTime> creation_time = std::nullopt, std::optional<uint64_t> event_id = std::nullopt) const;
 
  private:
   SegmentBuilder& segment_builder_;

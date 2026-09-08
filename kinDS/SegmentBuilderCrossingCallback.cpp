@@ -54,7 +54,7 @@ void SegmentBuilderCrossingCallback::beforeEvent(KineticDelaunay::Event& e)
       + std::to_string(new_tri),
     VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), runtime_branch_id,
     /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
-    crossing->creation_time);
+    crossing->creation_time, /*fan_out_active_runtime_branches=*/false, crossing->eventId());
 
   // Snapshot crossed-edge boundary interval links before CrossingData mutates them.
   crossing_edge_snapshot_.clear();
@@ -115,7 +115,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         + std::to_string(post_new_tri),
       VisualDebugHighlight::forCrossing(graph, crossing->half_edge_id, crossing->voronoi_vertex_id), runtime_branch_id,
       /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
-      crossing->creation_time);
+      crossing->creation_time, /*fan_out_active_runtime_branches=*/false, crossing->eventId());
   };
 
   int branch_vertex = graph.halfEdge(crossing->half_edge_id).origin;

@@ -1552,7 +1552,8 @@ void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, si
 }
 
 void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots,
-  bool update_runtime_branch_map, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result)
+  bool update_runtime_branch_map, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result,
+  const std::unordered_set<size_t>* additional_flip_quads)
 {
   growGraphSlotArrays();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
@@ -1591,7 +1592,7 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
 
   if (split_result != nullptr)
   {
-    refreshEventsAfterGraphCut(t, *split_result);
+    refreshEventsAfterGraphCut(t, *split_result, additional_flip_quads);
   }
 
   if (update_runtime_branch_map)
@@ -1607,11 +1608,13 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
 }
 
 void KineticDelaunay::refreshEventsAfterGraphCut(
-  double t, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult& split_result)
+  double t, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult& split_result,
+  const std::unordered_set<size_t>* additional_flip_quads)
 {
   // Flip schedules are keyed by undirected edge id (half_edge / 2).
   // 1) Infinite edges that bordered one live + one tombstoned face: recompute that edge's own quad.
   // 2) Finite capped outer edges (interior→hull): recompute those quads separately.
+  // 3) Optional extras (e.g. separation mixed-shift seam quads) merged so each quad is scheduled once.
   std::unordered_set<size_t> flip_quads;
   std::vector<size_t> infinite_edge_ids = split_result.infinite_half_edges_bordering_tombstone;
 
@@ -1632,6 +1635,14 @@ void KineticDelaunay::refreshEventsAfterGraphCut(
     }
   }
 
+  if (additional_flip_quads != nullptr)
+  {
+    for (size_t quad_id : *additional_flip_quads)
+    {
+      flip_quads.insert(quad_id);
+    }
+  }
+
   std::vector<size_t> recomputed_quads;
   recomputed_quads.reserve(flip_quads.size());
   for (size_t quad_id : flip_quads)
@@ -1643,7 +1654,7 @@ void KineticDelaunay::refreshEventsAfterGraphCut(
     flip_event_manager_->computeEvents(t, quad_id);
     if (quad_id < quadrilateral_last_updated.size())
     {
-      quadrilateral_last_updated[quad_id] = t;
+      quadrilateral_last_updated[quad_id] = EventTime(t);
     }
     recomputed_quads.push_back(quad_id);
   }
@@ -2915,12 +2926,58 @@ bool KineticDelaunay::maybeFinalizeInfinitesimalSeparation(size_t parent_compone
     return false;
   }
 
+  // Capture seam targets before the cut clears pending-split topology bookkeeping.
+  std::unordered_set<size_t> affected_quads;
+  std::unordered_set<size_t> affected_faces;
+  collectSeparationRecomputeTargets(parent_component_id, affected_quads, affected_faces);
+
   KINDS_DEBUG("maybeFinalizeInfinitesimalSeparation: parent_component_id=" << parent_component_id << " t=" << t
                                                                            << " epoch=" << split.infinitesimal_epoch
                                                                            << "; applying graph split");
   ++split.infinitesimal_epoch;
   split.infinitesimal_active = false;
-  applyPendingRuntimeBranchSplit(t, split.parent_runtime_branch);
+  // Union mixed-shift seam quads into the cut flip refresh so each undirected edge is
+  // computeEvents'd once (cut hull/cap edges ∪ separation seam quads).
+  applyPendingRuntimeBranchSplit(t, split.parent_runtime_branch, &affected_quads);
+
+  // Radius / crossing for surviving mixed-shift faces (cut refresh is flip-only).
+  growGraphSlotArrays();
+  for (size_t face_id : affected_faces)
+  {
+    if (!graph.isLiveFace(face_id))
+    {
+      continue;
+    }
+    const size_t he_id = graph.face(face_id).half_edges[0];
+    radius_event_manager_->computeEvents(t, he_id);
+    if (face_id < face_last_updated.size())
+    {
+      face_last_updated[face_id] = EventTime(t);
+    }
+
+    const auto recompute_crossing_for_voronoi_vertex = [&](size_t voronoi_vertex_id)
+    {
+      if (!crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
+      {
+        return;
+      }
+      crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
+      if (voronoi_vertex_id < crossing_data.last_crossing.size())
+      {
+        crossing_data.last_crossing[voronoi_vertex_id] = EventTime(t);
+      }
+    };
+
+    recompute_crossing_for_voronoi_vertex(face_id);
+    for (size_t voronoi_vertex_id : crossing_data.getVoronoiVerticesInTri(face_id))
+    {
+      if (voronoi_vertex_id == face_id)
+      {
+        continue;
+      }
+      recompute_crossing_for_voronoi_vertex(voronoi_vertex_id);
+    }
+  }
   return true;
 }
 
@@ -2973,34 +3030,21 @@ void KineticDelaunay::recomputeEventsAfterInfinitesimalSeparation(
   collectSeparationRecomputeTargets(parent_component_id, affected_quads, affected_faces);
   growGraphSlotArrays();
 
+  // Seed virtual schedules only. Do not stamp last_crossing / face_last_updated /
+  // quadrilateral_last_updated here: those EventTime(t, min) watermarks poison primary
+  // schedules at the same real t. Virtual events are gated by infinitesimal epoch;
+  // primary schedules stay valid until topology changes or primitives are tombstoned.
   const InfinitesimalComputeContext infinitesimal { min_virtual_x, parent_component_id };
-  const EventTime stamp(t, min_virtual_x);
 
   for (size_t quad_id : affected_quads)
   {
-    if (quad_id < quadrilateral_last_updated.size())
-    {
-      quadrilateral_last_updated[quad_id] = stamp;
-    }
     flip_event_manager_->computeEvents(t, quad_id, infinitesimal);
   }
 
   for (size_t face_id : affected_faces)
   {
-    if (face_id < face_last_updated.size())
-    {
-      face_last_updated[face_id] = stamp;
-    }
     const size_t he_id = graph.face(face_id).half_edges[0];
     radius_event_manager_->computeEvents(t, he_id, infinitesimal);
-
-    const auto stamp_voronoi_crossing_invalidation = [&](size_t voronoi_vertex_id)
-    {
-      if (voronoi_vertex_id < crossing_data.last_crossing.size())
-      {
-        crossing_data.last_crossing[voronoi_vertex_id] = stamp;
-      }
-    };
 
     const auto recompute_crossing_for_voronoi_vertex = [&](size_t voronoi_vertex_id)
     {
@@ -3008,7 +3052,6 @@ void KineticDelaunay::recomputeEventsAfterInfinitesimalSeparation(
       {
         return;
       }
-      stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
       crossing_event_manager_->computeEvents(t, voronoi_vertex_id, infinitesimal);
     };
 
@@ -3017,7 +3060,6 @@ void KineticDelaunay::recomputeEventsAfterInfinitesimalSeparation(
     {
       if (voronoi_vertex_id == face_id)
       {
-        stamp_voronoi_crossing_invalidation(voronoi_vertex_id);
         continue;
       }
       recompute_crossing_for_voronoi_vertex(voronoi_vertex_id);
@@ -3305,7 +3347,8 @@ void KineticDelaunay::handleSeparationEventAtTime(size_t parent_component_id, do
   activateInfinitesimalSeparationOrApplyCut(parent_component_id, t, /*apply_cut_now=*/true);
 }
 
-void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id)
+void KineticDelaunay::applyPendingRuntimeBranchSplit(
+  double t, size_t parent_runtime_branch_id, const std::unordered_set<size_t>* additional_flip_quads)
 {
   if (parent_runtime_branch_id == RuntimeBranchData::no_branch)
   {
@@ -3336,6 +3379,23 @@ void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_run
     graph.update(graph.getVertexCount(), component_data.components,
       [this, t](size_t v) { return getPointAt(v, t); });
     onGraphRetriangulated(t, prev_face_slots, prev_he_slots);
+    // No RuntimeBranchSplitResult / cut flip refresh — schedule optional seam quads here.
+    if (additional_flip_quads != nullptr)
+    {
+      growGraphSlotArrays();
+      for (size_t quad_id : *additional_flip_quads)
+      {
+        if (!graph.isLiveHalfEdge(quad_id * 2) && !graph.isLiveHalfEdge(quad_id * 2 + 1))
+        {
+          continue;
+        }
+        flip_event_manager_->computeEvents(t, quad_id);
+        if (quad_id < quadrilateral_last_updated.size())
+        {
+          quadrilateral_last_updated[quad_id] = EventTime(t);
+        }
+      }
+    }
   }
   else
   {
@@ -3347,7 +3407,7 @@ void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_run
     const std::vector<size_t> cut_map = buildRuntimeBranchCutMapForParent(parent_runtime_branch_id);
     const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult split_result = graph.applyRuntimeBranchSplit(
       cut_map, [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time);
-    onGraphCutApplied(t, prev_face_slots, prev_he_slots, false, &split_result);
+    onGraphCutApplied(t, prev_face_slots, prev_he_slots, false, &split_result, additional_flip_quads);
   }
 
   completePendingRuntimeBranchSplit(parent_runtime_branch_id, t);

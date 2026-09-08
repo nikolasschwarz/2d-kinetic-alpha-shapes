@@ -45,10 +45,10 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     auto& debug_graph = segment_builder_.kin_del.getGraph();
     const size_t runtime_branch_id = segment_builder_.kin_del.getRuntimeBranchIdForStrand(strand_id);
     writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, debug_graph, t, "before",
-      "subdivision_strand" + std::to_string(strand_id) + "_seq" + std::to_string(sub->queue_sequence_),
+      "subdivision_strand" + std::to_string(strand_id),
       VisualDebugHighlight::forSubdivisionStrand(debug_graph, strand_id), runtime_branch_id,
       /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
-      sub->creation_time);
+      sub->creation_time, /*fan_out_active_runtime_branches=*/false, sub->eventId());
   }
 
   KINDS_DEBUG("Inserting subdivision for strand " << strand_id << " at t = " << t);

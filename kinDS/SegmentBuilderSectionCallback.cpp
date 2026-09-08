@@ -28,7 +28,7 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
       graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }),
     /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
     /*explicit_runtime_branch_ids=*/nullptr, section->creation_time,
-    /*fan_out_active_runtime_branches=*/true);
+    /*fan_out_active_runtime_branches=*/true, section->eventId());
 
   segment_builder_.advanceBoundaryMeshes(t);
 
@@ -127,7 +127,7 @@ void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)
       graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }),
     /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
     /*explicit_runtime_branch_ids=*/nullptr, section->creation_time,
-    /*fan_out_active_runtime_branches=*/true);
+    /*fan_out_active_runtime_branches=*/true, section->eventId());
 }
 } // namespace kinDS
 

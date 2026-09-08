@@ -619,7 +619,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     "radius_he" + std::to_string(radius->half_edge_id) + "_" + radius_transition_tag,
     VisualDebugHighlight::forRadius(graph, radius->half_edge_id), runtime_branch_id,
     /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
-    radius->creation_time);
+    radius->creation_time, /*fan_out_active_runtime_branches=*/false, radius->eventId());
   const auto& face_half_edges = graph.face(face_id).half_edges;
   const double t = radius->occurrence_time;
 
@@ -1258,7 +1258,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     VisualDebugHighlight::forRadius(graph, radius->half_edge_id),
     segment_builder_.kin_del.getRuntimeBranchIdForHalfEdge(radius->half_edge_id),
     /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
-    radius->creation_time);
+    radius->creation_time, /*fan_out_active_runtime_branches=*/false, radius->eventId());
 
   auto triangle_he_ids = graph.getTriangleHalfEdgeIndices(radius->half_edge_id);
   std::unordered_set<size_t> affected_delaunay_edges;

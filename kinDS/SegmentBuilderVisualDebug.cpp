@@ -139,10 +139,14 @@ std::string chronologicalPhaseToken(const char* phase)
 
 std::string visualDebugSvgRelativePath(EventTime occurrence_time, const char* phase, const std::string& event_descriptor,
   std::optional<size_t> runtime_branch_id, const std::optional<std::filesystem::path>& output_root,
-  std::optional<EventTime> creation_time)
+  std::optional<EventTime> creation_time, std::optional<uint64_t> event_id)
 {
-  std::string basename = formatDebugExportTimeToken(occurrence_time) + "_segmentbuilder_"
-    + chronologicalPhaseToken(phase) + "_" + event_descriptor;
+  std::string basename = formatDebugExportTimeToken(occurrence_time);
+  if (event_id.has_value())
+  {
+    basename += "_eid" + std::to_string(*event_id);
+  }
+  basename += "_segmentbuilder_" + chronologicalPhaseToken(phase) + "_" + event_descriptor;
   if (creation_time.has_value())
   {
     basename += "_" + formatDebugExportTimeToken(*creation_time);
@@ -399,7 +403,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id,
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments,
   const std::vector<std::vector<glm::dvec2>>* seam_outlines, const std::vector<size_t>* explicit_runtime_branch_ids,
-  std::optional<EventTime> creation_time, bool fan_out_active_runtime_branches)
+  std::optional<EventTime> creation_time, bool fan_out_active_runtime_branches, std::optional<uint64_t> event_id)
 {
   if (!visual_debug)
   {
@@ -450,7 +454,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       return false;
     }
     const std::string filename = visualDebugSvgRelativePath(
-      occurrence_time, phase, event_descriptor, folder_branch_id, output_root, creation_time);
+      occurrence_time, phase, event_descriptor, folder_branch_id, output_root, creation_time, event_id);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       &branch_strands, positioned_strands, site_input_branch_labels, branch_site_world_positions,
       voronoi_vertex_world_positions, separation_offset_segments, seam_outlines);
@@ -500,8 +504,8 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     KINDS_WARNING("writeSegmentBuilderVisualDebugSvg: branch resolution failed at t=" << occurrence_time
       << " phase=" << phase << " event=" << event_descriptor << " (" << reason << "); exporting all live strands to "
       << kVisualDebugUnresolvedBranchFolder << ".");
-    const std::string filename
-      = visualDebugSvgRelativePath(occurrence_time, phase, event_descriptor, std::nullopt, output_root, creation_time);
+    const std::string filename = visualDebugSvgRelativePath(
+      occurrence_time, phase, event_descriptor, std::nullopt, output_root, creation_time, event_id);
     writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
       nullptr, positioned_strands, site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions,
       separation_offset_segments, seam_outlines);

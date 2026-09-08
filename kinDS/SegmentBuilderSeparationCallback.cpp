@@ -43,7 +43,7 @@ std::optional<size_t> runtimeBranchForPendingSplitParent(const KineticDelaunay& 
 
 void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
   size_t parent_component_id, EventTime occurrence_time, const char* phase,
-  std::optional<EventTime> creation_time) const
+  std::optional<EventTime> creation_time, std::optional<uint64_t> event_id) const
 {
   KineticDelaunay& kin_del = segment_builder_.kin_del;
   const HalfEdgeDelaunayGraph& graph = kin_del.getGraph();
@@ -109,14 +109,14 @@ void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
 
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, kin_del, graph, occurrence_time, phase,
     separationEventDescriptor(parent_component_id, iteration), highlight, preferred, &offset_segments, &seam_outlines,
-    explicit_branches, creation_time);
+    explicit_branches, creation_time, /*fan_out_active_runtime_branches=*/false, event_id);
 }
 
 void SegmentBuilderSeparationCallback::writeSeparationVisualDebugSvg(
   const KineticDelaunay::SeparationEvent& separation, const char* phase) const
 {
   writeSeparationVisualDebugSvg(
-    separation.parent_component_id, separation.occurrence_time, phase, separation.creation_time);
+    separation.parent_component_id, separation.occurrence_time, phase, separation.creation_time, separation.eventId());
 }
 
 void SegmentBuilderSeparationCallback::beforeEvent(KineticDelaunay::Event& e)

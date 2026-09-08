@@ -7,6 +7,7 @@
 #include "KineticAlgorithm.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,8 +31,9 @@ inline constexpr const char* kVisualDebugUnresolvedBranchFolder = "branchX";
 ///
 /// Filename times use @ref formatDebugExportTimeToken(EventTime) / @ref kDebugExportTimePrecision
 /// (`t{real}_i0!` or `t{real}_i{…}` with the same digit precision as real time).
-/// Occurrence time is the leading `t…_i…` token; when @p creation_time is set, another `t…_i…` token is
-/// appended before the extension so duplicate events at the same occurrence time stay distinct.
+/// Occurrence time is the leading `t…_i…` token; when @p event_id is set, `_eid{N}` follows (enqueue
+/// @ref KineticAlgorithm::Event::eventId). When @p creation_time is set, another `t…_i…` token is
+/// appended before the extension.
 ///
 /// If @p explicit_runtime_branch_ids is non-null and non-empty, SVGs are written only for those runtime branch ids
 /// (duplicates allowed when endpoints span multiple branches). Failure to position any of them falls back to
@@ -42,6 +44,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr,
   const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr,
   const std::vector<size_t>* explicit_runtime_branch_ids = nullptr,
-  std::optional<EventTime> creation_time = std::nullopt, bool fan_out_active_runtime_branches = false);
+  std::optional<EventTime> creation_time = std::nullopt, bool fan_out_active_runtime_branches = false,
+  std::optional<uint64_t> event_id = std::nullopt);
 
 } // namespace kinDS

@@ -512,7 +512,8 @@ class KineticDelaunay
   bool pendingSplitSeamsAreConvex(size_t parent_component_id, double t) const;
   void handleSeparationEventAtTime(size_t parent_component_id, double t);
   /// Apply the in-place graph cut (or retriangulation) for one pending parent *runtime branch* only.
-  void applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id);
+  void applyPendingRuntimeBranchSplit(double t, size_t parent_runtime_branch_id,
+    const std::unordered_set<size_t>* additional_flip_quads = nullptr);
   /// Activate frozen-site virtual separation, or handle convex seams: enqueue a same-t @ref SeparationEvent when
   /// @p apply_cut_now is false, otherwise apply the graph cut immediately.
   void activateInfinitesimalSeparationOrApplyCut(size_t parent_component_id, double t, bool apply_cut_now = false);
@@ -521,7 +522,8 @@ class KineticDelaunay
   /// neighbor paradigm as regular events (under @ref ScopedInfinitesimalEventCompute).
   /// Roots are scheduled at kinetic @p t with @c infinitesimal_t in (@p min_virtual_x, +inf).
   void recomputeEventsAfterInfinitesimalSeparation(size_t parent_component_id, double t, double min_virtual_x);
-  /// If seams are convex and not on hiatus: bump epoch, clear active, apply graph cut.
+  /// If seams are convex and not on hiatus: bump epoch, apply graph cut (unioning seam flip quads into
+  /// the cut flip refresh), then primary-reschedule surviving seam radius/crossing events.
   bool maybeFinalizeInfinitesimalSeparation(size_t parent_component_id, double t);
   void collectSeparationRecomputeTargets(size_t parent_component_id, std::unordered_set<size_t>& affected_quads,
     std::unordered_set<size_t>& affected_faces) const;
@@ -555,10 +557,15 @@ class KineticDelaunay
   /// Post-cut bookkeeping. Does not clear pending splits or remap runtime branches — the caller finalizes the
   /// targeted pending parent via @ref completePendingRuntimeBranchSplit. Optional live-graph remap is off by default.
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots, bool update_runtime_branch_map = false,
-    const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result = nullptr);
-  /// After a graph cut, recompute flip events for (1) infinite edges that bordered live+tombstoned faces and
-  /// (2) finite capped outer edges. Stamps @ref quadrilateral_last_updated so stale schedules are ignored.
-  void refreshEventsAfterGraphCut(double t, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult& split_result);
+    const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult* split_result = nullptr,
+    const std::unordered_set<size_t>* additional_flip_quads = nullptr);
+  /// After a graph cut, recompute flip events once for the union of:
+  /// (1) infinite edges that bordered live+tombstoned faces,
+  /// (2) finite capped outer edges, and
+  /// (3) optional extra quads (e.g. mixed-shift seam quads from separation finalize).
+  /// Stamps @ref quadrilateral_last_updated so stale schedules are ignored.
+  void refreshEventsAfterGraphCut(double t, const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult& split_result,
+    const std::unordered_set<size_t>* additional_flip_quads = nullptr);
 
   void handleEvents();
 
@@ -1003,9 +1010,9 @@ class KineticDelaunay
   static constexpr double kDiagnosticsMonitoredCrossingTimeEpsilon = 0.05;
   /// Debug target: undirected Delaunay edge id for flip-event trigger / handle diagnostics.
   /// Directed half-edge 1158 ⇒ undirected edge 579 (also matches twin 1159).
-  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = 3644 / 2;
+  static constexpr size_t kDiagnosticsMonitoredFlipDelaunayEdgeId = kDiagnosticsMonitorDisabledId;//36 / 2;
   /// Flip create/discard / trigger-root logging is constrained to [floor(t), floor(t)+1).
-  static constexpr double kDiagnosticsMonitoredFlipTime = 30.0;
+  static constexpr double kDiagnosticsMonitoredFlipTime = 10.0;
   void setDiagnosticsEnabled(bool enabled);
   bool diagnosticsEnabled() const;
   /// Optional per-event sanity check: all live sites lie inside the graph convex hull (same topology as SVG).

@@ -78,13 +78,16 @@ class KineticAlgorithm
     uint64_t infinitesimal_epoch_ = 0;
     /// Secondary order when @ref occurrence_time ties (e.g. strand subdivision before flip).
     uint32_t queue_dispatch_order_;
-    /// Monotonic id assigned in @ref enqueueEvent for stable ordering when higher keys tie.
+    /// Monotonic id assigned in @ref enqueueEvent (enqueue order). Used for queue tie-breaks and debug filenames.
     uint64_t queue_sequence_ = 0;
 
     virtual void handleEvent() = 0;
     virtual KineticEventType eventType() const = 0;
 
     double getTime() const { return occurrence_time.real_time; }
+
+    /// Consecutive event id assigned at enqueue (@ref queue_sequence_).
+    uint64_t eventId() const { return queue_sequence_; }
 
     void assignQueueSequence(uint64_t sequence) { queue_sequence_ = sequence; }
 

@@ -353,9 +353,10 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
 
       const EventTime occurrence = virtual_mode ? EventTime(kd->infinitesimal_schedule_t_, event_time)
                                                 : EventTime(event_time + section);
+      // Primary: record current infinitesimal (e.g. finalize-at-cut) on creation for debug backtracking.
       const EventTime creation = virtual_mode
         ? EventTime(kd->infinitesimal_schedule_t_, kd->infinitesimal_recompute_min_x_)
-        : EventTime(creation_time);
+        : kd->eventTimeAt(creation_time);
 
       if (log_flip_diag)
       {
@@ -789,7 +790,9 @@ void KineticDelaunay::FlipEvent::handleEvent()
     }
   }
 
-  // Local neighbor recompute (same paradigm for kinetic and infinitesimal).
+  // Local neighbor recompute. Infinitesimal flips stay on the virtual timeline only; primary
+  // seam reschedule runs after finalize. Dual primary here stamped EventTime(t) over virtual
+  // watermarks and resurrected stale seed events as duplicate infinitesimal handles.
   {
     size_t next1 = graph.halfEdge(half_edge_id).next;
     size_t next2 = graph.halfEdge(next1).next;
@@ -797,24 +800,36 @@ void KineticDelaunay::FlipEvent::handleEvent()
     size_t twin_next1 = graph.halfEdge(half_edge_id ^ 1).next;
     size_t twin_next2 = graph.halfEdge(twin_next1).next;
 
-    kd->flip_event_manager_->computeEvents(t, next1 / 2, infinitesimal_compute);
-    kd->quadrilateral_last_updated[next1 / 2] = occurrence_time;
+    const auto recompute_neighbors
+      = [&](std::optional<InfinitesimalComputeContext> ctx, EventTime stamp)
+    {
+      kd->flip_event_manager_->computeEvents(t, next1 / 2, ctx);
+      kd->quadrilateral_last_updated[next1 / 2] = stamp;
 
-    kd->flip_event_manager_->computeEvents(t, next2 / 2, infinitesimal_compute);
-    kd->quadrilateral_last_updated[next2 / 2] = occurrence_time;
+      kd->flip_event_manager_->computeEvents(t, next2 / 2, ctx);
+      kd->quadrilateral_last_updated[next2 / 2] = stamp;
 
-    kd->flip_event_manager_->computeEvents(t, twin_next1 / 2, infinitesimal_compute);
-    kd->quadrilateral_last_updated[twin_next1 / 2] = occurrence_time;
+      kd->flip_event_manager_->computeEvents(t, twin_next1 / 2, ctx);
+      kd->quadrilateral_last_updated[twin_next1 / 2] = stamp;
 
-    kd->flip_event_manager_->computeEvents(t, twin_next2 / 2, infinitesimal_compute);
-    kd->quadrilateral_last_updated[twin_next2 / 2] = occurrence_time;
+      kd->flip_event_manager_->computeEvents(t, twin_next2 / 2, ctx);
+      kd->quadrilateral_last_updated[twin_next2 / 2] = stamp;
 
-    // re-compute radius events for both triangles
-    kd->radius_event_manager_->computeEvents(t, half_edge_id, infinitesimal_compute);
-    kd->face_last_updated[face_id] = occurrence_time;
+      kd->radius_event_manager_->computeEvents(t, half_edge_id, ctx);
+      kd->face_last_updated[face_id] = stamp;
 
-    kd->radius_event_manager_->computeEvents(t, half_edge_id ^ 1, infinitesimal_compute);
-    kd->face_last_updated[twin_face_id] = occurrence_time;
+      kd->radius_event_manager_->computeEvents(t, half_edge_id ^ 1, ctx);
+      kd->face_last_updated[twin_face_id] = stamp;
+    };
+
+    if (infinitesimal_compute.has_value())
+    {
+      recompute_neighbors(infinitesimal_compute, occurrence_time);
+    }
+    else
+    {
+      recompute_neighbors(std::nullopt, occurrence_time);
+    }
   }
 
   if (is_infinitesimal)

@@ -45,8 +45,8 @@ struct VisualDebugHighlight
 
   static VisualDebugHighlight forFlip(const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id);
   static VisualDebugHighlight forRadius(const HalfEdgeDelaunayGraph& graph, size_t radius_half_edge_id);
-  /// Highlight the crossed Delaunay edge (primary), label every intersection on that edge, and show the moving
-  /// circumcenter with its three incident Voronoi edges as secondary context.
+  /// Highlight the crossed Delaunay edge (primary), label intersections on that edge, and emphasize only the
+  /// subject Voronoi vertex (plus its three incident Voronoi edges as secondary edge context).
   static VisualDebugHighlight forCrossing(
     const HalfEdgeDelaunayGraph& graph, size_t crossed_half_edge_id, size_t voronoi_vertex_id);
   static VisualDebugHighlight forSubdivisionStrand(const HalfEdgeDelaunayGraph& graph, size_t strand_vertex_id);

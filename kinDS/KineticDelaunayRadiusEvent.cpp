@@ -470,8 +470,12 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id,
     }
     else
     {
-      kd->kinetic_algorithm_->enqueueEvent(
-        std::make_shared<RadiusEvent>(kd, event_time.fraction + section, he_id, t, center, event_time.target_inside));
+      // Preserve current infinitesimal on creation (e.g. primary reschedule at finalize cut).
+      const EventTime creation = kd->eventTimeAt(t);
+      auto ev = std::make_shared<RadiusEvent>(
+        kd, event_time.fraction + section, he_id, creation.real_time, center, event_time.target_inside);
+      ev->creation_time = creation;
+      kd->kinetic_algorithm_->enqueueEvent(std::move(ev));
     }
   }
 }

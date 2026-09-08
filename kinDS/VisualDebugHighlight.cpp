@@ -237,16 +237,8 @@ VisualDebugHighlight VisualDebugHighlight::forCrossing(
   {
     highlight.delaunay_vertices.insert(static_cast<size_t>(twin_he.origin));
   }
-  if (he.face != -1)
-  {
-    highlight.voronoi_vertices.insert(static_cast<size_t>(he.face));
-  }
-  if (twin_he.face != -1)
-  {
-    highlight.voronoi_vertices.insert(static_cast<size_t>(twin_he.face));
-  }
 
-  // Secondary context: the moving circumcenter and its three incident Voronoi edges.
+  // Only the moving circumcenter is purple/bold; origin/target triangles and neighbor VVs stay dim.
   highlight.voronoi_vertices.insert(voronoi_vertex_id);
   if (voronoi_vertex_id < graph.faceSlotCount())
   {
@@ -256,12 +248,6 @@ VisualDebugHighlight VisualDebugHighlight::forCrossing(
       highlight.voronoi_edges.insert(voronoi_edge_id);
       highlight.directed_half_edges.insert(incident_he);
       highlight.directed_half_edges.insert(incident_he ^ 1);
-
-      const int opposite_face = graph.halfEdge(incident_he ^ 1).face;
-      if (opposite_face >= 0)
-      {
-        highlight.voronoi_vertices.insert(static_cast<size_t>(opposite_face));
-      }
     }
   }
 

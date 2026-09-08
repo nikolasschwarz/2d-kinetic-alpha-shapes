@@ -144,7 +144,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     flip->occurrence_time, "before", "flip_he" + std::to_string(flip->half_edge_id),
     VisualDebugHighlight::forFlip(graph, flip->half_edge_id), runtime_branch_id,
     /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
-    flip->creation_time);
+    flip->creation_time, /*fan_out_active_runtime_branches=*/false, flip->eventId());
   logFlipMonitoredEdgeDiagnostics(segment_builder_, graph, *flip, "before");
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
@@ -426,7 +426,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     VisualDebugHighlight::forFlip(graph, flip->half_edge_id),
     runtimeBranchIdForFlipEdge(segment_builder_.kin_del, graph, flip->half_edge_id),
     /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
-    flip->creation_time);
+    flip->creation_time, /*fan_out_active_runtime_branches=*/false, flip->eventId());
 
   if (segment_builder_.kin_del.isOnComponentBoundary(flip->half_edge_id))
   {
