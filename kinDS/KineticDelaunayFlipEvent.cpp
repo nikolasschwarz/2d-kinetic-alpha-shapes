@@ -605,6 +605,11 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
   const char* trigger_predicate = "inCircle";
   build_trigger(he_id, t, event_trigger, trajs, traj_strand_ids, trigger_predicate);
   const char* trigger_pass = kd->computing_infinitesimal_events_ ? "infinitesimal" : "primary";
+  if (kd->computing_infinitesimal_events_)
+  {
+    // Shared separation direction ⇒ inCircle ε³ ≡ 0 algebraically; drop FP junk before monitor/roots.
+    event_trigger.trimNearZero();
+  }
   enqueue_flip_roots(trajs, traj_strand_ids, event_trigger, fraction, he_id, t, trigger_pass, trigger_predicate);
 }
 

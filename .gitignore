@@ -49,6 +49,7 @@
 *.log
 *.txt
 
+/logs/
 /raw_meshlets/
 /segment_meshlets/
 /tests/

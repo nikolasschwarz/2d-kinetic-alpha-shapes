@@ -4108,6 +4108,10 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(double t, 
   };
 
   size_t pair_idx = static_cast<size_t>(-1);
+  size_t dbg_target_mid_count = 0;
+  size_t dbg_target_mid_with_strip = 0;
+  size_t dbg_anchor_match_attempts = 0;
+  size_t dbg_anchor_match_hits = 0;
   // Prefer a unique target-d mid from the beforeEvent finish list (metadata only — no MeshingData iterators).
   {
     size_t sole_target_mid = static_cast<size_t>(-1);
@@ -4122,6 +4126,7 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(double t, 
         sole_target_mid = candidate;
       }
     }
+    dbg_target_mid_count = target_mid_count;
     if (target_mid_count == 1)
     {
       pair_idx = sole_target_mid;
@@ -4142,12 +4147,15 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(double t, 
       {
         continue;
       }
+      ++dbg_target_mid_with_strip;
       const MeshingData& candidate_seg = intersection_mesh_pair_last_left_and_right_vertex[candidate].front();
+      ++dbg_anchor_match_attempts;
       if (segment_matches(candidate_seg)
         || (candidate_seg.start_crossing.has_value() && candidate_seg.end_crossing.has_value()
           && midIntervalMatchesRadiusShiftAnchors(candidate_seg.start_crossing.value(),
                candidate_seg.end_crossing.value(), site_vertex_id, boundary_transition_shift, t)))
       {
+        ++dbg_anchor_match_hits;
         pair_idx = candidate;
         break;
       }
@@ -4156,6 +4164,83 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(double t, 
 
   if (pair_idx == static_cast<size_t>(-1) || pair_idx >= intersection_meshes.size())
   {
+    // #region agent log
+    {
+      size_t meta_target_mids = 0;
+      size_t empty_strip = 0;
+      size_t not_target_mid = 0;
+      std::ostringstream cand_brief;
+      for (size_t i = 0; i < finished_one_edge_pair_indices.size(); ++i)
+      {
+        const size_t c = finished_one_edge_pair_indices[i];
+        if (i)
+        {
+          cand_brief << ';';
+        }
+        cand_brief << c;
+        if (c >= intersection_mesh_pair_metadata.size())
+        {
+          cand_brief << ":oob";
+          continue;
+        }
+        const auto& meta = intersection_mesh_pair_metadata[c];
+        cand_brief << ":sd" << meta.start_delaunay_edge_id << ":ed" << meta.end_delaunay_edge_id;
+        const bool is_mid = meta.start_delaunay_edge_id == target_d && meta.end_delaunay_edge_id == target_d;
+        if (is_mid)
+        {
+          ++meta_target_mids;
+        }
+        else
+        {
+          ++not_target_mid;
+        }
+        if (c >= intersection_mesh_pair_last_left_and_right_vertex.size()
+          || intersection_mesh_pair_last_left_and_right_vertex[c].empty())
+        {
+          ++empty_strip;
+          cand_brief << ":nostrip";
+        }
+      }
+      const char* fail_class = "unknown";
+      if (finished_one_edge_pair_indices.empty())
+      {
+        fail_class = "A_empty_candidates";
+      }
+      else if (meta_target_mids == 0)
+      {
+        fail_class = "B_no_target_d_mid_metadata";
+      }
+      else if (empty_strip == finished_one_edge_pair_indices.size()
+        || (dbg_target_mid_count == 0 && meta_target_mids > 0))
+      {
+        fail_class = "C_target_mid_but_empty_strip";
+      }
+      else if (dbg_target_mid_count != 1 && dbg_anchor_match_attempts > 0 && dbg_anchor_match_hits == 0)
+      {
+        fail_class = "D_anchor_match_failed";
+      }
+      else if (dbg_target_mid_count > 1 && dbg_anchor_match_attempts == 0)
+      {
+        fail_class = "E_multi_mid_no_usable_strip";
+      }
+      std::ofstream dbg(
+        R"(c:\Users\Nikolas\Source\EvoEngine\Extern\3rdParty\kinDS\debug-c3c75b.log)", std::ios::app);
+      if (dbg)
+      {
+        dbg << "{\"sessionId\":\"c3c75b\",\"hypothesisId\":\"" << fail_class
+            << "\",\"location\":\"SegmentBuilder.cpp:maybeQueueRadiusComplementarySplitForExistingMid\","
+            << "\"message\":\"no matching boundary meshlet\","
+            << "\"data\":{\"t\":" << t << ",\"site\":" << site_vertex_id << ",\"target_d\":" << target_d
+            << ",\"candidates\":" << finished_one_edge_pair_indices.size()
+            << ",\"meta_target_mids\":" << meta_target_mids << ",\"not_target_mid\":" << not_target_mid
+            << ",\"empty_strip\":" << empty_strip << ",\"unique_path_mid_count\":" << dbg_target_mid_count
+            << ",\"anchor_attempts\":" << dbg_anchor_match_attempts
+            << ",\"anchor_hits\":" << dbg_anchor_match_hits << ",\"cand_brief\":\"" << cand_brief.str()
+            << "\",\"anchor0\":\"" << anchor0_str << "\",\"anchor1\":\"" << anchor1_str << "\"},"
+            << "\"timestamp\":" << static_cast<long long>(t * 1e6) << "}\n";
+      }
+    }
+    // #endregion
     log_finished_mid("failed (no matching boundary meshlet)", static_cast<size_t>(-1), nullptr, anchor0_str,
       anchor1_str);
     return;

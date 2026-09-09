@@ -9,6 +9,7 @@
 #include "kinDS/Validator.hpp"
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -482,7 +483,8 @@ static void print_usage(const char* program_name)
             << "                            Replaces current levels. Default: info,warning,error,critical (no debug/monitor)\n"
             << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
             << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
-            << "  --log-file <path>         Write logs to file (default: no log file, console only)\n"
+            << "  --log-file <path>         Also write logger output to this path (overrides the default\n"
+            << "                            logs/console_YYYYMMDD_HHMMSS.log created at startup)\n"
             << "  --export-mode <mode>      Also export combined mesh when set to combined (default: raw)\n"
             << "  --export-path <path>      Base output directory; writes segment_meshlets/ and raw_meshlets/ beneath it\n"
             << "  --untransformed           Profile-space mesh (no object-space transform, no kinetic separation);\n"
@@ -850,8 +852,43 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   }
 }
 
+/// Mirror logger output (same lines as console KINDS_* / INFO / …) to logs/console_DATETIME.log.
+static std::filesystem::path enable_default_console_log_file()
+{
+  namespace fs = std::filesystem;
+  const fs::path logs_dir = "logs";
+  std::error_code ec;
+  fs::create_directories(logs_dir, ec);
+  if (ec)
+  {
+    std::cerr << "Warning: could not create logs directory '" << logs_dir.string() << "': " << ec.message()
+              << std::endl;
+    return {};
+  }
+
+  const std::time_t now = std::time(nullptr);
+  std::tm local_tm {};
+#if defined(_WIN32)
+  localtime_s(&local_tm, &now);
+#else
+  localtime_r(&now, &local_tm);
+#endif
+  char stamp[32];
+  std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local_tm);
+
+  const fs::path path = logs_dir / (std::string("console_") + stamp + ".log");
+  kinDS::logger.setLogFile(path.string());
+  return path;
+}
+
 int main(int argc, char* argv[])
 {
+  const std::filesystem::path default_console_log = enable_default_console_log_file();
+  if (!default_console_log.empty())
+  {
+    std::cout << "Console log file: " << default_console_log.string() << std::endl;
+  }
+
   // Sanity check: print all command line arguments
   std::cout << "Arguments (" << argc << "):";
   for (int i = 0; i < argc; ++i)

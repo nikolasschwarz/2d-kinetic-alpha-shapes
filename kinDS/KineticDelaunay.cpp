@@ -609,7 +609,9 @@ std::vector<double> KineticDelaunay::findVirtualEvents(
     return {};
   }
 
-  event_trigger.trim();
+  // Infinitesimal sites are p or p+Dε with one shared D; inCircle's ε³ coeff is then identically 0,
+  // but generic polynomial expansion leaves FP residue. Stronger than machine-eps trim().
+  event_trigger.trimNearZero();
   auto zeros = event_trigger.realRoots();
   std::vector<double> filtered_sorted_zeros;
 
