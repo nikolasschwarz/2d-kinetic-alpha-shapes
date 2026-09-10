@@ -66,8 +66,12 @@ class TreeMesher
     /// When false (@c --untransformed), vertices stay in local profile space (no reference-branch remap, no
     /// kinetic separation), with a final Y/Z swap for viewing alongside SVG.
     bool transform_mesh_at_construction = true;
-    /// When true, OBJ export alternates light/dark green and brown materials by even/odd kinetic section.
+    /// When true, OBJ export cycles brown boundary materials through 5 non-green section colors
+    /// (@c brown_s0..brown_s4). Green (interior) is left unchanged.
     bool alternate_section_shading = false;
+    /// When true, Combined meshlet OBJ export also writes an EcoSysLab-compatible `.json` sidecar
+    /// (distances/profile/root; fungus fields defaulted). CLI @c --export-gpu-attributes.
+    bool export_gpu_attributes_json = false;
     /// Inclusive first kinetic section to initialize and process (default 0).
     size_t start_section = 0;
     /// Exclusive kinetic stop / finalize time; empty means tree height (@c StrandTree::getHeight()).
@@ -160,6 +164,8 @@ class TreeMesher
   bool meshVertexSourceValidationPassed() const { return mesh_vertex_source_validation_passed_; }
 
   /// Export meshlets under @p export_path.
+  /// When @ref Settings::export_gpu_attributes_json is set and @p export_mode is Combined, also writes
+  /// an EcoSysLab-compatible `.json` sidecar next to the OBJ.
   /// @param export_mode How meshlets are grouped into output file(s).
   /// @param export_path Output directory for @c PerSegment/@c Raw; output OBJ path for @c Combined.
   /// @param max_exports Maximum meshlets to export; default unlimited.

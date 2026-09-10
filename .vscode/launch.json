@@ -35,7 +35,7 @@
       //   --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)
       //   --store-mesh-metadata     Store JSON vertex/face metadata on meshlets
       //   --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)
-      //   --section-shading         Alternate light/dark materials by even/odd kinetic section
+      //   --section-shading         Cycle brown boundary materials through 5 non-green section colors
       //   --start <section>         Bootstrap/start kinetic meshing at this section index (default: 0)
       //   --end <section>           Exclusive stop/finalize time (default: tree height).
       //                             Section events on [start, end); skip events with t >= end
@@ -114,6 +114,7 @@
         "input_examples/test_oak_10.txt",
         "--export-mode",
         "combined",
+        "--export-gpu-attributes",
         "--validate",
         "--section-shading",
         "--cutoff",

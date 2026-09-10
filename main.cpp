@@ -496,7 +496,9 @@ static void print_usage(const char* program_name)
             << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
             << "  --store-mesh-metadata     Store JSON vertex/face metadata on meshlets\n"
             << "  --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)\n"
-            << "  --section-shading         Alternate light/dark green and brown materials by even/odd section\n"
+            << "  --export-gpu-attributes   With --export-mode combined: also write EcoSysLab-style .json sidecar\n"
+            << "                            (distances/profile/root; fungus fields defaulted)\n"
+            << "  --section-shading         Cycle brown boundary materials through 5 non-green section colors\n"
             << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
             << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
             << "                            Section events run on [start, end); events with t >= end are skipped.\n"
@@ -537,7 +539,7 @@ static void print_usage(const char* program_name)
             << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
             << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
             << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
-            << "  " << program_name << " --export-mode combined --mesh strandtree.txt combined.obj\n";
+            << "  " << program_name << " --export-mode combined --export-gpu-attributes --mesh strandtree.txt combined.obj\n";
 }
 
 static const std::vector<std::string>& known_cli_flags()
@@ -556,6 +558,7 @@ static const std::vector<std::string>& known_cli_flags()
     "--validate-log",
     "--store-mesh-metadata",
     "--no-store-mesh-metadata",
+    "--export-gpu-attributes",
     "--section-shading",
     "--start",
     "--end",
@@ -677,9 +680,9 @@ static std::filesystem::path mesh_export_base_directory(const std::optional<std:
 static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, bool store_mesh_metadata,
-  const std::string& validate_log_path, bool alternate_section_shading, size_t start_section,
-  std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end, double alpha_cutoff,
-  bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
+  bool export_gpu_attributes_json, const std::string& validate_log_path, bool alternate_section_shading,
+  size_t start_section, std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end,
+  double alpha_cutoff, bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
   const std::optional<std::filesystem::path>& visual_debug_output_root,
   const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
   bool check_sites_inside_convex_hull)
@@ -719,6 +722,7 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().transform_mesh_at_construction = transform_mesh_at_construction;
     mesher.getSettings().validate_mesh_vertex_sources = validate_mesh_vertex_sources;
     mesher.getSettings().store_mesh_metadata = store_mesh_metadata;
+    mesher.getSettings().export_gpu_attributes_json = export_gpu_attributes_json;
     mesher.getSettings().validate_mesh_vertex_sources_log_path = validate_log_path;
     mesher.getSettings().alternate_section_shading = alternate_section_shading;
     mesher.getSettings().start_section = start_section;
@@ -817,8 +821,14 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
         : export_base / "combined_mesh.obj";
       std::cout << "Exporting combined mesh to: " << combined_export_path.string()
                 << (profile_space_export ? " (with _untransformed suffix)" : "") << " (" << space_label << ", "
-                << transform_label << ")" << std::endl;
+                << transform_label << ")"
+                << (export_gpu_attributes_json ? " + GPU attribute JSON sidecar" : "") << std::endl;
       mesher.exportMeshlets(kinDS::MeshletExportMode::Combined, combined_export_path, export_transform);
+    }
+    else if (export_gpu_attributes_json)
+    {
+      std::cout << "Note: --export-gpu-attributes only applies with --export-mode combined; skipping JSON sidecar."
+                << std::endl;
     }
 
     // Export boundary mesh
@@ -912,6 +922,7 @@ int main(int argc, char* argv[])
   bool mesh_transform_at_construction = true;
   bool mesh_validate_vertex_sources = false;
   bool mesh_store_mesh_metadata = kinDS::TreeMesher::Settings {}.store_mesh_metadata;
+  bool mesh_export_gpu_attributes_json = kinDS::TreeMesher::Settings {}.export_gpu_attributes_json;
   std::string mesh_validate_log_path = kinDS::Validator::defaultLogFilePath();
   bool mesh_alternate_section_shading = false;
   size_t mesh_start_section = 0;
@@ -1050,6 +1061,11 @@ int main(int argc, char* argv[])
     else if (arg == "--no-store-mesh-metadata")
     {
       mesh_store_mesh_metadata = false;
+      ++arg_idx;
+    }
+    else if (arg == "--export-gpu-attributes")
+    {
+      mesh_export_gpu_attributes_json = true;
       ++arg_idx;
     }
     else if (arg == "--validate-log")
@@ -1371,10 +1387,11 @@ int main(int argc, char* argv[])
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
-          mesh_validate_log_path, mesh_alternate_section_shading, mesh_start_section, mesh_end_section,
-          mesh_cap_at_start, mesh_cap_at_end, mesh_alpha_cutoff, mesh_visual_debug, mesh_error_files,
-          mesh_visual_debug_separate_pending_splits, mesh_visual_debug_output_root, mesh_visual_debug_time_lower,
-          mesh_visual_debug_time_upper, mesh_check_sites_inside_convex_hull))
+          mesh_export_gpu_attributes_json, mesh_validate_log_path, mesh_alternate_section_shading,
+          mesh_start_section, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end, mesh_alpha_cutoff,
+          mesh_visual_debug, mesh_error_files, mesh_visual_debug_separate_pending_splits,
+          mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
+          mesh_check_sites_inside_convex_hull))
     {
       return 1;
     }

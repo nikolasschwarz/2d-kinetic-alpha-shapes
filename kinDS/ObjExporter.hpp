@@ -54,6 +54,14 @@ struct ObjExportGpuAttributes
   }
 };
 
+/// Optional segment-level axis attrs broadcast to every vertex (EcoSysLab GpuSegment equivalents).
+struct ObjExportSegmentAxis
+{
+  glm::dvec3 position0 { 0.0 };
+  glm::dvec3 direction0 { 0.0, 1.0, 0.0 };
+  double root_distance = 0.0;
+};
+
 struct ObjWriteOptions
 {
   double uv_height_factor = 1.0;
@@ -338,18 +346,14 @@ class ObjExporter
     return kineticSectionIndexFromMinTime(time_range->first);
   }
 
-  static bool kineticSectionIsEven(size_t section_index) { return (section_index % 2) == 0; }
+  static constexpr size_t kSectionShadingColorCount = 5;
 
   static std::string sectionShadedMaterialName(const std::string& base_material_name, size_t section_index)
   {
-    const bool even_section = kineticSectionIsEven(section_index);
-    if (base_material_name == "green")
-    {
-      return even_section ? "green_light" : "green_dark";
-    }
+    // Boundary (brown) cycles through five non-green section colors. Green stays green — reserved for interior.
     if (base_material_name == "brown")
     {
-      return even_section ? "brown_light" : "brown_dark";
+      return "brown_s" + std::to_string(section_index % kSectionShadingColorCount);
     }
     return base_material_name;
   }
@@ -511,28 +515,35 @@ class ObjExporter
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    // Section-alternating shades (even sections = light, odd sections = dark).
-    file << "newmtl green_light\n";
-    file << "Ka 0.6 0.6 0.1\n";
-    file << "Kd 0.9 0.85 0.2\n";
+    // Section shading for boundary (brown): five mutually distinct non-green hues (green stays for interior).
+    // 0 terracotta, 1 steel blue, 2 plum, 3 amber, 4 burgundy
+    file << "newmtl brown_s0\n";
+    file << "Ka 0.28 0.14 0.07\n";
+    file << "Kd 0.55 0.28 0.14\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    file << "newmtl green_dark\n";
-    file << "Ka 0.35 0.35 0.05\n";
-    file << "Kd 0.55 0.5 0.1\n";
+    file << "newmtl brown_s1\n";
+    file << "Ka 0.12 0.20 0.35\n";
+    file << "Kd 0.25 0.42 0.72\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    file << "newmtl brown_light\n";
-    file << "Ka 0.2 0.1 0.05\n";
-    file << "Kd 0.4 0.25 0.1\n";
+    file << "newmtl brown_s2\n";
+    file << "Ka 0.32 0.10 0.28\n";
+    file << "Kd 0.68 0.22 0.58\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    file << "newmtl brown_dark\n";
-    file << "Ka 0.1 0.05 0.02\n";
-    file << "Kd 0.22 0.12 0.05\n";
+    file << "newmtl brown_s3\n";
+    file << "Ka 0.42 0.22 0.05\n";
+    file << "Kd 0.88 0.48 0.12\n";
+    file << "Ks 0.0 0.0 0.0\n";
+    file << "d 1.0\n\n";
+
+    file << "newmtl brown_s4\n";
+    file << "Ka 0.22 0.06 0.10\n";
+    file << "Kd 0.48 0.14 0.24\n";
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
@@ -608,6 +619,107 @@ class ObjExporter
   }
 
  public:
+  /// Append @p src onto @p dst (EcoSysLab MeshletObjExport::AppendGpuAttributes).
+  static void appendGpuAttributes(ObjExportGpuAttributes& dst, const ObjExportGpuAttributes& src)
+  {
+    auto append = [](auto& d, const auto& s) { d.insert(d.end(), s.begin(), s.end()); };
+    append(dst.color, src.color);
+    append(dst.boundary_distance, src.boundary_distance);
+    append(dst.profile_position, src.profile_position);
+    append(dst.profile_polar_coordinate, src.profile_polar_coordinate);
+    append(dst.HC, src.HC);
+    append(dst.HL, src.HL);
+    append(dst.RW, src.RW);
+    append(dst.RB, src.RB);
+    append(dst.moisture, src.moisture);
+    append(dst.position0, src.position0);
+    append(dst.direction0, src.direction0);
+    append(dst.root_distance, src.root_distance);
+    append(dst.uv_3, src.uv_3);
+    append(dst.has_neighbor, src.has_neighbor);
+  }
+
+  /// Build EcoSysLab-compatible GPU attrs from a standalone kinDS meshlet.
+  /// Fungus fields default to healthy wood (HC=HL=moisture=1, RW=RB=0, white color).
+  /// Distance/profile come from triangulation-plane XY + semantic UV; @p texture_diameter recovers
+  /// normalized distance-to-boundary (1 at center, 0 at bark) from interior disk UVs.
+  static ObjExportGpuAttributes buildStandaloneGpuAttributes(const VoronoiMesh& mesh,
+    const std::vector<int>& face_neighbors = {}, const std::optional<ObjExportSegmentAxis>& segment_axis = std::nullopt,
+    double texture_diameter = 0.9, double uv_height_factor = 1.0)
+  {
+    ObjExportGpuAttributes attrs;
+    const size_t n = mesh.getVertexCount();
+    const size_t tri_count = mesh.getTriangleCount();
+    attrs.color.assign(n, glm::dvec4(1.0, 1.0, 1.0, 1.0));
+    attrs.boundary_distance.assign(n, 0.0);
+    attrs.profile_position.resize(n);
+    attrs.profile_polar_coordinate.resize(n);
+    attrs.HC.assign(n, 1.0);
+    attrs.HL.assign(n, 1.0);
+    attrs.RW.assign(n, 0.0);
+    attrs.RB.assign(n, 0.0);
+    attrs.moisture.assign(n, 1.0);
+    attrs.position0.assign(n, segment_axis.has_value() ? segment_axis->position0 : glm::dvec3(0.0));
+    attrs.direction0.assign(n, segment_axis.has_value() ? segment_axis->direction0 : glm::dvec3(0.0, 1.0, 0.0));
+    attrs.root_distance.assign(n, segment_axis.has_value() ? segment_axis->root_distance : 0.0);
+    attrs.uv_3.assign(n, 0.0);
+    attrs.has_neighbor.assign(tri_count, false);
+
+    const double inv_texture_radius = (texture_diameter > 1e-12) ? (2.0 / texture_diameter) : 0.0;
+
+    for (size_t i = 0; i < n; ++i)
+    {
+      const glm::dvec2 profile = mesh.triangulationPlaneXY(i);
+      attrs.profile_position[i] = profile;
+      const double r = glm::length(profile);
+      attrs.profile_polar_coordinate[i] = glm::dvec2(r, std::atan2(profile.y, profile.x));
+
+      if (const std::optional<glm::dvec3> semantic = mesh.vertexSemanticUv(i))
+      {
+        const glm::dvec2 offset(semantic->x - 0.5, semantic->y - 0.5);
+        const double relative = inv_texture_radius > 0.0 ? (glm::length(offset) * inv_texture_radius) : 0.0;
+        // Normalized distance to bark (EcoSysLab-style: larger near the pith).
+        attrs.boundary_distance[i] = std::max(0.0, 1.0 - relative);
+        attrs.uv_3[i] = semantic->z * uv_height_factor;
+      }
+      else if (inv_texture_radius > 0.0)
+      {
+        // Fallback when semantic UV is missing: treat profile radius like disk UV distance from center.
+        const double relative = std::min(1.0, r * inv_texture_radius);
+        attrs.boundary_distance[i] = std::max(0.0, 1.0 - relative);
+      }
+    }
+
+    const auto& material_ids = mesh.getMaterialIDs();
+    const auto& triangles = mesh.getTriangles();
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      const int neighbor = (tri < face_neighbors.size()) ? face_neighbors[tri] : -1;
+      attrs.has_neighbor[tri] = neighbor >= 0;
+      const bool is_bark = (neighbor == -2);
+      for (size_t c = 0; c < 3; ++c)
+      {
+        const size_t corner = 3 * tri + c;
+        const size_t vi = triangles[corner];
+        if (vi >= n)
+        {
+          continue;
+        }
+        if (!mesh.hasValidUVIndex(corner))
+        {
+          continue;
+        }
+        const glm::dvec3 uv = mesh.getUV(corner);
+        const int material = (tri < material_ids.size()) ? material_ids[tri] : -1;
+        // brown / bark material is index 1 in MeshletExportMaterialNames; neighbor -2 is boundary strip.
+        const bool bark_uv = is_bark || material == 1;
+        attrs.uv_3[vi] = (bark_uv ? uv.y : uv.z) * uv_height_factor;
+      }
+    }
+
+    return attrs;
+  }
+
   /// Legacy JSON with a single `boundary_distance` array.
   static void writeJson(const std::filesystem::path& json_path, const std::vector<float>& boundary_distances_by_vertex)
   {

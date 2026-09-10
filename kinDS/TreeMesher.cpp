@@ -8,8 +8,10 @@
 #include "Validator.hpp"
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <execution>
 #include <filesystem>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -123,19 +125,22 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     ? std::min(max_exports.value(), meshlets_to_export.size())
     : meshlets_to_export.size();
 
+  auto meshlet_strand_id = [&](size_t i) -> size_t
+  {
+    if (!mesh_builder)
+    {
+      throw std::runtime_error("exportMeshlets: strand lookup requires a live meshing run.");
+    }
+    return export_mode == MeshletExportMode::Raw ? mesh_builder->strandIdForRawMeshlet(i)
+                                                 : mesh_builder->strandIdForSegment(i);
+  };
+
   auto meshlet_for_export = [&](size_t i) -> VoronoiMesh
   {
     VoronoiMesh mesh = meshlets_to_export[i];
     if (apply_export_transform)
     {
-      if (!mesh_builder)
-      {
-        throw std::runtime_error("exportMeshlets: export transform requires a live meshing run.");
-      }
-      const size_t strand_id = export_mode == MeshletExportMode::Raw
-        ? mesh_builder->strandIdForRawMeshlet(i)
-        : mesh_builder->strandIdForSegment(i);
-      transformToWorldSpace(mesh, strand_id);
+      transformToWorldSpace(mesh, meshlet_strand_id(i));
     }
     return mesh;
   };
@@ -201,8 +206,84 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     std::filesystem::create_directories(obj_path.parent_path());
   }
 
+  const bool export_gpu_json = settings.export_gpu_attributes_json;
+  const double texture_diameter = mesh_builder ? mesh_builder->getTextureDiameter() : 0.9;
+  const double uv_height_factor = mesh_builder ? mesh_builder->getUvHeightFactor() : 1.0;
+
+  auto segment_axis_for_meshlet = [&](size_t i, const VoronoiMesh& mesh) -> ObjExportSegmentAxis
+  {
+    ObjExportSegmentAxis axis;
+    if (!mesh_builder)
+    {
+      return axis;
+    }
+
+    const size_t strand_id = meshlet_strand_id(i);
+    double t_min = std::numeric_limits<double>::infinity();
+    double t_max = -std::numeric_limits<double>::infinity();
+    for (size_t vi = 0; vi < mesh.getVertexCount(); ++vi)
+    {
+      const double t = mesh.vertexKineticTime(vi);
+      if (!std::isfinite(t))
+      {
+        continue;
+      }
+      t_min = std::min(t_min, t);
+      t_max = std::max(t_max, t);
+    }
+    if (!std::isfinite(t_min) || !std::isfinite(t_max))
+    {
+      const double ct = mesh.getCreationKineticTime();
+      if (std::isfinite(ct))
+      {
+        t_min = ct;
+        t_max = ct;
+      }
+      else
+      {
+        t_min = 0.0;
+        t_max = 0.0;
+      }
+    }
+    if (t_max <= t_min)
+    {
+      t_max = t_min + 1e-3;
+    }
+
+    const double t_mid = 0.5 * (t_min + t_max);
+    axis.root_distance = t_mid;
+
+    auto point_at = [&](double t) -> glm::dvec3
+    {
+      if (untransformed_export)
+      {
+        const glm::dvec2 p = strand_tree.evaluate(strand_id, t);
+        return glm::dvec3(p.x, p.y, t);
+      }
+      return strand_tree.getPointInObjectSpace(strand_id, t);
+    };
+
+    const glm::dvec3 p0 = point_at(t_min);
+    const glm::dvec3 p1 = point_at(t_max);
+    axis.position0 = 0.5 * (p0 + p1);
+    glm::dvec3 dir = p1 - p0;
+    const double len = glm::length(dir);
+    axis.direction0 = len > 1e-12 ? (dir / len) : glm::dvec3(0.0, 1.0, 0.0);
+    return axis;
+  };
+
+  auto face_neighbors_for_meshlet = [&](size_t i) -> std::vector<int>
+  {
+    if (i < meshing_neighbor_indices.size())
+    {
+      return meshing_neighbor_indices[i];
+    }
+    return {};
+  };
+
   kinDS::VoronoiMesh combined_mesh;
   bool combined_mesh_initialized = false;
+  ObjExportGpuAttributes combined_attrs;
   // Empty meshlets (e.g. unused segments) keep default NoNormals; lock combined mode from the first
   // meshlet that actually has geometry so the first += does not mismatch.
   NormalMode combined_normal_mode = NormalMode::NoNormals;
@@ -239,6 +320,12 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
 
     if (mesh_has_geometry)
     {
+      if (export_gpu_json)
+      {
+        ObjExporter::appendGpuAttributes(combined_attrs,
+          ObjExporter::buildStandaloneGpuAttributes(mesh, face_neighbors_for_meshlet(i),
+            segment_axis_for_meshlet(i, mesh), texture_diameter, uv_height_factor));
+      }
       // operator+= merges the rhs group_offsets, which would shift/absorb prior meshlet groups.
       mesh.setGroupOffsets({});
       mesh.setGroupNames({});
@@ -252,12 +339,24 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
     return;
   }
 
-  kinDS::ObjExporter::writeMesh(combined_mesh, obj_path, 1.0, 1.0, {}, include_metadata,
-    Validator::meshUsesValidationErrorMaterial(combined_mesh), settings.alternate_section_shading);
+  {
+    ObjWriteOptions options;
+    options.uv_height_factor = 1.0;
+    options.uv_circum_factor = 1.0;
+    options.include_metadata = include_metadata;
+    options.include_vertex_colors = Validator::meshUsesValidationErrorMaterial(combined_mesh);
+    options.alternate_section_shading = settings.alternate_section_shading;
+    options.write_obj_groups = true;
+    if (export_gpu_json && !combined_attrs.empty())
+    {
+      options.gpu_attributes = std::move(combined_attrs);
+    }
+    kinDS::ObjExporter::writeMesh(combined_mesh, obj_path, options);
+  }
   const size_t group_count = combined_mesh.getGroupOffsets().size();
   KINDS_DEBUG("Exported combined mesh (" << group_count << " group(s) from " << export_count
                                        << " meshlet(s), mode=combined, transformed=" << apply_export_transform
-                                       << ") to " << obj_path.string() << ".");
+                                       << ", gpu_json=" << export_gpu_json << ") to " << obj_path.string() << ".");
 }
 
 TreeMesher::BoundaryTruncateResult TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
