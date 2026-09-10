@@ -27,6 +27,7 @@
 #include <glm/geometric.hpp>
 #include <limits>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -4481,10 +4482,55 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
       }
       if (branch_trajs.getBranchIndex(static_cast<size_t>(vertex), section) != input_branch_id)
       {
-        throw std::runtime_error("Finished input branch " + std::to_string(input_branch_id)
-          + " still shares a live triangle with input branch "
-          + std::to_string(branch_trajs.getBranchIndex(static_cast<size_t>(vertex), section)) + " at section "
-          + std::to_string(section));
+        const size_t other_input = branch_trajs.getBranchIndex(static_cast<size_t>(vertex), section);
+        std::ostringstream detail;
+        detail << "Finished input branch " << input_branch_id
+               << " still shares a live triangle with input branch " << other_input << " at section " << section
+               << " face=" << face_id << " runtime_branch=" << runtime_branch_id.value() << " verts=[";
+        for (size_t vi = 0; vi < 3; ++vi)
+        {
+          if (vi)
+          {
+            detail << ',';
+          }
+          const int v = tri_vertices[vi];
+          if (v < 0)
+          {
+            detail << v;
+            continue;
+          }
+          const size_t vs = static_cast<size_t>(v);
+          detail << v << "{in=" << branch_trajs.getBranchIndex(vs, section)
+                 << ",rt=" << (vs < runtime_branch_data_.branch_map.size() ? runtime_branch_data_.branch_map[vs]
+                                                                          : RuntimeBranchData::no_branch)
+                 << ",sup=" << branch_trajs.getSupportPoints(vs).size() << "}";
+        }
+        detail << "] pending_splits=" << pending_branch_splits_.by_parent_.size() << " runtime_inputs=[";
+        {
+          std::set<size_t> runtime_inputs;
+          if (runtime_branch_id.value() < runtime_branch_data_.branches.size())
+          {
+            for (size_t sid : runtime_branch_data_.branches[runtime_branch_id.value()])
+            {
+              if (!isDummyBoundary(sid))
+              {
+                runtime_inputs.insert(branch_trajs.getBranchIndex(sid, section));
+              }
+            }
+          }
+          bool first = true;
+          for (size_t bid : runtime_inputs)
+          {
+            if (!first)
+            {
+              detail << ',';
+            }
+            first = false;
+            detail << bid;
+          }
+        }
+        detail << "]";
+        throw std::runtime_error(detail.str());
       }
     }
   }
@@ -6767,6 +6813,11 @@ std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(const std::array
   return checkForSplit(tri_vertices, face_inside, t);
 }
 
+std::vector<std::vector<size_t>> KineticDelaunay::checkForSplitOnComponent(size_t parent_component_id, double t) const
+{
+  return checkForSplitOnComponent(parent_component_id, face_inside, t, std::nullopt);
+}
+
 std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
   const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state, double t) const
 {
@@ -6780,7 +6831,12 @@ std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
   {
     return {};
   }
-  const size_t parent_component_id = component_data.component_map[seed0];
+  return checkForSplitOnComponent(component_data.component_map[seed0], inside_state, t, seed0);
+}
+
+std::vector<std::vector<size_t>> KineticDelaunay::checkForSplitOnComponent(size_t parent_component_id,
+  const std::vector<bool>& inside_state, double t, std::optional<size_t> preferred_retained_seed) const
+{
   if (parent_component_id >= component_data.components.size())
   {
     return {};
@@ -6917,16 +6973,20 @@ std::vector<std::vector<size_t>> KineticDelaunay::checkForSplit(
     return {};
   }
 
-  // Prefer the piece that contains the radius-triangle seed as components[0] (retained parent id).
-  for (size_t i = 0; i < components.size(); ++i)
+  // Prefer the piece that contains the preferred seed (radius triangle vertex) as components[0].
+  if (preferred_retained_seed.has_value())
   {
-    if (std::find(components[i].begin(), components[i].end(), seed0) != components[i].end())
+    const size_t seed0 = *preferred_retained_seed;
+    for (size_t i = 0; i < components.size(); ++i)
     {
-      if (i != 0)
+      if (std::find(components[i].begin(), components[i].end(), seed0) != components[i].end())
       {
-        std::swap(components[0], components[i]);
+        if (i != 0)
+        {
+          std::swap(components[0], components[i]);
+        }
+        break;
       }
-      break;
     }
   }
 

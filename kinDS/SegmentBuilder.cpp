@@ -10204,6 +10204,33 @@ void kinDS::SegmentBuilder::splitComponent(
   kin_del.maybeScheduleSeparationOrApplyPendingSplit(component_id, t);
 }
 
+void SegmentBuilder::maybeInduceSplitsAtSection(double t)
+{
+  // Same criterion as after radius events: isolated input branches within a kinetic component.
+  // When that already holds at a section boundary, start the usual infinitesimal / SeparationEvent path.
+  const size_t component_count = kin_del.component_data.components.size();
+  for (size_t component_id = 0; component_id < component_count; ++component_id)
+  {
+    if (kin_del.component_data.components[component_id].empty())
+    {
+      continue;
+    }
+    if (kin_del.getPendingBranchSplit(component_id).has_value())
+    {
+      continue;
+    }
+
+    std::vector<std::vector<size_t>> split = kin_del.checkForSplitOnComponent(component_id, t);
+    if (split.size() < 2)
+    {
+      continue;
+    }
+
+    KINDS_INFO("Section-induced split: component=" << component_id << " pieces=" << split.size() << " t=" << t);
+    splitComponent(component_id, split, t);
+  }
+}
+
 void SegmentBuilder::init()
 {
   configureMeshletStorage(boundary_mesh);

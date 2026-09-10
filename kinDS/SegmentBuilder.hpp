@@ -1334,5 +1334,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);
 
   void splitComponent(size_t component_id, const std::vector<std::vector<size_t>>& new_components, double t);
+
+  /// At section events: if a kinetic component already satisfies the usual input-strand isolation split
+  /// check, note/schedule the infinitesimal separation path (same as after a radius @ref checkForSplit).
+  void maybeInduceSplitsAtSection(double t);
 };
 } // namespace kinDS

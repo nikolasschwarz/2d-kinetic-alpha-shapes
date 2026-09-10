@@ -363,7 +363,7 @@ static MeshCGAL<Origin> voronoiMeshToCgalMesh(const VoronoiMesh& input_mesh,
     if (output_mesh.mesh.is_valid(face_index))
     {
       // Always record origin so hole-fill defaults (-1) stay distinguishable from real faces.
-      output_mesh.fidx[face_index] = { mesh_id, i / 3 };
+        output_mesh.fidx[face_index] = { mesh_id, i / 3 };
     }
     else
     {
@@ -1067,8 +1067,8 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const Voron
         logSampleBoundaryEdges(input_mesh.mesh, meshlet_suffix());
       }
       mark_failed("Intersection failed - " + readiness.failureReason() + " [" + readiness.summary() + "]");
-      return ret_val; // empty mesh
-    }
+    return ret_val; // empty mesh
+  }
 
     KINDS_WARNING("Repair succeeded for intersection (" << readiness.summary() << ")." << meshlet_suffix());
   }
@@ -1175,7 +1175,7 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const Voron
       }
       else
       {
-        interpolateProperties(boundary_mesh_voronoi, intersection_mesh, origin.face_id, tri);
+      interpolateProperties(boundary_mesh_voronoi, intersection_mesh, origin.face_id, tri);
       }
     }
     else if (origin.mesh_index < 0)

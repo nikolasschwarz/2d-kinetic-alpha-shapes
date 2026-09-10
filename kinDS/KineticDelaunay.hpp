@@ -890,6 +890,11 @@ class KineticDelaunay
   /// Same split check using an explicit face-inside state, allowing callbacks to predict a radius event's target state.
   std::vector<std::vector<size_t>> checkForSplit(
     const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state, double t) const;
+  /// Usual @ref checkForSplit criterion on a kinetic component (no radius-triangle seed required).
+  std::vector<std::vector<size_t>> checkForSplitOnComponent(size_t parent_component_id, double t) const;
+  std::vector<std::vector<size_t>> checkForSplitOnComponent(size_t parent_component_id,
+    const std::vector<bool>& inside_state, double t,
+    std::optional<size_t> preferred_retained_seed = std::nullopt) const;
 
   std::vector<std::vector<size_t>> extractConnectedComponents() const;
 
