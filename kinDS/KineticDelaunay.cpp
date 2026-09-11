@@ -4229,8 +4229,12 @@ void KineticDelaunay::updateRuntimeBranchMapFromInputBranches(double t)
 
   for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
   {
-    if (isDummyBoundary(strand_id))
+    if (isDummyBoundary(strand_id) || !isStrandLiveInGraph(strand_id))
     {
+      if (strand_id < runtime_branch_data_.branch_map.size())
+      {
+        runtime_branch_data_.branch_map[strand_id] = no_runtime_branch;
+      }
       continue;
     }
 
@@ -4605,6 +4609,11 @@ std::vector<size_t> KineticDelaunay::inputBranchesFinishingAtSection(double t) c
     {
       throw std::runtime_error("Input branch " + std::to_string(input_branch_id)
         + " has inconsistent strand heights at section " + std::to_string(section));
+    }
+
+    if (!isTrackedInputBranchAtSection(section, input_branch_id))
+    {
+      continue;
     }
 
     finished.push_back(input_branch_id);
@@ -5578,6 +5587,7 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
   const double bootstrap_t = static_cast<double>(bootstrap_section);
 
   const size_t vertex_count = branch_trajs.getPoints().size();
+  tracked_strand_.assign(vertex_count, false);
   // Bootstrap with one HalfEdgeDelaunayGraph per input branch at the start height, then combine into a
   // single graph whose vertex indices remain global strand ids.
   const auto& branches_at_bootstrap = branch_trajs.getStrandBranchesByHeight(bootstrap_section);
@@ -5609,8 +5619,17 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
     local_to_global.push_back(std::move(strand_ids));
   };
 
-  for (const auto& branch_strands : branches_at_bootstrap)
+  auto load_bootstrap_branch = [&](size_t input_branch_id)
   {
+    if (input_branch_id >= branches_at_bootstrap.size())
+    {
+      return false;
+    }
+    const auto& branch_strands = branches_at_bootstrap[input_branch_id];
+    if (branch_strands.empty())
+    {
+      return false;
+    }
     std::vector<size_t> component;
     component.reserve(branch_strands.size());
     for (size_t strand_id : branch_strands)
@@ -5620,7 +5639,55 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
         component.push_back(strand_id);
       }
     }
+    if (component.size() < 3)
+    {
+      return false;
+    }
+    for (size_t strand_id : component)
+    {
+      if (strand_id < tracked_strand_.size())
+      {
+        tracked_strand_[strand_id] = true;
+      }
+    }
     append_branch_graph(std::move(component));
+    return true;
+  };
+
+  if (start_input_branches_.has_value())
+  {
+    std::unordered_set<size_t> requested_seen;
+    std::vector<size_t> ignored;
+    ignored.reserve(start_input_branches_->size());
+    for (size_t input_branch_id : *start_input_branches_)
+    {
+      if (!requested_seen.insert(input_branch_id).second)
+      {
+        continue; // duplicate id in --start-branches list
+      }
+      if (!load_bootstrap_branch(input_branch_id))
+      {
+        ignored.push_back(input_branch_id);
+      }
+    }
+    if (!ignored.empty())
+    {
+      std::ostringstream oss;
+      oss << "Ignoring start-branch id(s) absent (or not triangulable) at start_section=" << bootstrap_section
+          << ":";
+      for (size_t i = 0; i < ignored.size(); ++i)
+      {
+        oss << (i == 0 ? " " : ", ") << ignored[i];
+      }
+      KINDS_WARNING(oss.str());
+    }
+  }
+  else
+  {
+    for (size_t input_branch_id = 0; input_branch_id < branches_at_bootstrap.size(); ++input_branch_id)
+    {
+      load_bootstrap_branch(input_branch_id);
+    }
   }
   if (add_dummy_boundary)
   {
@@ -5730,6 +5797,10 @@ void KineticDelaunay::enqueueScheduledSubdivisionEvents()
   for (const auto& strand_and_t : subdivision_schedule_)
   {
     if (strand_and_t.second < min_t || !(strand_and_t.second < max_t))
+    {
+      continue;
+    }
+    if (!isTrackedStrand(strand_and_t.first))
     {
       continue;
     }
@@ -6660,6 +6731,45 @@ void KineticDelaunay::setSectionRange(size_t start_section, std::optional<size_t
 {
   start_section_ = start_section;
   end_section_ = end_section;
+}
+
+void KineticDelaunay::setStartInputBranches(std::optional<std::vector<size_t>> branch_ids)
+{
+  start_input_branches_ = std::move(branch_ids);
+}
+
+bool KineticDelaunay::isTrackedStrand(size_t strand_id) const
+{
+  if (tracked_strand_.empty())
+  {
+    return !isDummyBoundary(strand_id);
+  }
+  return strand_id < tracked_strand_.size() && tracked_strand_[strand_id];
+}
+
+bool KineticDelaunay::isTrackedInputBranchAtSection(size_t section, size_t input_branch_id) const
+{
+  if (tracked_strand_.empty())
+  {
+    return true;
+  }
+  if (section >= branch_trajs.getStrandsByBranchId().size())
+  {
+    return false;
+  }
+  const auto& branches_at_section = branch_trajs.getStrandBranchesByHeight(section);
+  if (input_branch_id >= branches_at_section.size())
+  {
+    return false;
+  }
+  for (size_t strand_id : branches_at_section[input_branch_id])
+  {
+    if (!isDummyBoundary(strand_id) && isTrackedStrand(strand_id))
+    {
+      return true;
+    }
+  }
+  return false;
 }
 
 size_t KineticDelaunay::getEndSection() const

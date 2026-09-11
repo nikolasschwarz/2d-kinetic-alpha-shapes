@@ -238,6 +238,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
   std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
+  /// Runtime branch id for each meshing segment / combined meshlet index, recorded when that segment's
+  /// meshlets are finished (section event, branch tip, subdivision, finalize). @c no_branch until then.
+  std::vector<size_t> segment_runtime_branch_;
   // Pairs of segments and their corresponding mesh data
   std::vector<MeshStructure::SegmentMeshPair> segment_mesh_pairs;
   std::vector<MeshStructure::SegmentMeshPair> intersection_segment_mesh_pairs;
@@ -1329,6 +1332,22 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t strandIdForSegment(size_t segment_id) const;
   /// Strand used to transform a raw (unmerged) meshlet at @p meshlet_index.
   size_t strandIdForRawMeshlet(size_t meshlet_index) const;
+
+  /// Snapshot @p strand_id's current runtime branch onto its current (back) meshing segment.
+  /// Call while the runtime-branch map still holds a live assignment (before retirement).
+  void recordRuntimeBranchForStrandCurrentSegment(size_t strand_id);
+  /// Snapshot runtime branch for every strand that currently has a meshing segment.
+  void recordRuntimeBranchesForActiveSegments();
+  /// Runtime branch recorded for meshing segment / combined meshlet @p segment_id, or @c no_branch.
+  size_t runtimeBranchForSegment(size_t segment_id) const;
+  /// Runtime branch for a raw (unmerged) strip meshlet via its owning segment endpoint.
+  size_t runtimeBranchForRawMeshlet(size_t meshlet_index) const;
+
+  /// Max finite kinetic time among mesh vertices (metadata @c t / stored kinetic times).
+  static std::optional<double> maxMeshKineticTime(const VoronoiMesh& mesh);
+  /// OBJ object-name suffix @c _end_t_…_input_branch_…_runtime_branch_… using @p runtime_branch
+  /// (from @ref runtimeBranchForSegment) and input branch at @p end_t.
+  std::string objObjectBranchSuffix(size_t strand_id, double end_t, size_t runtime_branch) const;
 
   std::vector<glm::dvec3> computeClampedVoronoiVertices(
     size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);

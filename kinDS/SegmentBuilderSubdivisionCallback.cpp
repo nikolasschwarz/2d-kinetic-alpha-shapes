@@ -40,6 +40,12 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
   const size_t strand_id = sub->strand_id;
   const double t = sub->occurrence_time;
 
+  if (!segment_builder_.kin_del.isTrackedStrand(strand_id)
+    || !segment_builder_.kin_del.isStrandLiveInGraph(strand_id))
+  {
+    return;
+  }
+
   if (segment_builder_.visual_debug)
   {
     auto& debug_graph = segment_builder_.kin_del.getGraph();
@@ -156,8 +162,12 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
   segment_mesh_pair.segment_index0 = segment_builder_.strand_to_segment_indices[strand_id].back();
   segment_mesh_pair.segment_index1 = new_segment_id;
 
+  // Old segment is finished at this subdivision; record runtime branch before allocating the next.
+  segment_builder_.recordRuntimeBranchForStrandCurrentSegment(strand_id);
+
   MeshStructure::SegmentProperties properties;
   segment_builder_.segment_properties.push_back(properties);
+  segment_builder_.segment_runtime_branch_.push_back(KineticDelaunay::RuntimeBranchData::no_branch);
   segment_builder_.strand_to_segment_indices[strand_id].push_back(new_segment_id);
 
   // Start new regular Voronoi-edge strips and extend adjacent inside strips.

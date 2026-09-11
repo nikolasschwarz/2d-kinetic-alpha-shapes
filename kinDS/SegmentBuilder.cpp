@@ -9900,6 +9900,7 @@ void kinDS::SegmentBuilder::createClosingCapForStrand(size_t strand_id, double t
   MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[closing_mesh_index];
   segment_mesh_pair.segment_index0 = static_cast<int>(strand_to_segment_indices[strand_id].back());
   segment_mesh_pair.segment_index1 = -1;
+  recordRuntimeBranchForStrandCurrentSegment(strand_id);
 }
 
 void kinDS::SegmentBuilder::createClosingCapsForInputBranchFinishingAtSection(double t, size_t input_branch_id)
@@ -10254,12 +10255,19 @@ void SegmentBuilder::init()
   // origin
   size_t half_edge_count = graph.halfEdgeSlotCount();
 
-  // initialize segment mesh properties for each strand
+  // initialize segment mesh properties for each tracked live strand
   for (size_t strand_id = 0; strand_id < strand_count; ++strand_id)
   {
+    if (kin_del.isDummyBoundary(strand_id) || !kin_del.isTrackedStrand(strand_id)
+      || !kin_del.isStrandLiveInGraph(strand_id))
+    {
+      continue;
+    }
+
     size_t new_segment_id = segment_properties.size();
     MeshStructure::SegmentProperties properties;
     segment_properties.push_back(properties);
+    segment_runtime_branch_.push_back(KineticDelaunay::RuntimeBranchData::no_branch);
     strand_to_segment_indices[strand_id].push_back(new_segment_id);
 
     size_t component_index = kin_del.component_data.component_map[strand_id];
@@ -10360,6 +10368,10 @@ void SegmentBuilder::init()
   const auto& branches_at_section = kin_del.getStrandTree().getStrandBranchesByHeight(init_section);
   for (size_t input_branch_id = 0; input_branch_id < branches_at_section.size(); ++input_branch_id)
   {
+    if (!kin_del.isTrackedInputBranchAtSection(init_section, input_branch_id))
+    {
+      continue;
+    }
     if (branches_at_section[input_branch_id].empty())
     {
       if (diagnostics)
@@ -10372,6 +10384,7 @@ void SegmentBuilder::init()
     }
 
     bool any_real_strand = false;
+    bool any_live_strand = false;
     bool contains_strand_0 = false;
     for (size_t strand_id : branches_at_section[input_branch_id])
     {
@@ -10382,6 +10395,10 @@ void SegmentBuilder::init()
       if (!kin_del.isDummyBoundary(strand_id))
       {
         any_real_strand = true;
+        if (kin_del.isStrandLiveInGraph(strand_id))
+        {
+          any_live_strand = true;
+        }
       }
     }
     if (!any_real_strand)
@@ -10390,6 +10407,17 @@ void SegmentBuilder::init()
       {
         std::ostringstream oss;
         oss << "input_branch_id=" << input_branch_id << " reason=only_dummy_strands"
+            << " contains_strand_0=" << (contains_strand_0 ? "true" : "false");
+        strandInitDiagnosticLogLine("init_boundary_branch_skip", 0, t, oss.str().c_str());
+      }
+      continue;
+    }
+    if (!any_live_strand)
+    {
+      if (diagnostics)
+      {
+        std::ostringstream oss;
+        oss << "input_branch_id=" << input_branch_id << " reason=not_loaded_at_start"
             << " contains_strand_0=" << (contains_strand_0 ? "true" : "false");
         strandInitDiagnosticLogLine("init_boundary_branch_skip", 0, t, oss.str().c_str());
       }
@@ -10522,6 +10550,9 @@ void SegmentBuilder::finalize(double t)
       createClosingCapForStrand(strand_id, t);
     }
   }
+
+  // Cover segments finished only at finalize (bootstrap section skips beforeEvent; tree-top / --end tips).
+  recordRuntimeBranchesForActiveSegments();
 
   accumulateSegmentProperties();
 
@@ -12378,6 +12409,21 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       std::vector<int> neighbors_for_meshlet;
       neighbors_for_meshlet.assign(raw_meshlets[meshlet_index].getTriangleCount(), -1);
       raw_neighbors.push_back(std::move(neighbors_for_meshlet));
+
+      std::string object_name = "meshlet_" + std::to_string(meshlet_index);
+      if (const std::optional<double> end_t = maxMeshKineticTime(raw_meshlets[meshlet_index]))
+      {
+        try
+        {
+          object_name += objObjectBranchSuffix(
+            strandIdForRawMeshlet(meshlet_index), *end_t, runtimeBranchForRawMeshlet(meshlet_index));
+        }
+        catch (const std::exception&)
+        {
+        }
+      }
+      raw_meshlets[meshlet_index].setGroupOffsets({ 0 });
+      raw_meshlets[meshlet_index].setGroupNames({ std::move(object_name) });
     }
 
     return std::make_pair(raw_meshlets, raw_neighbors);
@@ -12475,11 +12521,36 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       alignGlueEdgesOnContribCopies(kin_del, contribs, segment_id, physics_segment_id);
     }
 
+    std::string object_suffix;
+    {
+      double segment_end_t = -std::numeric_limits<double>::infinity();
+      for (const SegmentAssemblyContrib& contrib : contribs)
+      {
+        if (const std::optional<double> mesh_end = SegmentBuilder::maxMeshKineticTime(contrib.mesh))
+        {
+          segment_end_t = std::max(segment_end_t, *mesh_end);
+        }
+      }
+      if (std::isfinite(segment_end_t))
+      {
+        try
+        {
+          object_suffix = objObjectBranchSuffix(
+            strandIdForSegment(segment_id), segment_end_t, runtimeBranchForSegment(segment_id));
+        }
+        catch (const std::exception&)
+        {
+          // Unused / unmapped segment: leave contributor labels unsuffixed.
+        }
+      }
+    }
+
     for (SegmentAssemblyContrib& contrib : contribs)
     {
       // One OBJ group per contributor source (iN / bN) when this segment meshlet is exported.
+      // Suffix uses this segment's end time (max over contribs) so branch ids match the segment tip.
       contrib.mesh.setGroupOffsets({ 0 });
-      contrib.mesh.setGroupNames({ contrib.contributorLabel() });
+      contrib.mesh.setGroupNames({ contrib.contributorLabel() + object_suffix });
       if (!segment_mesh_initialized)
       {
         segment_mesh = VoronoiMesh(MeshletExportMaterialNames, contrib.mesh.getNormalMode());
@@ -12658,4 +12729,123 @@ size_t kinDS::SegmentBuilder::strandIdForRawMeshlet(size_t meshlet_index) const
       "strandIdForRawMeshlet: meshlet " + std::to_string(meshlet_index) + " has no segment endpoint.");
   }
   return strandIdForSegment(segment_id);
+}
+
+void kinDS::SegmentBuilder::recordRuntimeBranchForStrandCurrentSegment(size_t strand_id)
+{
+  if (kin_del.isDummyBoundary(strand_id) || strand_id >= strand_to_segment_indices.size()
+    || strand_to_segment_indices[strand_id].empty())
+  {
+    return;
+  }
+
+  size_t runtime_branch = KineticDelaunay::RuntimeBranchData::no_branch;
+  try
+  {
+    runtime_branch = kin_del.getRuntimeBranchIdForStrand(strand_id);
+  }
+  catch (const std::exception&)
+  {
+    return;
+  }
+  if (runtime_branch == KineticDelaunay::RuntimeBranchData::no_branch)
+  {
+    return;
+  }
+
+  const size_t segment_id = strand_to_segment_indices[strand_id].back();
+  if (segment_id >= segment_runtime_branch_.size())
+  {
+    segment_runtime_branch_.resize(segment_id + 1, KineticDelaunay::RuntimeBranchData::no_branch);
+  }
+  segment_runtime_branch_[segment_id] = runtime_branch;
+}
+
+void kinDS::SegmentBuilder::recordRuntimeBranchesForActiveSegments()
+{
+  for (size_t strand_id = 0; strand_id < strand_to_segment_indices.size(); ++strand_id)
+  {
+    recordRuntimeBranchForStrandCurrentSegment(strand_id);
+  }
+}
+
+size_t kinDS::SegmentBuilder::runtimeBranchForSegment(size_t segment_id) const
+{
+  if (segment_id >= segment_runtime_branch_.size())
+  {
+    return KineticDelaunay::RuntimeBranchData::no_branch;
+  }
+  return segment_runtime_branch_[segment_id];
+}
+
+size_t kinDS::SegmentBuilder::runtimeBranchForRawMeshlet(size_t meshlet_index) const
+{
+  if (meshlet_index >= segment_mesh_pairs.size())
+  {
+    return KineticDelaunay::RuntimeBranchData::no_branch;
+  }
+  const auto& pair = segment_mesh_pairs[meshlet_index];
+  size_t segment_id = pair.segment_index0;
+  if (segment_id == static_cast<size_t>(-1))
+  {
+    segment_id = pair.segment_index1;
+  }
+  return runtimeBranchForSegment(segment_id);
+}
+
+std::optional<double> kinDS::SegmentBuilder::maxMeshKineticTime(const VoronoiMesh& mesh)
+{
+  double max_t = -std::numeric_limits<double>::infinity();
+  bool found = false;
+  const size_t vertex_count = mesh.getVertexCount();
+  for (size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
+  {
+    const double t = mesh.vertexKineticTime(vertex_index);
+    if (!std::isfinite(t))
+    {
+      continue;
+    }
+    max_t = std::max(max_t, t);
+    found = true;
+  }
+  if (!found)
+  {
+    return std::nullopt;
+  }
+  return max_t;
+}
+
+std::string kinDS::SegmentBuilder::objObjectBranchSuffix(size_t strand_id, double end_t, size_t runtime_branch) const
+{
+  auto format_end_t = [](double t) -> std::string
+  {
+    if (!std::isfinite(t))
+    {
+      return "unknown";
+    }
+    const double rounded = std::round(t);
+    if (std::abs(t - rounded) < 1e-9)
+    {
+      return std::to_string(static_cast<long long>(rounded));
+    }
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(6) << t;
+    return oss.str();
+  };
+
+  const size_t section
+    = std::isfinite(end_t) ? static_cast<size_t>(std::floor(std::max(0.0, end_t))) : static_cast<size_t>(0);
+  const size_t input_branch = kin_del.getStrandTree().getBranchIndex(strand_id, section);
+
+  std::ostringstream oss;
+  oss << "_end_t_" << format_end_t(end_t) << "_input_branch_" << input_branch << "_runtime_branch_";
+  if (runtime_branch == KineticDelaunay::RuntimeBranchData::no_branch)
+  {
+    oss << "none";
+  }
+  else
+  {
+    oss << runtime_branch;
+  }
+  return oss.str();
 }

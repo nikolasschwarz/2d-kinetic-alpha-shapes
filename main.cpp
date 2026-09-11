@@ -8,6 +8,7 @@
 #include "kinDS/TreeMesher.hpp"
 #include "kinDS/Validator.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <filesystem>
@@ -500,6 +501,10 @@ static void print_usage(const char* program_name)
             << "                            (distances/profile/root; fungus fields defaulted)\n"
             << "  --section-shading         Cycle brown boundary materials through 5 non-green section colors\n"
             << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
+            << "  --start-branches <ids>    Comma-separated input branch ids to load at --start\n"
+            << "                            (default: all branches present at that height).\n"
+            << "                            Only those strands and their descendant input branches are\n"
+            << "                            meshed / finished afterward; other ids at --start are ignored with a warning.\n"
             << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
             << "                            Section events run on [start, end); events with t >= end are skipped.\n"
             << "  --mesh-cap-at-start       Emit closing-cap meshlets at --start (default: off).\n"
@@ -561,6 +566,7 @@ static const std::vector<std::string>& known_cli_flags()
     "--export-gpu-attributes",
     "--section-shading",
     "--start",
+    "--start-branches",
     "--end",
     "--mesh-cap-at-start",
     "--mesh-cap-at-end",
@@ -681,7 +687,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, bool store_mesh_metadata,
   bool export_gpu_attributes_json, const std::string& validate_log_path, bool alternate_section_shading,
-  size_t start_section, std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end,
+  size_t start_section, const std::optional<std::vector<size_t>>& start_input_branches,
+  std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end,
   double alpha_cutoff, bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
   const std::optional<std::filesystem::path>& visual_debug_output_root,
   const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
@@ -726,6 +733,7 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().validate_mesh_vertex_sources_log_path = validate_log_path;
     mesher.getSettings().alternate_section_shading = alternate_section_shading;
     mesher.getSettings().start_section = start_section;
+    mesher.getSettings().start_input_branches = start_input_branches;
     mesher.getSettings().end_section = end_section;
     mesher.getSettings().mesh_cap_at_start = mesh_cap_at_start;
     mesher.getSettings().mesh_cap_at_end = mesh_cap_at_end;
@@ -781,6 +789,22 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
       else
       {
         std::cout << " end=<last>";
+      }
+      std::cout << std::endl;
+    }
+    if (start_input_branches.has_value())
+    {
+      std::cout << "Start branches:";
+      if (start_input_branches->empty())
+      {
+        std::cout << " (none)";
+      }
+      else
+      {
+        for (size_t i = 0; i < start_input_branches->size(); ++i)
+        {
+          std::cout << (i == 0 ? " " : ",") << (*start_input_branches)[i];
+        }
       }
       std::cout << std::endl;
     }
@@ -926,6 +950,7 @@ int main(int argc, char* argv[])
   std::string mesh_validate_log_path = kinDS::Validator::defaultLogFilePath();
   bool mesh_alternate_section_shading = false;
   size_t mesh_start_section = 0;
+  std::optional<std::vector<size_t>> mesh_start_input_branches;
   std::optional<size_t> mesh_end_section;
   bool mesh_cap_at_start = false;
   bool mesh_cap_at_end = false;
@@ -1108,6 +1133,56 @@ int main(int argc, char* argv[])
         print_usage(argv[0]);
         return 1;
       }
+      arg_idx += 2;
+    }
+    else if (arg == "--start-branches")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --start-branches requires a comma-separated list of input branch ids." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      const std::string list = argv[arg_idx + 1];
+      std::vector<size_t> ids;
+      std::stringstream ss(list);
+      std::string token;
+      while (std::getline(ss, token, ','))
+      {
+        // Trim whitespace
+        size_t begin = 0;
+        while (begin < token.size() && std::isspace(static_cast<unsigned char>(token[begin])))
+        {
+          ++begin;
+        }
+        size_t end = token.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(token[end - 1])))
+        {
+          --end;
+        }
+        if (begin == end)
+        {
+          continue; // allow "1,,2" / trailing commas
+        }
+        const std::string trimmed = token.substr(begin, end - begin);
+        try
+        {
+          const long long parsed = std::stoll(trimmed);
+          if (parsed < 0)
+          {
+            throw std::out_of_range("negative");
+          }
+          ids.push_back(static_cast<size_t>(parsed));
+        }
+        catch (const std::exception&)
+        {
+          std::cerr << "Error: --start-branches expects comma-separated non-negative integers; got '" << trimmed
+                    << "'." << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+      }
+      mesh_start_input_branches = std::move(ids);
       arg_idx += 2;
     }
     else if (arg == "--end")
@@ -1388,8 +1463,8 @@ int main(int argc, char* argv[])
     if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
           mesh_export_gpu_attributes_json, mesh_validate_log_path, mesh_alternate_section_shading,
-          mesh_start_section, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end, mesh_alpha_cutoff,
-          mesh_visual_debug, mesh_error_files, mesh_visual_debug_separate_pending_splits,
+          mesh_start_section, mesh_start_input_branches, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,
+          mesh_alpha_cutoff, mesh_visual_debug, mesh_error_files, mesh_visual_debug_separate_pending_splits,
           mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
           mesh_check_sites_inside_convex_hull))
     {

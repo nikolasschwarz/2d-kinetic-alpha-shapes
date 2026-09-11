@@ -74,6 +74,10 @@ class TreeMesher
     bool export_gpu_attributes_json = false;
     /// Inclusive first kinetic section to initialize and process (default 0).
     size_t start_section = 0;
+    /// When set, only these input branch ids are triangulated at @ref start_section (CLI @c --start-branches).
+    /// Those strands and their later descendant input-branch ids stay constrained for the whole run.
+    /// Ids absent / empty / not triangulable at that height are ignored with a warning.
+    std::optional<std::vector<size_t>> start_input_branches;
     /// Exclusive kinetic stop / finalize time; empty means tree height (@c StrandTree::getHeight()).
     /// Section events run on `[start_section, end_section)`; events with `t >= end_section` are not processed.
     std::optional<size_t> end_section;

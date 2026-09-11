@@ -103,6 +103,9 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     segment_builder_.addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
   }
+
+  // Snapshot runtime branch while the map still has live assignments (retire runs after beforeEvent).
+  segment_builder_.recordRuntimeBranchesForActiveSegments();
 }
 
 void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)

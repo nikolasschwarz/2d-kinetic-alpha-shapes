@@ -418,6 +418,13 @@ class KineticDelaunay
   size_t start_section_ = 0;
   /// Last section index to process (inclusive). Empty means @ref getSectionCount() - 1.
   std::optional<size_t> end_section_;
+  /// When set, only these input branch ids are triangulated at @ref start_section_ (CLI @c --start-branches).
+  /// Their strands (and later descendant input-branch ids of those strands) remain the only tracked set
+  /// for finishing / subdivision / caps for the rest of the run.
+  std::optional<std::vector<size_t>> start_input_branches_;
+  /// Non-dummy strands loaded from @ref start_input_branches_ (or all loaded strands when unrestricted).
+  /// Empty until @ref init. Index = strand id.
+  std::vector<bool> tracked_strand_;
   double cutoff; // Cutoff radius for boundary events
   std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
 
@@ -670,6 +677,7 @@ class KineticDelaunay
   const StrandTree& getStrandTree() const;
 
   /// Input branch ids whose last real-strand section is @p t (same criterion as @ref retireFinishedInputBranches).
+  /// When @ref setStartInputBranches is active, only branches that touch tracked strands are returned.
   std::vector<size_t> inputBranchesFinishingAtSection(double t) const;
 
   void setVisualDebugOutputRoot(const std::filesystem::path& root);
@@ -871,6 +879,17 @@ class KineticDelaunay
   size_t getStartSection() const { return start_section_; }
   /// Exclusive kinetic stop / finalize time (defaults to @c getSectionCount(), i.e. tree height).
   size_t getEndSection() const;
+
+  /// Restrict bootstrap triangulation to these input branch ids at @ref getStartSection.
+  /// Empty optional means all branches. Unknown / empty ids at that height are ignored with a warning.
+  /// Only those strands (and their descendant input branches at later heights) are tracked afterward.
+  void setStartInputBranches(std::optional<std::vector<size_t>> branch_ids);
+  const std::optional<std::vector<size_t>>& getStartInputBranches() const { return start_input_branches_; }
+
+  /// True if @p strand_id was loaded under @ref setStartInputBranches (or all strands when unrestricted).
+  bool isTrackedStrand(size_t strand_id) const;
+  /// True if any non-dummy strand of @p input_branch_id at @p section is @ref isTrackedStrand.
+  bool isTrackedInputBranchAtSection(size_t section, size_t input_branch_id) const;
 
   Statistics& statistics() { return statistics_; }
   const Statistics& statistics() const { return statistics_; }

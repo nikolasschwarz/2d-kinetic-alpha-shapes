@@ -135,6 +135,16 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
                                                  : mesh_builder->strandIdForSegment(i);
   };
 
+  auto meshlet_runtime_branch = [&](size_t i) -> size_t
+  {
+    if (!mesh_builder)
+    {
+      return kinDS::KineticDelaunay::RuntimeBranchData::no_branch;
+    }
+    return export_mode == MeshletExportMode::Raw ? mesh_builder->runtimeBranchForRawMeshlet(i)
+                                                 : mesh_builder->runtimeBranchForSegment(i);
+  };
+
   auto meshlet_for_export = [&](size_t i) -> VoronoiMesh
   {
     VoronoiMesh mesh = meshlets_to_export[i];
@@ -300,6 +310,26 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
       combined_normal_mode = candidate.getNormalMode();
     }
   }
+  auto meshlet_obj_group_name = [&](size_t i, const VoronoiMesh& mesh) -> std::string
+  {
+    std::string name = "meshlet_" + std::to_string(i);
+    if (!mesh_builder)
+    {
+      return name;
+    }
+    if (const std::optional<double> end_t = SegmentBuilder::maxMeshKineticTime(mesh))
+    {
+      try
+      {
+        name += mesh_builder->objObjectBranchSuffix(meshlet_strand_id(i), *end_t, meshlet_runtime_branch(i));
+      }
+      catch (const std::exception&)
+      {
+      }
+    }
+    return name;
+  };
+
   for (size_t i = 0; i < export_count; ++i)
   {
     VoronoiMesh mesh = meshlet_for_export(i);
@@ -310,12 +340,12 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
       combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, combined_normal_mode);
       // One OBJ group per meshlet index; boundaries are managed here, not via per-meshlet group_offsets.
       combined_mesh.setGroupOffsets({ 0 });
-      combined_mesh.setGroupNames({ "meshlet_0" });
+      combined_mesh.setGroupNames({ meshlet_obj_group_name(i, mesh) });
       combined_mesh_initialized = true;
     }
     else
     {
-      combined_mesh.startNewGroup("meshlet_" + std::to_string(i));
+      combined_mesh.startNewGroup(meshlet_obj_group_name(i, mesh));
     }
 
     if (mesh_has_geometry)
@@ -738,6 +768,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
       ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
       : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
   kinetic_delaunay->setSectionRange(settings.start_section, settings.end_section);
+  kinetic_delaunay->setStartInputBranches(settings.start_input_branches);
 
   const bool transform_mesh_at_construction = settings.transform_mesh_at_construction;
 
