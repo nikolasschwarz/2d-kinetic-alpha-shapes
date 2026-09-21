@@ -76,6 +76,9 @@ struct ObjWriteOptions
   bool write_obj_groups = true;
   /// EcoSysLab-compatible OBJ: bark/interior face grouping, negate normal X, slim MTL.
   bool framework_compatible = false;
+  /// When non-empty and sized to match the mesh material names, write these Kd colors into the MTL
+  /// instead of the built-in bark/interior or debug material set.
+  std::vector<glm::dvec3> material_kd_colors;
 };
 
 class ObjExporter
@@ -602,6 +605,32 @@ class ObjExporter
     file.close();
   }
 
+  /// One diffuse material per mesh material name, using @p kd_colors (must match @p material_names size).
+  static void writeColoredMtl(const std::filesystem::path& mtl_path, const std::vector<std::string>& material_names,
+    const std::vector<glm::dvec3>& kd_colors)
+  {
+    if (kd_colors.size() != material_names.size())
+    {
+      throw std::runtime_error("ObjExporter::writeColoredMtl: material_names and kd_colors size mismatch.");
+    }
+    std::ofstream file(mtl_path);
+    if (!file.is_open())
+    {
+      throw std::runtime_error("Failed to open MTL file");
+    }
+    for (size_t i = 0; i < material_names.size(); ++i)
+    {
+      const glm::dvec3& kd = kd_colors[i];
+      const glm::dvec3 ka = kd * 0.5;
+      file << "newmtl " << material_names[i] << "\n";
+      file << "Ka " << ka.x << " " << ka.y << " " << ka.z << "\n";
+      file << "Kd " << kd.x << " " << kd.y << " " << kd.z << "\n";
+      file << "Ks 0.0 0.0 0.0\n";
+      file << "d 1.0\n\n";
+    }
+    file.close();
+  }
+
   static std::string jsonVec2(const glm::dvec2& v)
   {
     return "[" + std::to_string(v.x) + ", " + std::to_string(v.y) + "]";
@@ -809,7 +838,11 @@ class ObjExporter
     }
     std::filesystem::path mtl_path = obj_path;
     mtl_path.replace_extension(".mtl");
-    if (options.framework_compatible)
+    if (!options.material_kd_colors.empty())
+    {
+      writeColoredMtl(mtl_path, mesh.getMaterialNames(), options.material_kd_colors);
+    }
+    else if (options.framework_compatible)
     {
       writeFrameworkMtl(mtl_path);
     }
