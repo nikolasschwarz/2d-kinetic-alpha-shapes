@@ -777,18 +777,27 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
     ensureFaceMetadataSize();
   }
 
+  std::unordered_map<std::string, int> material_name_to_id;
+  material_name_to_id.reserve(material_names.size() + other.material_names.size());
+  for (size_t i = 0; i < material_names.size(); ++i)
+  {
+    material_name_to_id.emplace(material_names[i], static_cast<int>(i));
+  }
+
   std::vector<int> other_material_id_remap(other.material_names.size(), -1);
   for (size_t i = 0; i < other.material_names.size(); ++i)
   {
-    const auto it = std::find(material_names.begin(), material_names.end(), other.material_names[i]);
-    if (it == material_names.end())
+    const auto it = material_name_to_id.find(other.material_names[i]);
+    if (it == material_name_to_id.end())
     {
-      other_material_id_remap[i] = static_cast<int>(material_names.size());
+      const int new_id = static_cast<int>(material_names.size());
       material_names.push_back(other.material_names[i]);
+      material_name_to_id.emplace(material_names.back(), new_id);
+      other_material_id_remap[i] = new_id;
     }
     else
     {
-      other_material_id_remap[i] = static_cast<int>(std::distance(material_names.begin(), it));
+      other_material_id_remap[i] = it->second;
     }
   }
 
