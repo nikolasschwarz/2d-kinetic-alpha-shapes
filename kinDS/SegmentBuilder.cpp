@@ -6274,6 +6274,37 @@ size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(
   return index;
 }
 
+size_t kinDS::SegmentBuilder::registerBarkOnlyMeshlet(VoronoiMesh&& mesh, std::string suffix,
+  double creation_kinetic_time, size_t owner_segment_id, size_t voronoi_cell_id)
+{
+  configureMeshletStorage(mesh);
+  if (mesh.getMaterialNames().empty())
+  {
+    mesh.setMaterialNames(MeshletExportMaterialNames);
+  }
+  if (std::isfinite(creation_kinetic_time))
+  {
+    mesh.setCreationKineticTime(creation_kinetic_time);
+  }
+
+  const size_t index = intersection_meshes.size();
+  intersection_segment_mesh_pairs.push_back(
+    MeshStructure::SegmentMeshPair { owner_segment_id, static_cast<size_t>(-1), 0, 0, 1 });
+  if (intersection_mesh_pair_metadata.size() <= index)
+  {
+    intersection_mesh_pair_metadata.resize(index + 1);
+  }
+  intersection_mesh_pair_metadata[index] = MeshStructure::IntersectionMeshPairMetadata {
+    voronoi_cell_id, owner_segment_id, static_cast<size_t>(-1), static_cast<size_t>(-1)
+  };
+  intersection_meshes.push_back(std::move(mesh));
+  intersection_mesh_raw_uvs.emplace_back();
+  boundary_meshlet_completed_.push_back(false);
+  intersection_meshlet_export_suffixes.push_back(std::move(suffix));
+  intersection_mesh_pair_last_left_and_right_vertex.emplace_back();
+  return index;
+}
+
 void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right, double t)
 {
   const std::string face_metadata = composeBoundaryMeshFaceMetadata(t, "boundary_section", he_id);
@@ -10672,6 +10703,37 @@ struct SegmentAssemblyContrib
   std::string contributorLabel() const { return (is_boundary ? "b" : "i") + std::to_string(source_index); }
 };
 
+/// True when @p material_id names a bark / pending-split-fallback export material (brown / light_blue).
+bool isBarkExportMaterialId(const VoronoiMesh& mesh, int material_id)
+{
+  if (material_id < 0)
+  {
+    return false;
+  }
+  const auto& names = mesh.getMaterialNames();
+  if (static_cast<size_t>(material_id) < names.size())
+  {
+    const std::string& name = names[static_cast<size_t>(material_id)];
+    return name == "brown" || name == "light_blue" || name == "bark";
+  }
+  // Names missing: fall back to canonical MeshletExportMaterialNames indices.
+  return material_id == SegmentBuilder::BoundaryIntervalMeshletMaterialId
+    || material_id == SegmentBuilder::PendingSplitFallbackMeshletMaterialId;
+}
+
+/// True when any triangle uses bark / pending-split-fallback export materials.
+bool meshletUsesBarkExportMaterial(const VoronoiMesh& mesh)
+{
+  for (const int material_id : mesh.getMaterialIDs())
+  {
+    if (isBarkExportMaterialId(mesh, material_id))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 struct Vec3ExactHash
 {
   std::size_t operator()(const glm::dvec3& v) const noexcept
@@ -12479,7 +12541,17 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       {
         contrib.mesh.flipOrientation();
       }
-      contrib.neighbor = (seg0 == segment_id) ? static_cast<int>(seg1) : static_cast<int>(seg0);
+      // One-sided meshlets (segment_index1 == -1): closing caps use RegularMeshletMaterialId → interior (-1);
+      // radius traced-cell / triangle-cap fans use BoundaryIntervalMeshletMaterialId → bark (-2).
+      // EcoSysLab GPU materials key off neighbor tags, not VoronoiMesh material_ids.
+      if (seg0 == static_cast<size_t>(-1) || seg1 == static_cast<size_t>(-1))
+      {
+        contrib.neighbor = meshletUsesBarkExportMaterial(contrib.mesh) ? -2 : -1;
+      }
+      else
+      {
+        contrib.neighbor = (seg0 == segment_id) ? static_cast<int>(seg1) : static_cast<int>(seg0);
+      }
       const double mesh_ct = contrib.mesh.getCreationKineticTime();
       if (std::isfinite(mesh_ct) && (!std::isfinite(earliest_creation) || mesh_ct < earliest_creation))
       {
@@ -12566,11 +12638,34 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     {
       segment_mesh.setCreationKineticTime(earliest_creation);
     }
-    neighbor_segments.push_back(neighbor_segments_for_meshlet);
     segment_mesh.mergeDuplicateVertices(0.0);
     postProcessFlexibleVerticesOnSegmentMeshlet(segment_mesh);
     segment_mesh.validateUVLayout("extractSegmentMeshlets merged segment mesh");
     segment_mesh.ensureFaceMetadataSize();
+
+    // Force bark neighbor tags from final material IDs. Radius triangle caps / boundary strips use brown
+    // (or light_blue); EcoSysLab GPU materials key off neighbor == -2, not VoronoiMesh material_ids.
+    {
+      const auto& material_ids = segment_mesh.getMaterialIDs();
+      const size_t tri_count = segment_mesh.getTriangleCount();
+      if (neighbor_segments_for_meshlet.size() < tri_count)
+      {
+        neighbor_segments_for_meshlet.resize(tri_count, -1);
+      }
+      else if (neighbor_segments_for_meshlet.size() > tri_count)
+      {
+        neighbor_segments_for_meshlet.resize(tri_count);
+      }
+      for (size_t tri = 0; tri < tri_count && tri < material_ids.size(); ++tri)
+      {
+        if (isBarkExportMaterialId(segment_mesh, material_ids[tri]))
+        {
+          neighbor_segments_for_meshlet[tri] = -2;
+        }
+      }
+    }
+
+    neighbor_segments.push_back(std::move(neighbor_segments_for_meshlet));
     meshlets.push_back(segment_mesh);
 
     if (diagnostics && segment_id == 0)

@@ -2205,19 +2205,17 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       {
         owner_segment_id = segment_builder_.strand_to_segment_indices[cell_id].back();
       }
-      const size_t stored_segment_pair_index = segment_builder_.segment_mesh_pairs.size();
-      segment_builder_.segment_mesh_pairs.push_back(
-        MeshStructure::SegmentMeshPair { owner_segment_id, static_cast<size_t>(-1), 0, 0, 1 });
       std::string suffix = std::string("_delaunay") + std::to_string(affected_face_id) + "_strand"
         + std::to_string(cell_id);
-      KINDS_DEBUG("Radius: stored extracted strand meshlet segment segment_mesh_pairs_index=" << stored_segment_pair_index
+      // Store as a bark-only intersection meshlet so extractSegmentMeshlets assigns neighbor -2
+      // (registering into regular meshes with segment_index1=-1 previously mapped to interior -1).
+      const size_t stored_index = segment_builder_.registerBarkOnlyMeshlet(
+        std::move(mesh), std::move(suffix), t, owner_segment_id, cell_id);
+      KINDS_DEBUG("Radius: stored extracted strand meshlet as bark intersection meshlet index=" << stored_index
                                                                                               << " cell_id=" << cell_id
                                                                                               << " owner_segment_id=" << owner_segment_id
                                                                                               << " delaunay_face=" << affected_face_id
-                                                                                              << " t=" << t << " polygon_vertices=" << poly.size()
-                                                                                              << " meshlet_suffix=" << suffix);
-      segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::move(suffix), t);
-      segment_builder_.segment_mesh_pair_last_left_and_right_vertex.emplace_back();
+                                                                                              << " t=" << t << " polygon_vertices=" << poly.size());
     };
 
     if (!success)

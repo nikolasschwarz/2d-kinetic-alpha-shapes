@@ -1252,6 +1252,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t registerMeshletWithSuffix(
     VoronoiMesh&& mesh, std::string suffix, double creation_kinetic_time = std::numeric_limits<double>::quiet_NaN());
 
+  /// Register a one-sided bark meshlet (radius traced-cell / triangle-cap fans) into @ref intersection_meshes
+  /// so @ref extractSegmentMeshlets assigns neighbor @c -2 (bark) instead of treating it as interior.
+  size_t registerBarkOnlyMeshlet(VoronoiMesh&& mesh, std::string suffix, double creation_kinetic_time,
+    size_t owner_segment_id, size_t voronoi_cell_id = static_cast<size_t>(-1));
+
  public:
   double getUvHeightFactor() const { return uv_height_factor; }
   double getUvCircumFactor() const { return uv_circum_factor; }

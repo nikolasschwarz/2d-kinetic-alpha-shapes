@@ -606,6 +606,7 @@ class ObjExporter
   }
 
   /// One diffuse material per mesh material name, using @p kd_colors (must match @p material_names size).
+  /// Written for flat, saturated look under ray tracers: no ambient fill, full-intensity Kd, illum 1.
   static void writeColoredMtl(const std::filesystem::path& mtl_path, const std::vector<std::string>& material_names,
     const std::vector<glm::dvec3>& kd_colors)
   {
@@ -621,12 +622,16 @@ class ObjExporter
     for (size_t i = 0; i < material_names.size(); ++i)
     {
       const glm::dvec3& kd = kd_colors[i];
-      const glm::dvec3 ka = kd * 0.5;
       file << "newmtl " << material_names[i] << "\n";
-      file << "Ka " << ka.x << " " << ka.y << " " << ka.z << "\n";
+      // Ka=0 avoids ambient wash-out that turns mid-tones pastel in many path tracers.
+      file << "Ka 0.0 0.0 0.0\n";
       file << "Kd " << kd.x << " " << kd.y << " " << kd.z << "\n";
       file << "Ks 0.0 0.0 0.0\n";
-      file << "d 1.0\n\n";
+      file << "Ke 0.0 0.0 0.0\n";
+      file << "Ns 1.0\n";
+      file << "Ni 1.0\n";
+      file << "d 1.0\n";
+      file << "illum 1\n\n";
     }
     file.close();
   }
