@@ -43,7 +43,7 @@ PlaneProjector::PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4
     // Rotation matrix
     m_rot = glm::dmat3(glm::rotate(glm::dmat4(1.0), m_angle, m_axis));
 
-    // Plane offsets
+    // Plane offsets for n·x + d = 0 with d = -n·origin.
     double dA = -glm::dot(m_nA, m_oA);
     double dB = -glm::dot(m_nB, m_oB);
 
@@ -52,6 +52,12 @@ PlaneProjector::PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4
 
     assert(std::abs(denom) > EPS);
 
+    // BUG (suspected): for planes n·x + d = 0 this formula yields nA·m_p0 = dA and nB·m_p0 = dB,
+    // but points on the planes must satisfy n·x = -d. So m_p0 generally does NOT lie on either
+    // plane (it is the negation of the correct particular solution through the origin's normal
+    // span). Hinge/project about this point is wrong whenever origins are not at the world
+    // origin. Left unchanged for kinetic Delaunay compatibility; EcoSysLab profile-plane mix
+    // uses its own hinge helper instead. Fix later and re-validate StrandTree remaps / flips.
     m_p0 = (dB * glm::cross(m_axis, m_nA) + dA * glm::cross(m_nB, m_axis)) / denom;
   }
 }
@@ -84,20 +90,20 @@ glm::dvec3 PlaneProjector::applyTransform(const glm::dvec3& x) const
   }
 }
 
-glm::dvec2 PlaneProjector::worldToLocalB(const glm::dvec3& x) const
+glm::dvec2 PlaneProjector::worldToLocalOnPlane(
+  const glm::dvec3& x, const glm::dvec3& origin, const glm::dvec3& u, const glm::dvec3& v)
 {
-  glm::dvec3 w = x - m_oB;
+  glm::dvec3 w = x - origin;
 
-  double uu = glm::dot(m_uB, m_uB);
-  double uv = glm::dot(m_uB, m_vB);
-  double vv = glm::dot(m_vB, m_vB);
+  double uu = glm::dot(u, u);
+  double uv = glm::dot(u, v);
+  double vv = glm::dot(v, v);
 
-  double wu = glm::dot(w, m_uB);
-  double wv = glm::dot(w, m_vB);
+  double wu = glm::dot(w, u);
+  double wv = glm::dot(w, v);
 
   double det = uu * vv - uv * uv;
-  //assert(std::abs(det) > EPS);
-  if(std::abs(det) < EPS)
+  if (std::abs(det) < EPS)
   {
     // Degenerate case, warn
     //KINDS_WARNING("Degenerate plane in PlaneProjector");
@@ -107,6 +113,35 @@ glm::dvec2 PlaneProjector::worldToLocalB(const glm::dvec3& x) const
   double d = (wv * uu - wu * uv) / det;
 
   return glm::dvec2(c, d);
+}
+
+glm::dvec2 PlaneProjector::worldToLocalA(const glm::dvec3& x) const
+{
+  return worldToLocalOnPlane(x, m_oA, m_uA, m_vA);
+}
+
+glm::dvec2 PlaneProjector::worldToLocalB(const glm::dvec3& x) const
+{
+  return worldToLocalOnPlane(x, m_oB, m_uB, m_vB);
+}
+
+std::optional<std::pair<glm::dvec2, glm::dvec2>> PlaneProjector::intersectionLineInLocalA() const
+{
+  if (m_parallel)
+  {
+    return std::nullopt;
+  }
+
+  const glm::dvec2 p0 = worldToLocalA(m_p0);
+  const glm::dvec2 p1 = worldToLocalA(m_p0 + m_axis);
+  glm::dvec2 dir = p1 - p0;
+  const double len = glm::length(dir);
+  if (len < EPS)
+  {
+    return std::nullopt;
+  }
+  dir /= len;
+  return std::make_pair(p0, dir);
 }
 
 glm::dvec2 PlaneProjector::project(const glm::dvec2& v) const

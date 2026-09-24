@@ -1,4 +1,4 @@
-﻿#include "KineticDelaunaySectionEvent.hpp"
+#include "KineticDelaunaySectionEvent.hpp"
 
 #include <algorithm>
 #include <stdexcept>

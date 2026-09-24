@@ -522,6 +522,37 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     glm::dvec3 mesh_position {};
     std::optional<glm::dvec2> delaunay_xy {};
   };
+  /// Cache key for pre-split majority-plane branch assignment per kinetic component and time.
+  struct MajorityPlaneAssignmentKey
+  {
+    size_t component_id = static_cast<size_t>(-1);
+    uint64_t kinetic_time_bits = 0;
+    bool operator==(const MajorityPlaneAssignmentKey& other) const noexcept
+    {
+      return component_id == other.component_id && kinetic_time_bits == other.kinetic_time_bits;
+    }
+  };
+  struct MajorityPlaneAssignmentKeyHash
+  {
+    size_t operator()(const MajorityPlaneAssignmentKey& key) const noexcept
+    {
+      size_t h = std::hash<size_t> {}(key.component_id);
+      h ^= std::hash<uint64_t> {}(key.kinetic_time_bits) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+  struct MajorityPlaneAssignmentEntry
+  {
+    /// False → fall back to per-strand native profile→object placement.
+    bool active = false;
+    /// Shared kinetic reference branch (min of the two) used for 2D side tests and mesh XY.
+    size_t shared_ref_branch = 0;
+    std::unordered_map<size_t, size_t> strand_to_majority_branch;
+  };
+  /// Pre-split: majority input-branch plane for @p strand_id's component at @p t, if rotation projection exists.
+  std::optional<size_t> majorityPlaneBranchForStrand(size_t strand_id, double t) const;
+  MajorityPlaneAssignmentEntry computeMajorityPlaneAssignmentForComponent(size_t component_id, double t) const;
+  MajorityPlaneAssignmentEntry getOrComputeMajorityPlaneAssignment(size_t component_id, double t) const;
   /// First-wins mesh coords for the placement-determining Voronoi–Delaunay intersection at a kinetic time
   /// (@c position_intersection / metadata @c delaunay_edge_id+@c voronoi_edge_id — not conceptual pre-shift ids).
   struct BufferedIntersectionMeshKey
@@ -840,6 +871,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     buffered_voronoi_vertex_mesh_positions_;
   mutable std::unordered_map<BufferedIntersectionMeshKey, glm::dvec3, BufferedIntersectionMeshKeyHash>
     buffered_intersection_mesh_positions_;
+  mutable std::unordered_map<MajorityPlaneAssignmentKey, MajorityPlaneAssignmentEntry, MajorityPlaneAssignmentKeyHash>
+    majority_plane_assignment_cache_;
 
   glm::dvec3 radiusTransitionProjectionPosition(
     const RadiusTransitionProjection& projection, double t, bool mesh_space) const;

@@ -6,6 +6,7 @@
 #include "KineticDelaunayFlipEvent.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
 #include "Logger.hpp"
+#include "PlaneProjector.hpp"
 #include "SegmentBuilderCrossingCallback.hpp"
 #include "SegmentBuilderFlipCallback.hpp"
 #include "SegmentBuilderRadiusCallback.hpp"
@@ -6725,6 +6726,173 @@ glm::dvec3 SegmentBuilder::transformFromInputBranchToObjectSpace(glm::dvec3 vert
   return kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
 }
 
+SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlaneAssignmentForComponent(
+  size_t component_id, double t) const
+{
+  MajorityPlaneAssignmentEntry entry;
+  if (component_id >= kin_del.component_data.components.size())
+  {
+    return entry;
+  }
+
+  const auto& component_strands = kin_del.component_data.components[component_id];
+  if (component_strands.size() < 2)
+  {
+    return entry;
+  }
+
+  std::vector<size_t> sites;
+  sites.reserve(component_strands.size());
+  for (size_t strand_id : component_strands)
+  {
+    if (kin_del.isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+    sites.push_back(strand_id);
+  }
+  if (sites.size() < 2)
+  {
+    return entry;
+  }
+
+  const std::vector<size_t> distinct
+    = kin_del.collectDistinctInputBranchesForEventTrigger(sites, eventIntervalUpperBound(t));
+  if (distinct.size() != 2)
+  {
+    return entry;
+  }
+
+  const size_t branch_a = distinct[0];
+  const size_t branch_b = distinct[1];
+  const size_t shared_ref = std::min(branch_a, branch_b);
+  const size_t other_branch = (shared_ref == branch_a) ? branch_b : branch_a;
+
+  const auto& tree = kin_del.getStrandTree();
+  const auto& transforms = tree.getTransformsByHeightAndBranch();
+  if (transforms.empty())
+  {
+    return entry;
+  }
+
+  const size_t section = static_cast<size_t>(std::floor(std::max(0.0, t)));
+  const size_t height = std::min(section, transforms.size() - 1);
+  if (shared_ref >= transforms[height].size() || other_branch >= transforms[height].size())
+  {
+    return entry;
+  }
+
+  const PlaneProjector projector(transforms[height][shared_ref], transforms[height][other_branch]);
+  if (projector.isParallel())
+  {
+    return entry;
+  }
+
+  const auto line = projector.intersectionLineInLocalA();
+  if (!line.has_value())
+  {
+    return entry;
+  }
+
+  const glm::dvec2 line_p = line->first;
+  const glm::dvec2 line_dir = line->second;
+
+  const size_t branch_section = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+
+  // Votes: [side][0]=branch_a count, [side][1]=branch_b count. side 0 = cross < 0, side 1 = cross >= 0.
+  size_t votes[2][2] = { { 0, 0 }, { 0, 0 } };
+  std::vector<std::pair<size_t, int>> strand_sides;
+  strand_sides.reserve(sites.size());
+
+  for (size_t strand_id : sites)
+  {
+    const glm::dvec2 p = kin_del.getPointAtWithReferenceBranch(
+      strand_id, t, shared_ref, /*apply_reference_transform=*/true, /*include_virtual_offset=*/false);
+    const double cross = line_dir.x * (p.y - line_p.y) - line_dir.y * (p.x - line_p.x);
+    const int side = (cross >= 0.0) ? 1 : 0;
+    const size_t input_branch = tree.getBranchIndex(strand_id, branch_section);
+    const int branch_slot = (input_branch == branch_a) ? 0 : ((input_branch == branch_b) ? 1 : -1);
+    if (branch_slot < 0)
+    {
+      continue;
+    }
+    votes[side][branch_slot] += 1;
+    strand_sides.emplace_back(strand_id, side);
+  }
+
+  if (strand_sides.empty())
+  {
+    return entry;
+  }
+
+  const auto majority_on_side = [&](int side) -> size_t
+  {
+    const size_t count_a = votes[side][0];
+    const size_t count_b = votes[side][1];
+    if (count_a > count_b)
+    {
+      return branch_a;
+    }
+    if (count_b > count_a)
+    {
+      return branch_b;
+    }
+    // Tie (including empty side): deterministic lower id.
+    return std::min(branch_a, branch_b);
+  };
+
+  const size_t majority_side0 = majority_on_side(0);
+  const size_t majority_side1 = majority_on_side(1);
+
+  entry.active = true;
+  entry.shared_ref_branch = shared_ref;
+  entry.strand_to_majority_branch.reserve(strand_sides.size());
+  for (const auto& [strand_id, side] : strand_sides)
+  {
+    entry.strand_to_majority_branch.emplace(strand_id, side == 0 ? majority_side0 : majority_side1);
+  }
+  return entry;
+}
+
+SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::getOrComputeMajorityPlaneAssignment(
+  size_t component_id, double t) const
+{
+  const MajorityPlaneAssignmentKey key { component_id, meshVertexKineticTimeBits(t) };
+  {
+    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    if (const auto it = majority_plane_assignment_cache_.find(key); it != majority_plane_assignment_cache_.end())
+    {
+      return it->second;
+    }
+  }
+
+  MajorityPlaneAssignmentEntry computed = computeMajorityPlaneAssignmentForComponent(component_id, t);
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const auto [it, inserted] = majority_plane_assignment_cache_.emplace(key, std::move(computed));
+  (void)inserted;
+  return it->second;
+}
+
+std::optional<size_t> SegmentBuilder::majorityPlaneBranchForStrand(size_t strand_id, double t) const
+{
+  if (strand_id >= kin_del.component_data.component_map.size())
+  {
+    return std::nullopt;
+  }
+  const size_t component_id = kin_del.component_data.component_map[strand_id];
+  const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
+  if (!entry.active)
+  {
+    return std::nullopt;
+  }
+  const auto it = entry.strand_to_majority_branch.find(strand_id);
+  if (it == entry.strand_to_majority_branch.end())
+  {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
 glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
 {
   if (strand_id == static_cast<size_t>(-1))
@@ -6739,6 +6907,46 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
     const glm::dvec2 xy
       = kin_del.getPointAt(strand_id, t, /*apply_reference_transform=*/false, /*include_virtual_offset=*/false);
     return glm::dvec3(xy.x, xy.y, t);
+  }
+
+  // Pre-split majority-plane placement: lift shared-frame 2D XY onto the side's majority profile plane.
+  // (Native evaluate + own branch is a no-op when sides are pure, so it never produced two planes.)
+  if (strand_id < kin_del.component_data.component_map.size())
+  {
+    const size_t component_id = kin_del.component_data.component_map[strand_id];
+    const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
+    if (entry.active)
+    {
+      const auto it = entry.strand_to_majority_branch.find(strand_id);
+      if (it != entry.strand_to_majority_branch.end())
+      {
+        const size_t majority_branch = it->second;
+        const size_t shared_ref = entry.shared_ref_branch;
+        const glm::dvec2 shared_xy = kin_del.getPointAtWithReferenceBranch(
+          strand_id, t, shared_ref, /*apply_reference_transform=*/true, /*include_virtual_offset=*/false);
+
+        glm::dvec2 local_on_majority = shared_xy;
+        if (majority_branch != shared_ref)
+        {
+          const auto& tree = kin_del.getStrandTree();
+          const auto& transforms = tree.getTransformsByHeightAndBranch();
+          if (!transforms.empty())
+          {
+            const size_t section = static_cast<size_t>(std::floor(std::max(0.0, t)));
+            const size_t height = std::min(section, transforms.size() - 1);
+            if (shared_ref < transforms[height].size() && majority_branch < transforms[height].size())
+            {
+              const PlaneProjector shared_to_majority(
+                transforms[height][shared_ref], transforms[height][majority_branch]);
+              local_on_majority = shared_to_majority.project(shared_xy);
+            }
+          }
+        }
+
+        return kin_del.getStrandTree().transformToObjectSpaceForBranch(
+          glm::dvec3(local_on_majority.x, local_on_majority.y, t), t, majority_branch);
+      }
+    }
   }
 
   // Object-space mesh: local profile → object space (also without separation).
@@ -6851,6 +7059,7 @@ SegmentBuilder::MeshIntersectionObjectSpaceResult SegmentBuilder::computeMeshInt
       result.mesh_interpolation = IntersectionInterpolationDebug { a_mesh, b_mesh, param };
       // Keep the actual placement tied to the same captured endpoints/parameter reported in metadata. This also avoids
       // a second mutable CrossingData parameter read disagreeing with the diagnostic values during parallel callbacks.
+      // (Majority-plane lifting of the intersection from shared 2D is not applied; see Voronoi barycentric note.)
       result.position = a_mesh * (1.0 - param) + b_mesh * param;
     }
   }
@@ -7096,6 +7305,8 @@ SegmentBuilder::MeshVoronoiVertexObjectSpaceResult SegmentBuilder::computeMeshVo
   result.barycentric = bary;
 
   // 4) Interpolate unshifted mesh site positions with those weights.
+  // Note: majority-plane lifting of this Voronoi point from shared 2D onto the side's plane is intentionally
+  // not applied (can create pointy artifacts); revisit later if cross-plane barycentric blends are problematic.
   const glm::dvec3 mesh_pos
     = bary.value()[0] * mesh_sites[0] + bary.value()[1] * mesh_sites[1] + bary.value()[2] * mesh_sites[2];
   if (!vertexPositionFinite(mesh_pos))

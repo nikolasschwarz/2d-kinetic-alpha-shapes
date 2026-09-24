@@ -278,6 +278,17 @@ glm::dvec3 StrandTree::transformToObjectSpace(
     transforms_by_height_and_branch, v_3d, static_cast<float>(t), branch_indices_by_height);
 }
 
+glm::dvec3 StrandTree::transformToObjectSpaceForBranch(glm::dvec3 v_3d, double t, size_t branch_id) const
+{
+  if (transforms_by_height_and_branch.empty())
+  {
+    return v_3d;
+  }
+
+  std::vector<size_t> constant_branch(transforms_by_height_and_branch.size(), branch_id);
+  return transformToObjectSpace(std::move(v_3d), t, constant_branch);
+}
+
 Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const
 {
   if (strand_id >= support_points.size())
