@@ -44,6 +44,12 @@ class TreeMesher
   struct Settings
   {
     double alpha_cutoff = 10.0; // default value, can be adjusted as needed
+    /// Radius cutoff for triangles whose three strands do not share one input branch at t+1.
+    /// When equal to @ref alpha_cutoff the branch-specific path is disabled.
+    double branch_alpha_cutoff = 10.0;
+    /// Extra sections above the interval upper bound (floor(t)+1) when classifying same-branch membership
+    /// for @ref branch_alpha_cutoff. 0 = current behavior. Out-of-range heights clamp to the last valid index.
+    size_t look_ahead = 0;
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
     /// When true, a failed meshlet intersection keeps the uncut meshlet; when false, replaces it with an empty mesh.
     bool keep_original_on_intersection_failure = true;

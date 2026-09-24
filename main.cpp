@@ -512,6 +512,8 @@ static void print_usage(const char* program_name)
             << "  --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off).\n"
             << "                            Natural branch endings and tree-top caps are always produced.\n"
             << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)\n"
+            << "  --branch-cutoff <value>   Cross-branch radius cutoff; disabled when equal to --cutoff (default: 10)\n"
+            << "  --look-ahead <n>          Extra sections above floor(t)+1 for branch-alpha same-branch checks (default: 0)\n"
             << "  --debug-files [path] [lower] [upper]\n"
             << "                            Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
             << "                            and error dumps). Optional output directory (default: cwd).\n"
@@ -571,6 +573,8 @@ static const std::vector<std::string>& known_cli_flags()
     "--mesh-cap-at-start",
     "--mesh-cap-at-end",
     "--cutoff",
+    "--branch-cutoff",
+    "--look-ahead",
     "--debug-files",
     "--svg-separate-pending-splits",
     "--error-files",
@@ -689,7 +693,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   bool export_gpu_attributes_json, const std::string& validate_log_path, bool alternate_section_shading,
   size_t start_section, const std::optional<std::vector<size_t>>& start_input_branches,
   std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end,
-  double alpha_cutoff, bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
+  double alpha_cutoff, double branch_alpha_cutoff, size_t look_ahead, bool visual_debug, bool error_files,
+  bool visual_debug_separate_pending_splits,
   const std::optional<std::filesystem::path>& visual_debug_output_root,
   const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
   bool check_sites_inside_convex_hull)
@@ -738,6 +743,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().mesh_cap_at_start = mesh_cap_at_start;
     mesher.getSettings().mesh_cap_at_end = mesh_cap_at_end;
     mesher.getSettings().alpha_cutoff = alpha_cutoff;
+    mesher.getSettings().branch_alpha_cutoff = branch_alpha_cutoff;
+    mesher.getSettings().look_ahead = look_ahead;
     mesher.getSettings().visual_debug = visual_debug;
     mesher.getSettings().error_files = error_files || visual_debug;
     mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
@@ -749,6 +756,9 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
       mesher.getSettings().visual_debug_output_root = visual_debug_output_root;
     }
     std::cout << "Alpha cutoff: " << alpha_cutoff << std::endl;
+    std::cout << "Branch alpha cutoff: " << branch_alpha_cutoff
+              << (branch_alpha_cutoff == alpha_cutoff ? " (disabled, equal to alpha cutoff)" : "") << std::endl;
+    std::cout << "Look ahead: " << look_ahead << std::endl;
     if (check_sites_inside_convex_hull)
     {
       std::cout << "Sites-in-hull check: enabled" << std::endl;
@@ -955,6 +965,8 @@ int main(int argc, char* argv[])
   bool mesh_cap_at_start = false;
   bool mesh_cap_at_end = false;
   double mesh_alpha_cutoff = kinDS::TreeMesher::Settings {}.alpha_cutoff;
+  double mesh_branch_alpha_cutoff = kinDS::TreeMesher::Settings {}.branch_alpha_cutoff;
+  size_t mesh_look_ahead = kinDS::TreeMesher::Settings {}.look_ahead;
   bool mesh_visual_debug = false;
   bool mesh_error_files = false;
   bool mesh_visual_debug_separate_pending_splits = false;
@@ -1245,6 +1257,56 @@ int main(int argc, char* argv[])
       }
       arg_idx += 2;
     }
+    else if (arg == "--branch-cutoff")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --branch-cutoff requires a numeric value." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const double parsed = std::stod(argv[arg_idx + 1]);
+        if (!(parsed >= 0.0) || !std::isfinite(parsed))
+        {
+          throw std::out_of_range("non-finite or negative");
+        }
+        mesh_branch_alpha_cutoff = parsed;
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --branch-cutoff expects a non-negative finite number." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--look-ahead")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --look-ahead requires a non-negative integer." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const long long parsed = std::stoll(argv[arg_idx + 1]);
+        if (parsed < 0)
+        {
+          throw std::out_of_range("negative");
+        }
+        mesh_look_ahead = static_cast<size_t>(parsed);
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --look-ahead expects a non-negative integer." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
     else if (arg == "--debug-files")
     {
       mesh_visual_debug = true;
@@ -1464,7 +1526,8 @@ int main(int argc, char* argv[])
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
           mesh_export_gpu_attributes_json, mesh_validate_log_path, mesh_alternate_section_shading,
           mesh_start_section, mesh_start_input_branches, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,
-          mesh_alpha_cutoff, mesh_visual_debug, mesh_error_files, mesh_visual_debug_separate_pending_splits,
+          mesh_alpha_cutoff, mesh_branch_alpha_cutoff, mesh_look_ahead, mesh_visual_debug, mesh_error_files,
+          mesh_visual_debug_separate_pending_splits,
           mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
           mesh_check_sites_inside_convex_hull))
     {

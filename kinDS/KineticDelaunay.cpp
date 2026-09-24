@@ -1444,7 +1444,7 @@ size_t KineticDelaunay::findContainingTriForVoronoiVertex(size_t voronoi_vertex_
   if (!outer_face)
   {
     double r = circumradius(points[0], points[1], points[2]);
-    if (r < cutoff || isMinimalInputBranchTriangle(vertices, t))
+    if (r < effectiveCutoffForTriangle(vertices, t) || isMinimalInputBranchTriangle(vertices, t))
     {
       // For existing Voronoi vertices we only recompute containment; face-inside state is managed elsewhere.
     }
@@ -1519,7 +1519,7 @@ void KineticDelaunay::initializeFaceState(size_t face_index, double t)
   if (!outer_face)
   {
     double r = circumradius(points[0], points[1], points[2]);
-    if (r < cutoff || isMinimalInputBranchTriangle(vertices, t))
+    if (r < effectiveCutoffForTriangle(vertices, t) || isMinimalInputBranchTriangle(vertices, t))
     {
       setFaceInside(face_index, true, t);
     }
@@ -1757,10 +1757,12 @@ const std::vector<size_t>& KineticDelaunay::getBranchStrands(size_t t, size_t br
   return branch_trajs.getStrandsByBranchId()[t][branch_id];
 }
 
-KineticDelaunay::KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines)
+KineticDelaunay::KineticDelaunay(
+  const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines, double branch_cutoff_arg)
   : branch_trajs(branch_trajs)
   , kinetic_algorithm_(std::make_unique<KineticAlgorithm>())
   , cutoff(cutoff)
+  , branch_cutoff(branch_cutoff_arg < 0.0 ? cutoff : branch_cutoff_arg)
   , add_dummy_boundary(add_dummy_splines)
   , flip_event_manager_(std::make_unique<FlipEventManager>(this))
   , radius_event_manager_(std::make_unique<RadiusEventManager>(this))
@@ -7419,6 +7421,143 @@ bool KineticDelaunay::runtimeBranchHasSingleFiniteTriangle(size_t runtime_branch
   return finite_triangle_count == 1;
 }
 
+bool KineticDelaunay::triangleSharesInputBranchAtSection(
+  const std::array<int, 3>& vertices, size_t branch_section) const
+{
+  if (vertices[0] < 0 || vertices[1] < 0 || vertices[2] < 0)
+  {
+    return false;
+  }
+
+  for (int v : vertices)
+  {
+    if (isDummyBoundary(static_cast<size_t>(v)))
+    {
+      return false;
+    }
+  }
+
+  const size_t tree_height = branch_trajs.getHeight();
+  if (tree_height == 0)
+  {
+    return false;
+  }
+  size_t section = branch_section;
+  if (section >= tree_height)
+  {
+    section = tree_height - 1;
+  }
+
+  const size_t branch0 = getBranchIndex(static_cast<size_t>(vertices[0]), section);
+  const size_t branch1 = getBranchIndex(static_cast<size_t>(vertices[1]), section);
+  const size_t branch2 = getBranchIndex(static_cast<size_t>(vertices[2]), section);
+  return branch0 == branch1 && branch1 == branch2;
+}
+
+size_t KineticDelaunay::inputBranchSectionIndexForCutoffClassification(double t) const
+{
+  // Base height is the event-interval upper bound (floor(t)+1); look_ahead shifts further up.
+  return inputBranchSectionIndexAtIntervalUpperBound(
+    eventIntervalUpperBound(t) + static_cast<double>(branch_alpha_look_ahead_));
+}
+
+bool KineticDelaunay::triangleSharesInputBranch(const std::array<int, 3>& vertices, double t) const
+{
+  return triangleSharesInputBranchAtSection(vertices, inputBranchSectionIndexForCutoffClassification(t));
+}
+
+double KineticDelaunay::effectiveCutoffForTriangle(const std::array<int, 3>& vertices, double t) const
+{
+  if (!branchAlphaCutoffEnabled() || triangleSharesInputBranch(vertices, t))
+  {
+    return cutoff;
+  }
+  return branch_cutoff;
+}
+
+double KineticDelaunay::effectiveCutoffForFace(size_t face_index, double t) const
+{
+  if (!graph.isLiveFace(face_index))
+  {
+    return cutoff;
+  }
+  return effectiveCutoffForTriangle(graph.getTriangleVertexIndices(face_index), t);
+}
+
+void KineticDelaunay::scheduleRadiusEventsForCutoffRegimeChanges(double t)
+{
+  if (!branchAlphaCutoffEnabled())
+  {
+    return;
+  }
+
+  const EventTime creation = eventTimeAt(t);
+
+  for (size_t face_id : graph.liveFaces())
+  {
+    if (face_id >= face_inside.size())
+    {
+      continue;
+    }
+
+    const auto vertices = graph.getTriangleVertexIndices(face_id);
+    if (vertices[0] < 0 || vertices[1] < 0 || vertices[2] < 0)
+    {
+      continue;
+    }
+
+    // Upcoming interval classification (floor(t)+1 + look_ahead). Also reconcile when look_ahead
+    // already made prev/next agree on cross-branch but stored face_inside still lags.
+    const bool next_same = triangleSharesInputBranch(vertices, t);
+
+    glm::dvec2 points[3];
+    bool ok = true;
+    glm::dvec2 center { 0.0, 0.0 };
+    for (int i = 0; i < 3; ++i)
+    {
+      if (isDummyBoundary(static_cast<size_t>(vertices[i])))
+      {
+        ok = false;
+        break;
+      }
+      points[i] = getPointAt(static_cast<size_t>(vertices[i]), t);
+      center += points[i];
+    }
+    if (!ok)
+    {
+      continue;
+    }
+    center /= 3.0;
+
+    double r = 0.0;
+    try
+    {
+      r = circumradius(points[0], points[1], points[2]);
+    }
+    catch (const std::exception&)
+    {
+      continue;
+    }
+
+    const double next_cutoff = next_same ? cutoff : branch_cutoff;
+    const bool expected_inside = (r < next_cutoff) || mustRemainInside(face_id, t);
+    if (face_inside[face_id] == expected_inside)
+    {
+      continue;
+    }
+
+    const size_t he_id = graph.face(face_id).half_edges[0];
+    if (!graph.isLiveHalfEdge(he_id))
+    {
+      continue;
+    }
+
+    auto ev = std::make_shared<RadiusEvent>(this, t, he_id, creation.real_time, center, expected_inside);
+    ev->creation_time = creation;
+    kinetic_algorithm_->enqueueEvent(std::move(ev));
+  }
+}
+
 bool KineticDelaunay::isMinimalInputBranchTriangle(const std::array<int, 3>& vertices, double t) const
 {
   if (vertices[0] == -1 || vertices[1] == -1 || vertices[2] == -1)
@@ -7691,7 +7830,8 @@ FiniteFaceInsideExpectation computeFiniteFaceInsideExpectation(
     return out;
   }
 
-  out.expected_inside = (out.circumradius < kd.getCutoff()) || kd.mustRemainInside(face_id, t);
+  out.expected_inside
+    = (out.circumradius < kd.effectiveCutoffForTriangle(out.vertices, t)) || kd.mustRemainInside(face_id, t);
   out.valid = true;
   return out;
 }
@@ -7747,16 +7887,57 @@ void validateStoredFaceInsideAgainstExpectation(const KineticDelaunay& kd, size_
     return;
   }
 
-  const FiniteFaceInsideExpectation info = computeFiniteFaceInsideExpectation(kd, face_id, t);
+  FiniteFaceInsideExpectation info = computeFiniteFaceInsideExpectation(kd, face_id, t);
   if (!info.valid)
   {
     return;
   }
 
-  const bool stored_inside = kd.getFaceInside(face_id);
-  if (stored_inside != info.expected_inside)
+  double check_cutoff = kd.effectiveCutoffForFace(face_id, t);
+  bool expected_inside = info.expected_inside;
+
+  // At exact section times, same-time RadiusEvents (regime flip and/or look_ahead reconciliation) are
+  // still queued. Stored face_inside reflects the prior interval — validate against that cutoff.
+  // When stored already disagrees with the prior cutoff but a same-time event will move it to the
+  // upcoming expectation (typical when look_ahead made prev/next agree on branch_alpha while state
+  // still lags), allow the lag.
+  if (kd.branchAlphaCutoffEnabled())
   {
-    throwIncorrectFaceInsideState(context, face_id, stored_inside, info, kd.getCutoff(), t, extra_detail);
+    const size_t section_n = static_cast<size_t>(std::floor(std::max(0.0, t)));
+    if (t == static_cast<double>(section_n))
+    {
+      const bool prev_same = kd.triangleSharesInputBranchAtSection(info.vertices,
+        kd.inputBranchSectionIndexAtIntervalUpperBound(
+          static_cast<double>(section_n) + static_cast<double>(kd.getBranchAlphaLookAhead())));
+      const bool next_same = kd.triangleSharesInputBranch(info.vertices, t);
+      const double prev_cutoff = prev_same ? kd.getCutoff() : kd.getBranchCutoff();
+      const double next_cutoff = next_same ? kd.getCutoff() : kd.getBranchCutoff();
+      const bool expected_prev
+        = (info.circumradius < prev_cutoff) || kd.mustRemainInside(face_id, t);
+      const bool expected_next
+        = (info.circumradius < next_cutoff) || kd.mustRemainInside(face_id, t);
+      const bool stored_inside = kd.getFaceInside(face_id);
+
+      check_cutoff = prev_cutoff;
+      expected_inside = expected_prev;
+
+      if (stored_inside != expected_next)
+      {
+        // Radius event pending toward next. Accept prior-consistent state, or lag when prior and
+        // next agree (look_ahead already on the new cutoff but stored has not caught up yet).
+        if (stored_inside == expected_prev || expected_prev == expected_next)
+        {
+          return;
+        }
+      }
+    }
+  }
+
+  const bool stored_inside = kd.getFaceInside(face_id);
+  if (stored_inside != expected_inside)
+  {
+    info.expected_inside = expected_inside;
+    throwIncorrectFaceInsideState(context, face_id, stored_inside, info, check_cutoff, t, extra_detail);
   }
 }
 } // namespace

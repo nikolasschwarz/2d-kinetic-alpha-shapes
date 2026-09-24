@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <array>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <map>
@@ -426,6 +427,10 @@ class KineticDelaunay
   /// Empty until @ref init. Index = strand id.
   std::vector<bool> tracked_strand_;
   double cutoff; // Cutoff radius for boundary events
+  /// Cutoff for cross-input-branch triangles; feature inactive when equal to @ref cutoff.
+  double branch_cutoff;
+  /// Extra sections above floor(t)+1 for branch_alpha same-branch classification (0 = default).
+  size_t branch_alpha_look_ahead_ = 0;
   std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
 
   std::vector<std::vector<size_t>> branches; // track which vertices/splines belong to which branch
@@ -600,7 +605,8 @@ class KineticDelaunay
     Polynomial& event_trigger, double min_x, bool only_positive_to_negative = false);
 
  public:
-  KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines);
+  KineticDelaunay(const StrandTree& branch_trajs, double cutoff, bool add_dummy_splines,
+    double branch_cutoff = -1.0);
   ~KineticDelaunay();
 
   bool isDummyBoundary(size_t v) const;
@@ -932,6 +938,48 @@ class KineticDelaunay
 
   /** Alpha / radius cutoff used for inside-outside classification (see radius events). */
   double getCutoff() const { return cutoff; }
+
+  /** Cross-branch radius cutoff; equals @ref getCutoff when the branch-specific path is disabled. */
+  double getBranchCutoff() const { return branch_cutoff; }
+
+  /** True when @ref branch_cutoff differs from @ref cutoff. */
+  bool branchAlphaCutoffEnabled() const { return branch_cutoff != cutoff; }
+
+  /** Extra sections above floor(t)+1 for same-branch classification; 0 preserves default. */
+  size_t getBranchAlphaLookAhead() const { return branch_alpha_look_ahead_; }
+  void setBranchAlphaLookAhead(size_t look_ahead) { branch_alpha_look_ahead_ = look_ahead; }
+
+  /**
+   * Branch-index height used for @ref branch_alpha_cutoff same-branch checks at @p t:
+   * floor(t)+1 + look_ahead, clamped to the last valid StrandTree height index.
+   */
+  size_t inputBranchSectionIndexForCutoffClassification(double t) const;
+
+  /**
+   * True when the three finite non-dummy vertices share one input branch at @p branch_section
+   * (StrandTree branch index height).
+   */
+  bool triangleSharesInputBranchAtSection(const std::array<int, 3>& vertices, size_t branch_section) const;
+
+  /**
+   * Same-branch check at @ref inputBranchSectionIndexForCutoffClassification(@p t).
+   */
+  bool triangleSharesInputBranch(const std::array<int, 3>& vertices, double t) const;
+
+  /**
+   * Effective circumradius cutoff for a triangle at @p t: @ref cutoff when same-branch (or feature off),
+   * otherwise @ref branch_cutoff.
+   */
+  double effectiveCutoffForTriangle(const std::array<int, 3>& vertices, double t) const;
+
+  /** @ref effectiveCutoffForTriangle for a live face's vertices. */
+  double effectiveCutoffForFace(size_t face_index, double t) const;
+
+  /**
+   * At section @p t (integer), enqueue RadiusEvents for faces whose stored inside/outside state does
+   * not match the upcoming look_ahead-aware cutoff (regime flips and lagged look_ahead transitions).
+   */
+  void scheduleRadiusEventsForCutoffRegimeChanges(double t);
 
   void setFaceInside(size_t face_index, bool value, double t);
 

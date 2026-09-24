@@ -741,7 +741,9 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   // sort subdivisions into a single array
   std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
-  kinetic_delaunay = std::make_shared<KineticDelaunay>(strand_tree, settings.alpha_cutoff, false);
+  kinetic_delaunay = std::make_shared<KineticDelaunay>(
+    strand_tree, settings.alpha_cutoff, false, settings.branch_alpha_cutoff);
+  kinetic_delaunay->setBranchAlphaLookAhead(settings.look_ahead);
   // Debug/error file dumps key off the visual-debug output root; default to cwd when either is enabled.
   const bool enable_debug_output_root = visual_debug || settings.error_files;
   if (enable_debug_output_root && !settings.visual_debug_output_root.has_value())
@@ -793,6 +795,9 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   kinetic_delaunay->setSitesInsideConvexHullCheckEnabled(settings.check_sites_inside_convex_hull);
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
+                                                                                      << ", branch_alpha_cutoff="
+                                                                                      << settings.branch_alpha_cutoff
+                                                                                      << ", look_ahead=" << settings.look_ahead
                                                                                       << ", visual_debug=" << visual_debug
                                                                                       << ", error_files=" << mesh_builder->shouldDumpErrorFiles()
                                                                                       << ", transform_mesh_at_construction="

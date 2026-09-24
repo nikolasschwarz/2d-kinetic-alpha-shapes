@@ -245,7 +245,9 @@ void logRadiusTriggerRootsForMonitoredFace(const KineticDelaunay& kd, size_t fac
          << ", schedule_t=" << schedule_event_time
          << ", event_interval_upper_bound=" << event_interval_upper_bound << ", section=" << section
          << ", " << (virtual_mode ? "min_infinitesimal_t=" : "min_fraction=") << root_min
-         << ", cutoff=" << kd.getCutoff()
+         << ", cutoff=" << kd.effectiveCutoffForTriangle(
+              { static_cast<int>(strand_ids[0]), static_cast<int>(strand_ids[1]), static_cast<int>(strand_ids[2]) }, t)
+         << ", alpha_cutoff=" << kd.getCutoff() << ", branch_alpha_cutoff=" << kd.getBranchCutoff()
          << ", trigger_degree=" << event_trigger.degree()
          << ", pass=" << (virtual_mode ? "infinitesimal" : "primary") << ")";
   if (virtual_mode)
@@ -430,7 +432,9 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id,
 
   Polynomial event_trigger
     = circumradiusEquals(
-      trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1], kd->cutoff);
+      trajs[0][0], trajs[0][1], trajs[1][0], trajs[1][1], trajs[2][0], trajs[2][1],
+      kd->effectiveCutoffForTriangle(
+        { static_cast<int>(u), static_cast<int>(v), static_cast<int>(w) }, t));
 
   const bool virtual_mode = infinitesimal.has_value();
   const double root_min = virtual_mode ? kd->infinitesimal_recompute_min_x_ : static_cast<double>(fraction);
