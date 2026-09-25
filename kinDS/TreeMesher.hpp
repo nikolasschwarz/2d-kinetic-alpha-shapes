@@ -46,6 +46,7 @@ class TreeMesher
     double alpha_cutoff = 10.0; // default value, can be adjusted as needed
     /// Radius cutoff for triangles whose three strands do not share one input branch at t+1.
     /// When equal to @ref alpha_cutoff the branch-specific path is disabled.
+    /// CLI @c --branch-cutoff defaults to @ref alpha_cutoff when omitted.
     double branch_alpha_cutoff = 10.0;
     /// Extra sections above the interval upper bound (floor(t)+1) when classifying same-branch membership
     /// for @ref branch_alpha_cutoff. 0 = current behavior. Out-of-range heights clamp to the last valid index.

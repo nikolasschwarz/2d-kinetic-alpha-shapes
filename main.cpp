@@ -512,7 +512,8 @@ static void print_usage(const char* program_name)
             << "  --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off).\n"
             << "                            Natural branch endings and tree-top caps are always produced.\n"
             << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)\n"
-            << "  --branch-cutoff <value>   Cross-branch radius cutoff; disabled when equal to --cutoff (default: 10)\n"
+            << "  --branch-cutoff <value>   Cross-branch radius cutoff; disabled when equal to --cutoff\n"
+            << "                            (default: same as --cutoff)\n"
             << "  --look-ahead <n>          Extra sections above floor(t)+1 for branch-alpha same-branch checks (default: 0)\n"
             << "  --debug-files [path] [lower] [upper]\n"
             << "                            Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
@@ -965,7 +966,7 @@ int main(int argc, char* argv[])
   bool mesh_cap_at_start = false;
   bool mesh_cap_at_end = false;
   double mesh_alpha_cutoff = kinDS::TreeMesher::Settings {}.alpha_cutoff;
-  double mesh_branch_alpha_cutoff = kinDS::TreeMesher::Settings {}.branch_alpha_cutoff;
+  std::optional<double> mesh_branch_alpha_cutoff; // unset → inherit mesh_alpha_cutoff after parsing
   size_t mesh_look_ahead = kinDS::TreeMesher::Settings {}.look_ahead;
   bool mesh_visual_debug = false;
   bool mesh_error_files = false;
@@ -1503,6 +1504,8 @@ int main(int argc, char* argv[])
     return 1;
   }
 
+  const double resolved_branch_alpha_cutoff = mesh_branch_alpha_cutoff.value_or(mesh_alpha_cutoff);
+
   // Second pass: execute the chosen command (options already applied)
   if (command == "help")
   {
@@ -1526,7 +1529,7 @@ int main(int argc, char* argv[])
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
           mesh_export_gpu_attributes_json, mesh_validate_log_path, mesh_alternate_section_shading,
           mesh_start_section, mesh_start_input_branches, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,
-          mesh_alpha_cutoff, mesh_branch_alpha_cutoff, mesh_look_ahead, mesh_visual_debug, mesh_error_files,
+          mesh_alpha_cutoff, resolved_branch_alpha_cutoff, mesh_look_ahead, mesh_visual_debug, mesh_error_files,
           mesh_visual_debug_separate_pending_splits,
           mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
           mesh_check_sites_inside_convex_hull))
