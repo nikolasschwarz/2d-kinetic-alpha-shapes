@@ -985,8 +985,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// disk coordinates, plus kinetic height.
   glm::dvec3 interiorMeshUv(const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid,
     const glm::dvec2& delaunay_xy, double t) const;
+  /// @p vertex XY must be in Delaunay space (same as @p centroid). Mesh placement uses @p strand_id via
+  /// getPointInMeshSpace unless @p explicit_mesh_position is set (synthetic midpoints).
   size_t addBoundaryVertex(
-    glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift);
+    glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift,
+    const std::optional<glm::dvec3>& explicit_mesh_position = std::nullopt);
 
   size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}",
     int material_id = RegularMeshletMaterialId);
@@ -1080,9 +1083,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void advanceBoundaryMesh(double t, const std::vector<BoundaryPoint>& boundary_points, const glm::dvec2& centroid);
 
-  void updateBoundary(double t, std::vector<bool>& visited, size_t component_index);
+  void updateBoundary(double t, std::vector<bool>& visited, size_t component_index, bool force = false);
 
-  void updateBoundaries(double t, const std::vector<size_t>& component_indices);
+  void updateBoundaries(double t, const std::vector<size_t>& component_indices, bool force = false);
+
+  /// Re-extract live component hulls / centroids after a graph cut or retriangulation.
+  /// Bark UVs (@ref boundaryRawUv) depend on these centroids; refreshing only at the next section is too late.
+  void refreshComponentBoundariesAfterGraphTopologyChange(double t);
 
   bool isComponentLive(size_t component_index) const;
 

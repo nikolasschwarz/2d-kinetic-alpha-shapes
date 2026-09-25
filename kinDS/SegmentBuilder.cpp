@@ -1651,7 +1651,10 @@ static bool isInside(const std::vector<BoundaryPoint>& polygon, const glm::dvec2
 
 [[nodiscard]] glm::dvec3 kinDS::SegmentBuilder::computeVoronoiVertex(size_t half_edge_id, double t) const
 {
-  return kin_del.computeVoronoiVertexClampedInfinity(half_edge_id, t, false, false);
+  // Same Delaunay frame as getPointInDelaunaySpace / PostSplitFrameTransition hold+blend.
+  // UV and alpha-shape tests compare this against component_boundaries / centroids.
+  return kin_del.computeVoronoiVertexClampedInfinity(half_edge_id, t, /*apply_reference_transform=*/true,
+    /*include_virtual_offset=*/true);
 }
 
 bool clampVoronoiVertices(glm::dvec3& left_vertex, glm::dvec3& right_vertex,
@@ -6535,20 +6538,35 @@ void SegmentBuilder::applyUntransformedMeshViewTransform()
 }
 
 size_t kinDS::SegmentBuilder::addBoundaryVertex(
-  glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift)
+  glm::dvec3 vertex, glm::dvec2 centroid, size_t strand_id, double t, bool includes_virtual_shift,
+  const std::optional<glm::dvec3>& explicit_mesh_position)
 {
+  // Caller XY is Delaunay-space (same frame as component centroids / getPointInDelaunaySpace).
+  // Mesh placement must not feed that XY through transformFromInputBranchToObjectSpace: after a
+  // post-split frame hold the Delaunay point is in the shared parent frame, not the strand's native
+  // profile plane.
   const glm::dvec2 delaunay_xy(vertex.x, vertex.y);
-  glm::dvec2 profile_xy(vertex.x, vertex.y);
-  if (!create_transformed_mesh)
+  const double mesh_z = vertex.z;
+  glm::dvec2 profile_xy = delaunay_xy;
+  if (explicit_mesh_position.has_value())
+  {
+    vertex = explicit_mesh_position.value();
+    vertex.z = mesh_z;
+    profile_xy = glm::dvec2(vertex.x, vertex.y);
+    includes_virtual_shift = false;
+  }
+  else if (!create_transformed_mesh)
   {
     vertex = computeMeshSiteVertexPosition(vertex, strand_id, t);
+    vertex.z = mesh_z;
     profile_xy = glm::dvec2(vertex.x, vertex.y);
     includes_virtual_shift = false;
   }
   else
   {
-    applyMeshVirtualShiftToProfileVertex(vertex, profile_xy, strand_id, t, includes_virtual_shift);
-    vertex = transformFromInputBranchToObjectSpace(vertex, strand_id, t);
+    vertex = getPointInMeshSpace(strand_id, t);
+    vertex.z = mesh_z;
+    includes_virtual_shift = false;
   }
   const glm::dvec2 raw_uv = boundaryRawUv(delaunay_xy, centroid, t);
 
@@ -8126,7 +8144,7 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
       continue;
     }
 
-    glm::dvec2 vertex = kin_del.getPointAt(t, strand_id, false, false);
+    const glm::dvec2 vertex = kin_del.getPointInDelaunaySpace(strand_id, t);
 
     auto component_index = kin_del.component_data.component_map[strand_id];
     auto& centroid = kin_del.component_data.component_centroids[component_index];
@@ -8341,7 +8359,7 @@ std::vector<size_t> kinDS::SegmentBuilder::collectLiveComponentIndices() const
   return live_component_indices;
 }
 
-void kinDS::SegmentBuilder::updateBoundary(double t, std::vector<bool>& visited, size_t component_index)
+void kinDS::SegmentBuilder::updateBoundary(double t, std::vector<bool>& visited, size_t component_index, bool force)
 {
   if (component_index >= kin_del.component_data.components.size()
     || kin_del.component_data.components[component_index].empty() || !isComponentLive(component_index))
@@ -8349,28 +8367,42 @@ void kinDS::SegmentBuilder::updateBoundary(double t, std::vector<bool>& visited,
     return;
   }
 
-  if (kin_del.component_data.component_last_updated[component_index] != t)
+  if (!force && kin_del.component_data.component_last_updated[component_index] == t)
   {
-    kin_del.component_data.component_boundaries[component_index] = kin_del.extractComponentBoundaries(
-      kin_del.component_data.components[component_index], t, visited, false, false);
-    if (!kin_del.component_data.component_boundaries[component_index].empty()
-      && !kin_del.component_data.component_boundaries[component_index][0].empty())
-    {
-      kin_del.component_data.component_centroids[component_index]
-        = polygonCentroid(kin_del.component_data.component_boundaries[component_index][0]);
-    }
-    kin_del.component_data.component_last_updated[component_index] = t;
+    return;
   }
+
+  // Delaunay space (reference transform + virtual offset): must match getPointInDelaunaySpace /
+  // computeVoronoiVertex used for bark UV. During PostSplitFrameTransition this is the shared
+  // common frame until hold_end, then the blend/native frame — not each strand's raw evaluate().
+  kin_del.component_data.component_boundaries[component_index] = kin_del.extractComponentBoundaries(
+    kin_del.component_data.components[component_index], t, visited, /*apply_reference_transform=*/true,
+    /*include_virtual_offset=*/true);
+  if (!kin_del.component_data.component_boundaries[component_index].empty()
+    && !kin_del.component_data.component_boundaries[component_index][0].empty())
+  {
+    kin_del.component_data.component_centroids[component_index]
+      = polygonCentroid(kin_del.component_data.component_boundaries[component_index][0]);
+  }
+  kin_del.component_data.component_last_updated[component_index] = t;
 }
 
-void kinDS::SegmentBuilder::updateBoundaries(double t, const std::vector<size_t>& component_indices)
+void kinDS::SegmentBuilder::updateBoundaries(
+  double t, const std::vector<size_t>& component_indices, bool force)
 {
   std::vector<bool> visited(kin_del.getGraph().halfEdgeSlotCount(), false);
 
   for (size_t component_index : component_indices)
   {
-    updateBoundary(t, visited, component_index);
+    updateBoundary(t, visited, component_index, force);
   }
+}
+
+void kinDS::SegmentBuilder::refreshComponentBoundariesAfterGraphTopologyChange(double t)
+{
+  // Must force: splitComponent often already stamped component_last_updated at this same real time
+  // (pre-cut hull). After the cut the alpha-shape boundary changes and bark UV centroids must follow.
+  updateBoundaries(t, collectLiveComponentIndices(), /*force=*/true);
 }
 
 void kinDS::SegmentBuilder::advanceBoundaryMeshes(double t)
@@ -8722,17 +8754,18 @@ void kinDS::SegmentBuilder::onGraphRetriangulated(double t, size_t prev_face_slo
   initializeNewHalfEdgesAfterGraphUpdate(t, prev_he_slots);
   refreshCrossingRefsForAllStrips();
   refreshCrossingRefsForAllIntersectionStrips();
+  refreshComponentBoundariesAfterGraphTopologyChange(t);
 }
 
 void kinDS::SegmentBuilder::onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots)
 {
-  (void)t;
   (void)prev_face_slots;
   (void)prev_he_slots;
   growGraphSlotArrays();
   clearDeadHalfEdgeState();
   refreshCrossingRefsForAllStrips();
   refreshCrossingRefsForAllIntersectionStrips();
+  refreshComponentBoundariesAfterGraphTopologyChange(t);
 }
 
 void kinDS::SegmentBuilder::onBeforeComponentGraphSplit(double /*t*/) { }
@@ -10415,7 +10448,8 @@ void kinDS::SegmentBuilder::splitComponent(
       {
         continue;
       }
-      provisional_centroid += kin_del.getPointAt(strand_id, t, false, false);
+      // Same Delaunay frame as updateBoundary / bark UV (respects post-split common hold).
+      provisional_centroid += kin_del.getPointInDelaunaySpace(strand_id, t);
       provisional_weight += 1.0;
     }
     if (provisional_weight > 0.0)
@@ -10432,8 +10466,8 @@ void kinDS::SegmentBuilder::splitComponent(
   for (size_t i = 0; i < new_components.size(); i++)
   {
     size_t cid = component_ids[i];
-    kin_del.component_data.component_boundaries[cid]
-      = kin_del.extractComponentBoundaries(new_components[i], t, he_visited, false, false);
+    kin_del.component_data.component_boundaries[cid] = kin_del.extractComponentBoundaries(new_components[i], t,
+      he_visited, /*apply_reference_transform=*/true, /*include_virtual_offset=*/true);
     if (!kin_del.component_data.component_boundaries[cid].empty()
       && !kin_del.component_data.component_boundaries[cid][0].empty())
     {

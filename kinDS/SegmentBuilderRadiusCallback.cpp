@@ -822,14 +822,18 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
         break;
       }
     }
-    glm::dvec2 p0 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[0], false, false);
-    glm::dvec2 p1 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[1], false, false);
-    glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[2], false, false);
+    glm::dvec2 p0 = segment_builder_.kin_del.getPointInDelaunaySpace(vertices[0], radius->occurrence_time);
+    glm::dvec2 p1 = segment_builder_.kin_del.getPointInDelaunaySpace(vertices[1], radius->occurrence_time);
+    glm::dvec2 p2 = segment_builder_.kin_del.getPointInDelaunaySpace(vertices[2], radius->occurrence_time);
     glm::dvec2 new_point = (p0 + p1 + p2) / 3.0;
+    const glm::dvec3 mesh_point = (segment_builder_.getPointInMeshSpace(vertices[0], radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(vertices[1], radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(vertices[2], radius->occurrence_time))
+      / 3.0;
 
     size_t new_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
     segment_builder_.addBoundaryVertex(glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time },
-      glm::dvec2 { 0.0, 0.0 }, vertices[0], radius->occurrence_time, false);
+      glm::dvec2 { 0.0, 0.0 }, vertices[0], radius->occurrence_time, false, mesh_point);
 
     if (is_inside)
     {
@@ -867,13 +871,18 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t outer_he_id = inner_he_id ^ 1;
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
 
-    glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex, false, false);
+    glm::dvec2 opposite_point
+      = segment_builder_.kin_del.getPointInDelaunaySpace(opposite_vertex, radius->occurrence_time);
     size_t u = graph.halfEdge(inner_he_id).origin;
-    glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u, false, false);
+    glm::dvec2 p_u = segment_builder_.kin_del.getPointInDelaunaySpace(u, radius->occurrence_time);
     size_t v = graph.halfEdge(outer_he_id).origin;
-    glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v, false, false);
+    glm::dvec2 p_v = segment_builder_.kin_del.getPointInDelaunaySpace(v, radius->occurrence_time);
 
     glm::dvec2 new_boundary_vertex = (opposite_point + p_u + p_v) / 3.0;
+    const glm::dvec3 mesh_point = (segment_builder_.getPointInMeshSpace(opposite_vertex, radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(u, radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(v, radius->occurrence_time))
+      / 3.0;
 
     size_t component_id = segment_builder_.kin_del.component_data.component_map[v];
     auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
@@ -888,7 +897,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     const auto& boundary_last_vertices = segment_builder_.boundary_mesh_last_left_and_right_vertex[boundary_he_id];
 
     size_t new_boundary_vertex_index = segment_builder_.addBoundaryVertex(
-      glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], radius->occurrence_time }, centroid, opposite_vertex, radius->occurrence_time, false);
+      glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], radius->occurrence_time }, centroid, opposite_vertex,
+      radius->occurrence_time, false, mesh_point);
 
     size_t index
       = segment_builder_.addBoundaryTriangle(boundary_last_vertices.first, boundary_last_vertices.second, new_boundary_vertex_index);
@@ -937,12 +947,17 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 
     size_t opposite_vertex = graph.triangleOppositeVertex(inner_he_id);
 
-    glm::dvec2 opposite_point = segment_builder_.kin_del.getPointAt(radius->occurrence_time, opposite_vertex, false, false);
+    glm::dvec2 opposite_point
+      = segment_builder_.kin_del.getPointInDelaunaySpace(opposite_vertex, radius->occurrence_time);
     size_t u = graph.halfEdge(inner_he_id).origin;
-    glm::dvec2 p_u = segment_builder_.kin_del.getPointAt(radius->occurrence_time, u, false, false);
+    glm::dvec2 p_u = segment_builder_.kin_del.getPointInDelaunaySpace(u, radius->occurrence_time);
     size_t v = graph.halfEdge(outer_he_id).origin;
-    glm::dvec2 p_v = segment_builder_.kin_del.getPointAt(radius->occurrence_time, v, false, false);
+    glm::dvec2 p_v = segment_builder_.kin_del.getPointInDelaunaySpace(v, radius->occurrence_time);
     glm::dvec2 old_boundary_vertex = (opposite_point + p_u + p_v) / 3.0;
+    const glm::dvec3 mesh_point = (segment_builder_.getPointInMeshSpace(opposite_vertex, radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(u, radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(v, radius->occurrence_time))
+      / 3.0;
 
     size_t component_id = segment_builder_.kin_del.component_data.component_map[v];
     auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
@@ -950,7 +965,8 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 
     size_t old_boundary_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
     segment_builder_.addBoundaryVertex(
-      glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], radius->occurrence_time }, centroid, opposite_vertex, radius->occurrence_time, false);
+      glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], radius->occurrence_time }, centroid, opposite_vertex,
+      radius->occurrence_time, false, mesh_point);
 
     size_t he1_id = graph.halfEdge(inner_he_id).next;
     size_t he2_id = graph.halfEdge(he1_id).next;
@@ -1010,13 +1026,17 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       vertices[i] = graph.halfEdge(face_half_edges[i]).origin;
     }
-    glm::dvec2 p0 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[0], false, false);
-    glm::dvec2 p1 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[1], false, false);
-    glm::dvec2 p2 = segment_builder_.kin_del.getPointAt(radius->occurrence_time, vertices[2], false, false);
+    glm::dvec2 p0 = segment_builder_.kin_del.getPointInDelaunaySpace(vertices[0], radius->occurrence_time);
+    glm::dvec2 p1 = segment_builder_.kin_del.getPointInDelaunaySpace(vertices[1], radius->occurrence_time);
+    glm::dvec2 p2 = segment_builder_.kin_del.getPointInDelaunaySpace(vertices[2], radius->occurrence_time);
     glm::dvec2 new_point = (p0 + p1 + p2) / 3.0;
+    const glm::dvec3 mesh_point = (segment_builder_.getPointInMeshSpace(vertices[0], radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(vertices[1], radius->occurrence_time)
+                                    + segment_builder_.getPointInMeshSpace(vertices[2], radius->occurrence_time))
+      / 3.0;
 
     size_t new_vertex_index = segment_builder_.addBoundaryVertex(glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time },
-      glm::dvec2 { 0.0, 0.0 }, vertices[0], radius->occurrence_time, false);
+      glm::dvec2 { 0.0, 0.0 }, vertices[0], radius->occurrence_time, false, mesh_point);
 
     for (size_t i = 0; i < 3; ++i)
     {
