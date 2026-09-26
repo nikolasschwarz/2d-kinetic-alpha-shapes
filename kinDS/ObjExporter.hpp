@@ -74,7 +74,8 @@ struct ObjWriteOptions
   bool include_vertex_colors = false;
   bool alternate_section_shading = false;
   bool write_obj_groups = true;
-  /// EcoSysLab-compatible OBJ: bark/interior face grouping, negate normal X, slim MTL.
+  /// EcoSysLab-compatible OBJ: bark/interior face grouping, interleaved per-corner vt/vn, slim MTL.
+  /// Writes geometric normals (no X flip). Engine mesh shading may still flip X at draw time.
   bool framework_compatible = false;
   /// When non-empty and sized to match the mesh material names, write these Kd colors into the MTL
   /// instead of the built-in bark/interior or debug material set.
@@ -474,7 +475,8 @@ class ObjExporter
         for (size_t j = 0; j < 3; ++j)
         {
           const size_t corner = corner_base + j;
-          // vt/vn streams are emitted once per triangle corner in triangle order.
+          // vt/vn streams are one record per triangle corner in mesh triangle order.
+          // Index by corner — never by triangles[corner] (vertex id).
           file << " " << (indices[corner] + 1) << "/" << (corner + 1) << "/" << (corner + 1);
         }
         file << "\n";
@@ -894,8 +896,21 @@ class ObjExporter
 
     if (options.framework_compatible)
     {
-      // Interleaved vt/vn per triangle corner (EcoSysLab style), with negated normal X.
-      file << "# Texture coordinates and normals\n";
+      // Interleaved vt/vn once per triangle corner. Normals must be PerTriangleCorner and indexed
+      // by corner (same stream faces reference as `f v/(corner+1)/(corner+1)`), never by vertex id.
+      if (mesh.getNormalMode() != NormalMode::PerTriangleCorner)
+      {
+        throw std::runtime_error(
+            "ObjExporter::writeMesh(framework_compatible): mesh normal mode must be PerTriangleCorner.");
+      }
+      if (mesh.getNormals().size() != mesh.getTriangles().size())
+      {
+        throw std::runtime_error(
+            "ObjExporter::writeMesh(framework_compatible): expected one normal per triangle corner, got " +
+            std::to_string(mesh.getNormals().size()) + " normals for " + std::to_string(mesh.getTriangles().size()) +
+            " corners.");
+      }
+      file << "# Texture coordinates and normals (per triangle corner)\n";
       for (size_t i = 0; i < mesh.getTriangleCount(); ++i)
       {
         int material = (i < mesh.getMaterialIDs().size()) ? mesh.getMaterialIDs()[i] : -1;
@@ -913,13 +928,10 @@ class ObjExporter
             uv[2] *= options.uv_height_factor;
           }
 
-          glm::dvec3 normal(0.0);
-          if (corner_index < mesh.getNormals().size())
-          {
-            normal = mesh.getNormals()[corner_index];
-          }
+          // Index normals by corner — do not use triangles[corner] (that is a vertex id).
+          const glm::dvec3& normal = mesh.getNormals()[corner_index];
           file << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
-          file << "vn " << (-normal[0]) << " " << normal[1] << " " << normal[2] << "\n";
+          file << "vn " << normal[0] << " " << normal[1] << " " << normal[2] << "\n";
         }
       }
     }
