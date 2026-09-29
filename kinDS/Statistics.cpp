@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -42,6 +43,12 @@ void Statistics::reset()
   current_section_id_ = 0;
   sections_.clear();
   totals_ = {};
+  event_list_.clear();
+  totals_alpha_.reset();
+  totals_triangle_count_.reset();
+  totals_vertex_count_.reset();
+  totals_failure_.reset();
+  filename_experiment_tag_.clear();
 }
 
 void Statistics::beginRun()
@@ -117,6 +124,33 @@ void Statistics::onEvent(KineticEventType type, double occurrence_time)
   totals_.event_counts[type_index] += 1;
 }
 
+void Statistics::recordEvent(EventListRow row)
+{
+  if (!run_active_ || row.type >= KineticEventType::Count || !std::isfinite(row.occurrence_t)
+    || row.occurrence_t < 0.0)
+  {
+    return;
+  }
+  onEvent(row.type, row.occurrence_t);
+  event_list_.push_back(std::move(row));
+}
+
+void Statistics::setRadiusShift(uint64_t event_id, bool shifted)
+{
+  if (!run_active_)
+  {
+    return;
+  }
+  for (auto it = event_list_.rbegin(); it != event_list_.rend(); ++it)
+  {
+    if (it->event_id == event_id)
+    {
+      it->radius_shift = shifted;
+      return;
+    }
+  }
+}
+
 void Statistics::setSectionTopology(size_t section_id, size_t strand_count, size_t branch_count)
 {
   if (!run_active_)
@@ -132,6 +166,27 @@ void Statistics::setTotalsTopology(size_t strand_count, size_t branch_count)
 {
   totals_.strand_count = strand_count;
   totals_.branch_count = branch_count;
+}
+
+void Statistics::setTotalsAlpha(double alpha)
+{
+  totals_alpha_ = alpha;
+}
+
+void Statistics::setTotalsMeshCounts(size_t triangle_count, size_t vertex_count)
+{
+  totals_triangle_count_ = triangle_count;
+  totals_vertex_count_ = vertex_count;
+}
+
+void Statistics::setTotalsFailure(std::string message)
+{
+  totals_failure_ = std::move(message);
+}
+
+void Statistics::setFilenameExperimentTag(std::string tag)
+{
+  filename_experiment_tag_ = std::move(tag);
 }
 
 void Statistics::addWallTimeSeconds(double seconds)
@@ -193,9 +248,80 @@ std::filesystem::path Statistics::timestampedCsvPath(const std::filesystem::path
   return base.parent_path() / (stem + "_" + stamp.str() + extension);
 }
 
+std::filesystem::path Statistics::eventListCsvPathBeside(const std::filesystem::path& statistics_csv_path)
+{
+  std::filesystem::path base
+    = statistics_csv_path.empty() ? std::filesystem::path("meshing_statistics.csv") : statistics_csv_path;
+  if (base.has_filename() && base.filename() == ".")
+  {
+    base /= "meshing_statistics.csv";
+  }
+  else if (!base.has_filename())
+  {
+    base /= "meshing_statistics.csv";
+  }
+
+  std::string stem = base.stem().string();
+  if (stem.empty())
+  {
+    stem = "meshing_event_list";
+  }
+  else
+  {
+    const size_t pos = stem.find("statistics");
+    if (pos != std::string::npos)
+    {
+      stem.replace(pos, std::strlen("statistics"), "event_list");
+    }
+    else
+    {
+      stem += "_event_list";
+    }
+  }
+  std::string extension = base.extension().string();
+  if (extension.empty())
+  {
+    extension = ".csv";
+  }
+  return base.parent_path() / (stem + extension);
+}
+
+std::filesystem::path Statistics::statisticsCsvStemPath(const std::filesystem::path& path) const
+{
+  std::filesystem::path base = path.empty() ? std::filesystem::path("meshing_statistics.csv") : path;
+  if (base.has_filename() && base.filename() == ".")
+  {
+    base /= "meshing_statistics.csv";
+  }
+  else if (!base.has_filename())
+  {
+    base /= "meshing_statistics.csv";
+  }
+
+  std::string stem = base.stem().string();
+  if (stem.empty())
+  {
+    stem = "meshing_statistics";
+  }
+  if (!filename_experiment_tag_.empty())
+  {
+    stem += "_";
+    stem += filename_experiment_tag_;
+  }
+  stem += "_";
+  stem += std::to_string(sections_.size());
+
+  std::string extension = base.extension().string();
+  if (extension.empty())
+  {
+    extension = ".csv";
+  }
+  return base.parent_path() / (stem + extension);
+}
+
 bool Statistics::writeCsv(const std::filesystem::path& path) const
 {
-  const std::filesystem::path unique_path = timestampedCsvPath(path);
+  const std::filesystem::path unique_path = timestampedCsvPath(statisticsCsvStemPath(path));
   std::ofstream out(unique_path);
   if (!out)
   {
@@ -208,7 +334,7 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
   {
     out << ',' << kineticEventTypeName(static_cast<KineticEventType>(i));
   }
-  out << '\n';
+  out << ",alpha,triangle_count,vertex_count,failure\n";
 
   out << std::setprecision(std::numeric_limits<double>::max_digits10);
   auto write_optional_size = [&](const std::optional<size_t>& value)
@@ -218,7 +344,30 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
       out << value.value();
     }
   };
-  auto write_row = [&](const std::string& id, const SectionStats& row)
+  auto write_optional_double = [&](const std::optional<double>& value)
+  {
+    if (value.has_value())
+    {
+      out << value.value();
+    }
+  };
+  auto write_csv_string = [&](const std::string& value)
+  {
+    out << '"';
+    for (const char c : value)
+    {
+      if (c == '"')
+      {
+        out << "\"\"";
+      }
+      else
+      {
+        out << c;
+      }
+    }
+    out << '"';
+  };
+  auto write_row = [&](const std::string& id, const SectionStats& row, const bool is_total)
   {
     out << id << ',' << row.runtime_seconds << ',';
     write_optional_size(row.strand_count);
@@ -228,6 +377,26 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
     {
       out << ',' << row.event_counts[i];
     }
+    out << ',';
+    if (is_total)
+    {
+      write_optional_double(totals_alpha_);
+    }
+    out << ',';
+    if (is_total)
+    {
+      write_optional_size(totals_triangle_count_);
+    }
+    out << ',';
+    if (is_total)
+    {
+      write_optional_size(totals_vertex_count_);
+    }
+    out << ',';
+    if (is_total && totals_failure_.has_value())
+    {
+      write_csv_string(totals_failure_.value());
+    }
     out << '\n';
   };
 
@@ -236,12 +405,79 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
     [](const SectionStats& a, const SectionStats& b) { return a.section_id < b.section_id; });
   for (const SectionStats& row : ordered)
   {
-    write_row(std::to_string(row.section_id), row);
+    write_row(std::to_string(row.section_id), row, /*is_total=*/false);
   }
-  write_row("total", totals_);
+  write_row("total", totals_, /*is_total=*/true);
 
   KINDS_INFO("Statistics: wrote meshing CSV to " << unique_path.generic_string() << " (" << sections_.size()
                                                  << " section row(s) + total)");
+  return true;
+}
+
+bool Statistics::writeEventListCsv(const std::filesystem::path& path) const
+{
+  // Match statistics naming (experiment tag + section count) then swap statistics → event_list.
+  const std::filesystem::path unique_path
+    = timestampedCsvPath(eventListCsvPathBeside(statisticsCsvStemPath(path)));
+  std::ofstream out(unique_path);
+  if (!out)
+  {
+    KINDS_WARNING("Statistics: failed to open event-list CSV " << unique_path.generic_string());
+    return false;
+  }
+
+  out << "event_id,occurrence_t,occurrence_infinitesimal_t,event_type,half_edge_id,delaunay_edge_id,"
+         "voronoi_vertex_id,section_id,strand_id,parent_component_id,split_time,target_inside,radius_shift\n";
+  out << std::setprecision(std::numeric_limits<double>::max_digits10);
+
+  auto write_optional_size = [&](const std::optional<size_t>& value)
+  {
+    if (value.has_value())
+    {
+      out << value.value();
+    }
+  };
+  auto write_optional_double = [&](const std::optional<double>& value)
+  {
+    if (value.has_value())
+    {
+      out << value.value();
+    }
+  };
+  auto write_optional_bool01 = [&](const std::optional<bool>& value)
+  {
+    if (value.has_value())
+    {
+      out << (value.value() ? 1 : 0);
+    }
+  };
+
+  for (const EventListRow& row : event_list_)
+  {
+    out << row.event_id << ',' << row.occurrence_t << ',' << row.occurrence_infinitesimal_t << ','
+        << kineticEventTypeName(row.type) << ',';
+    write_optional_size(row.half_edge_id);
+    out << ',';
+    write_optional_size(row.delaunay_edge_id);
+    out << ',';
+    write_optional_size(row.voronoi_vertex_id);
+    out << ',';
+    write_optional_size(row.section_id);
+    out << ',';
+    write_optional_size(row.strand_id);
+    out << ',';
+    write_optional_size(row.parent_component_id);
+    out << ',';
+    write_optional_double(row.split_time);
+    out << ',';
+    write_optional_bool01(row.target_inside);
+    out << ',';
+    write_optional_bool01(row.radius_shift);
+    out << '\n';
+  }
+
+  KINDS_INFO("Statistics: wrote event-list CSV to " << unique_path.generic_string() << " (" << event_list_.size()
+                                                    << " event row(s))");
   return true;
 }
 } // namespace kinDS

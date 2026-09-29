@@ -27,6 +27,7 @@ class KineticDelaunay::SubdivisionEvent final : public KineticDelaunay::Event
 
   void handleEvent() override;
   KineticEventType eventType() const override { return KineticEventType::Subdivision; }
+  void populateEventListFields(Statistics::EventListRow& row) const override { row.strand_id = strand_id; }
 };
 
 class KineticDelaunay::SubdivisionEventManager final : public KineticDelaunay::EventManager

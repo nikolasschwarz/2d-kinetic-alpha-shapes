@@ -1,5 +1,6 @@
 #pragma once
 #include "MeshIntersection.hpp"
+#include "Statistics.hpp"
 #include "StrandTree.hpp"
 #include "Validator.hpp"
 #include "VoronoiMesh.hpp"
@@ -95,9 +96,15 @@ class TreeMesher
     /// (@c --end). Default false. Natural branch endings and the tree-top finalize always get caps regardless.
     bool mesh_cap_at_end = false;
     /// When true, collect per-section runtime / event / topology statistics and write CSV after meshing.
+    /// Also writes a companion event-list CSV (@c meshing_event_list_*.csv) with one row per kinetic event.
     bool collect_meshing_statistics = false;
+    /// When true with @ref collect_meshing_statistics, skip writing CSVs inside @ref runMeshingAlgorithm
+    /// so the caller can fill totals-row extras (alpha / mesh counts / experiment tag) then call
+    /// @ref writeCollectedMeshingStatistics.
+    bool defer_meshing_statistics_write = false;
     /// Base output path used when @ref collect_meshing_statistics is enabled.
     /// A timestamp is inserted into the filename at write time so runs never overwrite each other.
+    /// The event-list CSV is written beside this path (@c *statistics* → @c *event_list*).
     std::filesystem::path meshing_statistics_csv_path = "meshing_statistics.csv";
 
     // for debugging purposes:
@@ -171,6 +178,14 @@ class TreeMesher
   std::vector<VoronoiMesh>& getSegmentMeshlets() { return segment_meshlets; }
   Settings& getSettings() { return settings; }
   const Settings& getSettings() const { return settings; }
+
+  /// Kinetic meshing statistics collected during the last @ref runMeshingAlgorithm (may be empty).
+  Statistics* getMeshingStatistics();
+  const Statistics* getMeshingStatistics() const;
+
+  /// Write deferred meshing / event-list CSVs when @ref Settings::collect_meshing_statistics was enabled.
+  /// No-op if nothing was collected.
+  bool writeCollectedMeshingStatistics();
   void setSettings(const Settings& new_settings) { settings = new_settings; }
   bool meshVertexSourceValidationPassed() const { return mesh_vertex_source_validation_passed_; }
 

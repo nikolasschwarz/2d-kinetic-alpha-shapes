@@ -824,9 +824,9 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   kinetic_delaunay->setCollectStatistics(settings.collect_meshing_statistics);
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
-  if (settings.collect_meshing_statistics)
+  if (settings.collect_meshing_statistics && !settings.defer_meshing_statistics_write)
   {
-    kinetic_delaunay->statistics().writeCsv(settings.meshing_statistics_csv_path);
+    writeCollectedMeshingStatistics();
   }
   KINDS_INFO("Kinetic Delaunay Voronoi Meshing finished.");
 
@@ -901,6 +901,33 @@ const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm(bool visu
   }
 
   return segment_meshlets;
+}
+
+Statistics* TreeMesher::getMeshingStatistics()
+{
+  return kinetic_delaunay ? &kinetic_delaunay->statistics() : nullptr;
+}
+
+const Statistics* TreeMesher::getMeshingStatistics() const
+{
+  return kinetic_delaunay ? &kinetic_delaunay->statistics() : nullptr;
+}
+
+bool TreeMesher::writeCollectedMeshingStatistics()
+{
+  if (!settings.collect_meshing_statistics || !kinetic_delaunay)
+  {
+    return false;
+  }
+  Statistics& stats = kinetic_delaunay->statistics();
+  if (stats.empty() && stats.eventList().empty())
+  {
+    return false;
+  }
+  const bool wrote_stats = stats.writeCsv(settings.meshing_statistics_csv_path);
+  // Same base path as statistics; writeEventListCsv renames stem statistics → event_list.
+  const bool wrote_events = stats.writeEventListCsv(settings.meshing_statistics_csv_path);
+  return wrote_stats || wrote_events;
 }
 
 const VoronoiMesh& TreeMesher::getBoundaryMesh() const

@@ -83,6 +83,8 @@ class KineticAlgorithm
 
     virtual void handleEvent() = 0;
     virtual KineticEventType eventType() const = 0;
+    /// Fill type-specific columns for the meshing event-list CSV (optional fields).
+    virtual void populateEventListFields(Statistics::EventListRow& row) const { (void)row; }
 
     double getTime() const { return occurrence_time.real_time; }
 

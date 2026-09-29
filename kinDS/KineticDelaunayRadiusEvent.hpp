@@ -34,6 +34,12 @@ public:
 
   void handleEvent() override;
   KineticEventType eventType() const override { return KineticEventType::Radius; }
+  void populateEventListFields(Statistics::EventListRow& row) const override
+  {
+    row.half_edge_id = half_edge_id;
+    row.delaunay_edge_id = half_edge_id / 2;
+    row.target_inside = target_inside;
+  }
 };
 
 class KineticDelaunay::RadiusEventManager final : public KineticDelaunay::EventManager

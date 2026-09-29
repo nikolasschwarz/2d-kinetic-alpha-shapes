@@ -1324,6 +1324,10 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     = !triangle_spans_pending_split
     && radiusBoundaryTransitionShiftApplicable(
       segment_builder_.radius_boundary_transition_shift_enabled, radius_boundary_shift_ctx);
+  if (segment_builder_.kin_del.statistics().isCollecting())
+  {
+    segment_builder_.kin_del.statistics().setRadiusShift(radius->eventId(), use_radius_boundary_shift);
+  }
   const RadiusBoundaryTransitionShiftContext* radius_boundary_shift_arg
     = use_radius_boundary_shift ? &radius_boundary_shift_ctx : nullptr;
   // only_adjacent_segment filters strips by crossing topology; requires shift context for neighbor remap.
@@ -2155,7 +2159,20 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                                       .addString("op", "radius_strand_cell_triangulation")
                                       .build();
       }
-      VoronoiMesh mesh;
+      size_t owner_segment_id = static_cast<size_t>(-1);
+      if (cell_id < segment_builder_.strand_to_segment_indices.size()
+        && !segment_builder_.strand_to_segment_indices[cell_id].empty())
+      {
+        owner_segment_id = segment_builder_.strand_to_segment_indices[cell_id].back();
+      }
+      std::string suffix = std::string("_delaunay") + std::to_string(affected_face_id) + "_strand"
+        + std::to_string(cell_id);
+      // Register an empty bark intersection meshlet first so addMeshletVertex writes bark polar raw UVs
+      // (not interior semantic UVs). Triangle-cap fans use light_blue for debug distinction from brown strips.
+      VoronoiMesh empty_mesh(SegmentBuilder::MeshletExportMaterialNames);
+      const size_t stored_index = segment_builder_.registerBarkOnlyMeshlet(
+        std::move(empty_mesh), std::move(suffix), t, owner_segment_id, cell_id);
+      VoronoiMesh& mesh = segment_builder_.intersection_meshes[stored_index];
       segment_builder_.configureMeshletStorage(mesh);
       std::vector<size_t> ids;
       ids.reserve(poly.size());
@@ -2212,25 +2229,14 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       // Radius traced cell rings are convex — fan triangulation only (no ear-clip / plane geometry).
       // Non-shift radius cell fans close the bark surface of the transitioning Delaunay triangle.
       segment_builder_.fanTriangulateConvexPolygon(mesh, ids, radius_triangulation_meta,
-        SegmentBuilder::BoundaryIntervalMeshletMaterialId, orient_upwards);
+        SegmentBuilder::PendingSplitFallbackMeshletMaterialId, orient_upwards,
+        /*use_boundary_interval_uvs=*/true);
       if (ids.size() < 3)
       {
         KINDS_WARNING("Radius: traced cell polygon has fewer than three vertices; no triangles emitted for cell "
           << cell_id << " face=" << affected_face_id << " t=" << occurrence << " runtime_branch=" << runtime_branch_id
           << "; " << segment_builder_.formatStrandBranchLogInfo(cell_id, t));
       }
-      size_t owner_segment_id = static_cast<size_t>(-1);
-      if (cell_id < segment_builder_.strand_to_segment_indices.size()
-        && !segment_builder_.strand_to_segment_indices[cell_id].empty())
-      {
-        owner_segment_id = segment_builder_.strand_to_segment_indices[cell_id].back();
-      }
-      std::string suffix = std::string("_delaunay") + std::to_string(affected_face_id) + "_strand"
-        + std::to_string(cell_id);
-      // Store as a bark-only intersection meshlet so extractSegmentMeshlets assigns neighbor -2
-      // (registering into regular meshes with segment_index1=-1 previously mapped to interior -1).
-      const size_t stored_index = segment_builder_.registerBarkOnlyMeshlet(
-        std::move(mesh), std::move(suffix), t, owner_segment_id, cell_id);
       KINDS_DEBUG("Radius: stored extracted strand meshlet as bark intersection meshlet index=" << stored_index
                                                                                               << " cell_id=" << cell_id
                                                                                               << " owner_segment_id=" << owner_segment_id

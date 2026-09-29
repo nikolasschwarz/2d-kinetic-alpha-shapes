@@ -576,6 +576,15 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
       return h;
     }
   };
+  /// Per boundary-interval meshlet: map local vertex → placement-determining crossing key, and local-only
+  /// first-wins for non-intersection bark corners. The actual raw UV for a crossing is stored globally in
+  /// @ref buffered_bark_raw_uvs_by_position_crossing_ (same identity scope as mesh-position buffering).
+  struct BarkVertexUvBuffers
+  {
+    std::unordered_map<size_t, BufferedIntersectionMeshKey> local_to_position_crossing;
+    std::unordered_map<size_t, glm::dvec2> by_local_vertex;
+  };
+  std::vector<BarkVertexUvBuffers> intersection_mesh_bark_vertex_uvs;
   /// Thread-safe lookup (section/finishMesh paths run under @c parallel_for).
   std::optional<BufferedVoronoiVertexMeshEntry> findBufferedVoronoiVertexMesh(
     size_t voronoi_vertex_id, double t) const;
@@ -586,6 +595,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t delaunay_edge_id, size_t voronoi_edge_id, double t) const;
   glm::dvec3 noteBufferedIntersectionMesh(
     size_t delaunay_edge_id, size_t voronoi_edge_id, double t, const glm::dvec3& mesh_position) const;
+  /// First-wins bark raw UV for the placement-determining crossing (@c position_intersection only).
+  glm::dvec2 noteBufferedBarkRawUv(const BufferedIntersectionMeshKey& position_crossing, const glm::dvec2& raw_uv) const;
+  std::optional<glm::dvec2> findBufferedBarkRawUv(const BufferedIntersectionMeshKey& position_crossing) const;
   glm::dvec2 meshVirtualShiftForStrand(size_t strand_id, double t) const;
   void applyMeshVirtualShiftToProfileVertex(
     glm::dvec3& vertex, glm::dvec2& profile_xy, size_t strand_id, double t, bool& includes_virtual_shift) const;
@@ -871,6 +883,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     buffered_voronoi_vertex_mesh_positions_;
   mutable std::unordered_map<BufferedIntersectionMeshKey, glm::dvec3, BufferedIntersectionMeshKeyHash>
     buffered_intersection_mesh_positions_;
+  /// Global first-wins bark raw UV keyed by @c position_intersection (same key as mesh-position buffering).
+  /// Conceptual / pre-shift ids are never used. Shared across all intersection meshlets under the same mutex.
+  mutable std::unordered_map<BufferedIntersectionMeshKey, glm::dvec2, BufferedIntersectionMeshKeyHash>
+    buffered_bark_raw_uvs_by_position_crossing_;
   mutable std::unordered_map<MajorityPlaneAssignmentKey, MajorityPlaneAssignmentEntry, MajorityPlaneAssignmentKeyHash>
     majority_plane_assignment_cache_;
 
@@ -978,6 +994,16 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::optional<glm::dvec2> boundaryIntervalRawUvAtVertex(const VoronoiMesh& mesh, size_t vertex_index) const;
   void setBoundaryIntervalRawUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec2& raw_uv);
   void refreshBoundaryIntervalTrianglesIncidentToVertex(VoronoiMesh& mesh, size_t vertex_index);
+  /// First-wins bark raw UV for @p local_vertex on a boundary-interval meshlet. Intersection corners share
+  /// one entry via the placement-determining crossing (@c position_intersection) in the global buffer —
+  /// never conceptual ids. Placeholder flex verts (flexible + raw circum 0) are not stored so later
+  /// resolved UVs can establish the buffer. Wraparound/scaling must be applied after fetch (triangle-dependent).
+  glm::dvec2 noteOrFetchBarkVertexRawUv(
+    VoronoiMesh& mesh, size_t local_vertex, const glm::dvec2& computed_raw_uv, const std::vector<glm::dvec2>& raw_uvs);
+  /// Register @p local_vertex as an intersection corner for bark-UV first-wins keyed by @p position_crossing
+  /// (@c position_intersection only — never conceptual).
+  void registerBarkVertexUvPositionCrossing(
+    VoronoiMesh& mesh, size_t local_vertex, const BufferedIntersectionMeshKey& position_crossing);
 
   /// Unscaled boundary UV in Delaunay space: normalized polar angle and kinetic height.
   static glm::dvec2 boundaryRawUv(const glm::dvec2& delaunay_xy, const glm::dvec2& centroid, double t);
@@ -1257,9 +1283,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * Used by radius traced cell / triangle-cap meshlets. Does not use plane XY or ear clipping.
    * @param polygon Vertex index ring into @p mesh (assumed convex, correctly ordered).
    * @param orient_upwards If true, emits (0,i,i+1); otherwise emits (0,i+1,i).
+   * @param use_boundary_interval_uvs When true, emits via @ref addBoundaryIntervalTriangle (bark polar UVs);
+   *        @p mesh must already be registered in @c intersection_meshes with raw UVs populated.
    */
   void fanTriangulateConvexPolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
-    const std::string& metadata = "{}", int material_id = RegularMeshletMaterialId, bool orient_upwards = true);
+    const std::string& metadata = "{}", int material_id = RegularMeshletMaterialId, bool orient_upwards = true,
+    bool use_boundary_interval_uvs = false);
 
   /**
    * @brief Triangulates each traced closing polygon ring into the cap mesh (in-place).
@@ -1403,4 +1432,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// check, note/schedule the infinitesimal separation path (same as after a radius @ref checkForSplit).
   void maybeInduceSplitsAtSection(double t);
 };
+
+/// Close T-junctions across neighboring segment meshlets: a vertex on A that lies on a shared
+/// interface edge of B is inserted on B, splitting every triangle on that edge (bark + interior).
+void closeCrossMeshletTJunctions(std::vector<VoronoiMesh>& meshlets, std::vector<std::vector<int>>& neighbor_indices);
+
+/// Close T-junctions inside each segment meshlet: a vertex that lies on another face's edge
+/// (but is missing from that face) is inserted by splitting every triangle on that edge.
+void closeIntraMeshletTJunctions(std::vector<VoronoiMesh>& meshlets, std::vector<std::vector<int>>& neighbor_indices);
+
 } // namespace kinDS

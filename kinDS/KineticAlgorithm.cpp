@@ -27,7 +27,13 @@ void KineticAlgorithm::processEvents(std::optional<double> end_time, Statistics*
     events_.pop();
     if (statistics != nullptr)
     {
-      statistics->onEvent(event->eventType(), event->occurrence_time);
+      Statistics::EventListRow row;
+      row.event_id = event->eventId();
+      row.occurrence_t = event->occurrence_time.real_time;
+      row.occurrence_infinitesimal_t = event->occurrence_time.infinitesimal_time;
+      row.type = event->eventType();
+      event->populateEventListFields(row);
+      statistics->recordEvent(std::move(row));
     }
     event->handleEvent();
   }

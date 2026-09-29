@@ -442,12 +442,14 @@ class ObjExporter
     }
   }
 
-  static void writeFacesFrameworkCompatible(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub)
+  static void writeFacesFrameworkCompatible(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub,
+    bool include_metadata = false)
   {
     validateFaceWriteRange(mesh, lb, ub, "writeFacesFrameworkCompatible");
 
     const auto& indices = mesh.getTriangles();
     const auto& material_ids = mesh.getMaterialIDs();
+    const auto& face_metadata = mesh.getFaceMetadata();
 
     std::vector<size_t> bark_tris;
     std::vector<size_t> interior_tris;
@@ -478,6 +480,11 @@ class ObjExporter
           // vt/vn streams are one record per triangle corner in mesh triangle order.
           // Index by corner — never by triangles[corner] (vertex id).
           file << " " << (indices[corner] + 1) << "/" << (corner + 1) << "/" << (corner + 1);
+        }
+        if (include_metadata)
+        {
+          const std::string metadata = (tri < face_metadata.size()) ? face_metadata[tri] : "{}";
+          file << " # " << sanitizeInlineComment(metadata);
         }
         file << "\n";
       }
@@ -513,7 +520,7 @@ class ObjExporter
     file << "Ks 0.0 0.0 0.0\n";
     file << "d 1.0\n\n";
 
-    // Pending-split mixed-branch radius fallback (reserved; non-shift radius cell fans use brown).
+    // Pending-split mixed-branch / radius triangle-cap fans (bark polar UVs).
     file << "newmtl light_blue\n";
     file << "Ka 0.15 0.35 0.5\n";
     file << "Kd 0.35 0.75 1.0\n";
@@ -980,7 +987,7 @@ class ObjExporter
     {
       if (options.framework_compatible)
       {
-        writeFacesFrameworkCompatible(file, mesh, lb, ub);
+        writeFacesFrameworkCompatible(file, mesh, lb, ub, options.include_metadata);
       }
       else
       {

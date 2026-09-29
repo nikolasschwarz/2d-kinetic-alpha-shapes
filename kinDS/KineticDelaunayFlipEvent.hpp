@@ -157,6 +157,11 @@ class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
 
   void handleEvent() override;
   KineticEventType eventType() const override { return KineticEventType::Flip; }
+  void populateEventListFields(Statistics::EventListRow& row) const override
+  {
+    row.half_edge_id = half_edge_id;
+    row.delaunay_edge_id = half_edge_id / 2;
+  }
 };
 
 class KineticDelaunay::FlipEventManager final : public KineticDelaunay::EventManager

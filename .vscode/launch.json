@@ -118,11 +118,7 @@
         "--validate",
         "--section-shading",
         "--cutoff",
-        "3",
-        "--start",
-        "91",
-        "--start-branches",
-        "114"
+        "3"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

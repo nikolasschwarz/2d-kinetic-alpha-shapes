@@ -33,6 +33,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -914,6 +915,30 @@ glm::dvec3 SegmentBuilder::noteBufferedIntersectionMesh(
   }
   buffered_intersection_mesh_positions_.emplace(key, mesh_position);
   return mesh_position;
+}
+
+std::optional<glm::dvec2> SegmentBuilder::findBufferedBarkRawUv(const BufferedIntersectionMeshKey& position_crossing) const
+{
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const auto it = buffered_bark_raw_uvs_by_position_crossing_.find(position_crossing);
+  if (it == buffered_bark_raw_uvs_by_position_crossing_.end())
+  {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+glm::dvec2 SegmentBuilder::noteBufferedBarkRawUv(
+  const BufferedIntersectionMeshKey& position_crossing, const glm::dvec2& raw_uv) const
+{
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const auto it = buffered_bark_raw_uvs_by_position_crossing_.find(position_crossing);
+  if (it != buffered_bark_raw_uvs_by_position_crossing_.end())
+  {
+    return it->second;
+  }
+  buffered_bark_raw_uvs_by_position_crossing_.emplace(position_crossing, raw_uv);
+  return raw_uv;
 }
 
 void SegmentBuilder::beginActiveCrossingEvent(
@@ -5288,6 +5313,7 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
       configureMeshletStorage(mesh_local);
       intersection_meshes.push_back(std::move(mesh_local));
       intersection_mesh_raw_uvs.emplace_back();
+      intersection_mesh_bark_vertex_uvs.emplace_back();
       boundary_meshlet_completed_.push_back(false);
       intersection_meshlet_export_suffixes.push_back(std::string("_intersection_d") + std::to_string(delaunay_edge_id));
     }
@@ -6303,6 +6329,7 @@ size_t kinDS::SegmentBuilder::registerBarkOnlyMeshlet(VoronoiMesh&& mesh, std::s
   };
   intersection_meshes.push_back(std::move(mesh));
   intersection_mesh_raw_uvs.emplace_back();
+  intersection_mesh_bark_vertex_uvs.emplace_back();
   boundary_meshlet_completed_.push_back(false);
   intersection_meshlet_export_suffixes.push_back(std::move(suffix));
   intersection_mesh_pair_last_left_and_right_vertex.emplace_back();
@@ -6397,8 +6424,12 @@ size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangle(
     return static_cast<size_t>(-1);
   }
 
+  // First-wins raw UV per local vertex (natural bake order: lower strip tris first), then wrap/scale per triangle.
+  const glm::dvec2 raw_u = noteOrFetchBarkVertexRawUv(mesh, u, raw_uvs[u], raw_uvs);
+  const glm::dvec2 raw_v = noteOrFetchBarkVertexRawUv(mesh, v, raw_uvs[v], raw_uvs);
+  const glm::dvec2 raw_w = noteOrFetchBarkVertexRawUv(mesh, w, raw_uvs[w], raw_uvs);
   const AdjustedBoundaryTriangleUvs adjusted
-    = adjustedBoundaryTriangleUvs(raw_uvs[u], raw_uvs[v], raw_uvs[w], uv_circum_factor, uv_height_factor);
+    = adjustedBoundaryTriangleUvs(raw_u, raw_v, raw_w, uv_circum_factor, uv_height_factor);
   const size_t uv_index_u = mesh.addUV(adjusted.u);
   const size_t uv_index_v = mesh.addUV(adjusted.v);
   const size_t uv_index_w = mesh.addUV(adjusted.w);
@@ -6415,6 +6446,10 @@ std::vector<glm::dvec2>& SegmentBuilder::boundaryIntervalRawUvs(VoronoiMesh& mes
   if (intersection_mesh_raw_uvs.size() <= mesh_index.value())
   {
     intersection_mesh_raw_uvs.resize(mesh_index.value() + 1);
+  }
+  if (intersection_mesh_bark_vertex_uvs.size() <= mesh_index.value())
+  {
+    intersection_mesh_bark_vertex_uvs.resize(mesh_index.value() + 1);
   }
   return intersection_mesh_raw_uvs[mesh_index.value()];
 }
@@ -6460,6 +6495,68 @@ void SegmentBuilder::setBoundaryIntervalRawUv(VoronoiMesh& mesh, size_t vertex_i
   raw_uvs[vertex_index] = raw_uv;
 }
 
+void SegmentBuilder::registerBarkVertexUvPositionCrossing(
+  VoronoiMesh& mesh, size_t local_vertex, const BufferedIntersectionMeshKey& position_crossing)
+{
+  const std::optional<size_t> mesh_index = intersectionMeshletIndexForMesh(mesh);
+  if (!mesh_index.has_value())
+  {
+    return;
+  }
+  if (intersection_mesh_bark_vertex_uvs.size() <= mesh_index.value())
+  {
+    intersection_mesh_bark_vertex_uvs.resize(mesh_index.value() + 1);
+  }
+  BarkVertexUvBuffers& buffers = intersection_mesh_bark_vertex_uvs[mesh_index.value()];
+  buffers.local_to_position_crossing.insert_or_assign(local_vertex, position_crossing);
+}
+
+glm::dvec2 SegmentBuilder::noteOrFetchBarkVertexRawUv(
+  VoronoiMesh& mesh, size_t local_vertex, const glm::dvec2& computed_raw_uv, const std::vector<glm::dvec2>& raw_uvs)
+{
+  const std::optional<size_t> mesh_index = intersectionMeshletIndexForMesh(mesh);
+  if (!mesh_index.has_value())
+  {
+    return computed_raw_uv;
+  }
+  if (intersection_mesh_bark_vertex_uvs.size() <= mesh_index.value())
+  {
+    intersection_mesh_bark_vertex_uvs.resize(mesh_index.value() + 1);
+  }
+  BarkVertexUvBuffers& buffers = intersection_mesh_bark_vertex_uvs[mesh_index.value()];
+
+  // Flexible placeholders keep raw circum 0 until resolved — do not first-wins-lock that into the buffer.
+  const bool placeholder_flex = mesh.isVertexFlexible(local_vertex) && local_vertex < raw_uvs.size()
+    && std::abs(raw_uvs[local_vertex].x) <= 1e-15;
+
+  // Match mesh-position buffering: identity is position_intersection only (never conceptual), and the
+  // first-wins UV store is global across meshlets so shifted siblings on different strips unify.
+  const auto identity_it = buffers.local_to_position_crossing.find(local_vertex);
+  if (identity_it != buffers.local_to_position_crossing.end())
+  {
+    if (placeholder_flex)
+    {
+      if (const std::optional<glm::dvec2> buffered = findBufferedBarkRawUv(identity_it->second))
+      {
+        return buffered.value();
+      }
+      return computed_raw_uv;
+    }
+    return noteBufferedBarkRawUv(identity_it->second, computed_raw_uv);
+  }
+
+  const auto local_it = buffers.by_local_vertex.find(local_vertex);
+  if (local_it != buffers.by_local_vertex.end())
+  {
+    return local_it->second;
+  }
+  if (!placeholder_flex)
+  {
+    buffers.by_local_vertex.emplace(local_vertex, computed_raw_uv);
+  }
+  return computed_raw_uv;
+}
+
 void SegmentBuilder::refreshBoundaryIntervalTrianglesIncidentToVertex(VoronoiMesh& mesh, size_t vertex_index)
 {
   const std::vector<glm::dvec2>& raw_uvs = boundaryIntervalRawUvs(mesh);
@@ -6477,8 +6574,11 @@ void SegmentBuilder::refreshBoundaryIntervalTrianglesIncidentToVertex(VoronoiMes
     const size_t u = flat_triangles[tri_base];
     const size_t v = flat_triangles[tri_base + 1];
     const size_t w = flat_triangles[tri_base + 2];
-    const AdjustedBoundaryTriangleUvs adjusted = adjustedBoundaryTriangleUvs(
-      raw_uv_at_vertex(u), raw_uv_at_vertex(v), raw_uv_at_vertex(w), uv_circum_factor, uv_height_factor);
+    const glm::dvec2 raw_u = noteOrFetchBarkVertexRawUv(mesh, u, raw_uv_at_vertex(u), raw_uvs);
+    const glm::dvec2 raw_v = noteOrFetchBarkVertexRawUv(mesh, v, raw_uv_at_vertex(v), raw_uvs);
+    const glm::dvec2 raw_w = noteOrFetchBarkVertexRawUv(mesh, w, raw_uv_at_vertex(w), raw_uvs);
+    const AdjustedBoundaryTriangleUvs adjusted
+      = adjustedBoundaryTriangleUvs(raw_u, raw_v, raw_w, uv_circum_factor, uv_height_factor);
     mesh.setUV(adjusted.u, tri_base);
     mesh.setUV(adjusted.v, tri_base + 1);
     mesh.setUV(adjusted.w, tri_base + 2);
@@ -7733,11 +7833,33 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
     }
     else
     {
-      if (!std::isfinite(delaunay_xy.x) || !std::isfinite(delaunay_xy.y))
+      // Bark UV + buffer identity use only the placement-determining (actual/shifted) crossing —
+      // never conceptual ids, VV-snap XY, or event-buffer XY. Seed the global first-wins UV buffer
+      // here (same scope as mesh-position buffering) so later meshlets/siblings reuse it.
+      glm::dvec2 uv_delaunay_xy(std::numeric_limits<double>::quiet_NaN());
+      std::optional<BufferedIntersectionMeshKey> position_uv_key;
+      if (is_intersection_vertex && runtime_info.position_intersection.has_value())
       {
-        delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+        const auto position_ref = runtime_info.position_intersection.value();
+        uv_delaunay_xy = glm::dvec2(getCrossingCoordsInDelaunaySpace(kin_del, position_ref, t));
+        position_uv_key = BufferedIntersectionMeshKey { position_ref->delaunay_edge_id, position_ref->voronoi_edge_id,
+          meshVertexKineticTimeBits(t) };
       }
-      raw_uvs[index] = boundaryRawUv(delaunay_xy, centroid, t);
+      if (!std::isfinite(uv_delaunay_xy.x) || !std::isfinite(uv_delaunay_xy.y))
+      {
+        uv_delaunay_xy = delaunay_xy;
+      }
+      if (!std::isfinite(uv_delaunay_xy.x) || !std::isfinite(uv_delaunay_xy.y))
+      {
+        uv_delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+      }
+      glm::dvec2 raw_uv = boundaryRawUv(uv_delaunay_xy, centroid, t);
+      if (position_uv_key.has_value())
+      {
+        registerBarkVertexUvPositionCrossing(mesh, index, position_uv_key.value());
+        raw_uv = noteBufferedBarkRawUv(position_uv_key.value(), raw_uv);
+      }
+      raw_uvs[index] = raw_uv;
     }
   }
   else if (is_flexible_placeholder)
@@ -7747,11 +7869,22 @@ size_t kinDS::SegmentBuilder::addMeshletVertex(VoronoiMesh& mesh, const std::vec
   }
   else
   {
-    if (!std::isfinite(delaunay_xy.x) || !std::isfinite(delaunay_xy.y))
+    // Interior UV for intersection corners likewise follows the actual (position) crossing only.
+    glm::dvec2 uv_delaunay_xy(std::numeric_limits<double>::quiet_NaN());
+    if (is_intersection_vertex && runtime_info.position_intersection.has_value())
     {
-      delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+      uv_delaunay_xy
+        = glm::dvec2(getCrossingCoordsInDelaunaySpace(kin_del, runtime_info.position_intersection.value(), t));
     }
-    mesh.setVertexSemanticUv(index, interiorMeshUv(boundary_polygon, centroid, delaunay_xy, t));
+    if (!std::isfinite(uv_delaunay_xy.x) || !std::isfinite(uv_delaunay_xy.y))
+    {
+      uv_delaunay_xy = delaunay_xy;
+    }
+    if (!std::isfinite(uv_delaunay_xy.x) || !std::isfinite(uv_delaunay_xy.y))
+    {
+      uv_delaunay_xy = kin_del.getPointInDelaunaySpace(strand_id, t);
+    }
+    mesh.setVertexSemanticUv(index, interiorMeshUv(boundary_polygon, centroid, uv_delaunay_xy, t));
   }
   return index;
 }
@@ -10092,7 +10225,7 @@ void kinDS::SegmentBuilder::triangulateSimplePolygon(VoronoiMesh& mesh, const st
 }
 
 void kinDS::SegmentBuilder::fanTriangulateConvexPolygon(VoronoiMesh& mesh, const std::vector<size_t>& polygon,
-  const std::string& metadata, int material_id, bool orient_upwards)
+  const std::string& metadata, int material_id, bool orient_upwards, bool use_boundary_interval_uvs)
 {
   std::vector<size_t> vertices;
   vertices.reserve(polygon.size());
@@ -10116,15 +10249,27 @@ void kinDS::SegmentBuilder::fanTriangulateConvexPolygon(VoronoiMesh& mesh, const
     return;
   }
 
+  auto emit = [&](size_t a, size_t b, size_t c)
+  {
+    if (use_boundary_interval_uvs)
+    {
+      addBoundaryIntervalTriangle(mesh, a, b, c, metadata, material_id);
+    }
+    else
+    {
+      addMeshletTriangle(mesh, a, b, c, metadata, material_id);
+    }
+  };
+
   for (size_t i = 1; i + 1 < vertices.size(); ++i)
   {
     if (orient_upwards)
     {
-      addMeshletTriangle(mesh, vertices[0], vertices[i], vertices[i + 1], metadata, material_id);
+      emit(vertices[0], vertices[i], vertices[i + 1]);
     }
     else
     {
-      addMeshletTriangle(mesh, vertices[0], vertices[i + 1], vertices[i], metadata, material_id);
+      emit(vertices[0], vertices[i + 1], vertices[i]);
     }
   }
 }
@@ -12699,7 +12844,648 @@ void alignGlueEdgesOnContribCopies(const KineticDelaunay& kin_del, std::vector<S
     }
   }
 }
+
+/// Close T-junctions between extracted segment meshlets: a vertex on meshlet A's shared interface that
+/// lies on an edge of meshlet B (but is missing as a B vertex) is inserted on B via @ref VoronoiMesh::splitTriangle.
+/// Every triangle on that undirected edge is split (interior face toward A and bark sharing the edge).
+void closeCrossMeshletTJunctionsImpl(std::vector<VoronoiMesh>& meshlets, std::vector<std::vector<int>>& neighbor_indices)
+{
+  if (meshlets.size() < 2 || neighbor_indices.size() != meshlets.size())
+  {
+    return;
+  }
+
+  constexpr double k_abs_eps = 1e-12;
+  constexpr double k_rel_eps = 1e-9;
+  constexpr int k_max_passes = 64;
+
+  auto undirected_edge_key = [](size_t a, size_t b) -> std::pair<size_t, size_t>
+  { return a < b ? std::pair<size_t, size_t> { a, b } : std::pair<size_t, size_t> { b, a }; };
+
+  auto point_strictly_on_segment
+    = [&](const glm::dvec3& p, const glm::dvec3& a, const glm::dvec3& b, double& out_t) -> bool
+  {
+    const glm::dvec3 ab = b - a;
+    const double len2 = glm::dot(ab, ab);
+    if (!(len2 > 0.0))
+    {
+      return false;
+    }
+    const double inv_len = 1.0 / std::sqrt(len2);
+    const double param_eps = std::max(k_abs_eps * inv_len, k_rel_eps);
+    const double t = glm::dot(p - a, ab) / len2;
+    if (t <= param_eps || t >= 1.0 - param_eps)
+    {
+      return false;
+    }
+    const glm::dvec3 closest = a + t * ab;
+    const glm::dvec3 d = p - closest;
+    const double dist2 = glm::dot(d, d);
+    const double tol2 = std::max(k_abs_eps * k_abs_eps, k_rel_eps * k_rel_eps * len2);
+    if (dist2 > tol2)
+    {
+      return false;
+    }
+    out_t = t;
+    return true;
+  };
+
+  /// Edges of faces tagged toward @p partner, plus bark (-2) edges whose both endpoints already lie
+  /// on that interface (the bark rim shared with the neighboring segment meshlet).
+  auto collect_interface_edges = [&](const VoronoiMesh& mesh, const std::vector<int>& neighbors, int partner,
+                                   std::set<std::pair<size_t, size_t>>& edges)
+  {
+    const auto& tris = mesh.getTriangles();
+    const size_t tri_count = tris.size() / 3;
+    std::unordered_set<size_t> iface_verts;
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      if (tri >= neighbors.size() || neighbors[tri] != partner)
+      {
+        continue;
+      }
+      for (size_t e = 0; e < 3; ++e)
+      {
+        const size_t a = tris[3 * tri + e];
+        const size_t b = tris[3 * tri + ((e + 1) % 3)];
+        edges.insert(undirected_edge_key(a, b));
+        iface_verts.insert(a);
+        iface_verts.insert(b);
+      }
+    }
+    if (iface_verts.empty())
+    {
+      return;
+    }
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      if (tri >= neighbors.size() || neighbors[tri] != -2)
+      {
+        continue;
+      }
+      for (size_t e = 0; e < 3; ++e)
+      {
+        const size_t a = tris[3 * tri + e];
+        const size_t b = tris[3 * tri + ((e + 1) % 3)];
+        if (iface_verts.count(a) > 0 && iface_verts.count(b) > 0)
+        {
+          edges.insert(undirected_edge_key(a, b));
+        }
+      }
+    }
+  };
+
+  /// Vertices of faces tagged toward @p partner, plus bark verts that sit on @p partner_edges.
+  auto collect_candidate_vertices = [&](const VoronoiMesh& mesh, const std::vector<int>& neighbors, int partner,
+                                      const VoronoiMesh& partner_mesh,
+                                      const std::set<std::pair<size_t, size_t>>& partner_edges,
+                                      std::unordered_set<size_t>& verts)
+  {
+    const auto& tris = mesh.getTriangles();
+    const size_t tri_count = tris.size() / 3;
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      if (tri >= neighbors.size() || neighbors[tri] != partner)
+      {
+        continue;
+      }
+      verts.insert(tris[3 * tri]);
+      verts.insert(tris[3 * tri + 1]);
+      verts.insert(tris[3 * tri + 2]);
+    }
+    if (partner_edges.empty())
+    {
+      return;
+    }
+    const auto& mesh_verts = mesh.getVertices();
+    const auto& partner_verts = partner_mesh.getVertices();
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      if (tri >= neighbors.size() || neighbors[tri] != -2)
+      {
+        continue;
+      }
+      for (size_t c = 0; c < 3; ++c)
+      {
+        const size_t vid = tris[3 * tri + c];
+        if (vid >= mesh_verts.size() || verts.count(vid) > 0)
+        {
+          continue;
+        }
+        const glm::dvec3& p = mesh_verts[vid];
+        for (const auto& [e0, e1] : partner_edges)
+        {
+          if (e0 >= partner_verts.size() || e1 >= partner_verts.size())
+          {
+            continue;
+          }
+          double t_on = 0.0;
+          if (point_strictly_on_segment(p, partner_verts[e0], partner_verts[e1], t_on))
+          {
+            verts.insert(vid);
+            break;
+          }
+        }
+      }
+    }
+  };
+
+  /// Split every triangle that currently owns undirected edge (@p v0, @p v1) — typically the
+  /// interior face toward the partner and the bark face sharing the rim — then weld the
+  /// duplicate mid-edge vertices created by successive @c splitTriangle calls.
+  auto split_all_triangles_on_edge = [&](VoronoiMesh& mesh, std::vector<int>& neighbors, size_t v0, size_t v1,
+                                        const glm::dvec3& position, const std::string& metadata,
+                                        std::optional<double> kinetic_time) -> bool
+  {
+    const auto& tris = mesh.getTriangles();
+    const size_t tri_count = tris.size() / 3;
+    std::vector<size_t> tris_to_split;
+    tris_to_split.reserve(4);
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      for (size_t e = 0; e < 3; ++e)
+      {
+        const size_t a = tris[3 * tri + e];
+        const size_t b = tris[3 * tri + ((e + 1) % 3)];
+        if ((a == v0 && b == v1) || (a == v1 && b == v0))
+        {
+          tris_to_split.push_back(tri);
+          break;
+        }
+      }
+    }
+    if (tris_to_split.empty())
+    {
+      return false;
+    }
+
+    bool any = false;
+    for (const size_t tri : tris_to_split)
+    {
+      // Edge endpoints are unchanged on triangles not yet split; already-split faces no longer
+      // contain both v0 and v1, so triangleCornerIndex fails and we skip them safely.
+      const size_t c0 = mesh.triangleCornerIndex(tri, v0);
+      const size_t c1 = mesh.triangleCornerIndex(tri, v1);
+      if (c0 == static_cast<size_t>(-1) || c1 == static_cast<size_t>(-1))
+      {
+        continue;
+      }
+      const int neighbor_tag = (tri < neighbors.size()) ? neighbors[tri] : -1;
+      const auto [new_vid, new_tri] = mesh.splitTriangle(c0, c1, position, metadata, kinetic_time);
+      if (new_vid == static_cast<size_t>(-1) || new_tri == static_cast<size_t>(-1))
+      {
+        continue;
+      }
+      if (neighbors.size() < mesh.getTriangleCount())
+      {
+        neighbors.resize(mesh.getTriangleCount(), -1);
+      }
+      if (new_tri < neighbors.size())
+      {
+        neighbors[new_tri] = neighbor_tag;
+      }
+      any = true;
+    }
+    if (any)
+    {
+      // Weld per-face mid vertices from successive splits onto the same geometric point.
+      mesh.mergeDuplicateVertices(0.0);
+      if (neighbors.size() != mesh.getTriangleCount())
+      {
+        neighbors.resize(mesh.getTriangleCount(), -1);
+      }
+    }
+    return any;
+  };
+
+  auto rebuild_b_lookup = [&](size_t mesh_b, int partner_of_b, std::set<std::pair<size_t, size_t>>& b_iface_edges,
+                            std::unordered_map<glm::dvec3, size_t, Vec3ExactHash, Vec3ExactEq>& b_pos_to_vid)
+  {
+    b_iface_edges.clear();
+    collect_interface_edges(meshlets[mesh_b], neighbor_indices[mesh_b], partner_of_b, b_iface_edges);
+    b_pos_to_vid.clear();
+    const auto& b_verts = meshlets[mesh_b].getVertices();
+    b_pos_to_vid.reserve(b_verts.size());
+    for (size_t vi = 0; vi < b_verts.size(); ++vi)
+    {
+      b_pos_to_vid.emplace(b_verts[vi], vi);
+    }
+  };
+
+  size_t total_inserts = 0;
+  for (int pass = 0; pass < k_max_passes; ++pass)
+  {
+    bool edited = false;
+    for (size_t mesh_a = 0; mesh_a < meshlets.size(); ++mesh_a)
+    {
+      if (mesh_a >= neighbor_indices.size())
+      {
+        continue;
+      }
+      std::unordered_set<int> partners;
+      for (const int n : neighbor_indices[mesh_a])
+      {
+        if (n >= 0 && static_cast<size_t>(n) < meshlets.size() && static_cast<size_t>(n) != mesh_a)
+        {
+          partners.insert(n);
+        }
+      }
+      for (const int partner_i : partners)
+      {
+        const size_t mesh_b = static_cast<size_t>(partner_i);
+        if (mesh_b >= neighbor_indices.size())
+        {
+          continue;
+        }
+
+        std::set<std::pair<size_t, size_t>> b_iface_edges;
+        std::unordered_map<glm::dvec3, size_t, Vec3ExactHash, Vec3ExactEq> b_pos_to_vid;
+        rebuild_b_lookup(mesh_b, static_cast<int>(mesh_a), b_iface_edges, b_pos_to_vid);
+        if (b_iface_edges.empty())
+        {
+          continue;
+        }
+
+        std::unordered_set<size_t> a_candidates;
+        collect_candidate_vertices(meshlets[mesh_a], neighbor_indices[mesh_a], partner_i, meshlets[mesh_b],
+          b_iface_edges, a_candidates);
+        if (a_candidates.empty())
+        {
+          continue;
+        }
+
+        const auto& a_verts = meshlets[mesh_a].getVertices();
+        for (const size_t a_vid : a_candidates)
+        {
+          if (a_vid >= a_verts.size())
+          {
+            continue;
+          }
+          const glm::dvec3& p = a_verts[a_vid];
+          if (b_pos_to_vid.find(p) != b_pos_to_vid.end())
+          {
+            continue;
+          }
+
+          const auto& b_verts = meshlets[mesh_b].getVertices();
+          size_t best_v0 = static_cast<size_t>(-1);
+          size_t best_v1 = static_cast<size_t>(-1);
+          double best_t = 0.5;
+          double best_edge_len2 = std::numeric_limits<double>::infinity();
+          for (const auto& [e0, e1] : b_iface_edges)
+          {
+            if (e0 >= b_verts.size() || e1 >= b_verts.size())
+            {
+              continue;
+            }
+            double t_on = 0.0;
+            if (!point_strictly_on_segment(p, b_verts[e0], b_verts[e1], t_on))
+            {
+              continue;
+            }
+            const double len2 = glm::length2(b_verts[e1] - b_verts[e0]);
+            if (len2 < best_edge_len2)
+            {
+              best_edge_len2 = len2;
+              best_v0 = e0;
+              best_v1 = e1;
+              best_t = t_on;
+            }
+          }
+          if (best_v0 == static_cast<size_t>(-1))
+          {
+            continue;
+          }
+
+          const double split_t = meshlets[mesh_a].vertexKineticTime(a_vid);
+          const std::string split_meta = meshlets[mesh_b].storeMetadata()
+            ? SegmentBuilder::MetadataBuilder()
+                .addString("event_type", "cross_meshlet_tjunction")
+                .addString("source", "propagated_interface")
+                .addBool("split_triangle", true)
+                .addSize("source_meshlet", mesh_a)
+                .addSize("target_meshlet", mesh_b)
+                .addDouble("t", std::isfinite(split_t) ? split_t : p.z)
+                .addDouble("edge_param", best_t)
+                .build()
+            : std::string {};
+
+          if (split_all_triangles_on_edge(meshlets[mesh_b], neighbor_indices[mesh_b], best_v0, best_v1, p, split_meta,
+                std::isfinite(split_t) ? std::optional<double>(split_t) : std::nullopt))
+          {
+            edited = true;
+            ++total_inserts;
+            if (const auto uv = meshlets[mesh_a].vertexSemanticUv(a_vid); uv.has_value())
+            {
+              const auto& b_verts_after = meshlets[mesh_b].getVertices();
+              for (size_t vi = 0; vi < b_verts_after.size(); ++vi)
+              {
+                if (Vec3ExactEq {}(b_verts_after[vi], p))
+                {
+                  meshlets[mesh_b].setVertexSemanticUv(vi, uv.value());
+                  break;
+                }
+              }
+            }
+            rebuild_b_lookup(mesh_b, static_cast<int>(mesh_a), b_iface_edges, b_pos_to_vid);
+          }
+        }
+      }
+    }
+
+    if (!edited)
+    {
+      break;
+    }
+
+    for (size_t mi = 0; mi < meshlets.size(); ++mi)
+    {
+      meshlets[mi].mergeDuplicateVertices(0.0);
+      if (neighbor_indices[mi].size() != meshlets[mi].getTriangleCount())
+      {
+        neighbor_indices[mi].resize(meshlets[mi].getTriangleCount(), -1);
+      }
+      const NormalMode mode = meshlets[mi].getNormalMode();
+      if (mode != NormalMode::NoNormals)
+      {
+        meshlets[mi].computeNormals(mode);
+      }
+    }
+  }
+
+  if (total_inserts > 0)
+  {
+    KINDS_INFO("closeCrossMeshletTJunctions: inserted " << total_inserts
+                                                       << " missing interface vertex split(s) across segment meshlets");
+  }
+}
+
+/// Close T-junctions inside a single segment meshlet: a vertex that lies strictly on another
+/// triangle's edge (while that face still owns the unsplit edge) is inserted via @ref VoronoiMesh::splitTriangle
+/// on every triangle sharing that edge (bark + interior).
+void closeIntraMeshletTJunctionsImpl(std::vector<VoronoiMesh>& meshlets, std::vector<std::vector<int>>& neighbor_indices)
+{
+  if (meshlets.empty() || neighbor_indices.size() != meshlets.size())
+  {
+    return;
+  }
+
+  constexpr double k_abs_eps = 1e-12;
+  constexpr double k_rel_eps = 1e-9;
+  constexpr int k_max_passes = 64;
+
+  auto undirected_edge_key = [](size_t a, size_t b) -> std::pair<size_t, size_t>
+  { return a < b ? std::pair<size_t, size_t> { a, b } : std::pair<size_t, size_t> { b, a }; };
+
+  auto point_strictly_on_segment
+    = [&](const glm::dvec3& p, const glm::dvec3& a, const glm::dvec3& b, double& out_t) -> bool
+  {
+    const glm::dvec3 ab = b - a;
+    const double len2 = glm::dot(ab, ab);
+    if (!(len2 > 0.0))
+    {
+      return false;
+    }
+    const double inv_len = 1.0 / std::sqrt(len2);
+    const double param_eps = std::max(k_abs_eps * inv_len, k_rel_eps);
+    const double t = glm::dot(p - a, ab) / len2;
+    if (t <= param_eps || t >= 1.0 - param_eps)
+    {
+      return false;
+    }
+    const glm::dvec3 closest = a + t * ab;
+    const glm::dvec3 d = p - closest;
+    const double dist2 = glm::dot(d, d);
+    const double tol2 = std::max(k_abs_eps * k_abs_eps, k_rel_eps * k_rel_eps * len2);
+    if (dist2 > tol2)
+    {
+      return false;
+    }
+    out_t = t;
+    return true;
+  };
+
+  auto collect_all_edges = [&](const VoronoiMesh& mesh, std::set<std::pair<size_t, size_t>>& edges)
+  {
+    const auto& tris = mesh.getTriangles();
+    const size_t tri_count = tris.size() / 3;
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      for (size_t e = 0; e < 3; ++e)
+      {
+        edges.insert(undirected_edge_key(tris[3 * tri + e], tris[3 * tri + ((e + 1) % 3)]));
+      }
+    }
+  };
+
+  auto edge_has_unsplit_face_without_vertex
+    = [&](const VoronoiMesh& mesh, size_t v0, size_t v1, size_t missing_vid) -> bool
+  {
+    const auto& tris = mesh.getTriangles();
+    const size_t tri_count = tris.size() / 3;
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      bool has_edge = false;
+      bool has_missing = false;
+      for (size_t e = 0; e < 3; ++e)
+      {
+        const size_t a = tris[3 * tri + e];
+        const size_t b = tris[3 * tri + ((e + 1) % 3)];
+        if ((a == v0 && b == v1) || (a == v1 && b == v0))
+        {
+          has_edge = true;
+        }
+        if (a == missing_vid)
+        {
+          has_missing = true;
+        }
+      }
+      if (has_edge && !has_missing)
+      {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  auto split_all_triangles_on_edge = [&](VoronoiMesh& mesh, std::vector<int>& neighbors, size_t v0, size_t v1,
+                                        const glm::dvec3& position, const std::string& metadata,
+                                        std::optional<double> kinetic_time) -> bool
+  {
+    const auto& tris = mesh.getTriangles();
+    const size_t tri_count = tris.size() / 3;
+    std::vector<size_t> tris_to_split;
+    tris_to_split.reserve(4);
+    for (size_t tri = 0; tri < tri_count; ++tri)
+    {
+      for (size_t e = 0; e < 3; ++e)
+      {
+        const size_t a = tris[3 * tri + e];
+        const size_t b = tris[3 * tri + ((e + 1) % 3)];
+        if ((a == v0 && b == v1) || (a == v1 && b == v0))
+        {
+          tris_to_split.push_back(tri);
+          break;
+        }
+      }
+    }
+    if (tris_to_split.empty())
+    {
+      return false;
+    }
+
+    bool any = false;
+    for (const size_t tri : tris_to_split)
+    {
+      const size_t c0 = mesh.triangleCornerIndex(tri, v0);
+      const size_t c1 = mesh.triangleCornerIndex(tri, v1);
+      if (c0 == static_cast<size_t>(-1) || c1 == static_cast<size_t>(-1))
+      {
+        continue;
+      }
+      const int neighbor_tag = (tri < neighbors.size()) ? neighbors[tri] : -1;
+      const auto [new_vid, new_tri] = mesh.splitTriangle(c0, c1, position, metadata, kinetic_time);
+      if (new_vid == static_cast<size_t>(-1) || new_tri == static_cast<size_t>(-1))
+      {
+        continue;
+      }
+      if (neighbors.size() < mesh.getTriangleCount())
+      {
+        neighbors.resize(mesh.getTriangleCount(), -1);
+      }
+      if (new_tri < neighbors.size())
+      {
+        neighbors[new_tri] = neighbor_tag;
+      }
+      any = true;
+    }
+    if (any)
+    {
+      mesh.mergeDuplicateVertices(0.0);
+      if (neighbors.size() != mesh.getTriangleCount())
+      {
+        neighbors.resize(mesh.getTriangleCount(), -1);
+      }
+    }
+    return any;
+  };
+
+  size_t total_inserts = 0;
+  for (size_t mi = 0; mi < meshlets.size(); ++mi)
+  {
+    if (mi >= neighbor_indices.size())
+    {
+      continue;
+    }
+    for (int pass = 0; pass < k_max_passes; ++pass)
+    {
+      bool edited = false;
+      std::set<std::pair<size_t, size_t>> edges;
+      collect_all_edges(meshlets[mi], edges);
+      if (edges.empty())
+      {
+        break;
+      }
+
+      const auto& verts = meshlets[mi].getVertices();
+      const size_t vert_count = verts.size();
+      for (size_t vid = 0; vid < vert_count; ++vid)
+      {
+        const glm::dvec3& p = verts[vid];
+        size_t best_v0 = static_cast<size_t>(-1);
+        size_t best_v1 = static_cast<size_t>(-1);
+        double best_t = 0.5;
+        double best_edge_len2 = std::numeric_limits<double>::infinity();
+        for (const auto& [e0, e1] : edges)
+        {
+          if (e0 == vid || e1 == vid || e0 >= verts.size() || e1 >= verts.size())
+          {
+            continue;
+          }
+          double t_on = 0.0;
+          if (!point_strictly_on_segment(p, verts[e0], verts[e1], t_on))
+          {
+            continue;
+          }
+          if (!edge_has_unsplit_face_without_vertex(meshlets[mi], e0, e1, vid))
+          {
+            continue;
+          }
+          const double len2 = glm::length2(verts[e1] - verts[e0]);
+          if (len2 < best_edge_len2)
+          {
+            best_edge_len2 = len2;
+            best_v0 = e0;
+            best_v1 = e1;
+            best_t = t_on;
+          }
+        }
+        if (best_v0 == static_cast<size_t>(-1))
+        {
+          continue;
+        }
+
+        const double split_t = meshlets[mi].vertexKineticTime(vid);
+        const std::string split_meta = meshlets[mi].storeMetadata()
+          ? SegmentBuilder::MetadataBuilder()
+              .addString("event_type", "intra_meshlet_tjunction")
+              .addString("source", "propagated_edge")
+              .addBool("split_triangle", true)
+              .addSize("meshlet", mi)
+              .addSize("source_vertex", vid)
+              .addDouble("t", std::isfinite(split_t) ? split_t : p.z)
+              .addDouble("edge_param", best_t)
+              .build()
+          : std::string {};
+
+        if (split_all_triangles_on_edge(meshlets[mi], neighbor_indices[mi], best_v0, best_v1, p, split_meta,
+              std::isfinite(split_t) ? std::optional<double>(split_t) : std::nullopt))
+        {
+          edited = true;
+          ++total_inserts;
+          // Topology changed; restart this pass with rebuilt edges.
+          break;
+        }
+      }
+
+      if (!edited)
+      {
+        break;
+      }
+
+      meshlets[mi].mergeDuplicateVertices(0.0);
+      if (neighbor_indices[mi].size() != meshlets[mi].getTriangleCount())
+      {
+        neighbor_indices[mi].resize(meshlets[mi].getTriangleCount(), -1);
+      }
+      const NormalMode mode = meshlets[mi].getNormalMode();
+      if (mode != NormalMode::NoNormals)
+      {
+        meshlets[mi].computeNormals(mode);
+      }
+    }
+  }
+
+  if (total_inserts > 0)
+  {
+    KINDS_INFO("closeIntraMeshletTJunctions: inserted " << total_inserts
+                                                       << " missing mid-edge vertex split(s) inside segment meshlets");
+  }
+}
+
 } // namespace
+
+void kinDS::closeCrossMeshletTJunctions(std::vector<VoronoiMesh>& meshlets,
+  std::vector<std::vector<int>>& neighbor_indices)
+{
+  closeCrossMeshletTJunctionsImpl(meshlets, neighbor_indices);
+}
+
+void kinDS::closeIntraMeshletTJunctions(std::vector<VoronoiMesh>& meshlets,
+  std::vector<std::vector<int>>& neighbor_indices)
+{
+  closeIntraMeshletTJunctionsImpl(meshlets, neighbor_indices);
+}
 
 std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::SegmentBuilder::extractSegmentMeshlets(
   bool merge_by_segment) const
@@ -12787,7 +13573,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
         contrib.mesh.flipOrientation();
       }
       // One-sided meshlets (segment_index1 == -1): closing caps use RegularMeshletMaterialId → interior (-1);
-      // radius traced-cell / triangle-cap fans use BoundaryIntervalMeshletMaterialId → bark (-2).
+      // radius traced-cell / triangle-cap fans use light_blue (PendingSplitFallback) → bark (-2).
       // EcoSysLab GPU materials key off neighbor tags, not VoronoiMesh material_ids.
       if (seg0 == static_cast<size_t>(-1) || seg1 == static_cast<size_t>(-1))
       {
@@ -12929,6 +13715,8 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
       }
     }
   }
+
+  closeCrossMeshletTJunctions(meshlets, neighbor_segments);
 
   return std::make_pair(meshlets, neighbor_segments);
 }

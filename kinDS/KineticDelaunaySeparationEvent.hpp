@@ -47,6 +47,11 @@ class KineticDelaunay::SeparationEvent final : public KineticDelaunay::Event
 
   void handleEvent() override;
   KineticEventType eventType() const override { return KineticEventType::Separation; }
+  void populateEventListFields(Statistics::EventListRow& row) const override
+  {
+    row.parent_component_id = parent_component_id;
+    row.split_time = split_time;
+  }
 };
 
 class KineticDelaunay::SeparationEventManager final : public KineticDelaunay::EventManager
