@@ -329,7 +329,7 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
     return false;
   }
 
-  out << "section_id,runtime_s,strand_count,branch_count";
+  out << "section_id,runtime_s,strand_count,branch_count,segment_count";
   for (size_t i = 0; i < kineticEventTypeCount; ++i)
   {
     out << ',' << kineticEventTypeName(static_cast<KineticEventType>(i));
@@ -373,6 +373,12 @@ bool Statistics::writeCsv(const std::filesystem::path& path) const
     write_optional_size(row.strand_count);
     out << ',';
     write_optional_size(row.branch_count);
+    out << ',';
+    // Rod / segment count ≈ initial strands + subdivision events (one new segment per subdiv).
+    if (row.strand_count.has_value())
+    {
+      out << (row.strand_count.value() + row.event_counts[static_cast<size_t>(KineticEventType::Subdivision)]);
+    }
     for (size_t i = 0; i < kineticEventTypeCount; ++i)
     {
       out << ',' << row.event_counts[i];

@@ -125,8 +125,10 @@ class Statistics
   /// (@c meshing_statistics.csv → @c meshing_event_list.csv).
   static std::filesystem::path eventListCsvPathBeside(const std::filesystem::path& statistics_csv_path);
 
-  /// CSV: @c section_id,runtime_s,strand_count,branch_count,<event types...>,alpha,triangle_count,vertex_count,failure;
-  /// final @c total row (alpha / mesh counts / failure filled only there when set).
+  /// CSV: @c section_id,runtime_s,strand_count,branch_count,segment_count,<event types...>,
+  /// @c alpha,triangle_count,vertex_count,failure;
+  /// @c segment_count is @c strand_count + subdivision events when strand_count is set (else blank).
+  /// Final @c total row (alpha / mesh counts / failure filled only there when set).
   /// Writes to a timestamped sibling of @p path so existing files are never overwritten.
   bool writeCsv(const std::filesystem::path& path) const;
 
