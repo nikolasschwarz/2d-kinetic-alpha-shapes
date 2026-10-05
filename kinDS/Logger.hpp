@@ -57,6 +57,7 @@ class Logger
   // Default: everything except Debug
   LogLevel log_level = LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
   ofstream log_file; // File stream for the log file (optional)
+  bool console_enabled_ = true;
 
  public:
   // Default constructor: no log file
@@ -74,8 +75,8 @@ class Logger
     }
   }
 
-  // Set or change the log file path
-  void setLogFile(const string& filename)
+  // Set or change the log file path. Returns true if the file is open for writing.
+  bool setLogFile(const string& filename)
   {
     // Close existing file if open
     if (log_file.is_open())
@@ -83,13 +84,25 @@ class Logger
       log_file.close();
     }
 
+    if (filename.empty())
+    {
+      return false;
+    }
+
     // Open new file
     log_file.open(filename, ios::app);
     if (!log_file.is_open())
     {
       cerr << "Warning: Could not open log file: " << filename << endl;
+      return false;
     }
+    return true;
   }
+
+  /// When false, @ref log writes only to the log file (if open), not stdout.
+  void setConsoleEnabled(bool enabled) { console_enabled_ = enabled; }
+
+  bool getConsoleEnabled() const { return console_enabled_; }
 
   // Explicitly set the full log level bitmask (overwrites existing mask).
   void setLogLevelMask(LogLevel mask) { log_level = mask; }
@@ -127,9 +140,12 @@ class Logger
     logEntry << "[kinDS] [" << timestamp << "] " << levelToString(level) << ": " << message << endl;
 
     // Output to console (flush so lines appear before a subsequent throw)
-    cout << logEntry.str();
-    cout.flush();
-    fflush(stdout);
+    if (console_enabled_)
+    {
+      cout << logEntry.str();
+      cout.flush();
+      fflush(stdout);
+    }
 
     // Output to log file
     if (log_file.is_open())
@@ -196,38 +212,39 @@ class Logger
 // Global logger instance (no log file by default)
 inline Logger logger;
 
+}  // namespace kinDS
+
 #define KINDS_DEBUG(msg)                                                                                               \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
-    logger.log(LogLevel::Debug, ss.str());                                                                             \
+    ::kinDS::logger.log(::kinDS::LogLevel::Debug, ss.str());                                                           \
   }
 
 #define KINDS_MONITOR(msg)                                                                                             \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
-    logger.log(LogLevel::Monitor, ss.str());                                                                           \
+    ::kinDS::logger.log(::kinDS::LogLevel::Monitor, ss.str());                                                         \
   }
 
-#define KINDS_INFO(msg)                                                                                                 \
+#define KINDS_INFO(msg)                                                                                                \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
-    logger.log(LogLevel::Info, ss.str());                                                                              \
+    ::kinDS::logger.log(::kinDS::LogLevel::Info, ss.str());                                                            \
   }
 
 #define KINDS_WARNING(msg)                                                                                             \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
-    logger.log(LogLevel::Warning, ss.str());                                                                           \
+    ::kinDS::logger.log(::kinDS::LogLevel::Warning, ss.str());                                                         \
   }
 
 #define KINDS_ERROR(msg)                                                                                               \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
-    logger.log(LogLevel::Error, ss.str());                                                                             \
+    ::kinDS::logger.log(::kinDS::LogLevel::Error, ss.str());                                                           \
   }
-}

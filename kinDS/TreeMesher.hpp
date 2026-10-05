@@ -102,6 +102,11 @@ class TreeMesher
     /// so the caller can fill totals-row extras (alpha / mesh counts / experiment tag) then call
     /// @ref writeCollectedMeshingStatistics.
     bool defer_meshing_statistics_write = false;
+    /// When true with @ref collect_meshing_statistics, append a CSV row every time a kinetic section
+    /// closes (incremental file) so hard failures still retain completed-section statistics.
+    bool flush_meshing_statistics_each_section = false;
+    /// Optional experiment tag for statistics CSV stems (spaces should already be underscores).
+    std::string meshing_statistics_experiment_tag;
     /// Base output path used when @ref collect_meshing_statistics is enabled.
     /// A timestamp is inserted into the filename at write time so runs never overwrite each other.
     /// The event-list CSV is written beside this path (@c *statistics* → @c *event_list*).

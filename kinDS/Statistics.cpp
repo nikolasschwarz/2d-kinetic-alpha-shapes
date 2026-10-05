@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <ostream>
 #include <sstream>
 
 namespace kinDS
@@ -49,6 +50,7 @@ void Statistics::reset()
   totals_vertex_count_.reset();
   totals_failure_.reset();
   filename_experiment_tag_.clear();
+  incremental_csv_path_.clear();
 }
 
 void Statistics::beginRun()
@@ -79,6 +81,104 @@ void Statistics::closeOpenSection(Clock::time_point now)
   row.runtime_seconds += seconds;
   totals_.runtime_seconds += seconds;
   section_open_ = false;
+  appendIncrementalSectionRow(row);
+}
+
+void Statistics::startIncrementalCsv(const std::filesystem::path& base_path)
+{
+  if (!run_active_ || base_path.empty())
+  {
+    return;
+  }
+  std::filesystem::path base = base_path;
+  if (base.has_filename() && base.filename() == ".")
+  {
+    base /= "meshing_statistics.csv";
+  }
+  else if (!base.has_filename())
+  {
+    base /= "meshing_statistics.csv";
+  }
+  std::string stem = base.stem().string();
+  if (stem.empty())
+  {
+    stem = "meshing_statistics";
+  }
+  if (!filename_experiment_tag_.empty())
+  {
+    stem += "_";
+    stem += filename_experiment_tag_;
+  }
+  stem += "_partial";
+  std::string extension = base.extension().string();
+  if (extension.empty())
+  {
+    extension = ".csv";
+  }
+  incremental_csv_path_ = timestampedCsvPath(base.parent_path() / (stem + extension));
+
+  std::ofstream out(incremental_csv_path_);
+  if (!out)
+  {
+    KINDS_WARNING("Statistics: failed to open incremental CSV " << incremental_csv_path_.generic_string());
+    incremental_csv_path_.clear();
+    return;
+  }
+  writeCsvHeader(out);
+  out.flush();
+  KINDS_INFO("Statistics: incremental CSV " << incremental_csv_path_.generic_string());
+}
+
+void Statistics::writeCsvHeader(std::ostream& out) const
+{
+  out << "section_id,runtime_s,strand_count,branch_count,segment_count";
+  for (size_t i = 0; i < kineticEventTypeCount; ++i)
+  {
+    out << ',' << kineticEventTypeName(static_cast<KineticEventType>(i));
+  }
+  out << ",alpha,triangle_count,vertex_count,failure\n";
+}
+
+void Statistics::writeCsvSectionRow(std::ostream& out, const SectionStats& row) const
+{
+  out << std::setprecision(std::numeric_limits<double>::max_digits10);
+  out << row.section_id << ',' << row.runtime_seconds << ',';
+  if (row.strand_count.has_value())
+  {
+    out << row.strand_count.value();
+  }
+  out << ',';
+  if (row.branch_count.has_value())
+  {
+    out << row.branch_count.value();
+  }
+  out << ',';
+  if (row.strand_count.has_value())
+  {
+    out << (row.strand_count.value() + row.event_counts[static_cast<size_t>(KineticEventType::Subdivision)]);
+  }
+  for (size_t i = 0; i < kineticEventTypeCount; ++i)
+  {
+    out << ',' << row.event_counts[i];
+  }
+  // Section rows leave totals-only columns blank.
+  out << ",,,\n";
+}
+
+void Statistics::appendIncrementalSectionRow(const SectionStats& row)
+{
+  if (incremental_csv_path_.empty())
+  {
+    return;
+  }
+  std::ofstream out(incremental_csv_path_, std::ios::app);
+  if (!out)
+  {
+    KINDS_WARNING("Statistics: failed to append incremental CSV " << incremental_csv_path_.generic_string());
+    return;
+  }
+  writeCsvSectionRow(out, row);
+  out.flush();
 }
 
 void Statistics::openSection(size_t section_id, Clock::time_point now)

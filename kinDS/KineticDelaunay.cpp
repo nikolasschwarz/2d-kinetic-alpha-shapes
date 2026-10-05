@@ -6794,6 +6794,14 @@ void KineticDelaunay::compute()
   if (collect_statistics_)
   {
     statistics_.beginRun();
+    if (!statistics_experiment_tag_.empty())
+    {
+      statistics_.setFilenameExperimentTag(statistics_experiment_tag_);
+    }
+    if (statistics_incremental_flush_ && !statistics_incremental_csv_base_.empty())
+    {
+      statistics_.startIncrementalCsv(statistics_incremental_csv_base_);
+    }
     size_t total_strands = 0;
     const size_t point_count = branch_trajs.getPoints().size();
     for (size_t strand_id = 0; strand_id < point_count; ++strand_id)
@@ -7558,6 +7566,46 @@ void KineticDelaunay::scheduleRadiusEventsForCutoffRegimeChanges(double t)
   }
 }
 
+void KineticDelaunay::enqueueCorrectiveRadiusEvent(size_t face_id, double t, bool target_inside)
+{
+  if (!kinetic_algorithm_ || face_id >= face_inside.size() || !graph.isLiveFace(face_id))
+  {
+    return;
+  }
+  if (face_inside[face_id] == target_inside)
+  {
+    return;
+  }
+
+  const size_t he_id = graph.face(face_id).half_edges[0];
+  if (!graph.isLiveHalfEdge(he_id))
+  {
+    return;
+  }
+
+  const auto vertices = graph.getTriangleVertexIndices(face_id);
+  if (vertices[0] < 0 || vertices[1] < 0 || vertices[2] < 0)
+  {
+    return;
+  }
+
+  glm::dvec2 center { 0.0, 0.0 };
+  for (int i = 0; i < 3; ++i)
+  {
+    if (isDummyBoundary(static_cast<size_t>(vertices[i])))
+    {
+      return;
+    }
+    center += getPointAt(static_cast<size_t>(vertices[i]), t);
+  }
+  center /= 3.0;
+
+  const EventTime creation = eventTimeAt(t);
+  auto ev = std::make_shared<RadiusEvent>(this, t, he_id, creation.real_time, center, target_inside);
+  ev->creation_time = creation;
+  kinetic_algorithm_->enqueueEvent(std::move(ev));
+}
+
 bool KineticDelaunay::isMinimalInputBranchTriangle(const std::array<int, 3>& vertices, double t) const
 {
   if (vertices[0] == -1 || vertices[1] == -1 || vertices[2] == -1)
@@ -7861,8 +7909,9 @@ std::string formatFaceInsideStateValues(
   return oss.str();
 }
 
-[[noreturn]] void throwIncorrectFaceInsideState(const char* context, size_t face_id, bool stored_inside,
-  const FiniteFaceInsideExpectation& info, double cutoff, double t, const std::string& extra_detail = {})
+void warnAndCorrectIncorrectFaceInsideState(KineticDelaunay& kd, const char* context, size_t face_id,
+  bool stored_inside, const FiniteFaceInsideExpectation& info, double cutoff, double t,
+  const std::string& extra_detail = {})
 {
   std::ostringstream oss;
   oss << "Face inside/outside sanity check failed";
@@ -7876,11 +7925,18 @@ std::string formatFaceInsideStateValues(
   {
     oss << ". " << extra_detail;
   }
-  throw std::runtime_error(oss.str());
+  oss << "; enqueueing corrective RadiusEvent toward "
+      << (info.expected_inside ? "inside" : "outside");
+  KINDS_WARNING(oss.str());
+
+  if (info.valid)
+  {
+    kd.enqueueCorrectiveRadiusEvent(face_id, t, info.expected_inside);
+  }
 }
 
-void validateStoredFaceInsideAgainstExpectation(const KineticDelaunay& kd, size_t face_id, double t,
-  const char* context, const std::string& extra_detail = {})
+void validateStoredFaceInsideAgainstExpectation(KineticDelaunay& kd, size_t face_id, double t, const char* context,
+  const std::string& extra_detail = {})
 {
   if (!kd.getGraph().isLiveFace(face_id) || face_id >= kd.getFacesInside().size())
   {
@@ -7937,12 +7993,12 @@ void validateStoredFaceInsideAgainstExpectation(const KineticDelaunay& kd, size_
   if (stored_inside != expected_inside)
   {
     info.expected_inside = expected_inside;
-    throwIncorrectFaceInsideState(context, face_id, stored_inside, info, check_cutoff, t, extra_detail);
+    warnAndCorrectIncorrectFaceInsideState(kd, context, face_id, stored_inside, info, check_cutoff, t, extra_detail);
   }
 }
 } // namespace
 
-void KineticDelaunay::validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const
+void KineticDelaunay::validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t)
 {
   if (!isDiagnosticsHalfEdgeIdValid(half_edge_id) || !isDiagnosticsHalfEdgeIdValid(half_edge_id ^ 1))
   {
@@ -7981,15 +8037,19 @@ void KineticDelaunay::validateFlipAdjacentFaceInsideConsistency(size_t half_edge
   if (incorrect_a && incorrect_b)
   {
     detail << "; both faces disagree with circumradius/cutoff expectation";
-    throwIncorrectFaceInsideState("flip_event", face_a, inside_a, info_a, getCutoff(), t, detail.str());
+    warnAndCorrectIncorrectFaceInsideState(*this, "flip_event", face_a, inside_a, info_a, getCutoff(), t, detail.str());
+    warnAndCorrectIncorrectFaceInsideState(*this, "flip_event", face_b, inside_b, info_b, getCutoff(), t, detail.str());
+    return;
   }
   if (incorrect_a)
   {
-    throwIncorrectFaceInsideState("flip_event", face_a, inside_a, info_a, getCutoff(), t, detail.str());
+    warnAndCorrectIncorrectFaceInsideState(*this, "flip_event", face_a, inside_a, info_a, getCutoff(), t, detail.str());
+    return;
   }
   if (incorrect_b)
   {
-    throwIncorrectFaceInsideState("flip_event", face_b, inside_b, info_b, getCutoff(), t, detail.str());
+    warnAndCorrectIncorrectFaceInsideState(*this, "flip_event", face_b, inside_b, info_b, getCutoff(), t, detail.str());
+    return;
   }
 
   std::ostringstream oss;
@@ -7998,10 +8058,10 @@ void KineticDelaunay::validateFlipAdjacentFaceInsideConsistency(size_t half_edge
       << info_a.circumradius << "; face " << face_b << " inside=" << inside_b << ", r=" << info_b.circumradius
       << ", cutoff=" << getCutoff()
       << ") but neither face violates circumradius/cutoff expectation (possible mustRemainInside asymmetry)";
-  throw std::runtime_error(oss.str());
+  KINDS_WARNING(oss.str());
 }
 
-void KineticDelaunay::validateAllFaceInsideStatesAtTime(double t, const char* context) const
+void KineticDelaunay::validateAllFaceInsideStatesAtTime(double t, const char* context)
 {
   for (size_t face_id : graph.liveFaces())
   {

@@ -82,6 +82,7 @@ set(KINDS_SOURCES
     "kinDS/SegmentBuilderSubdivisionCallback.cpp"
     "kinDS/SegmentBuilderSeparationCallback.cpp"
 	"kinDS/TreeMesher.cpp"
+	"kinDS/MeshingBuffer.cpp"
 	"kinDS/Validator.cpp"
 	"kinDS/VoronoiMesh.cpp"
 	"kinDS/PlaneProjector.cpp"

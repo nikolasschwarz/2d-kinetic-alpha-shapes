@@ -822,6 +822,12 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << mesh_builder
                                                                                            ->radius_boundary_transition_shift_enabled);
   kinetic_delaunay->setCollectStatistics(settings.collect_meshing_statistics);
+  if (settings.collect_meshing_statistics)
+  {
+    kinetic_delaunay->setStatisticsExperimentTag(settings.meshing_statistics_experiment_tag);
+    kinetic_delaunay->setStatisticsIncrementalFlush(settings.flush_meshing_statistics_each_section,
+                                                    settings.meshing_statistics_csv_path);
+  }
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
   if (settings.collect_meshing_statistics && !settings.defer_meshing_statistics_write)

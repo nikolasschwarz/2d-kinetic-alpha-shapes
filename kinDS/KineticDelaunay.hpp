@@ -403,6 +403,9 @@ class KineticDelaunay
   std::unique_ptr<KineticAlgorithm> kinetic_algorithm_;
   Statistics statistics_;
   bool collect_statistics_ = false;
+  std::string statistics_experiment_tag_ {};
+  bool statistics_incremental_flush_ = false;
+  std::filesystem::path statistics_incremental_csv_base_ {};
   // Reused managers: one per event type.
   // Kept as pointers to avoid forcing complete manager types in this header.
   std::unique_ptr<FlipEventManager> flip_event_manager_;
@@ -901,6 +904,11 @@ class KineticDelaunay
   const Statistics& statistics() const { return statistics_; }
   void setCollectStatistics(bool enabled) { collect_statistics_ = enabled; }
   bool collectStatistics() const { return collect_statistics_; }
+  void setStatisticsExperimentTag(std::string tag) { statistics_experiment_tag_ = std::move(tag); }
+  void setStatisticsIncrementalFlush(bool enabled, std::filesystem::path csv_base_path) {
+    statistics_incremental_flush_ = enabled;
+    statistics_incremental_csv_base_ = std::move(csv_base_path);
+  }
   /// Live non-dummy strands and alive runtime branches (excludes retired / phased-out).
   std::pair<size_t, size_t> countLiveStrandsAndBranches() const;
 
@@ -980,6 +988,12 @@ class KineticDelaunay
    * not match the upcoming look_ahead-aware cutoff (regime flips and lagged look_ahead transitions).
    */
   void scheduleRadiusEventsForCutoffRegimeChanges(double t);
+
+  /**
+   * Enqueue a same-time RadiusEvent that flips @p face_id to @p target_inside.
+   * Used when diagnostics detect a stored inside/outside mismatch so meshing callbacks still run.
+   */
+  void enqueueCorrectiveRadiusEvent(size_t face_id, double t, bool target_inside);
 
   void setFaceInside(size_t face_index, bool value, double t);
 
@@ -1066,6 +1080,7 @@ class KineticDelaunay
 
   /**
    * Debug sanity checks: compare @ref face_inside against circumradius and @ref cutoff (and @ref mustRemainInside).
+   * On mismatch, warn and enqueue a corrective RadiusEvent (do not abort).
    * Intended to be called only when @ref SegmentBuilder::diagnostics is enabled.
    */
   /// Sentinel for disabled diagnostic targets. Never matches unset / invalid / infinite entity ids.
@@ -1149,8 +1164,8 @@ class KineticDelaunay
   /// When diagnostics + monitored VV are enabled, log stored containing triangle vs
   /// @ref findContainingTriForVoronoiVertex (same as initialization) at @p t.
   void logDiagnosticsMonitoredCrossingContainingTriangle(double t, const char* context) const;
-  void validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t) const;
-  void validateAllFaceInsideStatesAtTime(double t, const char* context) const;
+  void validateFlipAdjacentFaceInsideConsistency(size_t half_edge_id, double t);
+  void validateAllFaceInsideStatesAtTime(double t, const char* context);
   void logFaceInsideStateAtTime(size_t face_id, double t, const char* context) const;
   void logRadiusEventTriggerRoots(size_t face_id, size_t he_id, double t, double min_fraction,
     Polynomial event_trigger, const std::array<size_t, 3>& strand_ids,

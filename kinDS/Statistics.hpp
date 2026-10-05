@@ -104,6 +104,10 @@ class Statistics
   /// (@c meshing_statistics_<tag>_<sectionCount>_YYYYMMDD_…). Spaces should already be underscores.
   void setFilenameExperimentTag(std::string tag);
 
+  /// After @ref beginRun, open a stable incremental CSV (header only) and append one row each time a
+  /// section closes so mid-run failures still leave completed section statistics on disk.
+  void startIncrementalCsv(const std::filesystem::path& base_path);
+
   /// Add wall time to the current open section (and totals), e.g. @c SegmentBuilder::finalize.
   void addWallTimeSeconds(double seconds);
 
@@ -143,6 +147,9 @@ class Statistics
   void openSection(size_t section_id, Clock::time_point now);
   SectionStats& ensureSection(size_t section_id);
   std::filesystem::path statisticsCsvStemPath(const std::filesystem::path& path) const;
+  void writeCsvHeader(std::ostream& out) const;
+  void writeCsvSectionRow(std::ostream& out, const SectionStats& row) const;
+  void appendIncrementalSectionRow(const SectionStats& row);
 
   bool run_active_ = false;
   bool section_open_ = false;
@@ -156,5 +163,6 @@ class Statistics
   std::optional<size_t> totals_vertex_count_ {};
   std::optional<std::string> totals_failure_ {};
   std::string filename_experiment_tag_ {};
+  std::filesystem::path incremental_csv_path_ {};
 };
 } // namespace kinDS
