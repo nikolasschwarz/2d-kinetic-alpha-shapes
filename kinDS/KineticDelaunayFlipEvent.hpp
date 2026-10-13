@@ -2,12 +2,144 @@
 
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
+#include "KineticDelaunayFlipEventTriggerDump.hpp"
 
+#include <cmath>
 #include <limits>
 #include <map>
+#include <algorithm>
+#include <optional>
+#include <string>
 
 namespace kinDS
 {
+inline constexpr double flip_voronoi_vertex_distance_eps = 1e-6;
+inline constexpr double flip_boundary_collinearity_eps = 1e-8;
+
+/// At a flip, the two Voronoi vertices of the flipped Delaunay edge coincide (unless one face is
+/// infinite). Meshing must snap both sides to one canonical id so mesh-space positions match.
+/// Prefer buffering those coordinates once in @c SegmentBuilderFlipCallback::beforeEvent and reusing
+/// them in @c afterEvent — face/strand association changes during the flip.
+/// Do @b not use this in the flip sanity check, which intentionally compares both coordinates.
+inline size_t canonicalFlipEdgeVoronoiVertexIdForMeshing(
+  const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id, size_t voronoi_vertex_id)
+{
+  const size_t even_he = flip_half_edge_id & ~size_t { 1 };
+  const int left_face = graph.halfEdge(even_he).face;
+  const int right_face = graph.halfEdge(even_he ^ 1).face;
+  if (left_face < 0 || right_face < 0)
+  {
+    return voronoi_vertex_id;
+  }
+
+  const size_t left_vv = static_cast<size_t>(left_face);
+  const size_t right_vv = static_cast<size_t>(right_face);
+  if (graph.faceHasInfiniteVertex(left_vv) || graph.faceHasInfiniteVertex(right_vv))
+  {
+    return voronoi_vertex_id;
+  }
+  if (voronoi_vertex_id != left_vv && voronoi_vertex_id != right_vv)
+  {
+    return voronoi_vertex_id;
+  }
+  return std::min(left_vv, right_vv);
+}
+
+inline double normalizedTriangleCollinearityMetric(const glm::dvec2& pa, const glm::dvec2& pb, const glm::dvec2& pc)
+{
+  const glm::dvec2 ab = pb - pa;
+  const glm::dvec2 ac = pc - pa;
+  const double area2 = std::abs(ab.x * ac.y - ab.y * ac.x);
+  const double max_len2 = std::max({ glm::dot(ab, ab), glm::dot(ac, ac), glm::dot(pc - pb, pc - pb) });
+  if (max_len2 <= 0.0)
+  {
+    return 0.0;
+  }
+  return area2 / max_len2;
+}
+
+inline std::vector<size_t> collectFlipQuadrilateralStrandIds(const HalfEdgeDelaunayGraph& graph, size_t he_id)
+{
+  std::vector<size_t> strand_ids;
+  strand_ids.reserve(4);
+
+  const auto append_strand = [&](int vertex)
+  {
+    if (vertex >= 0)
+    {
+      const size_t strand_id = static_cast<size_t>(vertex);
+      if (std::find(strand_ids.begin(), strand_ids.end(), strand_id) == strand_ids.end())
+      {
+        strand_ids.push_back(strand_id);
+      }
+    }
+  };
+
+  if (graph.isOnConvexBoundary(he_id) || graph.isOutsideConvexBoundary(he_id))
+  {
+    size_t boundary_he_id = he_id;
+    if (graph.isOutsideConvexBoundary(boundary_he_id))
+    {
+      boundary_he_id ^= 1;
+    }
+
+    const int indices[4] = {
+      graph.halfEdge(boundary_he_id).origin,
+      graph.triangleOppositeVertex(boundary_he_id ^ 1),
+      graph.halfEdge(boundary_he_id ^ 1).origin,
+      graph.triangleOppositeVertex(boundary_he_id),
+    };
+    for (int vertex : indices)
+    {
+      append_strand(vertex);
+    }
+  }
+  else
+  {
+    append_strand(graph.halfEdge(he_id).origin);
+    append_strand(graph.triangleOppositeVertex(he_id ^ 1));
+    append_strand(graph.halfEdge(he_id ^ 1).origin);
+    append_strand(graph.triangleOppositeVertex(he_id));
+  }
+
+  return strand_ids;
+}
+
+inline glm::dvec2 flipTriangleCircumcenterAt(const KineticDelaunay& kd, const HalfEdgeDelaunayGraph& graph, size_t he_id,
+  double t, bool use_transformed_points, std::optional<size_t> shared_reference_branch = std::nullopt)
+{
+  const std::array<int, 3> vertices = graph.adjacentTriangleVertices(he_id);
+  const StrandTree& tree = kd.getStrandTree();
+  const auto point_at = [&](int vertex) -> glm::dvec2
+  {
+    const size_t strand_id = static_cast<size_t>(vertex);
+    if (!use_transformed_points)
+    {
+      return tree.evaluate(strand_id, t);
+    }
+    if (shared_reference_branch.has_value())
+    {
+      return kd.getPointAtWithReferenceBranch(strand_id, t, shared_reference_branch.value());
+    }
+    return kd.getPointAt(strand_id, t);
+  };
+  return HalfEdgeDelaunayGraph::circumcenter(
+    point_at(vertices[0]), point_at(vertices[1]), point_at(vertices[2]));
+}
+
+inline std::string flipUntransformedFrameMismatchNote(bool transformed_passes, bool untransformed_passes)
+{
+  if (!transformed_passes && untransformed_passes)
+  {
+    return " [untransformed geometry satisfies the flip criterion; possible frame mismatch in event polynomials]";
+  }
+  if (transformed_passes && !untransformed_passes)
+  {
+    return " [only transformed geometry satisfies the flip criterion]";
+  }
+  return {};
+}
+
 class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
 {
  public:
@@ -16,7 +148,7 @@ class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
   glm::dvec2 position;
 
   FlipEvent(KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position)
-    : KineticDelaunay::Event(t, creation_time)
+    : KineticDelaunay::Event(t, creation_time, 20u)
     , kd_(kd)
     , half_edge_id(he_id)
     , position(position)
@@ -24,6 +156,12 @@ class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
   }
 
   void handleEvent() override;
+  KineticEventType eventType() const override { return KineticEventType::Flip; }
+  void populateEventListFields(Statistics::EventListRow& row) const override
+  {
+    row.half_edge_id = half_edge_id;
+    row.delaunay_edge_id = half_edge_id / 2;
+  }
 };
 
 class KineticDelaunay::FlipEventManager final : public KineticDelaunay::EventManager
@@ -34,134 +172,11 @@ class KineticDelaunay::FlipEventManager final : public KineticDelaunay::EventMan
   {
   }
 
-  void computeEvents(double t, size_t event_id) override;
+  void computeEvents(double t, size_t event_id,
+    std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt) override;
 
  private:
   KineticDelaunay* kd_;
 };
-
-inline void KineticDelaunay::FlipEvent::handleEvent()
-{
-  auto* kd = kd_;
-  if (!kd)
-  {
-    throw std::runtime_error("FlipEvent has no KineticDelaunay pointer");
-  }
-
-  auto& graph = kd->graph;
-
-  // Check if the event is still valid
-  if (creation_time < kd->quadrilateral_last_updated[half_edge_id / 2])
-  {
-    return;
-  }
-
-  // Before modifying the topology, store the face id for each half-edge in the quadrilateral
-  // (three per triangle) so we can reason about pre-flip topology if needed.
-  std::map<size_t, size_t> pre_flip_quad_faces;
-  {
-    size_t he0 = half_edge_id;
-    size_t he1 = graph.getHalfEdges()[he0].next;
-    size_t he2 = graph.getHalfEdges()[he1].next;
-    size_t he3 = he0 ^ 1;
-    size_t he4 = graph.getHalfEdges()[he3].next;
-    size_t he5 = graph.getHalfEdges()[he4].next;
-
-    pre_flip_quad_faces[he0] = graph.getHalfEdges()[he0].face;
-    pre_flip_quad_faces[he1] = graph.getHalfEdges()[he1].face;
-    pre_flip_quad_faces[he2] = graph.getHalfEdges()[he2].face;
-    pre_flip_quad_faces[he3] = graph.getHalfEdges()[he3].face;
-    pre_flip_quad_faces[he4] = graph.getHalfEdges()[he4].face;
-    pre_flip_quad_faces[he5] = graph.getHalfEdges()[he5].face;
-  }
-
-  // Process the event at the given time
-  size_t face_id = graph.getHalfEdges()[half_edge_id].face;
-  size_t twin_face_id = graph.getHalfEdges()[half_edge_id ^ 1].face;
-  KINDS_DEBUG("Processing flip event at time " << occurrence_time << " for half-edge ID " << half_edge_id
-                                               << ". Faces inside " << kd->face_inside[face_id] << " | "
-                                               << kd->face_inside[twin_face_id]);
-
-  auto* event_handler = kd->flip_event_manager_->getCallback();
-  if (event_handler)
-  {
-    event_handler->beforeEvent(*this);
-  }
-
-  // Faces swapped to the inside start out with an infinite circumradius, therefore their state depends on the cutoff
-  if (graph.getHalfEdges()[half_edge_id].origin == -1)
-  {
-    kd->face_inside[twin_face_id] = (kd->cutoff == std::numeric_limits<double>::infinity());
-  }
-
-  if (graph.getHalfEdges()[half_edge_id ^ 1].origin == -1)
-  {
-    kd->face_inside[face_id] = (kd->cutoff == std::numeric_limits<double>::infinity());
-  }
-
-  graph.flipEdge(half_edge_id);
-
-  // one of the triangles might have been swapped outside
-  auto tri_verts1 = graph.adjacentTriangleVertices(half_edge_id);
-  for (auto& v : tri_verts1)
-  {
-    if (v == -1)
-    {
-      size_t swapped_face_id = graph.getHalfEdges()[half_edge_id].face;
-      kd->setFaceInside(swapped_face_id, false);
-    }
-  }
-
-  auto tri_verts2 = graph.adjacentTriangleVertices(half_edge_id ^ 1);
-  for (auto& v : tri_verts2)
-  {
-    if (v == -1)
-    {
-      size_t swapped_face_id = graph.getHalfEdges()[half_edge_id ^ 1].face;
-      kd->setFaceInside(swapped_face_id, false);
-    }
-  }
-
-  // After flipping the edge, we need to recompute the events for all surrounding half-edges
-  size_t next1 = graph.getHalfEdges()[half_edge_id].next;
-  size_t next2 = graph.getHalfEdges()[next1].next;
-
-  size_t twin_next1 = graph.getHalfEdges()[half_edge_id ^ 1].next;
-  size_t twin_next2 = graph.getHalfEdges()[twin_next1].next;
-
-  kd->flip_event_manager_->computeEvents(occurrence_time, next1 / 2);
-  kd->quadrilateral_last_updated[next1 / 2] = occurrence_time;
-
-  kd->flip_event_manager_->computeEvents(occurrence_time, next2 / 2);
-  kd->quadrilateral_last_updated[next2 / 2] = occurrence_time;
-
-  kd->flip_event_manager_->computeEvents(occurrence_time, twin_next1 / 2);
-  kd->quadrilateral_last_updated[twin_next1 / 2] = occurrence_time;
-
-  kd->flip_event_manager_->computeEvents(occurrence_time, twin_next2 / 2);
-  kd->quadrilateral_last_updated[twin_next2 / 2] = occurrence_time;
-
-  // re-compute radius events for both triangles
-  kd->radius_event_manager_->computeEvents(occurrence_time, half_edge_id);
-  kd->face_last_updated[face_id] = occurrence_time;
-
-  kd->radius_event_manager_->computeEvents(occurrence_time, half_edge_id ^ 1);
-  kd->face_last_updated[twin_face_id] = occurrence_time;
-
-  // trigger re-assignment of voronoi vertices needed for crossing events
-  if (!graph.isOnConvexBoundary(half_edge_id))
-  {
-    kd->reassignVoronoiVerticesInQuadrilateral(half_edge_id / 2, occurrence_time, pre_flip_quad_faces);
-  }
-  else
-  {
-    kd->reassignVoronoiVerticesOnBoundary(half_edge_id, occurrence_time);
-  }
-
-  if (event_handler)
-  {
-    event_handler->afterEvent(*this);
-  }
-}
 
 } // namespace kinDS

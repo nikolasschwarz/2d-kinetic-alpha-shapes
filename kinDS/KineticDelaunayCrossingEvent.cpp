@@ -1,36 +1,532 @@
 #include "KineticDelaunayCrossingEvent.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <iomanip>
 #include <limits>
-
-using namespace kinDS;
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "KineticDelaunayEventPredicates.hpp"
 
-void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voronoi_vertex_id)
+using namespace kinDS;
+
+namespace
+{
+std::string formatSignLabel(double sign)
+{
+  return sign > 0.0 ? "+" : "-";
+}
+
+std::string formatSignChange(double sign_before, double sign_after)
+{
+  return "(" + formatSignLabel(sign_before) + " => " + formatSignLabel(sign_after) + ")";
+}
+
+std::pair<double, double> signChangeAtRoot(const Polynomial& event_trigger, double root,
+  const std::vector<double>& sorted_zeros, double root_min, bool virtual_mode)
+{
+  const auto root_it = std::lower_bound(sorted_zeros.begin(), sorted_zeros.end(), root);
+  const size_t root_index = static_cast<size_t>(root_it - sorted_zeros.begin());
+
+  const double left_bound = root_index == 0 ? root_min : sorted_zeros[root_index - 1];
+  const double right_bound = root_index + 1 < sorted_zeros.size() ? sorted_zeros[root_index + 1]
+                                                                : (virtual_mode ? root + 1.0 : 1.0);
+
+  const double before_test = (left_bound + root) * 0.5;
+  const double after_test = (root + right_bound) * 0.5;
+  const double sign_before = event_trigger(before_test) > 0.0 ? 1.0 : -1.0;
+  const double sign_after = event_trigger(after_test) > 0.0 ? 1.0 : -1.0;
+  return { sign_before, sign_after };
+}
+
+/// Inclusive window [@ref KineticDelaunay::kDiagnosticsMonitoredCrossingTime,
+/// @ref KineticDelaunay::kDiagnosticsMonitoredCrossingTime + 1] so section recomputes at the lower bound are included.
+bool isInDiagnosticsMonitoredCrossingTimeWindow(double schedule_t)
+{
+  return schedule_t >= KineticDelaunay::kDiagnosticsMonitoredCrossingTime
+    && schedule_t <= KineticDelaunay::kDiagnosticsMonitoredCrossingTime + 1.0;
+}
+
+/// VV + time window only (containing triangle is reported, not used as a filter).
+bool shouldLogCrossingDiagnostics(const KineticDelaunay& kd, size_t voronoi_vertex_id, double schedule_t)
+{
+  return kd.diagnosticsEnabled()
+    && KineticDelaunay::matchesDiagnosticsMonitorId(
+         voronoi_vertex_id, KineticDelaunay::kDiagnosticsMonitoredCrossingVoronoiVertexId)
+    && kd.isDiagnosticsFaceIdValid(voronoi_vertex_id)
+    && isInDiagnosticsMonitoredCrossingTimeWindow(schedule_t);
+}
+
+/// Handle-side filter: monitored VV + time window (optional edge highlight filter when enabled).
+bool shouldLogCrossingHandleDiagnostics(
+  const KineticDelaunay& kd, size_t voronoi_vertex_id, size_t half_edge_id, double occurrence_t)
+{
+  if (!kd.diagnosticsEnabled()
+    || !KineticDelaunay::matchesDiagnosticsMonitorId(
+         voronoi_vertex_id, KineticDelaunay::kDiagnosticsMonitoredCrossingVoronoiVertexId)
+    || !isInDiagnosticsMonitoredCrossingTimeWindow(occurrence_t))
+  {
+    return false;
+  }
+
+  if (KineticDelaunay::isDiagnosticsMonitorIdEnabled(KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId)
+    && !KineticDelaunay::matchesDiagnosticsMonitorId(
+         half_edge_id / 2, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId))
+  {
+    return false;
+  }
+
+  return true;
+}
+
+void logCrossingComputeContext(const KineticDelaunay& kd, size_t voronoi_vertex_id, double schedule_t,
+  size_t section, double root_min, size_t containing_tri_id, bool adjacent, size_t finite_he_id, bool virtual_mode,
+  double frozen_real_t)
+{
+  const double event_interval_upper_bound = eventIntervalUpperBound(schedule_t);
+  const EventTime schedule_event_time(schedule_t, virtual_mode ? root_min : 0.0);
+  std::ostringstream header;
+  header << "Crossing computeEvents monitor (voronoi_vertex=" << voronoi_vertex_id
+         << ", schedule_t=" << schedule_event_time
+         << ", section=" << section
+         << ", " << (virtual_mode ? "min_infinitesimal_t=" : "min_fraction=") << root_min
+         << ", event_interval_upper_bound=" << event_interval_upper_bound
+         << ", containing_tri=" << containing_tri_id << ", adjacent_case=" << (adjacent ? "true" : "false")
+         << ", pass=" << (virtual_mode ? "infinitesimal" : "primary");
+  if (virtual_mode)
+  {
+    header << ", virtual=true, frozen_real_t=" << frozen_real_t
+           << ", separation_recompute=true";
+  }
+  if (adjacent)
+  {
+    header << ", finite_he_id=" << finite_he_id << ", delaunay_edge=" << (finite_he_id / 2);
+  }
+  header << ", monitored_crossing_window=[" << KineticDelaunay::kDiagnosticsMonitoredCrossingTime << ", "
+         << (KineticDelaunay::kDiagnosticsMonitoredCrossingTime + 1.0) << "]";
+  if (KineticDelaunay::isDiagnosticsMonitorIdEnabled(KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId))
+  {
+    header << ", monitored_delaunay_edge=" << KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId
+           << ", monitored_half_edges=["
+           << (2 * KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId) << ","
+           << (2 * KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId + 1) << "]";
+  }
+  header << ")";
+  KINDS_MONITOR(header.str());
+
+  kd.logDiagnosticsMonitoredCrossingContainingTriangle(schedule_t, "crossing_computeEvents");
+}
+
+void logCrossingTriggerRoots(const KineticDelaunay& kd, size_t voronoi_vertex_id, size_t he_id, size_t edge_index,
+  double schedule_t, double min_fraction, const Polynomial& event_trigger_in, bool only_positive_to_negative,
+  bool virtual_mode, double frozen_real_t)
+{
+  Polynomial event_trigger = event_trigger_in;
+  const size_t section = static_cast<size_t>(schedule_t);
+  const size_t delaunay_edge_id = he_id / 2;
+  const bool monitored_edge = KineticDelaunay::matchesDiagnosticsMonitorId(
+    delaunay_edge_id, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId);
+  const double root_min = min_fraction;
+  const EventTime schedule_event_time(schedule_t, virtual_mode ? root_min : 0.0);
+  std::ostringstream header;
+  header << "  crossing trigger roots";
+  if (monitored_edge)
+  {
+    header << " **MONITORED_EDGE**";
+  }
+  header << " (voronoi_vertex=" << voronoi_vertex_id << ", edge_index=" << edge_index << ", he_id=" << he_id
+         << ", delaunay_edge=" << delaunay_edge_id << ", schedule_t=" << schedule_event_time
+         << ", section=" << section
+         << ", " << (virtual_mode ? "min_infinitesimal_t=" : "min_fraction=") << root_min
+         << ", only_positive_to_negative=" << (only_positive_to_negative ? "true" : "false")
+         << ", trigger_degree=" << event_trigger.degree()
+         << ", pass=" << (virtual_mode ? "infinitesimal" : "primary") << ")";
+  if (virtual_mode)
+  {
+    header << ", virtual=true, frozen_real_t=" << frozen_real_t;
+  }
+  KINDS_MONITOR(header.str());
+
+  if (event_trigger.degree() == -1)
+  {
+    KINDS_MONITOR("    trigger empty (degree -1)");
+    return;
+  }
+
+  event_trigger.trim();
+  const auto zeros = event_trigger.realRoots();
+  if (zeros.empty())
+  {
+    KINDS_MONITOR("    no real roots");
+    return;
+  }
+
+  std::vector<double> sorted_zeros;
+  sorted_zeros.reserve(zeros.size());
+  for (double root : zeros)
+  {
+    if (!std::isnan(root) && std::isfinite(root))
+    {
+      sorted_zeros.push_back(root);
+    }
+  }
+  std::sort(sorted_zeros.begin(), sorted_zeros.end());
+
+  std::optional<double> first_enqueued_root;
+  for (size_t root_index = 0; root_index < zeros.size(); ++root_index)
+  {
+    const double root = zeros[root_index];
+    std::ostringstream line;
+    line << std::setprecision(17) << "    root[" << root_index << "] ";
+    if (virtual_mode)
+    {
+      line << "infinitesimal_t=" << root << " frozen_real_t=" << frozen_real_t;
+    }
+    else
+    {
+      line << "fraction=" << root << " absolute_t=" << (root + static_cast<double>(section));
+    }
+
+    if (std::isnan(root) || !std::isfinite(root))
+    {
+      line << " discarded (nan/non-finite)";
+      KINDS_MONITOR(line.str());
+      continue;
+    }
+
+    const auto [sign_before, sign_after]
+      = signChangeAtRoot(event_trigger, root, sorted_zeros, root_min, virtual_mode);
+    line << " sign_change=" << formatSignChange(sign_before, sign_after);
+
+    if (root <= root_min)
+    {
+      line << " discarded (" << (virtual_mode ? "infinitesimal_t" : "fraction") << " <= min)";
+      KINDS_MONITOR(line.str());
+      continue;
+    }
+    if (!virtual_mode && root > kEventIntervalFractionUpperBound)
+    {
+      line << " discarded (fraction > " << kEventIntervalFractionUpperBound << ")";
+      KINDS_MONITOR(line.str());
+      continue;
+    }
+
+    if (sign_before == sign_after)
+    {
+      line << " discarded (no_sign_change)";
+      KINDS_MONITOR(line.str());
+      continue;
+    }
+
+    if (only_positive_to_negative && sign_before < 0.0)
+    {
+      line << " discarded (negative_to_positive, only_positive_to_negative=true)";
+      KINDS_MONITOR(line.str());
+      continue;
+    }
+
+    const bool positive_to_negative = sign_before > 0.0 && sign_after < 0.0;
+    line << (virtual_mode ? " queued_by_findVirtualEvents" : " queued_by_findEvents")
+         << " positive_to_negative=" << (positive_to_negative ? "true" : "false");
+    if (!first_enqueued_root.has_value())
+    {
+      first_enqueued_root = root;
+      line << " **first_enqueued_root**";
+    }
+    KINDS_MONITOR(line.str());
+  }
+
+  if (!first_enqueued_root.has_value())
+  {
+    KINDS_MONITOR("    " << (virtual_mode ? "findVirtualEvents" : "findEvents")
+                       << " would return empty for this trigger");
+  }
+  else if (virtual_mode)
+  {
+    KINDS_MONITOR("    findVirtualEvents would return first root infinitesimal_t=" << *first_enqueued_root
+                                                                                << " frozen_real_t=" << frozen_real_t);
+  }
+  else
+  {
+    KINDS_MONITOR("    findEvents would return first root fraction=" << *first_enqueued_root << " absolute_t="
+                                                                  << (*first_enqueued_root
+                                                                    + static_cast<double>(section)));
+  }
+  (void)kd;
+}
+
+struct CrossingEdgeCandidateSummary
+{
+  size_t he_id = size_t(-1);
+  size_t delaunay_edge_id = size_t(-1);
+  bool monitored_edge = false;
+  bool had_enqueued_root = false;
+  double first_enqueued_fraction = std::numeric_limits<double>::infinity();
+  double first_enqueued_absolute_t = std::numeric_limits<double>::infinity();
+};
+
+void logCrossingCandidateSelection(const KineticDelaunay& kd, size_t voronoi_vertex_id, size_t containing_tri_id,
+  double schedule_t, const std::vector<CrossingEdgeCandidateSummary>& candidates, size_t selected_he_id,
+  double selected_event_time, bool virtual_mode, double frozen_real_t, double selected_infinitesimal_t, double root_min)
+{
+  const EventTime schedule_event_time(schedule_t, virtual_mode ? root_min : 0.0);
+  KINDS_MONITOR("  crossing candidate selection summary (voronoi_vertex=" << voronoi_vertex_id
+                                                                         << ", schedule_t=" << schedule_event_time
+                                                                         << ", pass="
+                                                                         << (virtual_mode ? "infinitesimal"
+                                                                                          : "primary")
+                                                                         << ")");
+  for (size_t edge_index = 0; edge_index < candidates.size(); ++edge_index)
+  {
+    const auto& candidate = candidates[edge_index];
+    std::ostringstream line;
+    line << "    edge_index=" << edge_index << " he_id=" << candidate.he_id
+         << " delaunay_edge=" << candidate.delaunay_edge_id;
+    if (candidate.monitored_edge)
+    {
+      line << " **MONITORED_EDGE**";
+    }
+    if (!candidate.had_enqueued_root)
+    {
+      line << " discarded (no queued root from "
+           << (virtual_mode ? "findVirtualEvents" : "findEvents") << ")";
+    }
+    else
+    {
+      line << std::setprecision(17);
+      if (virtual_mode)
+      {
+        line << " first_queued_infinitesimal_t=" << candidate.first_enqueued_fraction
+             << " frozen_real_t=" << frozen_real_t;
+      }
+      else
+      {
+        line << " first_queued_fraction=" << candidate.first_enqueued_fraction
+             << " first_queued_absolute_t=" << candidate.first_enqueued_absolute_t;
+      }
+      if (selected_he_id != size_t(-1) && candidate.he_id == selected_he_id)
+      {
+        line << " **SELECTED**";
+      }
+      else if (virtual_mode ? (candidate.first_enqueued_fraction > selected_infinitesimal_t)
+                            : (candidate.first_enqueued_absolute_t > selected_event_time))
+      {
+        if (virtual_mode)
+        {
+          line << " discarded (later than selected candidate at infinitesimal_t=" << selected_infinitesimal_t
+               << ")";
+        }
+        else
+        {
+          line << " discarded (later than selected candidate at t=" << selected_event_time << ")";
+        }
+      }
+      else if (selected_he_id == size_t(-1))
+      {
+        line << " discarded (no overall winner)";
+      }
+      else
+      {
+        line << " discarded (not earliest among candidates)";
+      }
+    }
+    KINDS_MONITOR(line.str());
+  }
+
+  if (selected_he_id == size_t(-1))
+  {
+    KINDS_MONITOR("  crossing event NOT queued (no candidate roots)");
+  }
+  else
+  {
+    const EventTime creation_time = virtual_mode ? EventTime(frozen_real_t, root_min) : kd.eventTimeAt(schedule_t);
+    const auto& graph = kd.getGraph();
+    const size_t target_tri_id
+      = graph.isLiveHalfEdge(selected_he_id) ? graph.halfEdge(selected_he_id ^ 1).face : size_t(-1);
+    std::ostringstream queued;
+    queued << "  crossing event queued";
+    if (virtual_mode)
+    {
+      queued << " pass=infinitesimal";
+    }
+    queued << " voronoi_vertex=" << voronoi_vertex_id << " origin_tri=" << containing_tri_id
+           << " target_tri=" << target_tri_id << " he_id=" << selected_he_id
+           << " delaunay_edge=" << (selected_he_id / 2) << " creation_t=" << std::setprecision(17) << creation_time;
+    if (virtual_mode)
+    {
+      queued << " frozen_real_t=" << frozen_real_t << " infinitesimal_t=" << selected_infinitesimal_t;
+    }
+    else
+    {
+      queued << " event_time=" << selected_event_time;
+    }
+    KINDS_MONITOR(queued.str());
+  }
+}
+} // namespace
+
+bool KineticDelaunay::isDiagnosticsMonitoredCrossingValid() const
+{
+  return isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredCrossingVoronoiVertexId)
+    && isDiagnosticsFaceIdValid(kDiagnosticsMonitoredCrossingVoronoiVertexId);
+}
+
+void KineticDelaunay::logDiagnosticsMonitoredCrossingContainingTriangle(double t, const char* context) const
+{
+  if (!diagnosticsEnabled()
+    || !isDiagnosticsMonitorIdEnabled(kDiagnosticsMonitoredCrossingVoronoiVertexId))
+  {
+    return;
+  }
+
+  const size_t vv = kDiagnosticsMonitoredCrossingVoronoiVertexId;
+  std::ostringstream oss;
+  oss << "Crossing containing-triangle monitor";
+  if (context != nullptr && context[0] != '\0')
+  {
+    oss << " (" << context << ")";
+  }
+  oss << ": voronoi_vertex=" << vv << " at t=" << t;
+
+  if (!isDiagnosticsFaceIdValid(vv) || !graph.isLiveFace(vv))
+  {
+    oss << " (Voronoi vertex not live)";
+    KINDS_MONITOR(oss.str());
+    return;
+  }
+
+  if (!crossing_data.isVoronoiVertexRegistered(vv))
+  {
+    oss << " stored_containing_tri=unregistered";
+    const size_t recomputed_tri_id = findContainingTriForVoronoiVertex(vv, t);
+    oss << " recomputed_containing_tri=" << recomputed_tri_id;
+    KINDS_MONITOR(oss.str());
+    return;
+  }
+
+  const size_t stored_tri_id = crossing_data.getContainingTriId(vv);
+  const size_t recomputed_tri_id = findContainingTriForVoronoiVertex(vv, t);
+  oss << " stored_containing_tri=" << stored_tri_id << " recomputed_containing_tri=" << recomputed_tri_id;
+  if (stored_tri_id == recomputed_tri_id)
+  {
+    oss << " MATCH";
+  }
+  else
+  {
+    oss << " MISMATCH";
+  }
+  KINDS_MONITOR(oss.str());
+}
+
+void KineticDelaunay::logCrossingEventTriggerRoots(size_t voronoi_vertex_id, size_t he_id, size_t edge_index,
+  double t, double min_fraction, const Polynomial& event_trigger, bool only_positive_to_negative) const
+{
+  logCrossingTriggerRoots(*this, voronoi_vertex_id, he_id, edge_index, t, min_fraction, event_trigger,
+    only_positive_to_negative, computing_infinitesimal_events_, infinitesimal_schedule_t_);
+}
+
+void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voronoi_vertex_id,
+  std::optional<InfinitesimalComputeContext> infinitesimal)
 {
   auto* kd = kd_;
   auto& graph = kd->graph;
   auto& crossing_data = kd->crossing_data;
   auto& branch_trajs = kd->branch_trajs;
 
+  std::optional<KineticDelaunay::ScopedInfinitesimalEventCompute> scope;
+  if (infinitesimal.has_value())
+  {
+    scope.emplace(*kd, infinitesimal->parent_component_id, t, infinitesimal->min_infinitesimal_t);
+    if (!scope->active())
+    {
+      if (shouldLogCrossingDiagnostics(*kd, voronoi_vertex_id, t))
+      {
+        KINDS_MONITOR("Crossing computeEvents early exit (voronoi_vertex=" << voronoi_vertex_id
+                                                                           << ", schedule_t=" << EventTime(t, infinitesimal->min_infinitesimal_t)
+                                                                           << ", parent_component=" << infinitesimal->parent_component_id
+                                                                           << "): infinitesimal scope inactive "
+                                                                              "(no pending active separation / hiatus)");
+      }
+      return;
+    }
+  }
+
+  const bool log_crossing_diag = shouldLogCrossingDiagnostics(*kd, voronoi_vertex_id, t);
+  const auto log_early_exit = [&](const char* reason)
+  {
+    if (log_crossing_diag)
+    {
+      KINDS_MONITOR("Crossing computeEvents early exit (voronoi_vertex=" << voronoi_vertex_id << ", schedule_t="
+                                                                       << EventTime(t,
+                                                                            infinitesimal.has_value()
+                                                                              ? infinitesimal->min_infinitesimal_t
+                                                                              : 0.0)
+                                                                       << "): " << reason);
+    }
+  };
+
   if (!kd->on_the_fly_boundary)
   {
+    log_early_exit("on_the_fly_boundary=false");
+    return;
+  }
+  if (voronoi_vertex_id >= graph.faceSlotCount() || !graph.isLiveFace(voronoi_vertex_id)
+    || !crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
+  {
+    log_early_exit("voronoi vertex not live or not registered");
     return;
   }
   const size_t section = static_cast<size_t>(t);
   const float fraction = t - section;
+  const bool virtual_mode = infinitesimal.has_value();
+  const double root_min = virtual_mode ? kd->infinitesimal_recompute_min_x_ : static_cast<double>(fraction);
 
-  auto& dual_triangle = graph.getFaces()[voronoi_vertex_id];
-  auto& containing_triangle = graph.getFaces()[crossing_data.getContainingTriId(voronoi_vertex_id)];
+  auto& dual_triangle = graph.face(voronoi_vertex_id);
+  const size_t containing_tri_id = crossing_data.getContainingTriId(voronoi_vertex_id);
+  auto& containing_triangle = graph.face(containing_tri_id);
+
+  std::vector<size_t> event_strand_ids;
+  event_strand_ids.reserve(6);
+  const auto append_strand = [&](int vertex)
+  {
+    if (vertex >= 0)
+    {
+      const size_t strand_id = static_cast<size_t>(vertex);
+      if (std::find(event_strand_ids.begin(), event_strand_ids.end(), strand_id) == event_strand_ids.end())
+      {
+        event_strand_ids.push_back(strand_id);
+      }
+    }
+  };
+  for (size_t he_id : dual_triangle.half_edges)
+  {
+    append_strand(static_cast<int>(graph.halfEdge(he_id).origin));
+    append_strand(static_cast<int>(graph.destination(he_id)));
+  }
+  for (size_t he_id : containing_triangle.half_edges)
+  {
+    append_strand(static_cast<int>(graph.halfEdge(he_id).origin));
+    append_strand(static_cast<int>(graph.destination(he_id)));
+  }
+
+  const auto piece_poly = [&](size_t strand_id)
+  {
+    return kd->getSitePiecePolynomialForEventStrands(strand_id, section, t, event_strand_ids);
+  };
 
   // compute polynomials of two bisectors in homogeneous coordinates
-  size_t v_i = graph.getHalfEdges()[dual_triangle.half_edges[0]].origin;
-  size_t v_j = graph.getHalfEdges()[dual_triangle.half_edges[1]].origin;
-  size_t v_k = graph.getHalfEdges()[dual_triangle.half_edges[2]].origin;
+  size_t v_i = graph.halfEdge(dual_triangle.half_edges[0]).origin;
+  size_t v_j = graph.halfEdge(dual_triangle.half_edges[1]).origin;
+  size_t v_k = graph.halfEdge(dual_triangle.half_edges[2]).origin;
 
   // If a vertex is infinite, so is the Voronoi vertex and it cannot cross any edge, so we can skip this event.
   if (v_i == -1 || v_j == -1 || v_k == -1)
   {
+    log_early_exit("infinite Voronoi vertex (dual triangle has infinite site)");
     return;
   }
 
@@ -67,17 +563,23 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
     }
   }
 
+  if (log_crossing_diag)
+  {
+    logCrossingComputeContext(*kd, voronoi_vertex_id, t, section, root_min, containing_tri_id, adjacent, finite_he_id,
+      virtual_mode, kd->infinitesimal_schedule_t_);
+  }
+
   if (adjacent)
   {
 
     // re-assign vertices
     v_i = graph.triangleOppositeVertex(dual_triangle.half_edges[adjacent_edge_index]);
-    v_j = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index]].origin;
-    v_k = graph.getHalfEdges()[dual_triangle.half_edges[adjacent_edge_index] ^ 1].origin;
+    v_j = graph.halfEdge(dual_triangle.half_edges[adjacent_edge_index]).origin;
+    v_k = graph.halfEdge(dual_triangle.half_edges[adjacent_edge_index] ^ 1).origin;
 
-    Trajectory<2> traj_i = branch_trajs.getPiecePolynomial(v_i, section);
-    Trajectory<2> traj_j = branch_trajs.getPiecePolynomial(v_j, section);
-    Trajectory<2> traj_k = branch_trajs.getPiecePolynomial(v_k, section);
+    Trajectory<2> traj_i = piece_poly(v_i);
+    Trajectory<2> traj_j = piece_poly(v_j);
+    Trajectory<2> traj_k = piece_poly(v_k);
 
     Trajectory<2> vector_ij;
     vector_ij[0] = traj_j[0] - traj_i[0];
@@ -87,30 +589,70 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
     vector_ik[1] = traj_k[1] - traj_i[1];
 
     Polynomial event_trigger = -(vector_ij[0] * vector_ik[0] + vector_ij[1] * vector_ik[1]);
-    auto fractional_event_times = kd->findEvents(event_trigger, fraction, true);
+    if (log_crossing_diag)
+    {
+      kd->logCrossingEventTriggerRoots(
+        voronoi_vertex_id, finite_he_id, adjacent_edge_index, t, root_min, event_trigger, true);
+    }
+    auto fractional_event_times = virtual_mode
+      ? kd->findVirtualEvents(event_trigger, root_min, true)
+      : kd->findEvents(event_trigger, fraction, true);
 
     // Only need the first event as any following events will be invalidated by the first crossing event. TODO: The
     // exception is the edge being crossed, but that would make this more complex. We can optimize this later if needed.
     if (!fractional_event_times.empty())
     {
       double fractional_event_time = fractional_event_times.front();
-      double event_time = fractional_event_time + section;
+      double event_time = virtual_mode ? kd->infinitesimal_schedule_t_ : (fractional_event_time + section);
       // Position must be the midpoint of the two vertices
       glm::dvec2 position = glm::vec2((traj_j[0](fractional_event_time) + traj_k[0](fractional_event_time)) / 2.0,
         (traj_j[1](fractional_event_time) + traj_k[1](fractional_event_time)) / 2.0);
 
-      KINDS_DEBUG("Crossing (right angle) Event at time "
-        << event_time << " for Voronoi vertex ID " << voronoi_vertex_id << " crossing half-edge ID " << finite_he_id
+      if (log_crossing_diag)
+      {
+        const CrossingEdgeCandidateSummary candidate { finite_he_id, finite_he_id / 2,
+          KineticDelaunay::matchesDiagnosticsMonitorId(
+            finite_he_id / 2, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId),
+          true, fractional_event_time, event_time };
+        logCrossingCandidateSelection(*kd, voronoi_vertex_id, containing_tri_id, t, { candidate }, finite_he_id,
+          event_time, virtual_mode, kd->infinitesimal_schedule_t_, fractional_event_time, root_min);
+      }
+
+      KINDS_DEBUG("Crossing (right angle) Event queued at time "
+        << event_time << " infinitesimal_t=" << (virtual_mode ? fractional_event_time : 0.0)
+        << " for Voronoi vertex ID " << voronoi_vertex_id << " crossing half-edge ID " << finite_he_id
         << " at position " << glm::to_string(position));
-      kd->kinetic_algorithm_->enqueueEvent(
-        std::make_shared<CrossingEvent>(kd, event_time, finite_he_id, t, position, voronoi_vertex_id));
+      auto crossing_event
+        = std::make_shared<CrossingEvent>(kd, event_time, finite_he_id, t, position, voronoi_vertex_id);
+      if (virtual_mode)
+      {
+        crossing_event->occurrence_time = EventTime(event_time, fractional_event_time);
+        crossing_event->creation_time = EventTime(kd->infinitesimal_schedule_t_, kd->infinitesimal_recompute_min_x_);
+        crossing_event->infinitesimal_epoch_ = kd->infinitesimal_schedule_epoch_;
+      }
+      else
+      {
+        // Preserve current infinitesimal on creation (e.g. primary reschedule at finalize cut).
+        crossing_event->creation_time = kd->eventTimeAt(t);
+      }
+      kd->kinetic_algorithm_->enqueueEvent(std::move(crossing_event));
+    }
+    else if (log_crossing_diag)
+    {
+      const CrossingEdgeCandidateSummary candidate { finite_he_id, finite_he_id / 2,
+        KineticDelaunay::matchesDiagnosticsMonitorId(
+          finite_he_id / 2, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId),
+        false, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity() };
+      logCrossingCandidateSelection(*kd, voronoi_vertex_id, containing_tri_id, t, { candidate }, size_t(-1),
+        std::numeric_limits<double>::infinity(), virtual_mode, kd->infinitesimal_schedule_t_,
+        std::numeric_limits<double>::infinity(), root_min);
     }
   }
   else
   {
-    Trajectory<2> traj_i = branch_trajs.getPiecePolynomial(v_i, section);
-    Trajectory<2> traj_j = branch_trajs.getPiecePolynomial(v_j, section);
-    Trajectory<2> traj_k = branch_trajs.getPiecePolynomial(v_k, section);
+    Trajectory<2> traj_i = piece_poly(v_i);
+    Trajectory<2> traj_j = piece_poly(v_j);
+    Trajectory<2> traj_k = piece_poly(v_k);
     Trajectory<3> bisector_ij;
 
     bisector_ij[0] = 2 * (traj_j[0] - traj_i[0]);
@@ -129,19 +671,21 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
     double event_time = std::numeric_limits<double>::infinity();
     size_t event_he_id = -1;
     Polynomial event_trigger;
+    std::vector<CrossingEdgeCandidateSummary> candidate_summaries;
+    candidate_summaries.reserve(3);
     // Construct polynomial predicates for each of the three edges of the containing triangle
     for (size_t edge_index = 0; edge_index < 3; edge_index++)
     {
       size_t he_id = containing_triangle.half_edges[edge_index];
-      size_t a = graph.getHalfEdges()[he_id].origin;
-      size_t b = graph.getHalfEdges()[he_id ^ 1].origin;
+      size_t a = graph.halfEdge(he_id).origin;
+      size_t b = graph.halfEdge(he_id ^ 1).origin;
 
       Trajectory<3> line_ab;
       if (a != -1 && b != -1)
       {
 
-        Trajectory<2> traj_a = branch_trajs.getPiecePolynomial(a, section);
-        Trajectory<2> traj_b = branch_trajs.getPiecePolynomial(b, section);
+        Trajectory<2> traj_a = piece_poly(static_cast<size_t>(a));
+        Trajectory<2> traj_b = piece_poly(static_cast<size_t>(b));
 
         // line through a and b in homogeneous coordinates
 
@@ -161,14 +705,14 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
         if (a == finite_vertex)
         {
           size_t prev_he_id = graph.prev(he_id);
-          size_t next_he_id = graph.getHalfEdges()[he_id ^ 1].next;
+          size_t next_he_id = graph.halfEdge(he_id ^ 1).next;
 
-          size_t c = graph.getHalfEdges()[prev_he_id].origin;
-          size_t c_prime = graph.getHalfEdges()[next_he_id].origin;
+          size_t c = graph.halfEdge(prev_he_id).origin;
+          size_t c_prime = graph.halfEdge(next_he_id).origin;
 
-          Trajectory<2> traj_a = branch_trajs.getPiecePolynomial(a, section);
-          Trajectory<2> traj_c = branch_trajs.getPiecePolynomial(c, section);
-          Trajectory<2> traj_c_prime = branch_trajs.getPiecePolynomial(c_prime, section);
+          Trajectory<2> traj_a = piece_poly(static_cast<size_t>(a));
+          Trajectory<2> traj_c = piece_poly(static_cast<size_t>(c));
+          Trajectory<2> traj_c_prime = piece_poly(static_cast<size_t>(c_prime));
           Trajectory<3> voronoi_homogeneous = Trajectory<3>::cross(bisector_ij, bisector_ik);
 
           event_trigger = angularBisector(traj_a, traj_c, traj_c_prime, voronoi_homogeneous);
@@ -176,52 +720,308 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
         else
         {
           size_t prev_he_id = graph.prev(he_id ^ 1);
-          size_t next_he_id = graph.getHalfEdges()[he_id].next;
+          size_t next_he_id = graph.halfEdge(he_id).next;
 
-          size_t c_prime = graph.getHalfEdges()[prev_he_id].origin;
-          size_t c = graph.getHalfEdges()[next_he_id].origin;
+          size_t c_prime = graph.halfEdge(prev_he_id).origin;
+          size_t c = graph.halfEdge(next_he_id).origin;
 
-          Trajectory<2> traj_b = branch_trajs.getPiecePolynomial(b, section);
-          Trajectory<2> traj_c = branch_trajs.getPiecePolynomial(c, section);
-          Trajectory<2> traj_c_prime = branch_trajs.getPiecePolynomial(c_prime, section);
+          Trajectory<2> traj_b = piece_poly(static_cast<size_t>(b));
+          Trajectory<2> traj_c = piece_poly(static_cast<size_t>(c));
+          Trajectory<2> traj_c_prime = piece_poly(static_cast<size_t>(c_prime));
           Trajectory<3> voronoi_homogeneous = Trajectory<3>::cross(bisector_ij, bisector_ik);
 
           event_trigger = angularBisector(traj_b, traj_c, traj_c_prime, voronoi_homogeneous);
         }
       }
 
-      auto fractional_event_times = kd->findEvents(event_trigger, fraction, true);
+      if (log_crossing_diag)
+      {
+        kd->logCrossingEventTriggerRoots(voronoi_vertex_id, he_id, edge_index, t, root_min, event_trigger, true);
+      }
+
+      auto fractional_event_times = virtual_mode
+        ? kd->findVirtualEvents(event_trigger, root_min, true)
+        : kd->findEvents(event_trigger, fraction, true);
+      CrossingEdgeCandidateSummary candidate_summary;
+      candidate_summary.he_id = he_id;
+      candidate_summary.delaunay_edge_id = he_id / 2;
+      candidate_summary.monitored_edge = KineticDelaunay::matchesDiagnosticsMonitorId(
+        candidate_summary.delaunay_edge_id, KineticDelaunay::kDiagnosticsMonitoredCrossingDelaunayEdgeId);
+      if (!fractional_event_times.empty())
+      {
+        candidate_summary.had_enqueued_root = true;
+        candidate_summary.first_enqueued_fraction = fractional_event_times.front();
+        candidate_summary.first_enqueued_absolute_t = virtual_mode
+          ? kd->infinitesimal_schedule_t_
+          : (fractional_event_times.front() + section);
+      }
+      candidate_summaries.push_back(candidate_summary);
+
       if (!fractional_event_times.empty())
       {
         double fractional_event_time = fractional_event_times.front();
-        double candidate_event_time = fractional_event_time + section;
-        if (candidate_event_time < event_time)
+        if (virtual_mode)
         {
-          event_time = candidate_event_time;
-          event_he_id = he_id;
+          if (fractional_event_time < event_time)
+          {
+            event_time = fractional_event_time;
+            event_he_id = he_id;
+          }
+        }
+        else
+        {
+          double candidate_event_time = fractional_event_time + section;
+          if (candidate_event_time < event_time)
+          {
+            event_time = candidate_event_time;
+            event_he_id = he_id;
+          }
         }
       }
     }
 
+    if (log_crossing_diag)
+    {
+      const double selected_infinitesimal_t = virtual_mode ? event_time : 0.0;
+      const double log_event_time = virtual_mode && event_time != std::numeric_limits<double>::infinity()
+        ? kd->infinitesimal_schedule_t_
+        : event_time;
+      logCrossingCandidateSelection(
+        *kd, voronoi_vertex_id, containing_tri_id, t, candidate_summaries, event_he_id, log_event_time, virtual_mode,
+        kd->infinitesimal_schedule_t_, selected_infinitesimal_t, root_min);
+    }
+
     if (event_time != std::numeric_limits<double>::infinity())
     {
+      const double fractional_event_time = virtual_mode ? event_time : (event_time - static_cast<double>(section));
+      const double scheduled_occurrence = virtual_mode ? kd->infinitesimal_schedule_t_ : event_time;
       glm::dvec3 position_homogeneous;
 
-      // use cross product to compute the intersection point of the two bisectors at the event time
-      position_homogeneous[0] = bisector_ij[1](event_time) * bisector_ik[2](event_time)
-        - bisector_ij[2](event_time) * bisector_ik[1](event_time);
-      position_homogeneous[1] = bisector_ij[2](event_time) * bisector_ik[0](event_time)
-        - bisector_ij[0](event_time) * bisector_ik[2](event_time);
-      position_homogeneous[2] = bisector_ij[0](event_time) * bisector_ik[1](event_time)
-        - bisector_ij[1](event_time) * bisector_ik[0](event_time);
+      position_homogeneous[0] = bisector_ij[1](fractional_event_time) * bisector_ik[2](fractional_event_time)
+        - bisector_ij[2](fractional_event_time) * bisector_ik[1](fractional_event_time);
+      position_homogeneous[1] = bisector_ij[2](fractional_event_time) * bisector_ik[0](fractional_event_time)
+        - bisector_ij[0](fractional_event_time) * bisector_ik[2](fractional_event_time);
+      position_homogeneous[2] = bisector_ij[0](fractional_event_time) * bisector_ik[1](fractional_event_time)
+        - bisector_ij[1](fractional_event_time) * bisector_ik[0](fractional_event_time);
 
       glm::dvec2 position(
         position_homogeneous.x / position_homogeneous.z, position_homogeneous.y / position_homogeneous.z);
-      KINDS_DEBUG("Crossing Event at time " << event_time << " for Voronoi vertex ID " << voronoi_vertex_id
+      KINDS_DEBUG("Crossing Event scheduled at time " << scheduled_occurrence
+                                            << " infinitesimal_t=" << (virtual_mode ? fractional_event_time : 0.0)
+                                            << " for Voronoi vertex ID " << voronoi_vertex_id
                                             << " crossing half-edge ID " << event_he_id << " at position "
                                             << glm::to_string(position));
-      kd->kinetic_algorithm_->enqueueEvent(
-        std::make_shared<CrossingEvent>(kd, event_time, event_he_id, t, position, voronoi_vertex_id));
+      auto crossing_event
+        = std::make_shared<CrossingEvent>(kd, scheduled_occurrence, event_he_id, t, position, voronoi_vertex_id);
+      if (virtual_mode)
+      {
+        crossing_event->occurrence_time = EventTime(scheduled_occurrence, fractional_event_time);
+        crossing_event->creation_time = EventTime(kd->infinitesimal_schedule_t_, kd->infinitesimal_recompute_min_x_);
+        crossing_event->infinitesimal_epoch_ = kd->infinitesimal_schedule_epoch_;
+      }
+      else
+      {
+        // Preserve current infinitesimal on creation (e.g. primary reschedule at finalize cut).
+        crossing_event->creation_time = kd->eventTimeAt(t);
+      }
+      kd->kinetic_algorithm_->enqueueEvent(std::move(crossing_event));
     }
+  }
+}
+
+void KineticDelaunay::CrossingEvent::handleEvent()
+{
+  auto* kd = kd_;
+  if (!kd)
+  {
+    throw std::runtime_error("CrossingEvent has no KineticDelaunay pointer");
+  }
+
+  auto& graph = kd->graph;
+  const double t = occurrence_time.real_time;
+  const double infinitesimal_t = occurrence_time.infinitesimal_time;
+  const bool is_infinitesimal = infinitesimal_t > 0.0;
+  const bool log_crossing_diag
+    = shouldLogCrossingHandleDiagnostics(*kd, voronoi_vertex_id, half_edge_id, t);
+  const auto log_skip = [&](const char* reason)
+  {
+    if (log_crossing_diag)
+    {
+      KINDS_MONITOR("Crossing handleEvent SKIP (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
+                                                              << ", delaunay_edge=" << (half_edge_id / 2)
+                                                              << ", occurrence_t=" << std::setprecision(17)
+                                                              << occurrence_time << ", creation_t=" << creation_time
+                                                              << "): " << reason);
+    }
+  };
+
+  if (log_crossing_diag)
+  {
+    const bool registered = kd->crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id);
+    const std::optional<size_t> containing_tri
+      = registered ? std::optional<size_t>(kd->crossing_data.getContainingTriId(voronoi_vertex_id)) : std::nullopt;
+    const EventTime last_crossing
+      = (voronoi_vertex_id < kd->crossing_data.last_crossing.size()) ? kd->crossing_data.last_crossing[voronoi_vertex_id]
+                                                                     : EventTime(std::numeric_limits<double>::quiet_NaN());
+    const EventTime containing_last_updated
+      = (containing_tri.has_value() && *containing_tri < kd->face_last_updated.size())
+      ? kd->face_last_updated[*containing_tri]
+      : EventTime(std::numeric_limits<double>::quiet_NaN());
+
+    KINDS_MONITOR("Crossing handleEvent ENTER (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
+                                                             << ", delaunay_edge=" << (half_edge_id / 2)
+                                                             << ", occurrence_t=" << std::setprecision(17)
+                                                             << occurrence_time << ", creation_t=" << creation_time
+                                                             << ", registered=" << (registered ? "true" : "false")
+                                                             << ", containing_tri="
+                                                             << (containing_tri.has_value()
+                                                                   ? std::to_string(*containing_tri)
+                                                                   : std::string("n/a"))
+                                                             << ", last_crossing=" << last_crossing
+                                                             << ", containing_face_last_updated="
+                                                             << containing_last_updated
+                                                             << ", he_live="
+                                                             << (graph.isLiveHalfEdge(half_edge_id) ? "true" : "false")
+                                                             << ")");
+  }
+
+  if (is_infinitesimal)
+  {
+    bool epoch_ok = false;
+    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
+    {
+      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
+      {
+        epoch_ok = true;
+        break;
+      }
+    }
+    if (!epoch_ok)
+    {
+      log_skip("stale infinitesimal epoch");
+      return;
+    }
+    kd->current_infinitesimal_t_ = infinitesimal_t;
+  }
+
+  const auto clear_infinitesimal = [&]()
+  {
+    if (is_infinitesimal)
+    {
+      kd->current_infinitesimal_t_ = 0.0;
+    }
+  };
+
+  // Check if the event is still valid
+  if (creation_time < kd->crossing_data.last_crossing[voronoi_vertex_id])
+  {
+    log_skip("creation_time < last_crossing (stale vs later crossing/recompute stamp)");
+    clear_infinitesimal();
+    return;
+  }
+
+  // Outdated if the crossed Delaunay edge or the Delaunay triangle dual to this Voronoi vertex
+  // was tombstoned (e.g. after a branch split).
+  if (!graph.isLiveHalfEdge(half_edge_id))
+  {
+    log_skip("half_edge not live");
+    clear_infinitesimal();
+    return;
+  }
+  if (voronoi_vertex_id >= graph.faceSlotCount() || !graph.isLiveFace(voronoi_vertex_id)
+    || !kd->crossing_data.isVoronoiVertexRegistered(voronoi_vertex_id))
+  {
+    log_skip("voronoi vertex not live or not registered");
+    clear_infinitesimal();
+    return;
+  }
+
+  size_t containing_tri_id = kd->crossing_data.getContainingTriId(voronoi_vertex_id);
+
+  // Outdated if the containing Delaunay triangle was updated after this event was scheduled.
+  if (creation_time < kd->face_last_updated[containing_tri_id])
+  {
+    log_skip("creation_time < face_last_updated[containing_tri]");
+    clear_infinitesimal();
+    return;
+  }
+
+  if (log_crossing_diag)
+  {
+    KINDS_MONITOR("Crossing handleEvent PROCEED (voronoi_vertex=" << voronoi_vertex_id << ", he_id=" << half_edge_id
+                                                               << ", containing_tri=" << containing_tri_id
+                                                               << ", occurrence_t=" << std::setprecision(17)
+                                                               << occurrence_time << ")");
+  }
+
+  auto* event_handler = kd->crossing_event_manager_->getCallback();
+  if (event_handler)
+  {
+    event_handler->beforeEvent(*this);
+  }
+
+  kd->crossing_data.last_crossing[voronoi_vertex_id] = occurrence_time;
+
+  KINDS_DEBUG("Processing crossing event at time " << t << " for Voronoi vertex ID " << voronoi_vertex_id
+                                                   << " crossing half-edge ID " << half_edge_id);
+
+  // move to neighboring triangle
+  KINDS_DEBUG("Moving Voronoi vertex " << voronoi_vertex_id << " from triangle " << containing_tri_id << " to triangle "
+                                       << graph.halfEdge(half_edge_id ^ 1).face);
+  kd->crossing_data.moveVertex(voronoi_vertex_id, graph.halfEdge(half_edge_id ^ 1).face, t);
+
+  // Update Voronoi–Delaunay edge intersections stored in crossing_data in response to this crossing.
+  kd->crossing_data.updateAfterCrossingEvent(*kd, *this);
+
+  // Recompute params on all three Delaunay edges of this Voronoi vertex (Delaunay face) before callbacks mesh.
+  kd->refreshTriangleDelaunayEdgeIntersectionParams(voronoi_vertex_id, t);
+
+  if (event_handler)
+  {
+    event_handler->afterEvent(*this);
+  }
+
+  // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
+  kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", t);
+  kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", t);
+  kd->validateSitesInsideConvexHull("CrossingEvent:afterEvent", occurrence_time);
+
+  if (is_infinitesimal)
+  {
+    size_t parent_component_id = static_cast<size_t>(-1);
+    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
+    {
+      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
+      {
+        parent_component_id = entry.first;
+        break;
+      }
+    }
+    // Finalize first: cut succeeds → full primary reschedule inside finalize; no local recompute.
+    if (parent_component_id != static_cast<size_t>(-1)
+      && kd->maybeFinalizeInfinitesimalSeparation(parent_component_id, t))
+    {
+      kd->current_infinitesimal_t_ = 0.0;
+      return;
+    }
+    // Virtual-only local recompute while the separation ramp is still active.
+    // Primary dual-schedule here poisoned watermarks (EventTime(t) undoes virtual stamps) and
+    // let stale seed events with creation (t,0) fire again as duplicates.
+    if (parent_component_id != static_cast<size_t>(-1))
+    {
+      kd->crossing_event_manager_->computeEvents(t, voronoi_vertex_id,
+        InfinitesimalComputeContext { infinitesimal_t, parent_component_id });
+    }
+    kd->current_infinitesimal_t_ = 0.0;
+  }
+  else
+  {
+    // Re-compute crossing events for this Voronoi vertex
+    kd->crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
+  }
+
+  if (kd->diagnosticsEnabled() && kd->isDiagnosticsMonitoredFaceValid())
+  {
+    kd->logFaceInsideStateAtTime(kDiagnosticsMonitoredFaceId, t, "crossing_event");
   }
 }

@@ -6,9 +6,15 @@
 #include "kinDS/SegmentBuilder.hpp"
 #include "kinDS/StrandTree.hpp"
 #include "kinDS/TreeMesher.hpp"
+#include "kinDS/Validator.hpp"
 #include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <ctime>
+#include <filesystem>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <queue>
 #include <sstream>
 #include <string>
@@ -61,7 +67,8 @@ std::vector<std::pair<size_t, double>> merge_sorted_vectors(const std::vector<st
   return result;
 }
 
-static void kinetic_delaunay_example()
+static bool kinetic_delaunay_example(bool validate_mesh_vertex_sources, bool store_mesh_metadata,
+  const std::string& validate_log_path, bool alternate_section_shading)
 {
 #define TEST_TRAJECTORIES
 #ifdef TEST_TRAJECTORIES
@@ -214,8 +221,7 @@ static void kinetic_delaunay_example()
   }
 #endif
 
-  std::vector<std::vector<double>> subdivisions
-    = { { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 }, { 0.2, 0.4, 0.6, 0.8 } };
+  std::vector<std::vector<double>> subdivisions = { { 0.4 }, { 0.8 }, { 0.2 }, { 0.6 } };
 
   // Sort subdivisions into pairs of strand index and parameter
   std::vector<std::pair<size_t, double>> sorted_subdivisions = merge_sorted_vectors(subdivisions);
@@ -227,7 +233,7 @@ static void kinetic_delaunay_example()
   // Maintain the branches as strands_by_branch_id[h][branch_id][strand_no] = strand_id
   std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
 
-  // build strans_by_branch_id from branch_indices
+  // build strands_by_branch_id from branch_indices
   for (size_t h = 0; h < support_points.front().size(); ++h)
   {
     std::map<size_t, std::vector<size_t>> branch_to_strands;
@@ -274,12 +280,15 @@ static void kinetic_delaunay_example()
     10.0, false);
 
   kinDS::SegmentBuilder mesh_builder(kinetic_delaunay, sorted_subdivisions, false);
+  mesh_builder.radius_boundary_transition_shift_enabled = true;
+  mesh_builder.store_mesh_metadata = store_mesh_metadata || validate_mesh_vertex_sources;
+  mesh_builder.validate_mesh_vertex_sources = validate_mesh_vertex_sources;
   kinetic_delaunay.init(&mesh_builder);
   auto points = kinetic_delaunay.getPointsAt(0.0);
 
   // Build Voronoi vertex -> containing triangle mapping from CrossingData for SVG labeling.
   const kinDS::HalfEdgeDelaunayGraph& demo_graph = kinetic_delaunay.getGraph();
-  const size_t demo_face_count = demo_graph.getFaces().size();
+  const size_t demo_face_count = demo_graph.faceSlotCount();
   std::vector<size_t> demo_voronoi_vertex_to_tri(demo_face_count);
   constexpr size_t demo_invalid_id = static_cast<size_t>(-1);
   for (size_t vid = 0; vid < demo_face_count; ++vid)
@@ -295,22 +304,58 @@ static void kinetic_delaunay_example()
   kinetic_delaunay.compute();
 
   // mesh_builder.printDebugInfo();
-
+  bool merge_by_segment = true;
   // auto meshes = mesh_builder.extractMeshes();
-  auto meshes = mesh_builder.extractSegmentMeshlets();
+  auto meshes = mesh_builder.extractSegmentMeshlets(merge_by_segment);
+  auto mesh_suffixes = mesh_builder.extractSegmentMeshletExportSuffixes(merge_by_segment);
   //(0.1, 0.01, subdivisions);
+
+  bool validation_passed = true;
+  if (validate_mesh_vertex_sources)
+  {
+    kinDS::Validator::setLogFile(validate_log_path);
+    validation_passed
+      = kinDS::Validator::validateAndReportMeshVertexSources(meshes.first, "demo segment meshlets", &mesh_suffixes);
+    std::cout << "Validation report written to: " << kinDS::Validator::logFilePath() << std::endl;
+    if (!validation_passed)
+    {
+      std::cerr << "Mesh vertex source validation failed. See " << kinDS::Validator::logFilePath() << std::endl;
+    }
+  }
 
   for (size_t i = 0; i < meshes.first.size(); ++i)
   {
-    std::string filename = "mesh_" + std::to_string(i) + ".obj";
-    kinDS::ObjExporter::writeMesh(meshes.first[i], filename);
+    const std::string suffix = (i < mesh_suffixes.size()) ? mesh_suffixes[i] : "";
+    std::string filename = "mesh_" + std::to_string(i) + suffix + meshes.first[i].creationKineticTimeFilenameSuffix()
+      + ".obj";
+    const bool include_vertex_colors = kinDS::Validator::meshUsesValidationErrorMaterial(meshes.first[i]);
+    kinDS::ObjExporter::writeMesh(meshes.first[i], filename, 1.0, 1.0, {}, true, include_vertex_colors,
+      alternate_section_shading);
     std::cout << "Mesh saved to " << filename << std::endl;
   }
 
+  auto boundary_interval_meshes = mesh_builder.extractBoundaryIntervalMeshlets();
+  auto boundary_interval_suffixes = mesh_builder.extractBoundaryIntervalMeshletExportSuffixes();
+  for (size_t i = 0; i < boundary_interval_meshes.size(); ++i)
+  {
+    const std::string suffix = (i < boundary_interval_suffixes.size()) ? boundary_interval_suffixes[i] : "";
+    std::string filename = "mesh_bound_" + std::to_string(i) + suffix
+      + boundary_interval_meshes[i].creationKineticTimeFilenameSuffix() + ".obj";
+    kinDS::ObjExporter::writeMesh(boundary_interval_meshes[i], filename, 1.0, 1.0, {}, true, false,
+      alternate_section_shading);
+    std::cout << "Boundary interval mesh saved to " << filename << std::endl;
+  }
+
   auto& boundary_mesh = mesh_builder.getBoundaryMesh();
-  kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
+  kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, true);
 
   boundary_mesh.checkForDegenerateTriangles();
+
+  if (validate_mesh_vertex_sources)
+  {
+    return validation_passed;
+  }
+  return true;
 }
 
 // Helper: enable/disable specific log levels (relative to current)
@@ -336,6 +381,11 @@ static bool modify_log_level(const std::string& levels_str, bool enable)
     if (level_lower == "debug")
     {
       logger.setLogLevel(LogLevel::Debug, enable);
+      found_any = true;
+    }
+    else if (level_lower == "monitor")
+    {
+      logger.setLogLevel(LogLevel::Monitor, enable);
       found_any = true;
     }
     else if (level_lower == "info")
@@ -383,6 +433,7 @@ static std::string get_enabled_log_levels()
   };
 
   add_if(LogLevel::Debug, "debug");
+  add_if(LogLevel::Monitor, "monitor");
   add_if(LogLevel::Info, "info");
   add_if(LogLevel::Warning, "warning");
   add_if(LogLevel::Error, "error");
@@ -410,7 +461,7 @@ static void set_log_level(const std::string& levels_str)
 
   // First disable all known levels
   logger.setLogLevel(
-    LogLevel::Debug | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical, false);
+    LogLevel::Debug | LogLevel::Monitor | LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical, false);
 
   bool ok = modify_log_level(levels_str, true);
 
@@ -429,11 +480,59 @@ static void print_usage(const char* program_name)
   std::cout << "Usage: " << program_name << " [OPTIONS] COMMAND\n"
             << "\n"
             << "Options:\n"
-            << "  --log-level <levels>      Set log levels (comma-separated: debug,info,warning,error,critical)\n"
-            << "                            Replaces current levels. Default: info,warning,error,critical (no debug)\n"
+            << "  --log-level <levels>      Set log levels (comma-separated: debug,monitor,info,warning,error,critical)\n"
+            << "                            Replaces current levels. Default: info,warning,error,critical (no debug/monitor)\n"
             << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
             << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
-            << "  --log-file <path>         Write logs to file (default: no log file, console only)\n"
+            << "  --log-file <path>         Also write logger output to this path (overrides the default\n"
+            << "                            logs/console_YYYYMMDD_HHMMSS.log created at startup)\n"
+            << "  --export-mode <mode>      Also export combined mesh when set to combined (default: raw)\n"
+            << "  --export-path <path>      Base output directory; writes segment_meshlets/ and raw_meshlets/ beneath it\n"
+            << "  --untransformed           Profile-space mesh (no object-space transform, no kinetic separation);\n"
+            << "                            applies Y/Z swap for viewing alongside SVG (default: world space)\n"
+            << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
+            << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
+            << "  --validate                After meshing, check that vertices with the same metadata source agree in world space\n"
+            << "                            (implies mesh metadata storage)\n"
+            << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
+            << "  --store-mesh-metadata     Store JSON vertex/face metadata on meshlets\n"
+            << "  --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)\n"
+            << "  --export-gpu-attributes   With --export-mode combined: also write EcoSysLab-style .json sidecar\n"
+            << "                            (distances/profile/root; fungus fields defaulted)\n"
+            << "  --section-shading         Cycle brown boundary materials through 5 non-green section colors\n"
+            << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
+            << "  --start-branches <ids>    Comma-separated input branch ids to load at --start\n"
+            << "                            (default: all branches present at that height).\n"
+            << "                            Only those strands and their descendant input branches are\n"
+            << "                            meshed / finished afterward; other ids at --start are ignored with a warning.\n"
+            << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
+            << "                            Section events run on [start, end); events with t >= end are skipped.\n"
+            << "  --mesh-cap-at-start       Emit closing-cap meshlets at --start (default: off).\n"
+            << "                            Caps for branches that finish during the run are always produced.\n"
+            << "  --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off).\n"
+            << "                            Natural branch endings and tree-top caps are always produced.\n"
+            << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)\n"
+            << "  --branch-cutoff <value>   Cross-branch radius cutoff; disabled when equal to --cutoff\n"
+            << "                            (default: same as --cutoff)\n"
+            << "  --look-ahead <n>          Extra sections above floor(t)+1 for branch-alpha same-branch checks (default: 0)\n"
+            << "  --debug-files [path] [lower] [upper]\n"
+            << "                            Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
+            << "                            and error dumps). Optional output directory (default: cwd).\n"
+            << "                            Optional inclusive real-time bounds limit which events are exported:\n"
+            << "                            <lower> <upper>, <path> <lower>, <path> <lower> <upper>, or omit for all times.\n"
+            << "                            A leading numeric token is treated as a bound (not a path).\n"
+            << "                            Off by default.\n"
+            << "  --svg-separate-pending-splits\n"
+            << "                            With --debug-files: write pending split-off child branches into their own\n"
+            << "                            SVG folders (own strand subsets) as soon as a radius event notes the split,\n"
+            << "                            not only after the graph cut. Off by default.\n"
+            << "  --error-files [path]      Write failure SVGs/TXTs (ring-walk / triangulate FAIL, etc.) plus the\n"
+            << "                            common event-style kinetic SVG with affected sites/edges/VVs highlighted,\n"
+            << "                            without full visual debug. Optional output directory (default: cwd).\n"
+            << "                            Off by default; also enabled by --debug-files.\n"
+            << "  --check-sites-in-hull     After every kinetic event, warn if any live site lies outside its\n"
+            << "                            component's graph convex hull (same topology as SVG blue hull edges).\n"
+            << "                            May indicate an incorrect CCW flip. Off by default.\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -443,12 +542,163 @@ static void print_usage(const char* program_name)
             << "Examples:\n"
             << "  " << program_name << " --demo\n"
             << "  " << program_name << " --mesh strandtree.txt\n"
+            << "  " << program_name << " --validate --mesh strandtree.txt\n"
             << "  " << program_name << " --log-file output.log --demo\n"
             << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
-            << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n";
+            << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
+            << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
+            << "  " << program_name << " --export-mode combined --export-gpu-attributes --mesh strandtree.txt combined.obj\n";
 }
 
-static void mesh_from_file(const std::string& filename)
+static const std::vector<std::string>& known_cli_flags()
+{
+  static const std::vector<std::string> flags = {
+    "--log-level",
+    "--log-add",
+    "--log-remove",
+    "--log-file",
+    "--export-mode",
+    "--export-path",
+    "--untransformed",
+    "--transform-at-construction",
+    "--transform-at-export",
+    "--validate",
+    "--validate-log",
+    "--store-mesh-metadata",
+    "--no-store-mesh-metadata",
+    "--export-gpu-attributes",
+    "--section-shading",
+    "--start",
+    "--start-branches",
+    "--end",
+    "--mesh-cap-at-start",
+    "--mesh-cap-at-end",
+    "--cutoff",
+    "--branch-cutoff",
+    "--look-ahead",
+    "--debug-files",
+    "--svg-separate-pending-splits",
+    "--error-files",
+    "--check-sites-in-hull",
+    "--help",
+    "-h",
+    "--demo",
+    "--mesh",
+  };
+  return flags;
+}
+
+/// Normalize user typos like "debug-files" / "-debug-files" to the canonical "--..." form when unique.
+static std::optional<std::string> suggest_cli_flag(const std::string& arg)
+{
+  if (arg.empty())
+  {
+    return std::nullopt;
+  }
+
+  std::string stripped = arg;
+  while (!stripped.empty() && stripped.front() == '-')
+  {
+    stripped.erase(stripped.begin());
+  }
+  if (stripped.empty())
+  {
+    return std::nullopt;
+  }
+
+  std::vector<std::string> exact;
+  std::vector<std::string> prefix;
+  for (const std::string& flag : known_cli_flags())
+  {
+    std::string flag_body = flag;
+    while (!flag_body.empty() && flag_body.front() == '-')
+    {
+      flag_body.erase(flag_body.begin());
+    }
+    if (flag_body == stripped)
+    {
+      exact.push_back(flag);
+    }
+    else if (flag_body.size() > stripped.size() && flag_body.compare(0, stripped.size(), stripped) == 0)
+    {
+      prefix.push_back(flag);
+    }
+  }
+
+  if (exact.size() == 1)
+  {
+    return exact.front();
+  }
+  if (exact.empty() && prefix.size() == 1)
+  {
+    return prefix.front();
+  }
+  return std::nullopt;
+}
+
+static void report_unknown_cli_argument(const std::string& arg)
+{
+  std::cerr << "Error: Unknown option or command: " << arg << std::endl;
+  if (!arg.empty() && arg.front() != '-')
+  {
+    std::cerr << "Note: options and commands require a leading \"--\" (e.g. --" << arg << ")." << std::endl;
+  }
+  if (const std::optional<std::string> suggestion = suggest_cli_flag(arg); suggestion.has_value())
+  {
+    std::cerr << "Did you mean " << suggestion.value() << "?" << std::endl;
+  }
+}
+
+static bool parse_meshlet_export_mode(const std::string& value, kinDS::MeshletExportMode& out)
+{
+  if (value == "combined")
+  {
+    out = kinDS::MeshletExportMode::Combined;
+    return true;
+  }
+  if (value == "segments" || value == "per_segment" || value == "per-segment")
+  {
+    out = kinDS::MeshletExportMode::PerSegment;
+    return true;
+  }
+  if (value == "raw")
+  {
+    out = kinDS::MeshletExportMode::Raw;
+    return true;
+  }
+  return false;
+}
+
+static std::filesystem::path mesh_export_base_directory(const std::optional<std::filesystem::path>& export_path)
+{
+  if (!export_path.has_value())
+  {
+    return std::filesystem::current_path();
+  }
+
+  const std::filesystem::path& path = *export_path;
+  if (path.has_extension() && path.extension() == ".obj")
+  {
+    if (path.has_parent_path() && !path.parent_path().empty())
+    {
+      return path.parent_path();
+    }
+    return std::filesystem::current_path();
+  }
+  return path;
+}
+
+static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
+  const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
+  bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, bool store_mesh_metadata,
+  bool export_gpu_attributes_json, const std::string& validate_log_path, bool alternate_section_shading,
+  size_t start_section, const std::optional<std::vector<size_t>>& start_input_branches,
+  std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end,
+  double alpha_cutoff, double branch_alpha_cutoff, size_t look_ahead, bool visual_debug, bool error_files,
+  bool visual_debug_separate_pending_splits,
+  const std::optional<std::filesystem::path>& visual_debug_output_root,
+  const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
+  bool check_sites_inside_convex_hull)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -456,33 +706,234 @@ static void mesh_from_file(const std::string& filename)
   {
     kinDS::StrandTree strand_tree = kinDS::StrandTree::loadFromFile(filename);
     std::cout << "StrandTree loaded successfully. Height: " << strand_tree.getHeight()
-              << ", Number of strands: " << strand_tree.getPoints().size() << std::endl;
+              << ", Number of strands: " << strand_tree.getPoints().size();
+
+    const auto& branches_by_height = strand_tree.getStrandsByBranchId();
+    if (!branches_by_height.empty())
+    {
+      size_t min_branches = branches_by_height.front().size();
+      size_t max_branches = min_branches;
+      for (const auto& at_height : branches_by_height)
+      {
+        min_branches = std::min(min_branches, at_height.size());
+        max_branches = std::max(max_branches, at_height.size());
+      }
+      std::cout << ", Number of branches: ";
+      if (min_branches == max_branches)
+      {
+        std::cout << min_branches;
+      }
+      else
+      {
+        std::cout << min_branches << "-" << max_branches << " (varies by height)";
+      }
+    }
+    std::cout << std::endl;
 
     std::cout << "Running TreeMesher..." << std::endl;
     kinDS::TreeMesher mesher(strand_tree);
-    const auto& meshes = mesher.runMeshingAlgorithm();
+    mesher.getSettings().transform_mesh_at_construction = transform_mesh_at_construction;
+    mesher.getSettings().validate_mesh_vertex_sources = validate_mesh_vertex_sources;
+    mesher.getSettings().store_mesh_metadata = store_mesh_metadata;
+    mesher.getSettings().export_gpu_attributes_json = export_gpu_attributes_json;
+    mesher.getSettings().validate_mesh_vertex_sources_log_path = validate_log_path;
+    mesher.getSettings().alternate_section_shading = alternate_section_shading;
+    mesher.getSettings().start_section = start_section;
+    mesher.getSettings().start_input_branches = start_input_branches;
+    mesher.getSettings().end_section = end_section;
+    mesher.getSettings().mesh_cap_at_start = mesh_cap_at_start;
+    mesher.getSettings().mesh_cap_at_end = mesh_cap_at_end;
+    mesher.getSettings().alpha_cutoff = alpha_cutoff;
+    mesher.getSettings().branch_alpha_cutoff = branch_alpha_cutoff;
+    mesher.getSettings().look_ahead = look_ahead;
+    mesher.getSettings().visual_debug = visual_debug;
+    mesher.getSettings().error_files = error_files || visual_debug;
+    mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
+    mesher.getSettings().check_sites_inside_convex_hull = check_sites_inside_convex_hull;
+    mesher.getSettings().visual_debug_time_lower = visual_debug_time_lower;
+    mesher.getSettings().visual_debug_time_upper = visual_debug_time_upper;
+    if (visual_debug_output_root.has_value())
+    {
+      mesher.getSettings().visual_debug_output_root = visual_debug_output_root;
+    }
+    std::cout << "Alpha cutoff: " << alpha_cutoff << std::endl;
+    std::cout << "Branch alpha cutoff: " << branch_alpha_cutoff
+              << (branch_alpha_cutoff == alpha_cutoff ? " (disabled, equal to alpha cutoff)" : "") << std::endl;
+    std::cout << "Look ahead: " << look_ahead << std::endl;
+    if (check_sites_inside_convex_hull)
+    {
+      std::cout << "Sites-in-hull check: enabled" << std::endl;
+    }
+    if (visual_debug || error_files)
+    {
+      const std::filesystem::path debug_root
+        = visual_debug_output_root.value_or(std::filesystem::current_path());
+      if (visual_debug)
+      {
+        std::cout << "Debug files: enabled (root=" << debug_root.string() << ")";
+        if (visual_debug_time_lower.has_value() || visual_debug_time_upper.has_value())
+        {
+          std::cout << " time_window=["
+                    << (visual_debug_time_lower.has_value() ? std::to_string(*visual_debug_time_lower) : "-inf")
+                    << ", "
+                    << (visual_debug_time_upper.has_value() ? std::to_string(*visual_debug_time_upper) : "+inf")
+                    << "]";
+        }
+        std::cout << std::endl;
+        if (visual_debug_separate_pending_splits)
+        {
+          std::cout << "SVG separate pending splits: enabled" << std::endl;
+        }
+      }
+      else
+      {
+        std::cout << "Error files: enabled (root=" << debug_root.string() << ")" << std::endl;
+      }
+    }
+    if (start_section != 0 || end_section.has_value())
+    {
+      std::cout << "Section range: start=" << start_section;
+      if (end_section.has_value())
+      {
+        std::cout << " end=" << end_section.value();
+      }
+      else
+      {
+        std::cout << " end=<last>";
+      }
+      std::cout << std::endl;
+    }
+    if (start_input_branches.has_value())
+    {
+      std::cout << "Start branches:";
+      if (start_input_branches->empty())
+      {
+        std::cout << " (none)";
+      }
+      else
+      {
+        for (size_t i = 0; i < start_input_branches->size(); ++i)
+        {
+          std::cout << (i == 0 ? " " : ",") << (*start_input_branches)[i];
+        }
+      }
+      std::cout << std::endl;
+    }
+    if (mesh_cap_at_start || mesh_cap_at_end)
+    {
+      std::cout << "Mesh caps: start=" << (mesh_cap_at_start ? "on" : "off")
+                << " end=" << (mesh_cap_at_end ? "on" : "off") << std::endl;
+    }
+    const auto& meshes = mesher.runMeshingAlgorithm(visual_debug);
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
 
-    // Export the combined mesh
-    mesher.exportCombinedMesh();
+    const std::filesystem::path export_base = mesh_export_base_directory(export_path);
+    const std::filesystem::path segment_export_dir = export_base / "segment_meshlets";
+    const std::filesystem::path raw_export_dir = export_base / "raw_meshlets";
+    const std::optional<bool> export_transform
+      = profile_space_export ? std::optional<bool>(false) : std::nullopt;
+    const bool apply_export_transform
+      = export_transform.value_or(!mesher.meshletsTransformedAtConstruction());
+    const char* space_label = profile_space_export ? "profile space" : "world space";
+    const char* transform_label = mesher.meshletsTransformedAtConstruction() && !profile_space_export
+      ? "transformed at construction"
+      : apply_export_transform ? "transformed at export" : "no export transform";
+
+    std::cout << "Exporting segment meshlets to: " << segment_export_dir.string() << " (" << space_label << ", "
+              << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
+    mesher.exportMeshlets(kinDS::MeshletExportMode::PerSegment, segment_export_dir, export_transform);
+
+    std::cout << "Exporting raw meshlets to: " << raw_export_dir.string() << " (" << space_label << ", "
+              << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
+    mesher.exportMeshlets(kinDS::MeshletExportMode::Raw, raw_export_dir, export_transform);
+
+    if (export_mode == kinDS::MeshletExportMode::Combined)
+    {
+      const std::filesystem::path combined_export_path = export_path.has_value() && export_path->has_extension()
+        && export_path->extension() == ".obj"
+        ? *export_path
+        : export_base / "combined_mesh.obj";
+      std::cout << "Exporting combined mesh to: " << combined_export_path.string()
+                << (profile_space_export ? " (with _untransformed suffix)" : "") << " (" << space_label << ", "
+                << transform_label << ")"
+                << (export_gpu_attributes_json ? " + GPU attribute JSON sidecar" : "") << std::endl;
+      mesher.exportMeshlets(kinDS::MeshletExportMode::Combined, combined_export_path, export_transform);
+    }
+    else if (export_gpu_attributes_json)
+    {
+      std::cout << "Note: --export-gpu-attributes only applies with --export-mode combined; skipping JSON sidecar."
+                << std::endl;
+    }
 
     // Export boundary mesh
-    const auto& boundary_mesh = mesher.getBoundaryMesh();
-    kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
-    std::cout << "Boundary mesh exported to: boundary_mesh.obj" << std::endl;
+    kinDS::VoronoiMesh boundary_mesh = mesher.getBoundaryMesh();
+    if (apply_export_transform)
+    {
+      mesher.transformBoundaryMesh(boundary_mesh);
+    }
+    const std::filesystem::path boundary_export_path
+      = profile_space_export ? "boundary_mesh_untransformed.obj" : "boundary_mesh.obj";
+    kinDS::ObjExporter::writeMesh(boundary_mesh, boundary_export_path, 1.0, 1.0, {}, true);
+    std::cout << "Boundary mesh exported to: " << boundary_export_path.string() << std::endl;
 
     std::cout << "Meshing complete!" << std::endl;
+
+    if (validate_mesh_vertex_sources)
+    {
+      std::cout << "Validation report written to: " << kinDS::Validator::logFilePath() << std::endl;
+      if (!mesher.meshVertexSourceValidationPassed())
+      {
+        std::cerr << "Mesh vertex source validation failed. See " << kinDS::Validator::logFilePath() << std::endl;
+        return false;
+      }
+    }
+    return true;
   }
   catch (const std::exception& e)
   {
     std::cerr << "Error: " << e.what() << std::endl;
-    std::exit(1);
+    return false;
   }
+}
+
+/// Mirror logger output (same lines as console KINDS_* / INFO / …) to logs/console_DATETIME.log.
+static std::filesystem::path enable_default_console_log_file()
+{
+  namespace fs = std::filesystem;
+  const fs::path logs_dir = "logs";
+  std::error_code ec;
+  fs::create_directories(logs_dir, ec);
+  if (ec)
+  {
+    std::cerr << "Warning: could not create logs directory '" << logs_dir.string() << "': " << ec.message()
+              << std::endl;
+    return {};
+  }
+
+  const std::time_t now = std::time(nullptr);
+  std::tm local_tm {};
+#if defined(_WIN32)
+  localtime_s(&local_tm, &now);
+#else
+  localtime_r(&now, &local_tm);
+#endif
+  char stamp[32];
+  std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local_tm);
+
+  const fs::path path = logs_dir / (std::string("console_") + stamp + ".log");
+  kinDS::logger.setLogFile(path.string());
+  return path;
 }
 
 int main(int argc, char* argv[])
 {
+  const std::filesystem::path default_console_log = enable_default_console_log_file();
+  if (!default_console_log.empty())
+  {
+    std::cout << "Console log file: " << default_console_log.string() << std::endl;
+  }
+
   // Sanity check: print all command line arguments
   std::cout << "Arguments (" << argc << "):";
   for (int i = 0; i < argc; ++i)
@@ -500,6 +951,30 @@ int main(int argc, char* argv[])
   // First pass: parse all options, remember the command (order-independent)
   std::string command; // "demo", "mesh", "help"
   std::string mesh_file; // for --mesh
+  kinDS::MeshletExportMode mesh_export_mode = kinDS::MeshletExportMode::Raw;
+  std::optional<std::filesystem::path> mesh_export_path;
+  bool mesh_export_profile_space = false;
+  bool mesh_transform_at_construction = true;
+  bool mesh_validate_vertex_sources = false;
+  bool mesh_store_mesh_metadata = kinDS::TreeMesher::Settings {}.store_mesh_metadata;
+  bool mesh_export_gpu_attributes_json = kinDS::TreeMesher::Settings {}.export_gpu_attributes_json;
+  std::string mesh_validate_log_path = kinDS::Validator::defaultLogFilePath();
+  bool mesh_alternate_section_shading = false;
+  size_t mesh_start_section = 0;
+  std::optional<std::vector<size_t>> mesh_start_input_branches;
+  std::optional<size_t> mesh_end_section;
+  bool mesh_cap_at_start = false;
+  bool mesh_cap_at_end = false;
+  double mesh_alpha_cutoff = kinDS::TreeMesher::Settings {}.alpha_cutoff;
+  std::optional<double> mesh_branch_alpha_cutoff; // unset → inherit mesh_alpha_cutoff after parsing
+  size_t mesh_look_ahead = kinDS::TreeMesher::Settings {}.look_ahead;
+  bool mesh_visual_debug = false;
+  bool mesh_error_files = false;
+  bool mesh_visual_debug_separate_pending_splits = false;
+  std::optional<std::filesystem::path> mesh_visual_debug_output_root;
+  std::optional<double> mesh_visual_debug_time_lower;
+  std::optional<double> mesh_visual_debug_time_upper;
+  bool mesh_check_sites_inside_convex_hull = false;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -567,6 +1042,406 @@ int main(int argc, char* argv[])
       std::cout << "Log file set to: " << argv[arg_idx + 1] << std::endl;
       arg_idx += 2;
     }
+    else if (arg == "--export-mode")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --export-mode requires a value (combined, segments, raw)." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      if (!parse_meshlet_export_mode(argv[arg_idx + 1], mesh_export_mode))
+      {
+        std::cerr << "Error: Unknown export mode: " << argv[arg_idx + 1]
+                  << " (expected combined, segments, or raw)." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--export-path")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --export-path requires a path." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      mesh_export_path = argv[arg_idx + 1];
+      arg_idx += 2;
+    }
+    else if (arg == "--untransformed")
+    {
+      mesh_export_profile_space = true;
+      mesh_transform_at_construction = false;
+      ++arg_idx;
+    }
+    else if (arg == "--transform-at-construction")
+    {
+      mesh_transform_at_construction = true;
+      ++arg_idx;
+    }
+    else if (arg == "--transform-at-export")
+    {
+      mesh_transform_at_construction = false;
+      ++arg_idx;
+    }
+    else if (arg == "--validate")
+    {
+      mesh_validate_vertex_sources = true;
+      ++arg_idx;
+    }
+    else if (arg == "--store-mesh-metadata")
+    {
+      mesh_store_mesh_metadata = true;
+      ++arg_idx;
+    }
+    else if (arg == "--no-store-mesh-metadata")
+    {
+      mesh_store_mesh_metadata = false;
+      ++arg_idx;
+    }
+    else if (arg == "--export-gpu-attributes")
+    {
+      mesh_export_gpu_attributes_json = true;
+      ++arg_idx;
+    }
+    else if (arg == "--validate-log")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --validate-log requires a file path." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      mesh_validate_log_path = argv[arg_idx + 1];
+      ++arg_idx;
+      ++arg_idx;
+    }
+    else if (arg == "--section-shading")
+    {
+      mesh_alternate_section_shading = true;
+      ++arg_idx;
+    }
+    else if (arg == "--start")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --start requires a section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const long long parsed = std::stoll(argv[arg_idx + 1]);
+        if (parsed < 0)
+        {
+          throw std::out_of_range("negative");
+        }
+        mesh_start_section = static_cast<size_t>(parsed);
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --start expects a non-negative integer section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--start-branches")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --start-branches requires a comma-separated list of input branch ids." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      const std::string list = argv[arg_idx + 1];
+      std::vector<size_t> ids;
+      std::stringstream ss(list);
+      std::string token;
+      while (std::getline(ss, token, ','))
+      {
+        // Trim whitespace
+        size_t begin = 0;
+        while (begin < token.size() && std::isspace(static_cast<unsigned char>(token[begin])))
+        {
+          ++begin;
+        }
+        size_t end = token.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(token[end - 1])))
+        {
+          --end;
+        }
+        if (begin == end)
+        {
+          continue; // allow "1,,2" / trailing commas
+        }
+        const std::string trimmed = token.substr(begin, end - begin);
+        try
+        {
+          const long long parsed = std::stoll(trimmed);
+          if (parsed < 0)
+          {
+            throw std::out_of_range("negative");
+          }
+          ids.push_back(static_cast<size_t>(parsed));
+        }
+        catch (const std::exception&)
+        {
+          std::cerr << "Error: --start-branches expects comma-separated non-negative integers; got '" << trimmed
+                    << "'." << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+      }
+      mesh_start_input_branches = std::move(ids);
+      arg_idx += 2;
+    }
+    else if (arg == "--end")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --end requires a section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const long long parsed = std::stoll(argv[arg_idx + 1]);
+        if (parsed < 0)
+        {
+          throw std::out_of_range("negative");
+        }
+        mesh_end_section = static_cast<size_t>(parsed);
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --end expects a non-negative integer section index." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--mesh-cap-at-start")
+    {
+      mesh_cap_at_start = true;
+      ++arg_idx;
+    }
+    else if (arg == "--mesh-cap-at-end")
+    {
+      mesh_cap_at_end = true;
+      ++arg_idx;
+    }
+    else if (arg == "--cutoff")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --cutoff requires a numeric value." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const double parsed = std::stod(argv[arg_idx + 1]);
+        if (!(parsed >= 0.0) || !std::isfinite(parsed))
+        {
+          throw std::out_of_range("non-finite or negative");
+        }
+        mesh_alpha_cutoff = parsed;
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --cutoff expects a non-negative finite number." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--branch-cutoff")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --branch-cutoff requires a numeric value." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const double parsed = std::stod(argv[arg_idx + 1]);
+        if (!(parsed >= 0.0) || !std::isfinite(parsed))
+        {
+          throw std::out_of_range("non-finite or negative");
+        }
+        mesh_branch_alpha_cutoff = parsed;
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --branch-cutoff expects a non-negative finite number." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--look-ahead")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --look-ahead requires a non-negative integer." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      try
+      {
+        const long long parsed = std::stoll(argv[arg_idx + 1]);
+        if (parsed < 0)
+        {
+          throw std::out_of_range("negative");
+        }
+        mesh_look_ahead = static_cast<size_t>(parsed);
+      }
+      catch (const std::exception&)
+      {
+        std::cerr << "Error: --look-ahead expects a non-negative integer." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+      }
+      arg_idx += 2;
+    }
+    else if (arg == "--debug-files")
+    {
+      mesh_visual_debug = true;
+      // Optional trailing args. Numeric tokens are time bounds; a non-numeric first token is a path.
+      // Forms: (none) | <path> | <lower> | <lower> <upper> | <path> <lower> | <path> <lower> <upper>
+      auto try_parse_finite_double = [](const std::string& text, double& out) -> bool
+      {
+        try
+        {
+          size_t consumed = 0;
+          const double parsed = std::stod(text, &consumed);
+          if (consumed != text.size() || !std::isfinite(parsed))
+          {
+            return false;
+          }
+          out = parsed;
+          return true;
+        }
+        catch (const std::exception&)
+        {
+          return false;
+        }
+      };
+
+      std::vector<std::string> extras;
+      while (arg_idx + 1 < argc && extras.size() < 3)
+      {
+        const std::string next = argv[arg_idx + 1];
+        if (next.empty() || next[0] == '-')
+        {
+          break;
+        }
+        extras.push_back(next);
+        ++arg_idx;
+      }
+      ++arg_idx;
+
+      if (extras.size() == 1)
+      {
+        double lower = 0.0;
+        if (try_parse_finite_double(extras[0], lower))
+        {
+          mesh_visual_debug_time_lower = lower;
+        }
+        else
+        {
+          mesh_visual_debug_output_root = std::filesystem::path(extras[0]);
+        }
+      }
+      else if (extras.size() == 2)
+      {
+        double first_num = 0.0;
+        double second_num = 0.0;
+        const bool first_is_number = try_parse_finite_double(extras[0], first_num);
+        const bool second_is_number = try_parse_finite_double(extras[1], second_num);
+        if (first_is_number && second_is_number)
+        {
+          if (!(first_num <= second_num))
+          {
+            std::cerr << "Error: --debug-files lower bound must be <= upper bound." << std::endl;
+            print_usage(argv[0]);
+            return 1;
+          }
+          mesh_visual_debug_time_lower = first_num;
+          mesh_visual_debug_time_upper = second_num;
+        }
+        else if (!first_is_number && second_is_number)
+        {
+          mesh_visual_debug_output_root = std::filesystem::path(extras[0]);
+          mesh_visual_debug_time_lower = second_num;
+        }
+        else
+        {
+          std::cerr << "Error: --debug-files with two arguments expects <lower> <upper> or <path> <lower>."
+                    << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+      }
+      else if (extras.size() == 3)
+      {
+        double lower = 0.0;
+        double upper = 0.0;
+        if (try_parse_finite_double(extras[0], lower))
+        {
+          std::cerr << "Error: --debug-files <path> <lower> <upper> expects a non-numeric path as the first argument."
+                    << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+        if (!try_parse_finite_double(extras[1], lower) || !try_parse_finite_double(extras[2], upper))
+        {
+          std::cerr << "Error: --debug-files expects <path> <lower> <upper> with finite numeric bounds."
+                    << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+        if (!(lower <= upper))
+        {
+          std::cerr << "Error: --debug-files lower bound must be <= upper bound." << std::endl;
+          print_usage(argv[0]);
+          return 1;
+        }
+        mesh_visual_debug_output_root = std::filesystem::path(extras[0]);
+        mesh_visual_debug_time_lower = lower;
+        mesh_visual_debug_time_upper = upper;
+      }
+      continue;
+    }
+    else if (arg == "--svg-separate-pending-splits")
+    {
+      mesh_visual_debug_separate_pending_splits = true;
+      arg_idx += 1;
+    }
+    else if (arg == "--check-sites-in-hull")
+    {
+      mesh_check_sites_inside_convex_hull = true;
+      arg_idx += 1;
+    }
+    else if (arg == "--error-files")
+    {
+      mesh_error_files = true;
+      if (arg_idx + 1 < argc)
+      {
+        const std::string next = argv[arg_idx + 1];
+        if (!next.empty() && next[0] != '-')
+        {
+          mesh_visual_debug_output_root = std::filesystem::path(next);
+          arg_idx += 2;
+          continue;
+        }
+      }
+      arg_idx += 1;
+    }
     else if (arg == "--help" || arg == "-h")
     {
       if (!command.empty() && command != "help")
@@ -609,7 +1484,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-      std::cerr << "Error: Unknown option or command: " << arg << std::endl;
+      report_unknown_cli_argument(arg);
       print_usage(argv[0]);
       return 1;
     }
@@ -622,6 +1497,15 @@ int main(int argc, char* argv[])
     return 1;
   }
 
+  if (mesh_end_section.has_value() && mesh_end_section.value() < mesh_start_section)
+  {
+    std::cerr << "Error: --end (" << mesh_end_section.value() << ") is before --start (" << mesh_start_section
+              << ")." << std::endl;
+    return 1;
+  }
+
+  const double resolved_branch_alpha_cutoff = mesh_branch_alpha_cutoff.value_or(mesh_alpha_cutoff);
+
   // Second pass: execute the chosen command (options already applied)
   if (command == "help")
   {
@@ -631,13 +1515,27 @@ int main(int argc, char* argv[])
   else if (command == "demo")
   {
     std::cout << "Running demo (kinetic_delaunay_example)..." << std::endl;
-    kinetic_delaunay_example();
+    if (!kinetic_delaunay_example(mesh_validate_vertex_sources, mesh_store_mesh_metadata, mesh_validate_log_path,
+          mesh_alternate_section_shading))
+    {
+      return 1;
+    }
     return 0;
   }
   else if (command == "mesh")
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
-    mesh_from_file(mesh_file);
+    if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
+          mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
+          mesh_export_gpu_attributes_json, mesh_validate_log_path, mesh_alternate_section_shading,
+          mesh_start_section, mesh_start_input_branches, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,
+          mesh_alpha_cutoff, resolved_branch_alpha_cutoff, mesh_look_ahead, mesh_visual_debug, mesh_error_files,
+          mesh_visual_debug_separate_pending_splits,
+          mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
+          mesh_check_sites_inside_convex_hull))
+    {
+      return 1;
+    }
     return 0;
   }
 

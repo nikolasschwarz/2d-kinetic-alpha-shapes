@@ -2,7 +2,11 @@
 
 #include "Logger.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -69,6 +73,9 @@ StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_point
   , branch_indices(branch_indices)
   , strands_by_branch_id(strands_by_branch_id)
 {
+  // Snap all profile transforms to similarities before anything derived from them (normals, projections) is computed.
+  conditionProfileTransforms();
+
   // compute height
   for (const auto& pts : support_points)
   {
@@ -81,6 +88,77 @@ StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_point
 const std::vector<std::vector<glm::dvec2>>& StrandTree::getPoints() const { return support_points; }
 
 size_t StrandTree::getHeight() const { return tree_height; }
+
+size_t StrandTree::getBranchCount(size_t height) const
+{
+  if (height >= strands_by_branch_id.size())
+  {
+    return 0;
+  }
+  return strands_by_branch_id[height].size();
+}
+
+size_t StrandTree::resolveBranchAtHeight(size_t height, size_t branch_id, size_t branch_lookup_height) const
+{
+  if (transforms_by_height_and_branch.empty())
+  {
+    return 0;
+  }
+
+  height = std::min(height, transforms_by_height_and_branch.size() - 1);
+
+  if (branch_id < getBranchCount(height))
+  {
+    return branch_id;
+  }
+
+  if (strands_by_branch_id.empty())
+  {
+    return 0;
+  }
+
+  size_t lookup = std::min(branch_lookup_height, strands_by_branch_id.size() - 1);
+  while (lookup < strands_by_branch_id.size() && branch_id >= getBranchCount(lookup))
+  {
+    ++lookup;
+  }
+
+  if (branch_id >= getBranchCount(lookup))
+  {
+    return 0;
+  }
+
+  const auto& strands = strands_by_branch_id[lookup][branch_id];
+  if (strands.empty())
+  {
+    return 0;
+  }
+
+  const size_t representative_strand = strands.front();
+  if (representative_strand >= branch_indices.size() || height >= branch_indices[representative_strand].size())
+  {
+    return 0;
+  }
+
+  return branch_indices[representative_strand][height];
+}
+
+size_t StrandTree::getBranchIndex(size_t strand_id, size_t height) const
+{
+  if (strand_id >= branch_indices.size())
+  {
+    return 0;
+  }
+
+  const std::vector<size_t>& per_strand = branch_indices[strand_id];
+  if (per_strand.empty())
+  {
+    return 0;
+  }
+
+  const size_t clamped_height = std::min(height, per_strand.size() - 1);
+  return per_strand[clamped_height];
+}
 
 size_t StrandTree::addTrajectory(const std::vector<glm::dvec2>& traj)
 {
@@ -100,10 +178,14 @@ glm::dvec2 StrandTree::evaluate(size_t strand_id, double t) const
   size_t upper_index = lower_index + 1;
   double frac = t - lower_index;
 
-  if (upper_index >= support_points[strand_id].size() && lower_index < support_points[strand_id].size()
-    && frac < std::numeric_limits<double>::epsilon())
+  if (lower_index >= support_points[strand_id].size())
   {
-    return support_points[strand_id].back();
+    throw std::runtime_error("Parameter t out of bounds");
+  }
+
+  if (frac < std::numeric_limits<double>::epsilon())
+  {
+    return support_points[strand_id][lower_index];
   }
 
   if (upper_index >= support_points[strand_id].size())
@@ -119,6 +201,12 @@ glm::dvec2 StrandTree::evaluate(size_t strand_id, double t) const
 
 glm::dvec2 StrandTree::getPointTransformed(size_t strand_id, size_t index, size_t reference_branch) const
 {
+  return getPointTransformedAtSection(strand_id, index, reference_branch, index);
+}
+
+glm::dvec2 StrandTree::getPointTransformedAtSection(
+  size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const
+{
   size_t actual_branch;
   // dummy strands might not be mapped to a branch:
   if (strand_id >= branch_indices.size())
@@ -127,8 +215,11 @@ glm::dvec2 StrandTree::getPointTransformed(size_t strand_id, size_t index, size_
   }
   else
   {
-    actual_branch = branch_indices[strand_id][index];
+    actual_branch = getBranchIndex(strand_id, index);
   }
+
+  actual_branch = resolveBranchAtHeight(index, actual_branch, branch_lookup_height);
+  reference_branch = resolveBranchAtHeight(index, reference_branch, branch_lookup_height);
 
   glm::dvec2 point = support_points[strand_id][index];
   if (actual_branch == reference_branch)
@@ -137,9 +228,9 @@ glm::dvec2 StrandTree::getPointTransformed(size_t strand_id, size_t index, size_
   }
 
   PlaneProjector plane_projector(
-    transforms_by_height_and_branch[index][actual_branch], transforms_by_height_and_branch[index][reference_branch]);
+    transforms_by_height_and_branch[index][reference_branch], transforms_by_height_and_branch[index][actual_branch]);
 
-  auto result = plane_projector.project(glm::vec2(point[0], point[1]));
+  glm::dvec2 result = plane_projector.project(glm::dvec2(point[0], point[1]));
   return glm::dvec2 { result.x, result.y };
 }
 
@@ -151,24 +242,20 @@ glm::dvec2 StrandTree::evaluateTransformed(size_t strand_id, double t, size_t re
   }
 
   size_t lower_index = std::floor(t);
-  size_t upper_index = lower_index + 1;
   double frac = t - lower_index;
 
-  if (upper_index >= support_points[strand_id].size() && lower_index < support_points[strand_id].size()
-    && frac < std::numeric_limits<double>::epsilon())
-  {
-    return getPointTransformed(strand_id, support_points[strand_id].size() - 1, reference_branch);
-  }
-
-  if (upper_index >= support_points[strand_id].size())
+  if (lower_index >= support_points[strand_id].size())
   {
     throw std::runtime_error("Parameter t out of bounds");
   }
 
-  const glm::dvec2& lower = getPointTransformed(strand_id, lower_index, reference_branch);
-  const glm::dvec2& upper = getPointTransformed(strand_id, upper_index, reference_branch);
+  if (frac < std::numeric_limits<double>::epsilon())
+  {
+    return getPointTransformedAtSection(strand_id, lower_index, reference_branch, lower_index);
+  }
 
-  return lower * (1.0 - frac) + upper * frac;
+  const Trajectory<2> piece = getPiecePolynomial(strand_id, lower_index, reference_branch);
+  return glm::dvec2(piece[0](frac), piece[1](frac));
 }
 
 glm::dvec3 StrandTree::getPointInObjectSpace(size_t strand_id, double t) const
@@ -181,11 +268,28 @@ glm::dvec3 StrandTree::getPointInObjectSpace(size_t strand_id, double t) const
 
 glm::dvec3 StrandTree::transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const
 {
-  return ProfileToModelCoordinatesBranch(transforms_by_height_and_branch, v_3d, t, branch_indices[strand_id]);
+  return transformToObjectSpace(v_3d, t, branch_indices[strand_id]);
 }
 
-// TODO: also adjust to different reference frame
-Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index) const
+glm::dvec3 StrandTree::transformToObjectSpace(
+  glm::dvec3 v_3d, double t, const std::vector<size_t>& branch_indices_by_height) const
+{
+  return ProfileToModelCoordinatesBranch(
+    transforms_by_height_and_branch, v_3d, static_cast<float>(t), branch_indices_by_height);
+}
+
+glm::dvec3 StrandTree::transformToObjectSpaceForBranch(glm::dvec3 v_3d, double t, size_t branch_id) const
+{
+  if (transforms_by_height_and_branch.empty())
+  {
+    return v_3d;
+  }
+
+  std::vector<size_t> constant_branch(transforms_by_height_and_branch.size(), branch_id);
+  return transformToObjectSpace(std::move(v_3d), t, constant_branch);
+}
+
+Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const
 {
   if (strand_id >= support_points.size())
   {
@@ -196,11 +300,11 @@ Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index) con
   {
     throw std::out_of_range("Index " + std::to_string(index) + " out of range for piece polynomial.");
   }
-  const auto& P0 = support_points[strand_id][index];
-  const auto& P1 = support_points[strand_id][index + 1];
+
+  const glm::dvec2 P0 = getPointTransformedAtSection(strand_id, index, reference_branch, index);
+  const glm::dvec2 P1 = getPointTransformedAtSection(strand_id, index + 1, reference_branch, index + 1);
 
   Trajectory<2> result;
-  // Create linear polynomials for each dimension
   for (int i = 0; i < 2; ++i)
   {
     result[i] = POLYNOMIAL(P0[i] + (P1[i] - P0[i]) * x);
@@ -209,27 +313,141 @@ Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index) con
   return result;
 }
 
+Trajectory<2> StrandTree::getPiecePolynomialBlendingReference(size_t strand_id, size_t index,
+  size_t start_reference_branch, size_t end_reference_branch) const
+{
+  if (strand_id >= support_points.size())
+  {
+    throw std::out_of_range("Strand id " + std::to_string(strand_id) + " out of range.");
+  }
+
+  if (index >= support_points[strand_id].size() - 1)
+  {
+    throw std::out_of_range("Index " + std::to_string(index) + " out of range for piece polynomial.");
+  }
+
+  const glm::dvec2 P0
+    = getPointTransformedAtSection(strand_id, index, start_reference_branch, index);
+  const glm::dvec2 P1
+    = getPointTransformedAtSection(strand_id, index + 1, end_reference_branch, index + 1);
+
+  Trajectory<2> result;
+  for (int i = 0; i < 2; ++i)
+  {
+    result[i] = POLYNOMIAL(P0[i] + (P1[i] - P0[i]) * x);
+  }
+
+  return result;
+}
+
+Trajectory<2> StrandTree::getLocalPiecePolynomial(size_t strand_id, size_t index) const
+{
+  if (strand_id >= support_points.size())
+  {
+    throw std::out_of_range("Strand id " + std::to_string(strand_id) + " out of range.");
+  }
+
+  if (index >= support_points[strand_id].size() - 1)
+  {
+    throw std::out_of_range("Index " + std::to_string(index) + " out of range for piece polynomial.");
+  }
+
+  const glm::dvec2& p0 = support_points[strand_id][index];
+  const glm::dvec2& p1 = support_points[strand_id][index + 1];
+
+  Trajectory<2> result;
+  for (int i = 0; i < 2; ++i)
+  {
+    result[i] = POLYNOMIAL(p0[i] + (p1[i] - p0[i]) * x);
+  }
+
+  return result;
+}
+
 namespace
 {
 const char* FORMAT_MAGIC = "StrandTree 1";
+const char* SECTION_PREFIX = "[Section] ";
+
+void writeComment(std::ostream& out, const char* text) { out << "# " << text << '\n'; }
+
+void writeSectionHeader(std::ostream& out, const char* name) { out << SECTION_PREFIX << name << '\n'; }
+
+std::string trim(std::string s)
+{
+  const auto not_space = [](unsigned char c) { return !std::isspace(c); };
+  s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+  s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
+  return s;
+}
+
+std::string stripInlineComment(std::string line)
+{
+  const size_t hash = line.find('#');
+  if (hash != std::string::npos)
+  {
+    line.resize(hash);
+  }
+  return trim(std::move(line));
+}
+
+bool isCommentOrBlankLine(const std::string& line) { return stripInlineComment(line).empty(); }
+
+bool parseSectionHeader(const std::string& line, const char* expected_name)
+{
+  std::string content = stripInlineComment(line);
+  const std::string prefix = SECTION_PREFIX;
+  if (content.rfind(prefix, 0) == 0)
+  {
+    content = trim(content.substr(prefix.size()));
+  }
+  return content == expected_name;
+}
 
 void writeVec2(std::ostream& out, const glm::dvec2& v) { out << v.x << ' ' << v.y << '\n'; }
 
 void readVec2(std::istream& in, glm::dvec2& v) { in >> v.x >> v.y; }
 
-void writeMat4(std::ostream& out, const glm::mat4& m)
+void writeDMat4(std::ostream& out, const glm::dmat4& m)
 {
+  // One space between every coefficient. Do not use (col ? " " : "") — that omits the space
+  // between the last column of one row and the first column of the next, merging tokens on read.
+  const auto flags = out.flags();
+  const auto precision = out.precision();
+  out << std::scientific << std::setprecision(17);
   for (int row = 0; row < 4; ++row)
+  {
     for (int col = 0; col < 4; ++col)
-      out << (col ? " " : "") << m[col][row];
+    {
+      if (row != 0 || col != 0)
+      {
+        out << ' ';
+      }
+      out << m[col][row];
+    }
+  }
+  out.flags(flags);
+  out.precision(precision);
   out << '\n';
 }
 
 void readDMat4(std::istream& in, glm::dmat4& m)
 {
   for (int row = 0; row < 4; ++row)
+  {
     for (int col = 0; col < 4; ++col)
-      in >> m[col][row];
+    {
+      if (!(in >> m[col][row]))
+      {
+        throw std::runtime_error("StrandTree::loadFromFile: transform matrix has too few values");
+      }
+    }
+  }
+  std::string trailing;
+  if (in >> trailing)
+  {
+    throw std::runtime_error("StrandTree::loadFromFile: transform matrix has too many values");
+  }
 }
 } // namespace
 
@@ -239,11 +457,17 @@ void StrandTree::saveToFile(const std::filesystem::path& path) const
   if (!out)
     throw std::runtime_error(
       std::string("StrandTree::saveToFile: cannot open ") + path.string() + std::string(" for writing"));
+
+  writeComment(out, "kinDS StrandTree text format. Lines starting with # are comments.");
+  writeComment(out, "Section headers use [Section] <name>. Inline comments after # are ignored on load.");
   out << FORMAT_MAGIC << '\n';
+  writeComment(out, "Stored tree height (max support polyline length - 1).");
   out << tree_height << '\n';
+  writeComment(out, "Number of strands (moving sites).");
   out << support_points.size() << '\n';
 
-  out << "support_points\n";
+  writeSectionHeader(out, "support_points");
+  writeComment(out, "Per strand: point count, then one (x y) profile position per height index.");
   for (const auto& strand : support_points)
   {
     out << strand.size() << '\n';
@@ -251,7 +475,8 @@ void StrandTree::saveToFile(const std::filesystem::path& path) const
       writeVec2(out, p);
   }
 
-  out << "subdivisions_by_strand\n";
+  writeSectionHeader(out, "subdivisions_by_strand");
+  writeComment(out, "Per strand: count, then subdivision parameters in (0, 1) along each segment.");
   for (const auto& strand : subdivisions_by_strand)
   {
     out << strand.size();
@@ -260,7 +485,8 @@ void StrandTree::saveToFile(const std::filesystem::path& path) const
     out << '\n';
   }
 
-  out << "physics_strand_to_segment_indices\n";
+  writeSectionHeader(out, "physics_strand_to_segment_indices");
+  writeComment(out, "Per strand: count, then physics segment index per height (or -1 if unused).");
   for (const auto& strand : physics_strand_to_segment_indices)
   {
     out << strand.size();
@@ -269,16 +495,19 @@ void StrandTree::saveToFile(const std::filesystem::path& path) const
     out << '\n';
   }
 
-  out << "transforms_by_height_and_branch\n";
+  writeSectionHeader(out, "transforms_by_height_and_branch");
+  writeComment(out, "Profile-to-world transforms: height count, then per height branch count and 4x4 matrices.");
+  writeComment(out, "Matrix layout (row-major file order): m[col][row] for row,col in 0..3; local (u,0,v) axes.");
   out << transforms_by_height_and_branch.size() << '\n';
   for (const auto& by_branch : transforms_by_height_and_branch)
   {
     out << by_branch.size() << '\n';
     for (const auto& m : by_branch)
-      writeMat4(out, m);
+      writeDMat4(out, m);
   }
 
-  out << "branch_indices\n";
+  writeSectionHeader(out, "branch_indices");
+  writeComment(out, "Per strand: count, then data-structure branch id at each height index.");
   for (const auto& strand : branch_indices)
   {
     out << strand.size();
@@ -287,7 +516,8 @@ void StrandTree::saveToFile(const std::filesystem::path& path) const
     out << '\n';
   }
 
-  out << "strands_by_branch_id\n";
+  writeSectionHeader(out, "strands_by_branch_id");
+  writeComment(out, "Inverse branch membership: height count, branch count per height, strand ids per branch.");
   out << strands_by_branch_id.size() << '\n';
   for (const auto& by_height : strands_by_branch_id)
   {
@@ -310,42 +540,63 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
       std::string("StrandTree::loadFromFile: cannot open ") + path.string() + std::string(" for reading"));
   std::string line;
   auto getLine = [&in, &line]() -> bool { return static_cast<bool>(std::getline(in, line)); };
-  auto expect = [&line](const char* tag)
+  auto getContentLine = [&]() -> bool
   {
-    if (line != tag)
-      throw std::runtime_error(std::string("StrandTree::loadFromFile: expected '") + tag + "', got '" + line + "'");
+    while (getLine())
+    {
+      if (!isCommentOrBlankLine(line))
+      {
+        return true;
+      }
+    }
+    return false;
+  };
+  auto expectSection = [&](const char* tag)
+  {
+    if (!getContentLine())
+    {
+      throw std::runtime_error(
+        std::string("StrandTree::loadFromFile: unexpected EOF, expected section '") + tag + "'");
+    }
+    if (!parseSectionHeader(line, tag))
+    {
+      throw std::runtime_error(std::string("StrandTree::loadFromFile: expected section '") + tag + "', got '" + line
+        + "'");
+    }
+  };
+  auto parseContentLine = [&](const char* context) -> std::istringstream
+  {
+    if (!getContentLine())
+    {
+      throw std::runtime_error(
+        std::string("StrandTree::loadFromFile: unexpected EOF (") + context + ")");
+    }
+    return std::istringstream(stripInlineComment(line));
   };
 
-  if (!getLine() || line != FORMAT_MAGIC)
+  if (!getContentLine() || stripInlineComment(line) != FORMAT_MAGIC)
+  {
     throw std::runtime_error("StrandTree::loadFromFile: invalid or unsupported format");
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
+  }
+
   size_t read_height = 0;
-  std::istringstream(line) >> read_height;
+  parseContentLine("tree height") >> read_height;
   size_t num_strands = 0;
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
-  std::istringstream(line) >> num_strands;
+  parseContentLine("strand count") >> num_strands;
 
   std::vector<std::vector<glm::dvec2>> support_points;
   support_points.reserve(num_strands);
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
-  expect("support_points");
+  expectSection("support_points");
   for (size_t s = 0; s < num_strands; ++s)
   {
-    if (!getLine())
-      throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (support_points count)");
     size_t n = 0;
-    std::istringstream(line) >> n;
+    parseContentLine("support_points count") >> n;
     std::vector<glm::dvec2> strand;
     strand.reserve(n);
     for (size_t i = 0; i < n; ++i)
     {
-      if (!getLine())
-        throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (support point)");
       glm::dvec2 p;
-      std::istringstream iss(line);
+      std::istringstream iss = parseContentLine("support point");
       readVec2(iss, p);
       strand.push_back(p);
     }
@@ -354,14 +605,10 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
 
   std::vector<std::vector<double>> subdivisions_by_strand;
   subdivisions_by_strand.reserve(num_strands);
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
-  expect("subdivisions_by_strand");
+  expectSection("subdivisions_by_strand");
   for (size_t s = 0; s < num_strands; ++s)
   {
-    if (!getLine())
-      throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (subdivisions)");
-    std::istringstream iss(line);
+    std::istringstream iss = parseContentLine("subdivisions");
     size_t n = 0;
     iss >> n;
     std::vector<double> strand;
@@ -375,14 +622,10 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
 
   std::vector<std::vector<int>> physics_strand_to_segment_indices;
   physics_strand_to_segment_indices.reserve(num_strands);
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
-  expect("physics_strand_to_segment_indices");
+  expectSection("physics_strand_to_segment_indices");
   for (size_t s = 0; s < num_strands; ++s)
   {
-    if (!getLine())
-      throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (physics indices)");
-    std::istringstream iss(line);
+    std::istringstream iss = parseContentLine("physics indices");
     size_t n = 0;
     iss >> n;
     std::vector<int> strand;
@@ -395,28 +638,20 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
   }
 
   std::vector<std::vector<glm::dmat4>> transforms_by_height_and_branch;
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
-  expect("transforms_by_height_and_branch");
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
+  expectSection("transforms_by_height_and_branch");
   size_t num_heights = 0;
-  std::istringstream(line) >> num_heights;
+  parseContentLine("transform height count") >> num_heights;
   transforms_by_height_and_branch.reserve(num_heights);
   for (size_t h = 0; h < num_heights; ++h)
   {
-    if (!getLine())
-      throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (transforms branch count)");
     size_t num_branches = 0;
-    std::istringstream(line) >> num_branches;
+    parseContentLine("transforms branch count") >> num_branches;
     std::vector<glm::dmat4> by_branch;
     by_branch.reserve(num_branches);
     for (size_t b = 0; b < num_branches; ++b)
     {
-      if (!getLine())
-        throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (transform matrix)");
       glm::dmat4 m;
-      std::istringstream iss(line);
+      std::istringstream iss = parseContentLine("transform matrix");
       readDMat4(iss, m);
       by_branch.push_back(m);
     }
@@ -425,14 +660,10 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
 
   std::vector<std::vector<size_t>> branch_indices;
   branch_indices.reserve(num_strands);
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
-  expect("branch_indices");
+  expectSection("branch_indices");
   for (size_t s = 0; s < num_strands; ++s)
   {
-    if (!getLine())
-      throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (branch indices)");
-    std::istringstream iss(line);
+    std::istringstream iss = parseContentLine("branch indices");
     size_t n = 0;
     iss >> n;
     std::vector<size_t> strand;
@@ -445,27 +676,19 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
   }
 
   std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
-  expect("strands_by_branch_id");
-  if (!getLine())
-    throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF");
+  expectSection("strands_by_branch_id");
   num_heights = 0;
-  std::istringstream(line) >> num_heights;
+  parseContentLine("strands_by_branch_id height count") >> num_heights;
   strands_by_branch_id.reserve(num_heights);
   for (size_t h = 0; h < num_heights; ++h)
   {
-    if (!getLine())
-      throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (strands_by_branch branch count)");
     size_t num_branches = 0;
-    std::istringstream(line) >> num_branches;
+    parseContentLine("strands_by_branch branch count") >> num_branches;
     std::vector<std::vector<size_t>> by_branch;
     by_branch.reserve(num_branches);
     for (size_t b = 0; b < num_branches; ++b)
     {
-      if (!getLine())
-        throw std::runtime_error("StrandTree::loadFromFile: unexpected EOF (strands list)");
-      std::istringstream iss(line);
+      std::istringstream iss = parseContentLine("strands list");
       size_t n = 0;
       iss >> n;
       std::vector<size_t> branch;
@@ -493,6 +716,59 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
   }
 
   return tree;
+}
+
+void StrandTree::conditionProfileTransforms()
+{
+  for (auto& transforms_at_height : transforms_by_height_and_branch)
+  {
+    for (glm::dmat4& transform : transforms_at_height)
+    {
+      // Columns 0 and 2 are the in-plane profile axes; column 1 is the plane normal; column 3 is the origin.
+      const glm::dvec3 u(transform[0]);
+      const glm::dvec3 normal(transform[1]);
+      const glm::dvec3 v(transform[2]);
+
+      const double lu = glm::length(u);
+      const double lv = glm::length(v);
+      if (lu <= 0.0 || lv <= 0.0)
+      {
+        continue;
+      }
+
+      // Symmetric (minimal-rotation) orthonormalization of the in-plane axes: rotate u and v by equal and opposite
+      // amounts about their bisector until they are orthogonal, then give both the geometric-mean length so the
+      // in-plane block becomes scalar * orthonormal.
+      const glm::dvec3 a = u / lu;
+      const glm::dvec3 b = v / lv;
+      const glm::dvec3 sum = a + b; // bisector direction
+      const glm::dvec3 diff = a - b; // in-plane, perpendicular to the bisector (|a| == |b|)
+      const double sum_len = glm::length(sum);
+      const double diff_len = glm::length(diff);
+      if (sum_len <= 1e-12 || diff_len <= 1e-12)
+      {
+        continue;
+      }
+
+      const glm::dvec3 bisector = sum / sum_len;
+      const glm::dvec3 perp = diff / diff_len;
+      const double scale = std::sqrt(lu * lv); // representative in-plane scale, preserved per branch
+
+      // e_u = (bisector + perp)/sqrt(2) stays near a, e_v = (bisector - perp)/sqrt(2) stays near b; both orthonormal.
+      const glm::dvec3 new_u = scale * glm::normalize(bisector + perp);
+      const glm::dvec3 new_v = scale * glm::normalize(bisector - perp);
+
+      // Give the normal the same length as the in-plane axes so the whole 3x3 is scalar * orthogonal. The normal does
+      // not affect point positions (it is zeroed for points), but this keeps normal transforms consistent too.
+      const double ln = glm::length(normal);
+      const glm::dvec3 unit_normal = (ln > 0.0) ? normal / ln : glm::normalize(glm::cross(new_u, new_v));
+      const glm::dvec3 new_normal = scale * unit_normal;
+
+      transform[0] = glm::dvec4(new_u, transform[0].w);
+      transform[1] = glm::dvec4(new_normal, transform[1].w);
+      transform[2] = glm::dvec4(new_v, transform[2].w);
+    }
+  }
 }
 
 void StrandTree::computeNormalTransforms()

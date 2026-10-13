@@ -1,0 +1,366 @@
+#include "VisualDebugHighlight.hpp"
+
+#include <vector>
+
+namespace kinDS
+{
+namespace
+{
+void processPendingUndirectedEdges(
+  VisualDebugHighlight& highlight, const HalfEdgeDelaunayGraph& graph, std::vector<size_t>& edge_pending)
+{
+  while (!edge_pending.empty())
+  {
+    const size_t raw_he = edge_pending.back();
+    edge_pending.pop_back();
+
+    const size_t even_he = raw_he & ~static_cast<size_t>(1);
+    const size_t undirected_edge_id = even_he / 2;
+    if (!highlight.voronoi_edges.insert(undirected_edge_id).second)
+    {
+      continue;
+    }
+
+    highlight.directed_half_edges.insert(even_he);
+    highlight.directed_half_edges.insert(even_he ^ 1);
+
+    const auto& he = graph.halfEdge(even_he);
+    const auto& twin_he = graph.halfEdge(even_he ^ 1);
+    if (he.face != -1)
+    {
+      highlight.voronoi_vertices.insert(static_cast<size_t>(he.face));
+    }
+    if (twin_he.face != -1)
+    {
+      highlight.voronoi_vertices.insert(static_cast<size_t>(twin_he.face));
+    }
+    if (he.origin != -1)
+    {
+      highlight.delaunay_vertices.insert(static_cast<size_t>(he.origin));
+    }
+    if (twin_he.origin != -1)
+    {
+      highlight.delaunay_vertices.insert(static_cast<size_t>(twin_he.origin));
+    }
+  }
+}
+
+void flushPendingHighlightWork(VisualDebugHighlight& highlight, const HalfEdgeDelaunayGraph& graph,
+  std::vector<size_t>& face_pending, std::vector<size_t>& edge_pending)
+{
+  while (!face_pending.empty() || !edge_pending.empty())
+  {
+    while (!face_pending.empty())
+    {
+      const size_t face_id = face_pending.back();
+      face_pending.pop_back();
+      if (!highlight.delaunay_faces.insert(face_id).second)
+      {
+        continue;
+      }
+
+      const std::array<int, 3> verts = graph.getTriangleVertexIndices(face_id);
+      for (int v : verts)
+      {
+        if (v >= 0)
+        {
+          highlight.delaunay_vertices.insert(static_cast<size_t>(v));
+        }
+      }
+      for (size_t he : graph.face(face_id).half_edges)
+      {
+        edge_pending.push_back(he);
+      }
+    }
+
+    processPendingUndirectedEdges(highlight, graph, edge_pending);
+  }
+}
+
+} // namespace
+
+void VisualDebugHighlight::addUndirectedDelaunayEdge(const HalfEdgeDelaunayGraph& graph, size_t he_id)
+{
+  std::vector<size_t> edge_pending;
+  edge_pending.push_back(he_id);
+  std::vector<size_t> face_pending;
+  flushPendingHighlightWork(*this, graph, face_pending, edge_pending);
+}
+
+void VisualDebugHighlight::addDelaunayTriangle(const HalfEdgeDelaunayGraph& graph, size_t face_id)
+{
+  std::vector<size_t> face_pending;
+  face_pending.push_back(face_id);
+  std::vector<size_t> edge_pending;
+  flushPendingHighlightWork(*this, graph, face_pending, edge_pending);
+}
+
+bool VisualDebugHighlight::affectsDelaunayVertex(size_t vertex_id) const
+{
+  return delaunay_vertices.find(vertex_id) != delaunay_vertices.end();
+}
+
+bool VisualDebugHighlight::affectsDelaunayFace(size_t face_id) const
+{
+  return delaunay_faces.find(face_id) != delaunay_faces.end();
+}
+
+bool VisualDebugHighlight::affectsDirectedHalfEdge(size_t he_id) const
+{
+  return directed_half_edges.find(he_id) != directed_half_edges.end();
+}
+
+bool VisualDebugHighlight::affectsVoronoiVertex(size_t voronoi_vertex_id) const
+{
+  return voronoi_vertices.find(voronoi_vertex_id) != voronoi_vertices.end();
+}
+
+bool VisualDebugHighlight::affectsVoronoiEdge(size_t voronoi_edge_id) const
+{
+  return voronoi_edges.find(voronoi_edge_id) != voronoi_edges.end();
+}
+
+bool VisualDebugHighlight::affectsPrimaryVoronoiEdge(size_t voronoi_edge_id) const
+{
+  return primary_voronoi_edges.find(voronoi_edge_id) != primary_voronoi_edges.end();
+}
+
+bool VisualDebugHighlight::shouldLabelCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const
+{
+  const bool has_explicit_label_filter = !label_crossings_on_delaunay_edges.empty()
+    || !label_crossings_on_voronoi_edges.empty() || !crossing_intersection_keys.empty();
+
+  if (!label_crossings_on_delaunay_edges.empty())
+  {
+    if (label_crossings_on_delaunay_edges.find(delaunay_edge_id) != label_crossings_on_delaunay_edges.end())
+    {
+      return true;
+    }
+  }
+  if (!label_crossings_on_voronoi_edges.empty())
+  {
+    if (label_crossings_on_voronoi_edges.find(voronoi_edge_id) != label_crossings_on_voronoi_edges.end())
+    {
+      return true;
+    }
+  }
+  if (!crossing_intersection_keys.empty())
+  {
+    const uint64_t key = (static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id;
+    if (crossing_intersection_keys.find(key) != crossing_intersection_keys.end())
+    {
+      return true;
+    }
+  }
+  if (has_explicit_label_filter)
+  {
+    return false;
+  }
+  return affectsVoronoiEdge(delaunay_edge_id) || affectsVoronoiEdge(voronoi_edge_id);
+}
+
+bool VisualDebugHighlight::emphasizesCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const
+{
+  if (crossing_intersection_keys.empty())
+  {
+    return false;
+  }
+  const uint64_t key = (static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id;
+  return crossing_intersection_keys.find(key) != crossing_intersection_keys.end();
+}
+
+VisualDebugHighlight VisualDebugHighlight::forFlip(const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id)
+{
+  VisualDebugHighlight highlight;
+  std::vector<size_t> face_pending;
+  std::vector<size_t> edge_pending;
+  edge_pending.push_back(flip_half_edge_id);
+
+  const auto& flip_he = graph.halfEdge(flip_half_edge_id);
+  const auto& flip_twin_he = graph.halfEdge(flip_half_edge_id ^ 1);
+  if (flip_he.face != -1)
+  {
+    face_pending.push_back(static_cast<size_t>(flip_he.face));
+  }
+  if (flip_twin_he.face != -1)
+  {
+    face_pending.push_back(static_cast<size_t>(flip_twin_he.face));
+  }
+
+  const std::array<size_t, 4> quad_hes = graph.getQuadBoundaryHalfEdgeIndices(flip_half_edge_id / 2);
+  for (size_t quad_he : quad_hes)
+  {
+    edge_pending.push_back(quad_he);
+  }
+
+  flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  highlight.primary_voronoi_edges.insert(flip_half_edge_id / 2);
+  return highlight;
+}
+
+VisualDebugHighlight VisualDebugHighlight::forRadius(const HalfEdgeDelaunayGraph& graph, size_t radius_half_edge_id)
+{
+  VisualDebugHighlight highlight;
+  const int triangle_face = graph.halfEdge(radius_half_edge_id).face;
+  if (triangle_face != -1)
+  {
+    std::vector<size_t> face_pending;
+    face_pending.push_back(static_cast<size_t>(triangle_face));
+    std::vector<size_t> edge_pending;
+    flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  }
+  return highlight;
+}
+
+VisualDebugHighlight VisualDebugHighlight::forCrossing(
+  const HalfEdgeDelaunayGraph& graph, size_t crossed_half_edge_id, size_t voronoi_vertex_id)
+{
+  VisualDebugHighlight highlight;
+
+  const size_t even_he = crossed_half_edge_id & ~static_cast<size_t>(1);
+  const size_t crossed_delaunay_edge_id = even_he / 2;
+
+  // Primary focus: the Delaunay edge being crossed (and its dual Voronoi edge, same undirected id).
+  highlight.voronoi_edges.insert(crossed_delaunay_edge_id);
+  highlight.primary_voronoi_edges.insert(crossed_delaunay_edge_id);
+  highlight.label_crossings_on_delaunay_edges.insert(crossed_delaunay_edge_id);
+  highlight.directed_half_edges.insert(even_he);
+  highlight.directed_half_edges.insert(even_he ^ 1);
+
+  const auto& he = graph.halfEdge(even_he);
+  const auto& twin_he = graph.halfEdge(even_he ^ 1);
+  if (he.origin != -1)
+  {
+    highlight.delaunay_vertices.insert(static_cast<size_t>(he.origin));
+  }
+  if (twin_he.origin != -1)
+  {
+    highlight.delaunay_vertices.insert(static_cast<size_t>(twin_he.origin));
+  }
+
+  // Only the moving circumcenter is purple/bold; origin/target triangles and neighbor VVs stay dim.
+  highlight.voronoi_vertices.insert(voronoi_vertex_id);
+  if (voronoi_vertex_id < graph.faceSlotCount())
+  {
+    for (size_t incident_he : graph.face(voronoi_vertex_id).half_edges)
+    {
+      const size_t voronoi_edge_id = incident_he / 2;
+      highlight.voronoi_edges.insert(voronoi_edge_id);
+      highlight.directed_half_edges.insert(incident_he);
+      highlight.directed_half_edges.insert(incident_he ^ 1);
+    }
+  }
+
+  return highlight;
+}
+
+VisualDebugHighlight VisualDebugHighlight::forSubdivisionStrand(const HalfEdgeDelaunayGraph& graph, size_t strand_vertex_id)
+{
+  VisualDebugHighlight highlight;
+  std::vector<size_t> edge_pending;
+  for (auto it = graph.incidentEdgesBegin(strand_vertex_id); it != graph.incidentEdgesEnd(strand_vertex_id); ++it)
+  {
+    edge_pending.push_back(*it);
+  }
+  highlight.delaunay_vertices.insert(strand_vertex_id);
+
+  std::vector<size_t> face_pending;
+  flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  return highlight;
+}
+
+VisualDebugHighlight VisualDebugHighlight::forSectionBoundary(
+  const HalfEdgeDelaunayGraph& graph, const std::function<bool(size_t even_half_edge_id)>& is_boundary_edge)
+{
+  VisualDebugHighlight highlight;
+  std::vector<size_t> edge_pending;
+  edge_pending.reserve(graph.halfEdgeSlotCount() / 6);
+  for (size_t even_he : graph.liveDelaunayEdges())
+  {
+    if (is_boundary_edge(even_he))
+    {
+      edge_pending.push_back(even_he);
+    }
+  }
+
+  std::vector<size_t> face_pending;
+  flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  return highlight;
+}
+
+VisualDebugHighlight VisualDebugHighlight::forSeparationRecompute(const HalfEdgeDelaunayGraph& graph,
+  const std::unordered_set<size_t>& affected_quads, const std::unordered_set<size_t>& affected_faces)
+{
+  VisualDebugHighlight highlight;
+  std::vector<size_t> face_pending;
+  std::vector<size_t> edge_pending;
+  edge_pending.reserve(affected_quads.size() * 5 + affected_faces.size() * 3);
+
+  for (size_t quad_id : affected_quads)
+  {
+    const size_t flip_half_edge_id = quad_id * 2;
+    if (flip_half_edge_id + 1 >= graph.halfEdgeSlotCount())
+    {
+      continue;
+    }
+
+    edge_pending.push_back(flip_half_edge_id);
+    const auto& flip_he = graph.halfEdge(flip_half_edge_id);
+    const auto& flip_twin_he = graph.halfEdge(flip_half_edge_id ^ 1);
+    if (flip_he.face != -1)
+    {
+      face_pending.push_back(static_cast<size_t>(flip_he.face));
+    }
+    if (flip_twin_he.face != -1)
+    {
+      face_pending.push_back(static_cast<size_t>(flip_twin_he.face));
+    }
+
+    const std::array<size_t, 4> quad_hes = graph.getQuadBoundaryHalfEdgeIndices(quad_id);
+    for (size_t quad_he : quad_hes)
+    {
+      edge_pending.push_back(quad_he);
+    }
+  }
+
+  for (size_t face_id : affected_faces)
+  {
+    face_pending.push_back(face_id);
+  }
+
+  flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  return highlight;
+}
+
+VisualDebugHighlight VisualDebugHighlight::forInvariantViolation(const HalfEdgeDelaunayGraph& graph,
+  std::optional<size_t> primary_dual_edge, const std::unordered_set<size_t>& auxiliary_dual_edges,
+  const std::unordered_set<uint64_t>& crossing_intersection_keys)
+{
+  VisualDebugHighlight highlight;
+  highlight.crossing_intersection_keys = crossing_intersection_keys;
+  if (primary_dual_edge.has_value())
+  {
+    highlight.label_crossings_on_delaunay_edges.insert(*primary_dual_edge);
+  }
+
+  std::vector<size_t> edge_pending;
+  if (primary_dual_edge.has_value())
+  {
+    highlight.primary_voronoi_edges.insert(*primary_dual_edge);
+    edge_pending.push_back(*primary_dual_edge * 2);
+  }
+  for (size_t edge_id : auxiliary_dual_edges)
+  {
+    if (primary_dual_edge.has_value() && edge_id == *primary_dual_edge)
+    {
+      continue;
+    }
+    edge_pending.push_back(edge_id * 2);
+  }
+
+  std::vector<size_t> face_pending;
+  flushPendingHighlightWork(highlight, graph, face_pending, edge_pending);
+  return highlight;
+}
+
+} // namespace kinDS

@@ -8,6 +8,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -22,7 +23,9 @@ enum class LogLevel : unsigned int
   Info = 2,
   Warning = 4,
   Error = 8,
-  Critical = 16
+  Critical = 16,
+  /// Targeted diagnostic tracing (flip/crossing/radius monitors). Off by default; enable with --log-add monitor.
+  Monitor = 32
 };
 
 inline LogLevel operator|(LogLevel a, LogLevel b)
@@ -55,6 +58,8 @@ class Logger
   // Default: everything except Debug
   LogLevel log_level = LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
   ofstream log_file; // File stream for the log file (optional)
+  bool console_enabled_ = true;
+  mutable std::mutex mutex_;
 
  public:
   // Default constructor: no log file
@@ -66,19 +71,26 @@ class Logger
   // Destructor: Closes the log file if open
   ~Logger()
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (log_file.is_open())
     {
       log_file.close();
     }
   }
 
-  // Set or change the log file path
-  void setLogFile(const string& filename)
+  // Set or change the log file path. Returns true if the file is open for writing.
+  bool setLogFile(const string& filename)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     // Close existing file if open
     if (log_file.is_open())
     {
       log_file.close();
+    }
+
+    if (filename.empty())
+    {
+      return false;
     }
 
     // Open new file
@@ -86,46 +98,80 @@ class Logger
     if (!log_file.is_open())
     {
       cerr << "Warning: Could not open log file: " << filename << endl;
+      return false;
     }
+    return true;
+  }
+
+  /// When false, @ref log writes only to the log file (if open), not stdout.
+  void setConsoleEnabled(bool enabled)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    console_enabled_ = enabled;
+  }
+
+  bool getConsoleEnabled() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return console_enabled_;
   }
 
   // Explicitly set the full log level bitmask (overwrites existing mask).
-  void setLogLevelMask(LogLevel mask) { log_level = mask; }
-
-  void setLogLevel(LogLevel log_level, bool set = true)
+  void setLogLevelMask(LogLevel mask)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
+    log_level = mask;
+  }
+
+  void setLogLevel(LogLevel level, bool set = true)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (set)
     {
-      this->log_level |= log_level;
+      log_level |= level;
     }
     else
     {
-      log_level = ~log_level;
-      this->log_level &= log_level;
+      log_level &= ~level;
     }
   }
 
-  LogLevel getLogLevel() const { return log_level; }
+  LogLevel getLogLevel() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return log_level;
+  }
 
   // Logs a message with a given log level
   void log(LogLevel level, const string& message)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!static_cast<unsigned>(log_level & level))
     {
       return; // Log level not enabled
     }
-    // Get current timestamp
-    time_t now = time(0);
-    tm* timeinfo = localtime(&now);
+    // Get current timestamp (thread-safe)
+    time_t now = time(nullptr);
+    tm timeinfo{};
+#ifdef _WIN32
+    localtime_s(&timeinfo, &now);
+#else
+    localtime_r(&now, &timeinfo);
+#endif
     char timestamp[20];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
     // Create log entry
     ostringstream logEntry;
     logEntry << "[kinDS] [" << timestamp << "] " << levelToString(level) << ": " << message << endl;
 
-    // Output to console
-    cout << logEntry.str();
+    // Output to console (flush so lines appear before a subsequent throw)
+    if (console_enabled_)
+    {
+      cout << logEntry.str();
+      cout.flush();
+      fflush(stdout);
+    }
 
     // Output to log file
     if (log_file.is_open())
@@ -137,11 +183,14 @@ class Logger
 
   void log(LogLevel level, const char* fmt, ...)
   {
-
-    if (!static_cast<unsigned>(log_level & level))
     {
-      return; // Log level not enabled
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!static_cast<unsigned>(log_level & level))
+      {
+        return; // Log level not enabled
+      }
     }
+
     va_list args;
     va_start(args, fmt);
 
@@ -155,13 +204,14 @@ class Logger
     {
       va_end(args);
       log(level, std::string("formatting error in log"));
+      return;
     }
 
-    std::vector<char> buffer(size + 1);
+    std::vector<char> buffer(static_cast<size_t>(size) + 1);
     std::vsnprintf(buffer.data(), buffer.size(), fmt, args);
     va_end(args);
 
-    std::string log_string(buffer.data(), size);
+    std::string log_string(buffer.data(), static_cast<size_t>(size));
     log(level, log_string);
   }
 
@@ -181,6 +231,8 @@ class Logger
       return "ERROR";
     case LogLevel::Critical:
       return "CRITICAL";
+    case LogLevel::Monitor:
+      return "MONITOR";
     default:
       return "UNKNOWN";
     }
@@ -190,31 +242,39 @@ class Logger
 // Global logger instance (no log file by default)
 inline Logger logger;
 
+}  // namespace kinDS
+
 #define KINDS_DEBUG(msg)                                                                                               \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
-    ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::Debug, ss.str());                                                                             \
+    ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
+    ::kinDS::logger.log(::kinDS::LogLevel::Debug, ss.str());                                                           \
+  }
+
+#define KINDS_MONITOR(msg)                                                                                             \
+  {                                                                                                                    \
+    std::stringstream ss;                                                                                              \
+    ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
+    ::kinDS::logger.log(::kinDS::LogLevel::Monitor, ss.str());                                                         \
   }
 
 #define KINDS_INFO(msg)                                                                                                \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
-    ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::Info, ss.str());                                                                              \
+    ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
+    ::kinDS::logger.log(::kinDS::LogLevel::Info, ss.str());                                                            \
   }
 
 #define KINDS_WARNING(msg)                                                                                             \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
-    ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::Warning, ss.str());                                                                           \
+    ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
+    ::kinDS::logger.log(::kinDS::LogLevel::Warning, ss.str());                                                         \
   }
 
 #define KINDS_ERROR(msg)                                                                                               \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
-    ss << msg << " (" << __FILE__ << ": line " << __LINE__ << ")\n";                                                   \
-    logger.log(LogLevel::Error, ss.str());                                                                             \
+    ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
+    ::kinDS::logger.log(::kinDS::LogLevel::Error, ss.str());                                                           \
   }
-}

@@ -13,7 +13,7 @@ class KineticDelaunay::SectionEvent final : public KineticDelaunay::Event
   glm::dvec2 position;
 
   SectionEvent(KineticDelaunay* kd, double t, size_t section_id, double creation_time, glm::dvec2 position)
-    : KineticDelaunay::Event(t, creation_time)
+    : KineticDelaunay::Event(t, creation_time, 10u)
     , kd_(kd)
     , section_id(section_id)
     , position(position)
@@ -21,6 +21,8 @@ class KineticDelaunay::SectionEvent final : public KineticDelaunay::Event
   }
 
   void handleEvent() override;
+  KineticEventType eventType() const override { return KineticEventType::Section; }
+  void populateEventListFields(Statistics::EventListRow& row) const override { row.section_id = section_id; }
 };
 
 class KineticDelaunay::SectionEventManager final : public KineticDelaunay::EventManager
@@ -31,10 +33,12 @@ class KineticDelaunay::SectionEventManager final : public KineticDelaunay::Event
   {
   }
 
-  void computeEvents(double t, size_t event_id) override;
+  void computeEvents(double t, size_t event_id,
+    std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt) override;
 
   void updateProgress(size_t section_index);
   void finishProgressIfNeeded(size_t section_index);
+  void finishProgress();
 
   void resetProgress()
   {

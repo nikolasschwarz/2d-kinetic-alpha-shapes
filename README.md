@@ -8,7 +8,7 @@ A C++20 library for 2D kinetic alpha shapes, including kinetic Delaunay triangul
 - **C++20 compatible compiler** (MSVC recommended for Windows)
 - **vcpkg** - C++ package manager
 - **Visual Studio 2022** (includes MSVC compiler and build tools)
-- **Ninja** (optional) - Only needed if using the `vcpkg-x64-ninja` preset
+- **Ninja** - Required for the default CMake preset (`vcpkg-x64`); install via winget/choco/scoop (see below)
 
 ## Setup Instructions
 
@@ -34,7 +34,7 @@ $env:VCPKG_ROOT = "path\to\vcpkg"
 [System.Environment]::SetEnvironmentVariable("VCPKG_ROOT", "path\to\vcpkg", "Machine")
 ```
 
-Or set it via System Properties → Environment Variables.
+Or set it via System Properties â†’ Environment Variables.
 
 ### 2. Install Dependencies
 
@@ -49,50 +49,57 @@ vcpkg install cgal:x64-windows
 
 **Using CMake Presets (Recommended):**
 
+Use **Developer PowerShell for VS 2022** (or run `vcvars64.bat`) so `cl.exe` is on `PATH`, then:
+
 ```powershell
-# Configure (uses Visual Studio 2022 generator with MSVC)
+# Configure (Ninja + MSVC via vcpkg toolchain; Release by default)
 cmake --preset vcpkg-x64
 
-# Build the library and demo
-cmake --build build --config Debug
+# Build the library and tests (single-config: no --config flag)
+cmake --build build --target kinDS kinDS-tests
+
+# Debug build
+cmake --preset vcpkg-x64-debug
+cmake --build build --target kinDS kinDS-tests
 ```
 
 The demo executable will be built to `build/bin/kinDS-demo.exe` (or `build/bin/kinDS-demo` on Unix).
 
-**Or manually:**
+**Or manually (Ninja):**
 
 ```powershell
-# Configure
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -G "Visual Studio 17 2022" -A x64
-
-# Build
-cmake --build build --config Debug
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_TOOLCHAIN_FILE="cmake/vcpkg-ninja-msvc.toolchain.cmake"
+cmake --build build --target kinDS kinDS-tests
 ```
 
-**Using Ninja (Optional):**
+**CGAL + compiler note:** vcpkg's CGAL 5.6.x does not build with **Clang** on Windows (invalid `operator bool` in CGAL headers). The Ninja presets use `cmake/vcpkg-ninja-msvc.toolchain.cmake` to force **MSVC** (`cl.exe`). If you still see Clang in compile commands, delete `build/` and reconfigure.
 
-If you prefer Ninja for faster builds, install it first (see below), then use:
+**Visual Studio generator (optional, multi-config):**
 
 ```powershell
-# Configure with Ninja preset
-cmake --preset vcpkg-x64-ninja
-
-# Build
-cmake --build build
+cmake --preset vcpkg-x64-vs
+cmake --build build-vs --config Release --target kinDS kinDS-tests
 ```
 
-**Install Ninja (only if using Ninja preset):**
+**Install Ninja:**
 
 - **Using winget:** `winget install Ninja-build.Ninja`
 - **Using Chocolatey:** `choco install ninja`
 - **Using Scoop:** `scoop install ninja`
 - **Manual:** Download from [ninja-build.org](https://ninja-build.org/)
 
-**In VS Code:**
-1. Open the Command Palette (Ctrl+Shift+P)
-2. Select "CMake: Select Configure Preset"
-3. Choose "vcpkg (x64)"
-4. Build using the CMake extension
+**In VS Code / Cursor:**
+
+The repo includes `.vscode/settings.json` so **Delete Cache and Reconfigure** uses the `vcpkg-x64` preset by default (Ninja + MSVC + vcpkg). Debug launch is wired to `build/bin/kinDS-demo.exe` (Ninja's flat output path). Switch the status-bar configure preset to `vcpkg-x64-debug` when you need a Debug build with symbols.
+
+1. Open the kinDS folder as the workspace root.
+2. Right-click `CMakeLists.txt` → **Delete Cache and Reconfigure**.
+3. Select **kinDS-demo** as the launch target, then **Debug** (or F5).
+
+**In Visual Studio 2022:**
+
+Enable **CMake Presets** under **Tools → Options → CMake → General**, then reopen the folder.
 
 ## Project Structure
 
@@ -140,8 +147,7 @@ The library will automatically handle its dependencies (glm, CGAL, Eigen) when u
 - The project is structured as a library (`kinDS` target) with an optional demo executable (`kinDS-demo`)
 - The demo executable is only built when this is the main project (not when used as a submodule)
 - The project uses `CMakePresets.json` to automatically configure vcpkg integration
-- The default preset (`vcpkg-x64`) uses Visual Studio 2022 generator with MSVC compiler, which matches vcpkg's CGAL build
-- The preset uses the `VCPKG_ROOT` environment variable to locate vcpkg
+- The default preset (`vcpkg-x64`) uses **Ninja** with the MSVC toolchain (Developer shell / `vcvars64`) and vcpkg; use `vcpkg-x64-vs` for the Visual Studio multi-config generator
 - If `VCPKG_ROOT` is not set, update `CMakePresets.json` with your vcpkg path
-- Ninja is optional and only needed if you want to use the `vcpkg-x64-ninja` preset for faster incremental builds
+- Set `VCPKG_ROOT` before configuring; update the vcpkg path in `CMakePresets.json` if yours is not `C:/src/vcpkg` (or copy `CMakeUserPresets.json.example` to `CMakeUserPresets.json` and override `VCPKG_ROOT` there)
 - CGAL is optional - the library will build without it, but some features will be disabled

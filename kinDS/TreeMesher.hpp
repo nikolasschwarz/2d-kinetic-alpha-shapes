@@ -1,9 +1,14 @@
 #pragma once
 #include "MeshIntersection.hpp"
+#include "Statistics.hpp"
 #include "StrandTree.hpp"
+#include "Validator.hpp"
 #include "VoronoiMesh.hpp"
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace kinDS
@@ -11,17 +16,128 @@ namespace kinDS
 class SegmentBuilder;
 class KineticDelaunay;
 
+enum class MeshletExportMode
+{
+  Combined,   ///< One OBJ; each segment meshlet is an OBJ group.
+  PerSegment, ///< One OBJ per segment (meshlets merged per segment).
+  Raw,        ///< One OBJ per Voronoi-edge mesh pair (no segment-level merge).
+};
+
+inline bool mergeMeshletsBySegment(MeshletExportMode mode) { return mode != MeshletExportMode::Raw; }
+
+inline const char* meshletExportModeToString(MeshletExportMode mode)
+{
+  switch (mode)
+  {
+  case MeshletExportMode::Combined:
+    return "combined";
+  case MeshletExportMode::PerSegment:
+    return "per_segment";
+  case MeshletExportMode::Raw:
+    return "raw";
+  }
+  return "unknown";
+}
+
 class TreeMesher
 {
  public:
   struct Settings
   {
     double alpha_cutoff = 10.0; // default value, can be adjusted as needed
+    /// Radius cutoff for triangles whose three strands do not share one input branch at t+1.
+    /// When equal to @ref alpha_cutoff the branch-specific path is disabled.
+    /// CLI @c --branch-cutoff defaults to @ref alpha_cutoff when omitted.
+    double branch_alpha_cutoff = 10.0;
+    /// Extra sections above the interval upper bound (floor(t)+1) when classifying same-branch membership
+    /// for @ref branch_alpha_cutoff. 0 = current behavior. Out-of-range heights clamp to the last valid index.
+    size_t look_ahead = 0;
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
+    /// When true, a failed meshlet intersection keeps the uncut meshlet; when false, replaces it with an empty mesh.
+    bool keep_original_on_intersection_failure = true;
+    /// Seam vertices receive segment-meshlet UVs instead of clip-boundary UVs (editor intersection).
+    bool intersection_prefer_meshlet_uv_on_seam = false;
+    /// Clip-boundary-origin faces use interior (a,b,h) UVs; bark polar distance is treated as r=1.
+    bool intersection_boundary_faces_interior_uv = false;
+    /// When false, skip JSON vertex/face metadata on meshlets (material_ids still stored for OBJ export).
+    /// Default off; CLI @c --store-mesh-metadata / @c --no-store-mesh-metadata.
+    /// @ref validate_mesh_vertex_sources implies metadata storage when enabled.
+    bool store_mesh_metadata = false;
+    /// When true, run @ref Validator::validateAndReportMeshVertexSources after meshing.
+    bool validate_mesh_vertex_sources = false;
+    /// Output path for @ref Validator when validation is enabled (@ref Validator::defaultLogFilePath by default).
+    std::string validate_mesh_vertex_sources_log_path = Validator::defaultLogFilePath();
+    /// When false, skip meshlet diagnostic logging and related string assembly (@ref meshletDiagnosticLogLine).
+    bool diagnostics = true;
+    /// When true, mesh vertices are stored in object space during meshing (@ref SegmentBuilder::create_transformed_mesh).
+    /// Export skips a second transform; polygon triangulation still uses profile-plane xy.
+    /// When false (@c --untransformed), vertices stay in local profile space (no reference-branch remap, no
+    /// kinetic separation), with a final Y/Z swap for viewing alongside SVG.
+    bool transform_mesh_at_construction = true;
+    /// When true, OBJ export cycles brown boundary materials through 5 non-green section colors
+    /// (@c brown_s0..brown_s4). Green (interior) is left unchanged.
+    bool alternate_section_shading = false;
+    /// When true, Combined meshlet OBJ export also writes an EcoSysLab-compatible `.json` sidecar
+    /// (distances/profile/root; fungus fields defaulted). CLI @c --export-gpu-attributes.
+    bool export_gpu_attributes_json = false;
+    /// Inclusive first kinetic section to initialize and process (default 0).
+    size_t start_section = 0;
+    /// When set, only these input branch ids are triangulated at @ref start_section (CLI @c --start-branches).
+    /// Those strands and their later descendant input-branch ids stay constrained for the whole run.
+    /// Ids absent / empty / not triangulable at that height are ignored with a warning.
+    std::optional<std::vector<size_t>> start_input_branches;
+    /// Exclusive kinetic stop / finalize time; empty means tree height (@c StrandTree::getHeight()).
+    /// Section events run on `[start_section, end_section)`; events with `t >= end_section` are not processed.
+    std::optional<size_t> end_section;
+    /// When true, emit a closing-cap meshlet for every live strand at @ref start_section (bootstrap). Default false.
+    /// Caps for input branches that finish during the run are always produced regardless of this flag.
+    bool mesh_cap_at_start = false;
+    /// When true, also emit closing caps for strands still continuing past a premature @ref end_section
+    /// (@c --end). Default false. Natural branch endings and the tree-top finalize always get caps regardless.
+    bool mesh_cap_at_end = false;
+    /// When true, collect per-section runtime / event / topology statistics and write CSV after meshing.
+    /// Also writes a companion event-list CSV (@c meshing_event_list_*.csv) with one row per kinetic event.
+    bool collect_meshing_statistics = false;
+    /// When true with @ref collect_meshing_statistics, skip writing CSVs inside @ref runMeshingAlgorithm
+    /// so the caller can fill totals-row extras (alpha / mesh counts / experiment tag) then call
+    /// @ref writeCollectedMeshingStatistics.
+    bool defer_meshing_statistics_write = false;
+    /// When true with @ref collect_meshing_statistics, append a CSV row every time a kinetic section
+    /// closes (incremental file) so hard failures still retain completed-section statistics.
+    bool flush_meshing_statistics_each_section = false;
+    /// Optional experiment tag for statistics CSV stems (spaces should already be underscores).
+    std::string meshing_statistics_experiment_tag;
+    /// Base output path used when @ref collect_meshing_statistics is enabled.
+    /// A timestamp is inserted into the filename at write time so runs never overwrite each other.
+    /// The event-list CSV is written beside this path (@c *statistics* → @c *event_list*).
+    std::filesystem::path meshing_statistics_csv_path = "meshing_statistics.csv";
 
     // for debugging purposes:
     bool debug_export_meshes = false;
-    size_t max_meshlet_export = 10; // maximum number of meshlets to export for debugging
+    /// When true, OBJ export emits one @c o object per interior/boundary contributor (iN / bN).
+    bool export_separate_contributor_objects = true;
+    /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.
+    bool retriangulate_on_component_split = false;
+    size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
+    /// When true, write full visual-debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps, …).
+    /// Default off; CLI @c --debug-files enables this (also enables @ref error_files dumps).
+    bool visual_debug = false;
+    /// When true, write failure SVGs/TXTs (ring-walk / triangulate FAIL, etc.) and the common event-style
+    /// kinetic SVG with affected sites/edges/VVs highlighted, without full visual debug.
+    /// Default off; CLI @c --error-files enables this. Also enabled by @ref visual_debug.
+    bool error_files = false;
+    /// When true with @ref visual_debug, SVG folders already split by pending child runtime branches (from the radius
+    /// event that notes the split) instead of only after the graph cut. CLI @c --svg-separate-pending-splits.
+    bool visual_debug_separate_pending_splits = false;
+    std::optional<std::filesystem::path> visual_debug_output_root;
+    /// Inclusive real-time window for visual-debug SVG/TXT exports (CLI @c --debug-files … lower upper).
+    std::optional<double> visual_debug_time_lower;
+    std::optional<double> visual_debug_time_upper;
+    /// When true, after each kinetic event verify live sites lie inside the graph convex hull.
+    /// Default off; CLI @c --check-sites-in-hull.
+    bool check_sites_inside_convex_hull = false;
+    std::optional<double> flip_polynomial_dump_target_time;
+    std::optional<size_t> flip_polynomial_dump_target_half_edge;
   };
 
  private:
@@ -29,31 +145,85 @@ class TreeMesher
   std::shared_ptr<KineticDelaunay> kinetic_delaunay;
   std::shared_ptr<SegmentBuilder> mesh_builder;
   std::vector<VoronoiMesh> segment_meshlets;
+  std::vector<std::string> segment_meshlet_export_suffixes;
   std::vector<std::vector<int>> meshing_neighbor_indices; // for each mesh, the neighbor mesh index for each triangle
   std::vector<size_t> meshing_to_physics_segment_indices;
+  std::vector<std::vector<size_t>> meshing_strand_to_segment_indices_;
+  bool has_meshing_strand_to_segment_indices_ = false;
+
   Settings settings;
   std::function<void(size_t, std::function<void(size_t)>)> parallel_for;
+  bool mesh_vertex_source_validation_passed_ = true;
 
  public:
   TreeMesher(StrandTree& strand_tree);
   TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::function<void(size_t)>)> parallel_for);
-  const std::vector<VoronoiMesh>& runMeshingAlgorithm();
+  /// @param visual_debug When true, SegmentBuilder callbacks export full visual-debug SVG/TXT snapshots.
+  /// Prefer setting @ref Settings::visual_debug / @ref Settings::error_files (CLI @c --debug-files / @c --error-files).
+  const std::vector<VoronoiMesh>& runMeshingAlgorithm(bool visual_debug = false);
   const VoronoiMesh& getBoundaryMesh() const;
   const std::vector<std::vector<int>>& getMeshingNeighborIndices() const;
+  std::vector<std::vector<int>>& getMeshingNeighborIndices() { return meshing_neighbor_indices; }
   const std::vector<size_t>& getMeshingToPhysicsSegmentIndices() const;
+  void setMeshingToPhysicsSegmentIndices(std::vector<size_t> indices)
+  {
+    meshing_to_physics_segment_indices = std::move(indices);
+  }
   const std::vector<std::vector<size_t>>& getMeshingStrandToSegmentIndices() const;
+  void setMeshingStrandToSegmentIndices(std::vector<std::vector<size_t>> indices)
+  {
+    meshing_strand_to_segment_indices_ = std::move(indices);
+    has_meshing_strand_to_segment_indices_ = true;
+  }
   const std::vector<size_t>& getBoundaryVertexToStrandId() const;
   void transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const glm::dmat4& root_transform = glm::dmat4(1));
   void transformToWorldSpace(
     VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform = glm::dmat4(1)) const;
   const std::vector<VoronoiMesh>& getSegmentMeshlets() const { return segment_meshlets; }
+  std::vector<VoronoiMesh>& getSegmentMeshlets() { return segment_meshlets; }
+  Settings& getSettings() { return settings; }
+  const Settings& getSettings() const { return settings; }
 
-  void exportCombinedMesh() const;
-  void truncateToBoundary(const VoronoiMesh& boundary_mesh);
+  /// Kinetic meshing statistics collected during the last @ref runMeshingAlgorithm (may be empty).
+  Statistics* getMeshingStatistics();
+  const Statistics* getMeshingStatistics() const;
+
+  /// Write deferred meshing / event-list CSVs when @ref Settings::collect_meshing_statistics was enabled.
+  /// No-op if nothing was collected.
+  bool writeCollectedMeshingStatistics();
+  void setSettings(const Settings& new_settings) { settings = new_settings; }
+  bool meshVertexSourceValidationPassed() const { return mesh_vertex_source_validation_passed_; }
+
+  /// Export meshlets under @p export_path.
+  /// When @ref Settings::export_gpu_attributes_json is set and @p export_mode is Combined, also writes
+  /// an EcoSysLab-compatible `.json` sidecar next to the OBJ.
+  /// @param export_mode How meshlets are grouped into output file(s).
+  /// @param export_path Output directory for @c PerSegment/@c Raw; output OBJ path for @c Combined.
+  /// @param max_exports Maximum meshlets to export; default unlimited.
+  /// @param transformed When set, force export-time world/profile mapping. When unset, uses
+  ///   @c !settings.transform_mesh_at_construction. When export is untransformed, OBJ filenames are
+  ///   suffixed with @c _untransformed.
+  void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
+    std::optional<bool> transformed = std::nullopt, std::optional<size_t> max_exports = std::nullopt) const;
+  bool meshletsTransformedAtConstruction() const { return settings.transform_mesh_at_construction; }
+
+  /// Result of @ref truncateToBoundary: outside/intersecting meshlet indices plus classification counts.
+  struct BoundaryTruncateResult
+  {
+    std::vector<size_t> outside_meshlet_indices;
+    /// Meshlets whose pre-check was INTERSECTING and that produced a non-empty clipped result.
+    std::vector<size_t> intersecting_meshlet_indices;
+    size_t inside_count = 0;
+    size_t intersecting_count = 0;
+    size_t outside_count = 0;
+  };
+
+  /// Clip meshlets against @p boundary_mesh. Returns OUTSIDE indices and inside/intersect/outside counts.
+  BoundaryTruncateResult truncateToBoundary(const VoronoiMesh& boundary_mesh);
   void fixFailedSegments(const MeshIntersection& boundary_intersector);
   std::pair<std::vector<float>, std::vector<float>> computeTopAndBottomBoundaryDistances(
     const std::vector<float>& boundary_distance_by_segment_id);
-  void runKineticDelaunay();
+  void runKineticDelaunay(bool visual_debug);
   void mapMeshingToPhysicsSegmentIndices();
 };
 }

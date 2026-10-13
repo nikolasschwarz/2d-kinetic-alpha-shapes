@@ -1,6 +1,9 @@
 #pragma once
+#include <algorithm>
 #include <assert.h>
+#include <cmath>
 #include <iostream>
+#include <limits>
 
 // resolve a macro conflict with /usr/include/X11/X.h:350:21
 #pragma push_macro("Success")
@@ -211,6 +214,32 @@ class Polynomial
 
   // Utility: Remove leading zeros
   void trim() { coeffs.conservativeResize(degree() + 1); }
+
+  /// Zero coefficients below max(abs_eps, rel_eps * max|c|), then drop leading zeros like @ref trim.
+  /// Used for virtual/infinitesimal triggers where shared-direction motions make high-degree leads
+  /// algebraically zero but leave floating-point residue (e.g. inCircle ε³ ≡ 0).
+  void trimNearZero(double abs_eps = 1e-12, double rel_eps = 1e-10)
+  {
+    if (coeffs.size() == 0)
+    {
+      return;
+    }
+
+    double max_abs = 0.0;
+    for (Eigen::Index i = 0; i < coeffs.size(); ++i)
+    {
+      max_abs = std::max(max_abs, std::abs(coeffs[i]));
+    }
+    const double thresh = std::max(abs_eps, rel_eps * max_abs);
+    for (Eigen::Index i = 0; i < coeffs.size(); ++i)
+    {
+      if (std::abs(coeffs[i]) < thresh)
+      {
+        coeffs[i] = 0.0;
+      }
+    }
+    trim();
+  }
 
   // Polynomial degree, will return -1 for the zero polynomial
   int degree() const

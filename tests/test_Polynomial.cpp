@@ -127,3 +127,30 @@ TEST_CASE("Polynomial with negative coefficients", "[Polynomial]")
   REQUIRE(p3(1.0) == Approx(7.0)); // 4 + 5 - 2 = 7
   REQUIRE(p3(2.0) == Approx(6.0));
 }
+
+TEST_CASE("Polynomial trimNearZero drops FP junk leading coefficients", "[Polynomial]")
+{
+  enable_all_log_levels_for_test();
+  // Simulate infinitesimal inCircle residue: algebraic degree 2 with a ~1e-14 cubic lead.
+  Eigen::VectorXd coeffs(4);
+  coeffs << 1.0, -2.0, 0.5, 1e-14;
+  Polynomial p(coeffs);
+  REQUIRE(p.degree() == 3);
+
+  p.trimNearZero();
+  REQUIRE(p.degree() == 2);
+  REQUIRE(p.getCoefficients().size() == 3);
+  REQUIRE(p.getCoefficients()[0] == Approx(1.0));
+  REQUIRE(p.getCoefficients()[1] == Approx(-2.0));
+  REQUIRE(p.getCoefficients()[2] == Approx(0.5));
+}
+
+TEST_CASE("Polynomial trimNearZero preserves real high-degree content", "[Polynomial]")
+{
+  Eigen::VectorXd coeffs(4);
+  coeffs << 1.0, 0.0, 0.0, 1.0; // 1 + x^3
+  Polynomial p(coeffs);
+  p.trimNearZero();
+  REQUIRE(p.degree() == 3);
+  REQUIRE(p.getCoefficients()[3] == Approx(1.0));
+}

@@ -60,19 +60,30 @@ set(KINDS_SOURCES
 	"kinDS/StrandTree.cpp"
 	"kinDS/Delaunator2D.cpp"
 	"kinDS/HalfEdgeDelaunayGraph.cpp"
+    "kinDS/VisualDebugHighlight.cpp"
+    "kinDS/SegmentBuilderVisualDebug.cpp"
     "kinDS/KineticAlgorithm.cpp"
+    "kinDS/Statistics.cpp"
     "kinDS/KineticDelaunay.cpp"
     "kinDS/KineticDelaunayFlipEvent.cpp"
+    "kinDS/KineticDelaunayFlipEventTriggerDump.cpp"
     "kinDS/KineticDelaunayRadiusEvent.cpp"
     "kinDS/KineticDelaunayCrossingEvent.cpp"
     "kinDS/KineticDelaunaySectionEvent.cpp"
+    "kinDS/KineticDelaunaySubdivisionEvent.cpp"
+    "kinDS/KineticDelaunaySeparationEvent.cpp"
+    "kinDS/Polygon2D.cpp"
 	"kinDS/Polynomial.cpp"
 	"kinDS/SegmentBuilder.cpp"
     "kinDS/SegmentBuilderSectionCallback.cpp"
     "kinDS/SegmentBuilderFlipCallback.cpp"
     "kinDS/SegmentBuilderRadiusCallback.cpp"
     "kinDS/SegmentBuilderCrossingCallback.cpp"
+    "kinDS/SegmentBuilderSubdivisionCallback.cpp"
+    "kinDS/SegmentBuilderSeparationCallback.cpp"
 	"kinDS/TreeMesher.cpp"
+	"kinDS/MeshingBuffer.cpp"
+	"kinDS/Validator.cpp"
 	"kinDS/VoronoiMesh.cpp"
 	"kinDS/PlaneProjector.cpp"
 	"kinDS/MeshIntersection.cpp")
@@ -184,12 +195,17 @@ endif()
 
 target_include_directories(kinDS
     PUBLIC
-        $<BUILD_INTERFACE:${KINDS_INCLUDE_DIRS}>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         # For internal includes within the library
         ${CMAKE_CURRENT_SOURCE_DIR}/kinDS
 )
+
+# Apply each public include directory separately. A single BUILD_INTERFACE entry with a
+# CMake list breaks on MSVC (semicolons are dropped and paths get concatenated).
+foreach(_kinds_public_include IN LISTS KINDS_INCLUDE_DIRS)
+    target_include_directories(kinDS PUBLIC $<BUILD_INTERFACE:${_kinds_public_include}>)
+endforeach()
 
 # Find and link dependencies
 # glm: allow parent project to provide glm::glm target if it already uses glm
@@ -226,7 +242,6 @@ if(KINDS_BUILD_DEMO)
     add_executable(kinDS-demo main.cpp)
     target_link_libraries(kinDS-demo PRIVATE kinDS)
     
-    # Set output directory for demo
     set_target_properties(kinDS-demo PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )

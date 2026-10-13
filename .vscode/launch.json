@@ -1,0 +1,133 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Break on thrown C++ exceptions: in the Run and Debug view → BREAKPOINTS,
+      // enable "All Exceptions" (appears after the first cppvsdbg session in this folder).
+      // That stops at the throw site. main.cpp also rethrows under an attached debugger
+      // so a user-unhandled stop still happens if All Exceptions is off.
+      "name": "Debug kinDS-demo (mesh)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build-debug/bin/kinDS-demo.exe",
+      // kinDS-demo CLI (see main.cpp print_usage). Pick one COMMAND; OPTIONS may appear in any order.
+      //
+      // Commands:
+      //   --mesh <file>             Load StrandTree and run TreeMesher
+      //   --demo                    Run the kinetic Delaunay example
+      //   --help / -h               Print usage and exit
+      //
+      // Options:
+      //   --log-level <levels>      Replace log levels (comma-separated: debug,monitor,info,warning,error,critical).
+      //                             Default: info,warning,error,critical
+      //   --log-add <levels>        Enable additional log levels (e.g. monitor for diagnostic-guard tracing)
+      //   --log-remove <levels>     Disable specific log levels
+      //   --log-file <path>         Also write logs to a file (console still used)
+      //   --export-mode <mode>      combined | segments | raw  (default: raw).
+      //                             "combined" also writes a single combined OBJ
+      //   --export-path <path>      Base output dir; writes segment_meshlets/ and raw_meshlets/ under it
+      //   --untransformed           Export/build in profile space (no object-space transform / separation);
+      //                             applies Y/Z swap for viewing with SVG. OBJ names get _untransformed
+      //   --transform-at-construction  Store vertices in object space while meshing (default)
+      //   --transform-at-export        Keep profile-space verts until OBJ export
+      //   --validate                After meshing, check same-source vertices agree in world space
+      //                             (implies mesh metadata storage)
+      //   --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)
+      //   --store-mesh-metadata     Store JSON vertex/face metadata on meshlets
+      //   --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)
+      //   --section-shading         Cycle brown boundary materials through 5 non-green section colors
+      //   --start <section>         Bootstrap/start kinetic meshing at this section index (default: 0)
+      //   --end <section>           Exclusive stop/finalize time (default: tree height).
+      //                             Section events on [start, end); skip events with t >= end
+      //   --mesh-cap-at-start       Closing caps at --start (default: off); finishers during run always capped
+      //   --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off);
+      //                             natural branch endings and tree-top caps are always produced
+      //   --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)
+      //   --debug-files [path]      Full debug SVGs/TXTs (off by default). Optional output directory (default: cwd).
+      //   --svg-separate-pending-splits
+      //                             With --debug-files: separate SVG folders for pending split-off child branches
+      //                             as soon as a radius event notes the split (not only after the graph cut).
+      //   --error-files [path]      Failure SVGs/TXTs + common highlighted kinetic SVG (off by default;
+      //                             also enabled by --debug-files).
+      "args": [
+        "--mesh",
+        "input_examples/test_oak_2.txt",
+        "--export-mode",
+        "combined",
+        "--validate",
+        "--store-mesh-metadata",
+        "--section-shading",
+        "--debug-files",
+        "debug_output",
+        "--log-add",
+        "monitor",
+        "--cutoff",
+        "3"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "logging": {
+        "exceptions": true,
+        "programOutput": true
+      },
+      "preLaunchTask": "Build kinDS-demo if needed (Debug)"
+    },
+    {
+      "name": "Release kinDS-demo (mesh)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/kinDS-demo.exe",
+      // Same CLI as Debug; binary comes from CMake preset vcpkg-x64 (CMAKE_BUILD_TYPE=Release → build/).
+      "args": [
+        "--mesh",
+        "input_examples/test_oak_2.txt",
+        "--export-mode",
+        "combined",
+        "--validate",
+        "--section-shading",
+        "--debug-files",
+        "debug_output",
+        "--svg-separate-pending-splits",
+        "--log-add",
+        "monitor",
+        "--cutoff",
+        "3"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "logging": {
+        "exceptions": true,
+        "programOutput": true
+      },
+      "preLaunchTask": "Build kinDS-demo if needed (Release)"
+    },
+    {
+      "name": "RelWithDebInfo kinDS-demo (mesh)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build-relwithdebinfo/bin/kinDS-demo.exe",
+      // Optimized Release build with PDB debug symbols (CMAKE_BUILD_TYPE=RelWithDebInfo → build-relwithdebinfo/).
+      "args": [
+        "--mesh",
+        "input_examples/test_oak_10.txt",
+        "--export-mode",
+        "combined",
+        "--export-gpu-attributes",
+        "--validate",
+        "--section-shading",
+        "--cutoff",
+        "3"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "logging": {
+        "exceptions": true,
+        "programOutput": true
+      },
+      "preLaunchTask": "Build kinDS-demo if needed (RelWithDebInfo)"
+    }
+  ]
+}

@@ -1,10 +1,20 @@
 #include "TreeMesher.hpp"
 #include "IndexIterator.hpp"
 #include "KineticDelaunay.hpp"
+#include "Logger.hpp"
 #include "ObjExporter.hpp"
 #include "SegmentBuilder.hpp"
 #include "TreeMesher.hpp"
+#include "Validator.hpp"
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <execution>
+#include <filesystem>
+#include <limits>
+#include <mutex>
+#include <sstream>
+#include <stdexcept>
 
 #ifdef _DEBUG
 #pragma message("kinDS: TreeMesher.cpp built in DEBUG")
@@ -79,25 +89,315 @@ TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::
 {
 }
 
-void TreeMesher::exportCombinedMesh() const
+void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
+  std::optional<bool> transformed, std::optional<size_t> max_exports) const
 {
-  // for now, just combine all meshes into one
-  kinDS::VoronoiMesh combined_mesh;
-  for (const auto& mesh : segment_meshlets)
+  if (!mesh_builder && export_mode == MeshletExportMode::Raw)
   {
-    combined_mesh += mesh;
+    throw std::runtime_error("exportMeshlets: Raw mode requires a live meshing run.");
+  }
+  if (!mesh_builder && segment_meshlets.empty())
+  {
+    throw std::runtime_error("exportMeshlets: meshing has not been run yet.");
   }
 
-  // also export some meshlets:
-  for (size_t i = 0; i < std::min(settings.max_meshlet_export, segment_meshlets.size()); i++)
+  const bool apply_export_transform = transformed.value_or(!settings.transform_mesh_at_construction);
+  // Explicit profile-space export (@c transformed == false), e.g. CLI --untransformed — not merely
+  // "skip export transform because meshlets were already transformed at construction".
+  const bool untransformed_export = transformed.has_value() && !transformed.value();
+  const bool include_metadata = mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata;
+
+  std::vector<VoronoiMesh> meshlets_to_export;
+  std::vector<std::string> export_suffixes;
+  if (export_mode == MeshletExportMode::Raw)
   {
-    kinDS::ObjExporter::writeMesh(segment_meshlets[i], "meshlet" + std::to_string(i) + ".obj");
+    std::vector<std::vector<int>> neighbors_unused;
+    std::tie(meshlets_to_export, neighbors_unused) = mesh_builder->extractSegmentMeshlets(false);
+    export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(false);
   }
-  KINDS_INFO("Kinetic Delaunay Voronoi Meshes exported.");
+  else
+  {
+    meshlets_to_export = segment_meshlets;
+    export_suffixes = segment_meshlet_export_suffixes;
+  }
+
+  const size_t export_count = max_exports.has_value()
+    ? std::min(max_exports.value(), meshlets_to_export.size())
+    : meshlets_to_export.size();
+
+  auto meshlet_strand_id = [&](size_t i) -> size_t
+  {
+    if (!mesh_builder)
+    {
+      throw std::runtime_error("exportMeshlets: strand lookup requires a live meshing run.");
+    }
+    return export_mode == MeshletExportMode::Raw ? mesh_builder->strandIdForRawMeshlet(i)
+                                                 : mesh_builder->strandIdForSegment(i);
+  };
+
+  auto meshlet_runtime_branch = [&](size_t i) -> size_t
+  {
+    if (!mesh_builder)
+    {
+      return kinDS::KineticDelaunay::RuntimeBranchData::no_branch;
+    }
+    return export_mode == MeshletExportMode::Raw ? mesh_builder->runtimeBranchForRawMeshlet(i)
+                                                 : mesh_builder->runtimeBranchForSegment(i);
+  };
+
+  auto meshlet_for_export = [&](size_t i) -> VoronoiMesh
+  {
+    VoronoiMesh mesh = meshlets_to_export[i];
+    if (apply_export_transform)
+    {
+      transformToWorldSpace(mesh, meshlet_strand_id(i));
+    }
+    return mesh;
+  };
+
+  auto write_meshlet_obj = [&](const VoronoiMesh& mesh, const std::filesystem::path& path)
+  {
+    const bool include_vertex_colors = Validator::meshUsesValidationErrorMaterial(mesh);
+    kinDS::ObjExporter::writeMesh(mesh, path, 1.0, 1.0, {}, include_metadata, include_vertex_colors,
+      settings.alternate_section_shading, settings.export_separate_contributor_objects);
+  };
+
+  const std::string untransformed_suffix = untransformed_export ? "_untransformed" : "";
+
+  auto meshlet_filename = [&](size_t i) -> std::filesystem::path
+  {
+    const std::string suffix = (i < export_suffixes.size()) ? export_suffixes[i] : "";
+    return std::filesystem::path("meshlet" + std::to_string(i) + suffix
+      + meshlets_to_export[i].creationKineticTimeFilenameSuffix() + untransformed_suffix + ".obj");
+  };
+
+  auto with_untransformed_path_suffix = [&](std::filesystem::path path) -> std::filesystem::path
+  {
+    if (!untransformed_export)
+    {
+      return path;
+    }
+    const std::filesystem::path ext = path.extension();
+    path.replace_extension();
+    path += untransformed_suffix;
+    if (!ext.empty())
+    {
+      path += ext;
+    }
+    return path;
+  };
+
+  switch (export_mode)
+  {
+  case MeshletExportMode::PerSegment:
+  case MeshletExportMode::Raw:
+  {
+    std::filesystem::create_directories(export_path);
+    for (size_t i = 0; i < export_count; ++i)
+    {
+      write_meshlet_obj(meshlet_for_export(i), export_path / meshlet_filename(i));
+    }
+    KINDS_DEBUG("Exported " << export_count << " meshlet OBJ file(s) (mode=" << meshletExportModeToString(export_mode)
+                            << ", transformed=" << apply_export_transform << ") to " << export_path.string() << ".");
+    return;
+  }
+
+  case MeshletExportMode::Combined:
+    break;
+  }
+
+  std::filesystem::path obj_path = with_untransformed_path_suffix(export_path);
+  if (obj_path.extension().empty())
+  {
+    obj_path.replace_extension(".obj");
+  }
+  if (obj_path.has_parent_path())
+  {
+    std::filesystem::create_directories(obj_path.parent_path());
+  }
+
+  const bool export_gpu_json = settings.export_gpu_attributes_json;
+  const double texture_diameter = mesh_builder ? mesh_builder->getTextureDiameter() : 0.9;
+  const double uv_height_factor = mesh_builder ? mesh_builder->getUvHeightFactor() : 1.0;
+
+  auto segment_axis_for_meshlet = [&](size_t i, const VoronoiMesh& mesh) -> ObjExportSegmentAxis
+  {
+    ObjExportSegmentAxis axis;
+    if (!mesh_builder)
+    {
+      return axis;
+    }
+
+    const size_t strand_id = meshlet_strand_id(i);
+    double t_min = std::numeric_limits<double>::infinity();
+    double t_max = -std::numeric_limits<double>::infinity();
+    for (size_t vi = 0; vi < mesh.getVertexCount(); ++vi)
+    {
+      const double t = mesh.vertexKineticTime(vi);
+      if (!std::isfinite(t))
+      {
+        continue;
+      }
+      t_min = std::min(t_min, t);
+      t_max = std::max(t_max, t);
+    }
+    if (!std::isfinite(t_min) || !std::isfinite(t_max))
+    {
+      const double ct = mesh.getCreationKineticTime();
+      if (std::isfinite(ct))
+      {
+        t_min = ct;
+        t_max = ct;
+      }
+      else
+      {
+        t_min = 0.0;
+        t_max = 0.0;
+      }
+    }
+    if (t_max <= t_min)
+    {
+      t_max = t_min + 1e-3;
+    }
+
+    const double t_mid = 0.5 * (t_min + t_max);
+    axis.root_distance = t_mid;
+
+    auto point_at = [&](double t) -> glm::dvec3
+    {
+      if (untransformed_export)
+      {
+        const glm::dvec2 p = strand_tree.evaluate(strand_id, t);
+        return glm::dvec3(p.x, p.y, t);
+      }
+      return strand_tree.getPointInObjectSpace(strand_id, t);
+    };
+
+    const glm::dvec3 p0 = point_at(t_min);
+    const glm::dvec3 p1 = point_at(t_max);
+    axis.position0 = 0.5 * (p0 + p1);
+    glm::dvec3 dir = p1 - p0;
+    const double len = glm::length(dir);
+    axis.direction0 = len > 1e-12 ? (dir / len) : glm::dvec3(0.0, 1.0, 0.0);
+    return axis;
+  };
+
+  auto face_neighbors_for_meshlet = [&](size_t i) -> std::vector<int>
+  {
+    if (i < meshing_neighbor_indices.size())
+    {
+      return meshing_neighbor_indices[i];
+    }
+    return {};
+  };
+
+  kinDS::VoronoiMesh combined_mesh;
+  bool combined_mesh_initialized = false;
+  ObjExportGpuAttributes combined_attrs;
+  // Empty meshlets (e.g. unused segments) keep default NoNormals; lock combined mode from the first
+  // meshlet that actually has geometry so the first += does not mismatch.
+  NormalMode combined_normal_mode = NormalMode::NoNormals;
+  for (size_t i = 0; i < export_count; ++i)
+  {
+    const VoronoiMesh& candidate = meshlets_to_export[i];
+    if (candidate.getVertexCount() > 0 || candidate.getTriangleCount() > 0)
+    {
+      combined_normal_mode = candidate.getNormalMode();
+      break;
+    }
+    if (i == 0)
+    {
+      combined_normal_mode = candidate.getNormalMode();
+    }
+  }
+  auto meshlet_obj_group_name = [&](size_t i, const VoronoiMesh& mesh) -> std::string
+  {
+    std::string name = "meshlet_" + std::to_string(i);
+    if (!mesh_builder)
+    {
+      return name;
+    }
+    if (const std::optional<double> end_t = SegmentBuilder::maxMeshKineticTime(mesh))
+    {
+      try
+      {
+        name += mesh_builder->objObjectBranchSuffix(meshlet_strand_id(i), *end_t, meshlet_runtime_branch(i));
+      }
+      catch (const std::exception&)
+      {
+      }
+    }
+    return name;
+  };
+
+  for (size_t i = 0; i < export_count; ++i)
+  {
+    VoronoiMesh mesh = meshlet_for_export(i);
+    const bool mesh_has_geometry = mesh.getVertexCount() > 0 || mesh.getTriangleCount() > 0;
+
+    if (!combined_mesh_initialized)
+    {
+      combined_mesh = kinDS::VoronoiMesh(SegmentBuilder::MeshletExportMaterialNames, combined_normal_mode);
+      // One OBJ group per meshlet index; boundaries are managed here, not via per-meshlet group_offsets.
+      combined_mesh.setGroupOffsets({ 0 });
+      combined_mesh.setGroupNames({ meshlet_obj_group_name(i, mesh) });
+      combined_mesh_initialized = true;
+    }
+    else
+    {
+      combined_mesh.startNewGroup(meshlet_obj_group_name(i, mesh));
+    }
+
+    if (mesh_has_geometry)
+    {
+      if (export_gpu_json)
+      {
+        ObjExporter::appendGpuAttributes(combined_attrs,
+          ObjExporter::buildStandaloneGpuAttributes(mesh, face_neighbors_for_meshlet(i),
+            segment_axis_for_meshlet(i, mesh), texture_diameter, uv_height_factor));
+      }
+      // operator+= merges the rhs group_offsets, which would shift/absorb prior meshlet groups.
+      mesh.setGroupOffsets({});
+      mesh.setGroupNames({});
+      combined_mesh += mesh;
+    }
+  }
+
+  if (!combined_mesh_initialized)
+  {
+    KINDS_DEBUG("exportMeshlets: no meshlets to export.");
+    return;
+  }
+
+  {
+    ObjWriteOptions options;
+    options.uv_height_factor = 1.0;
+    options.uv_circum_factor = 1.0;
+    options.include_metadata = include_metadata;
+    options.include_vertex_colors = Validator::meshUsesValidationErrorMaterial(combined_mesh);
+    options.alternate_section_shading = settings.alternate_section_shading;
+    options.write_obj_groups = true;
+    if (export_gpu_json && !combined_attrs.empty())
+    {
+      options.gpu_attributes = std::move(combined_attrs);
+    }
+    kinDS::ObjExporter::writeMesh(combined_mesh, obj_path, options);
+  }
+  const size_t group_count = combined_mesh.getGroupOffsets().size();
+  KINDS_DEBUG("Exported combined mesh (" << group_count << " group(s) from " << export_count
+                                       << " meshlet(s), mode=combined, transformed=" << apply_export_transform
+                                       << ", gpu_json=" << export_gpu_json << ") to " << obj_path.string() << ".");
 }
 
-void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
+TreeMesher::BoundaryTruncateResult TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
 {
+  if (!MeshIntersection::IsCgalAvailable())
+  {
+    KINDS_ERROR("CGAL is required for meshlet intersection (truncateToBoundary) but was not found. "
+                "Skipping all meshlets; install/link CGAL and rebuild kinDS with USE_CGAL.");
+    return {};
+  }
+
   // intersect all meshes with the boundary mesh and save the result
   // Build an AABB-tree of the boundary-mesh to prefilter
   kinDS::MeshIntersection boundary_intersector(boundary_mesh);
@@ -110,44 +410,135 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
   std::atomic<int> threads { 0 };
   thread_local bool counted = false;*/
 
+  std::mutex failed_mutex;
+  std::vector<std::pair<size_t, VoronoiMesh>> failed_meshlets;
+  std::vector<size_t> outside_meshlet_indices;
+  std::vector<size_t> intersecting_meshlet_indices;
+  std::atomic<size_t> inside_count { 0 };
+  std::atomic<size_t> intersecting_count { 0 };
+  std::atomic<size_t> outside_count { 0 };
+
+  std::optional<kinDS::MeshIntersectionUvOptions> uv_options;
+  if (settings.intersection_prefer_meshlet_uv_on_seam || settings.intersection_boundary_faces_interior_uv)
+  {
+    kinDS::MeshIntersectionUvOptions options;
+    options.prefer_meshlet_uv_on_seam = settings.intersection_prefer_meshlet_uv_on_seam;
+    options.boundary_faces_use_interior_uv = settings.intersection_boundary_faces_interior_uv;
+    if (mesh_builder)
+    {
+      options.texture_diameter = mesh_builder->getTextureDiameter();
+      options.uv_height_factor = mesh_builder->getUvHeightFactor();
+      options.uv_circum_factor = mesh_builder->getUvCircumFactor();
+    }
+    uv_options = options;
+  }
+
   parallel_for(segment_meshlets.size(),
     [&](auto mesh_index)
     {
       // progress_counter.fetch_add(1, std::memory_order_relaxed);
       // intersection_progress_bar.Update(progress_counter);
-      auto intersect_relation = boundary_intersector.ClassifyMeshRelation(segment_meshlets[mesh_index], true);
+      // Do not assume inside: classify fully so outside meshlets are cleared correctly.
+      auto intersect_relation = boundary_intersector.ClassifyMeshRelation(segment_meshlets[mesh_index], false);
 
       switch (intersect_relation)
       {
       case kinDS::MeshIntersection::MeshRelation::INSIDE:
-        // do nothing
+        inside_count.fetch_add(1, std::memory_order_relaxed);
         break;
 
       case kinDS::MeshIntersection::MeshRelation::INTERSECTING:
+        intersecting_count.fetch_add(1, std::memory_order_relaxed);
         if (settings.debug_export_meshes && mesh_index < settings.max_meshlet_export)
         {
-          kinDS::ObjExporter::writeMesh(
-            segment_meshlets[mesh_index], "meshlet" + std::to_string(mesh_index) + "_raw.obj");
+          const std::string suffix
+            = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
+          kinDS::ObjExporter::writeMesh(segment_meshlets[mesh_index],
+            "meshlet" + std::to_string(mesh_index) + suffix
+              + segment_meshlets[mesh_index].creationKineticTimeFilenameSuffix() + "_raw.obj",
+            1.0, 1.0, {}, mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata, false, false,
+            settings.export_separate_contributor_objects);
         }
-        std::tie(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index])
-          = boundary_intersector.Intersect(segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index]);
+        {
+          bool intersection_failed = false;
+          auto [clipped_mesh, clipped_neighbors] = boundary_intersector.Intersect(
+            segment_meshlets[mesh_index], meshing_neighbor_indices[mesh_index], mesh_index, &intersection_failed,
+            uv_options);
+          if (intersection_failed)
+          {
+            std::lock_guard<std::mutex> lock(failed_mutex);
+            failed_meshlets.emplace_back(mesh_index, segment_meshlets[mesh_index]);
+            if (!settings.keep_original_on_intersection_failure)
+            {
+              segment_meshlets[mesh_index] = kinDS::VoronoiMesh();
+              meshing_neighbor_indices[mesh_index] = {};
+            }
+            // else keep the uncut meshlet and its neighbor indices.
+          }
+          else
+          {
+            segment_meshlets[mesh_index] = std::move(clipped_mesh);
+            meshing_neighbor_indices[mesh_index] = std::move(clipped_neighbors);
+            if (segment_meshlets[mesh_index].getTriangleCount() > 0)
+            {
+              std::lock_guard<std::mutex> lock(failed_mutex);
+              intersecting_meshlet_indices.push_back(mesh_index);
+            }
+          }
+        }
         break;
 
       case kinDS::MeshIntersection::MeshRelation::OUTSIDE:
         // fully outside, result is empty mesh
+        outside_count.fetch_add(1, std::memory_order_relaxed);
         segment_meshlets[mesh_index] = kinDS::VoronoiMesh();
         meshing_neighbor_indices[mesh_index] = {};
+        {
+          std::lock_guard<std::mutex> lock(failed_mutex);
+          outside_meshlet_indices.push_back(mesh_index);
+        }
         break;
 
       case kinDS::MeshIntersection::MeshRelation::UNDEFINED:
-        KINDS_ERROR("Mesh relation returned UNDEFINED");
+        KINDS_ERROR("Mesh relation returned UNDEFINED (meshlet index " << mesh_index << ")");
         break;
 
       default:
-        KINDS_ERROR("Unknown return value of mesh relation");
+        KINDS_ERROR("Unknown return value of mesh relation (meshlet index " << mesh_index << ")");
         break;
       }
     });
+
+  if (!failed_meshlets.empty())
+  {
+    std::sort(failed_meshlets.begin(), failed_meshlets.end(),
+      [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    std::ostringstream index_list;
+    for (size_t i = 0; i < failed_meshlets.size(); ++i)
+    {
+      if (i > 0)
+      {
+        index_list << ", ";
+      }
+      index_list << failed_meshlets[i].first;
+    }
+    KINDS_ERROR("Intersection failed for " << failed_meshlets.size()
+                                           << " meshlet(s). Indices: [" << index_list.str() << "]. "
+                                           << "Dumping failed meshlets as OBJ.");
+
+    const bool include_metadata = mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata;
+    for (const auto& [mesh_index, failed_mesh] : failed_meshlets)
+    {
+      const std::string suffix
+        = (mesh_index < segment_meshlet_export_suffixes.size()) ? segment_meshlet_export_suffixes[mesh_index] : "";
+      const std::filesystem::path obj_path = "failed_meshlet_" + std::to_string(mesh_index) + suffix
+        + failed_mesh.creationKineticTimeFilenameSuffix() + ".obj";
+      kinDS::ObjExporter::writeMesh(failed_mesh, obj_path, 1.0, 1.0, {}, include_metadata, false, false,
+        settings.export_separate_contributor_objects);
+      KINDS_ERROR("Wrote failed meshlet " << mesh_index << " to " << obj_path.string());
+    }
+  }
 
   // intersection_progress_bar.Finish();
   // std::cout << "Threads used: " << threads.load() << "\n";
@@ -156,6 +547,16 @@ void TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
   {
     fixFailedSegments(boundary_intersector);
   }
+
+  std::sort(outside_meshlet_indices.begin(), outside_meshlet_indices.end());
+  std::sort(intersecting_meshlet_indices.begin(), intersecting_meshlet_indices.end());
+  BoundaryTruncateResult result;
+  result.outside_meshlet_indices = std::move(outside_meshlet_indices);
+  result.intersecting_meshlet_indices = std::move(intersecting_meshlet_indices);
+  result.inside_count = inside_count.load(std::memory_order_relaxed);
+  result.intersecting_count = intersecting_count.load(std::memory_order_relaxed);
+  result.outside_count = outside_count.load(std::memory_order_relaxed);
+  return result;
 }
 
 void TreeMesher::fixFailedSegments(const MeshIntersection& boundary_intersector)
@@ -214,7 +615,7 @@ void TreeMesher::fixFailedSegments(const MeshIntersection& boundary_intersector)
           size_t new_t2_index = neighbor_mesh.addUV(t2);
 
           // invert order to maintain consistent orientation
-          neighbor_mesh.addTriangle(new_v1_index, new_v0_index, new_v2_index, new_t0_index, new_t1_index, new_t2_index);
+          neighbor_mesh.addTriangle(new_v1_index, new_v0_index, new_v2_index, new_t1_index, new_t0_index, new_t2_index);
           meshing_neighbor_indices[neighbor_mesh_index].push_back(mesh_index);
         }
       }
@@ -320,7 +721,7 @@ void TreeMesher::fixFailedSegments(const MeshIntersection& boundary_intersector)
     fixed_mesh_count++;
   }
 
-  KINDS_INFO("Fixed " << fixed_mesh_count << " out of " << empty_mesh_indices.size() << " meshes.");
+  KINDS_DEBUG("Fixed " << fixed_mesh_count << " out of " << empty_mesh_indices.size() << " meshes.");
 }
 
 std::pair<std::vector<float>, std::vector<float>> TreeMesher::computeTopAndBottomBoundaryDistances(
@@ -341,21 +742,119 @@ std::pair<std::vector<float>, std::vector<float>> TreeMesher::computeTopAndBotto
   return std::make_pair(bottom_boundary_distances_by_strand_id, top_boundary_distances_by_strand_id);
 }
 
-void TreeMesher::runKineticDelaunay()
+void TreeMesher::runKineticDelaunay(bool visual_debug)
 {
-  KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing...");
+  KINDS_DEBUG("Starting Kinetic Delaunay Voronoi Meshing...");
   // sort subdivisions into a single array
   std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
-  kinetic_delaunay = std::make_shared<KineticDelaunay>(strand_tree, settings.alpha_cutoff, false);
+  kinetic_delaunay = std::make_shared<KineticDelaunay>(
+    strand_tree, settings.alpha_cutoff, false, settings.branch_alpha_cutoff);
+  kinetic_delaunay->setBranchAlphaLookAhead(settings.look_ahead);
+  // Debug/error file dumps key off the visual-debug output root; default to cwd when either is enabled.
+  const bool enable_debug_output_root = visual_debug || settings.error_files;
+  if (enable_debug_output_root && !settings.visual_debug_output_root.has_value())
+  {
+    kinetic_delaunay->setVisualDebugOutputRoot(std::filesystem::current_path());
+  }
+  else if (settings.visual_debug_output_root.has_value())
+  {
+    kinetic_delaunay->setVisualDebugOutputRoot(*settings.visual_debug_output_root);
+  }
+  kinetic_delaunay->setVisualDebugEnabled(visual_debug);
+  kinetic_delaunay->setErrorFilesEnabled(settings.error_files || visual_debug);
+  kinetic_delaunay->setVisualDebugSeparatePendingSplits(settings.visual_debug_separate_pending_splits);
+  kinetic_delaunay->setVisualDebugTimeRange(settings.visual_debug_time_lower, settings.visual_debug_time_upper);
+  if (settings.flip_polynomial_dump_target_time.has_value())
+  {
+    kinetic_delaunay->setFlipPolynomialDumpTargetTime(settings.flip_polynomial_dump_target_time);
+  }
+  if (settings.flip_polynomial_dump_target_half_edge.has_value())
+  {
+    kinetic_delaunay->setFlipPolynomialDumpTargetHalfEdge(settings.flip_polynomial_dump_target_half_edge);
+  }
+  kinetic_delaunay->setComponentSplitPolicy(settings.retriangulate_on_component_split
+      ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
+      : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
+  kinetic_delaunay->setSectionRange(settings.start_section, settings.end_section);
+  kinetic_delaunay->setStartInputBranches(settings.start_input_branches);
 
-  bool transform_mesh_at_construction = false;
+  const bool transform_mesh_at_construction = settings.transform_mesh_at_construction;
 
-  mesh_builder = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction);
+  mesh_builder = std::make_shared<SegmentBuilder>(*kinetic_delaunay, subdivisions, transform_mesh_at_construction,
+    visual_debug, parallel_for);
+  mesh_builder->setErrorFiles(settings.error_files || visual_debug);
+  // Validate needs source metadata; otherwise honor Settings::store_mesh_metadata (CLI-controllable).
+  if (settings.validate_mesh_vertex_sources && !settings.store_mesh_metadata)
+  {
+    KINDS_WARNING("validate_mesh_vertex_sources requires store_mesh_metadata; enabling metadata storage");
+  }
+  mesh_builder->store_mesh_metadata = settings.store_mesh_metadata || settings.validate_mesh_vertex_sources;
+  mesh_builder->validate_mesh_vertex_sources = settings.validate_mesh_vertex_sources;
+  if (settings.validate_mesh_vertex_sources)
+  {
+    Validator::setLogFile(settings.validate_mesh_vertex_sources_log_path);
+  }
+  mesh_builder->diagnostics = settings.diagnostics;
+  mesh_builder->mesh_cap_at_start = settings.mesh_cap_at_start;
+  mesh_builder->mesh_cap_at_end = settings.mesh_cap_at_end;
+  kinetic_delaunay->setDiagnosticsEnabled(settings.diagnostics);
+  kinetic_delaunay->setSitesInsideConvexHullCheckEnabled(settings.check_sites_inside_convex_hull);
+
+  KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
+                                                                                      << ", branch_alpha_cutoff="
+                                                                                      << settings.branch_alpha_cutoff
+                                                                                      << ", look_ahead=" << settings.look_ahead
+                                                                                      << ", visual_debug=" << visual_debug
+                                                                                      << ", error_files=" << mesh_builder->shouldDumpErrorFiles()
+                                                                                      << ", transform_mesh_at_construction="
+                                                                                      << transform_mesh_at_construction
+                                                                                      << ", debug_export_meshes="
+                                                                                      << settings.debug_export_meshes
+                                                                                      << ", max_meshlet_export="
+                                                                                      << settings.max_meshlet_export
+                                                                                      << ", fix_missing_meshes="
+                                                                                      << settings.fix_missing_meshes
+                                                                                      << ", store_mesh_metadata="
+                                                                                      << mesh_builder->store_mesh_metadata
+                                                                                      << ", diagnostics="
+                                                                                      << settings.diagnostics
+                                                                                      << ", mesh_cap_at_start="
+                                                                                      << settings.mesh_cap_at_start
+                                                                                      << ", mesh_cap_at_end="
+                                                                                      << settings.mesh_cap_at_end
+                                                                                      << ", check_sites_inside_convex_hull="
+                                                                                      << settings.check_sites_inside_convex_hull
+                                                                                      << ", radius_vertex_shift_enabled="
+                                                                                      << mesh_builder
+                                                                                           ->radius_boundary_transition_shift_enabled);
+  kinetic_delaunay->setCollectStatistics(settings.collect_meshing_statistics);
+  if (settings.collect_meshing_statistics)
+  {
+    kinetic_delaunay->setStatisticsExperimentTag(settings.meshing_statistics_experiment_tag);
+    kinetic_delaunay->setStatisticsIncrementalFlush(settings.flush_meshing_statistics_each_section,
+                                                    settings.meshing_statistics_csv_path);
+  }
   kinetic_delaunay->init(mesh_builder.get());
   kinetic_delaunay->compute();
+  if (settings.collect_meshing_statistics && !settings.defer_meshing_statistics_write)
+  {
+    writeCollectedMeshingStatistics();
+  }
+  KINDS_INFO("Kinetic Delaunay Voronoi Meshing finished.");
 
-  std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets();
+  std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
+  segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(true);
+  size_t flipped_meshlet_count = 0;
+  for (VoronoiMesh& meshlet : segment_meshlets)
+  {
+    if (meshlet.orientFacesAwayFromCentroid())
+    {
+      ++flipped_meshlet_count;
+    }
+  }
+  KINDS_INFO(flipped_meshlet_count << "/" << segment_meshlets.size()
+                                   << " meshlets flipped to orient faces away from centroid.");
 }
 
 void TreeMesher::mapMeshingToPhysicsSegmentIndices()
@@ -383,24 +882,65 @@ void TreeMesher::mapMeshingToPhysicsSegmentIndices()
       meshing_to_physics_segment_indices[meshing_segment_id] = physics_segment_id;
     }
   }
+
+  meshing_strand_to_segment_indices_ = meshing_strand_to_segment_indices;
+  has_meshing_strand_to_segment_indices_ = true;
 }
 
-const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm()
+const std::vector<VoronoiMesh>& kinDS::TreeMesher::runMeshingAlgorithm(bool visual_debug)
 {
-  runKineticDelaunay();
+  runKineticDelaunay(visual_debug);
 
   auto& boundary_mesh = getBoundaryMesh();
 
   if (settings.debug_export_meshes)
   {
-    kinDS::ObjExporter::writeMesh(boundary_mesh, "boundary_mesh.obj");
+    kinDS::ObjExporter::writeMesh(
+      boundary_mesh, "boundary_mesh.obj", 1.0, 1.0, {}, mesh_builder ? mesh_builder->store_mesh_metadata : settings.store_mesh_metadata);
   }
 
-  truncateToBoundary(boundary_mesh);
+  // truncateToBoundary(boundary_mesh);
 
   mapMeshingToPhysicsSegmentIndices();
 
+  if (mesh_builder && mesh_builder->store_mesh_metadata && settings.validate_mesh_vertex_sources)
+  {
+    mesh_vertex_source_validation_passed_ = Validator::validateAndReportMeshVertexSources(
+      segment_meshlets, "segment meshlets", &segment_meshlet_export_suffixes);
+  }
+  else
+  {
+    mesh_vertex_source_validation_passed_ = true;
+  }
+
   return segment_meshlets;
+}
+
+Statistics* TreeMesher::getMeshingStatistics()
+{
+  return kinetic_delaunay ? &kinetic_delaunay->statistics() : nullptr;
+}
+
+const Statistics* TreeMesher::getMeshingStatistics() const
+{
+  return kinetic_delaunay ? &kinetic_delaunay->statistics() : nullptr;
+}
+
+bool TreeMesher::writeCollectedMeshingStatistics()
+{
+  if (!settings.collect_meshing_statistics || !kinetic_delaunay)
+  {
+    return false;
+  }
+  Statistics& stats = kinetic_delaunay->statistics();
+  if (stats.empty() && stats.eventList().empty())
+  {
+    return false;
+  }
+  const bool wrote_stats = stats.writeCsv(settings.meshing_statistics_csv_path);
+  // Same base path as statistics; writeEventListCsv renames stem statistics → event_list.
+  const bool wrote_events = stats.writeEventListCsv(settings.meshing_statistics_csv_path);
+  return wrote_stats || wrote_events;
 }
 
 const VoronoiMesh& TreeMesher::getBoundaryMesh() const
@@ -428,6 +968,10 @@ const std::vector<std::vector<size_t>>& kinDS::TreeMesher::getMeshingStrandToSeg
   if (mesh_builder)
   {
     return mesh_builder->getStrandToSegmentIndices();
+  }
+  if (has_meshing_strand_to_segment_indices_)
+  {
+    return meshing_strand_to_segment_indices_;
   }
 
   throw std::runtime_error("Strand to segment indices are not available before running the meshing algorithm.");
@@ -479,18 +1023,25 @@ static glm::dvec3 ProfileToModelCoordinates(const std::vector<std::vector<glm::d
   return glm::dvec3(global_pos);
 }
 
+static const std::vector<size_t>& transformBranchIndicesForStrand(const StrandTree& strand_tree, size_t strand_id)
+{
+  return strand_tree.getBranchIndices(strand_id);
+}
+
 void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const glm::dmat4& root_transform)
 {
-  auto& branch_indices = strand_tree.getBranchIndices();
   auto& vertices = boundary_mesh.getVertices();
+  std::vector<double> kinetic_times(vertices.size(), 0.0);
   for (size_t i = 0; i < vertices.size(); i++)
   {
     size_t strand_id = getBoundaryVertexToStrandId()[i];
     auto& v = vertices[i];
+    kinetic_times[i] = v[2];
+    const std::vector<size_t>& branch_indices = transformBranchIndicesForStrand(strand_tree, strand_id);
     // v is a relative position in 2D, we need to convert it to 3D
     v = glm::dvec3(root_transform
       * glm::dvec4(
-        ProfileToModelCoordinates(strand_tree.getTransformsByHeightAndBranch(), v, v[2], branch_indices[strand_id]),
+        ProfileToModelCoordinates(strand_tree.getTransformsByHeightAndBranch(), v, kinetic_times[i], branch_indices),
         1.0));
   }
 
@@ -506,9 +1057,11 @@ void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const 
       size_t strand_id = getBoundaryVertexToStrandId()[source_tri_vertex_index];
       size_t normal_index = triangle_vertex_index + j;
       const glm::vec3& old_normal = boundary_mesh.getNormal(normal_index);
+      const double kinetic_time = kinetic_times[source_tri_vertex_index];
+      const std::vector<size_t>& branch_indices = transformBranchIndicesForStrand(strand_tree, strand_id);
       glm::vec3 transformed_normal = root_transform
         * glm::vec4(ProfileToModelCoordinates(strand_tree.getNormalTransformsByHeightAndBranch(), old_normal,
-                      boundary_mesh.getVertices()[source_tri_vertex_index][2], branch_indices[strand_id], 0.0f),
+                      kinetic_time, branch_indices, 0.0f),
           0.0f);
       boundary_mesh.replaceNormal(normal_index, transformed_normal);
     }
@@ -517,24 +1070,54 @@ void TreeMesher::transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const 
 
 void TreeMesher::transformToWorldSpace(VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform) const
 {
+  auto& vertices = mesh.getVertices();
+  std::vector<double> kinetic_times(vertices.size(), 0.0);
 
   // transform points
-  for (auto& v : mesh.getVertices())
+  for (size_t vertex_index = 0; vertex_index < vertices.size(); ++vertex_index)
   {
+    auto& v = vertices[vertex_index];
+    kinetic_times[vertex_index] = v.z;
+    const std::vector<size_t>& branch_indices = transformBranchIndicesForStrand(strand_tree, strand_id);
     v = root_transform
       * glm::dvec4(ProfileToModelCoordinates(
-                     strand_tree.getTransformsByHeightAndBranch(), v, v.z, strand_tree.getBranchIndices(strand_id)),
+                     strand_tree.getTransformsByHeightAndBranch(), v, kinetic_times[vertex_index], branch_indices),
         1.0);
   }
 
-  auto& normal_transforms = strand_tree.getNormalTransformsByHeightAndBranch();
-  // transform normals
-  for (auto& n : mesh.getNormals())
+  if (mesh.getNormalMode() == NormalMode::NoNormals)
   {
-    // The root transform is assumed to be orthogonal, so we can apply it directly to the normal vector without using
-    // the inverse transpose
-    n = root_transform
-      * glm::dvec4(
-        ProfileToModelCoordinates(normal_transforms, n, n.z, strand_tree.getBranchIndices(strand_id), 0.0f), 0.0);
+    return;
+  }
+
+  auto& normal_transforms = strand_tree.getNormalTransformsByHeightAndBranch();
+
+  if (mesh.getNormalMode() == NormalMode::PerTriangleCorner)
+  {
+    const auto& triangles = mesh.getTriangles();
+    for (size_t triangle_vertex_index = 0; triangle_vertex_index < triangles.size(); ++triangle_vertex_index)
+    {
+      const size_t vertex_index = triangles[triangle_vertex_index];
+      const glm::dvec3& old_normal = mesh.getNormal(triangle_vertex_index);
+      const double kinetic_time = kinetic_times[vertex_index];
+      const std::vector<size_t>& branch_indices = transformBranchIndicesForStrand(strand_tree, strand_id);
+      const glm::dvec3 transformed_normal = root_transform
+        * glm::dvec4(ProfileToModelCoordinates(normal_transforms, old_normal, kinetic_time, branch_indices, 0.0f),
+          0.0);
+      mesh.setNormal(transformed_normal, triangle_vertex_index);
+    }
+  }
+  else
+  {
+    auto& normals = mesh.getNormals();
+    for (size_t vertex_index = 0; vertex_index < normals.size(); ++vertex_index)
+    {
+      glm::dvec3& n = normals[vertex_index];
+      const double kinetic_time = kinetic_times[vertex_index];
+      const std::vector<size_t>& branch_indices = transformBranchIndicesForStrand(strand_tree, strand_id);
+      n = root_transform
+        * glm::dvec4(ProfileToModelCoordinates(normal_transforms, n, kinetic_time, branch_indices, 0.0f),
+          0.0);
+    }
   }
 }

@@ -26,7 +26,7 @@ static void exportSvgBeforeAssertion(const KineticDelaunay& kd, double t, const 
 {
   std::vector<glm::dvec2> points = kd.getPointsAt(t);
   const HalfEdgeDelaunayGraph& graph = kd.getGraph();
-  const size_t face_count = graph.getFaces().size();
+  const size_t face_count = graph.faceSlotCount();
 
   // Build Voronoi vertex -> containing triangle mapping from CrossingData.
   std::vector<size_t> voronoi_vertex_to_tri(face_count);
@@ -41,14 +41,22 @@ static void exportSvgBeforeAssertion(const KineticDelaunay& kd, double t, const 
     &intersection_debug_data); // margin 0.1, draw Voronoi edges in red
 }
 
-// Validate CrossingData: each Voronoi vertex's containing tri matches the list, and the vertex lies inside that
-// triangle. The 'context' string is used to indicate where in the evolution we are (init, betweenSections, after event,
-// etc.).
+static void validateCrossingData(const KineticDelaunay& kd, double t, const std::string& context);
+
+// Export SVG, then intersection invariants, then geometric checks (init / between-sections; no afterEvent hook).
+static void exportSvgThenValidateCrossingData(
+  const KineticDelaunay& kd, double t, const std::string& filename, const std::string& context)
+{
+  exportSvgBeforeAssertion(kd, t, filename);
+  kd.getCrossingData().validateIntersectionInvariants(context.c_str(), &kd, t);
+  validateCrossingData(kd, t, context);
+}
+
+// Geometric CrossingData checks only. For flip/crossing, intersection invariants run in the library after afterEvent.
 static void validateCrossingData(const KineticDelaunay& kd, double t, const std::string& context)
 {
   const HalfEdgeDelaunayGraph& graph = kd.getGraph();
-  const size_t face_count = graph.getFaces().size();
-  const auto& faces = graph.getFaces();
+  const size_t face_count = graph.faceSlotCount();
 
   constexpr size_t invalid_id = static_cast<size_t>(-1);
 
@@ -92,7 +100,7 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
     for (; it != end; ++it)
     {
       size_t he_id = *it;
-      int v = graph.getHalfEdges()[he_id].origin;
+      int v = graph.halfEdge(he_id).origin;
       if (v == -1)
       {
         continue;
@@ -139,9 +147,9 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
   auto findContainingFaceByGeometry = [&](const glm::dvec2& p) -> size_t
   {
     constexpr double eps = 1e-8;
-    for (size_t f = 0; f < face_count; ++f)
+    for (size_t f : graph.liveFaces())
     {
-      const auto& tri = faces[f];
+      const auto& tri = graph.face(f);
       auto tri_vertices = graph.adjacentTriangleVertices(tri.half_edges[0]);
       std::vector<glm::dvec2> pts;
       bool has_infinite_vertex = false;
@@ -190,7 +198,7 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
       return " [tri_id invalid for barycentric debug]";
     }
 
-    const auto& tri = faces[tri_id];
+    const auto& tri = graph.face(tri_id);
     auto tri_vertices = graph.adjacentTriangleVertices(tri.half_edges[0]);
     std::vector<glm::dvec2> pts;
 
@@ -240,10 +248,10 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
 
   KINDS_DEBUG(context << ": validateCrossingData called at t=" << t << " with " << face_count << " faces.");
 
-  for (size_t face_id = 0; face_id < face_count; ++face_id)
+  for (size_t face_id : graph.liveFaces())
   {
     // Skip validation on infinite faces for now (faces with any vertex at infinity).
-    const auto& tri_face = faces[face_id];
+    const auto& tri_face = graph.face(face_id);
     auto tri_face_vertices = graph.adjacentTriangleVertices(tri_face.half_edges[0]);
     bool face_has_infinite_vertex = false;
     for (int v : tri_face_vertices)
@@ -335,7 +343,7 @@ static void validateCrossingData(const KineticDelaunay& kd, double t, const std:
           {
             size_t he_id = hull_edge_ids[best_idx];
             // The face associated with this boundary half-edge represents the infinite triangle region.
-            size_t inf_face = graph.getHalfEdges()[he_id].face;
+            size_t inf_face = graph.halfEdge(he_id).face;
             if (inf_face != invalid_id)
             {
               expected_face_by_geometry = inf_face;
@@ -450,8 +458,8 @@ struct CrossingDataTestHandler : public KineticDelaunay::EventCallback
     if (auto* crossing = dynamic_cast<KineticDelaunay::CrossingEvent*>(&e))
     {
       const auto& graph = kd.getGraph();
-      size_t old_tri = graph.getHalfEdges()[crossing->half_edge_id].face;
-      size_t new_tri = graph.getHalfEdges()[crossing->half_edge_id ^ 1].face;
+      size_t old_tri = graph.halfEdge(crossing->half_edge_id).face;
+      size_t new_tri = graph.halfEdge(crossing->half_edge_id ^ 1).face;
       std::string filename = "t" + std::to_string(crossing->occurrence_time) + "_crossing_data_after_crossing_v"
         + std::to_string(crossing->voronoi_vertex_id) + "_" + std::to_string(old_tri) + "_to_"
         + std::to_string(new_tri) + ".svg";
@@ -474,9 +482,8 @@ struct CrossingDataTestHandler : public KineticDelaunay::EventCallback
     const size_t index = section->section_id;
     std::string filename
       = "t" + std::to_string(index) + "_crossing_data_between_sections_" + std::to_string(index) + ".svg";
-    exportSvgBeforeAssertion(kd, static_cast<double>(index), filename);
     std::string ctx = "betweenSections(index=" + std::to_string(index) + ")";
-    validateCrossingData(kd, static_cast<double>(index), ctx);
+    exportSvgThenValidateCrossingData(kd, static_cast<double>(index), filename, ctx);
   }
 };
 
@@ -484,7 +491,7 @@ TEST_CASE("KineticDelaunay CrossingData consistency on demo data", "[KineticDela
 {
   enable_all_log_levels_for_test();
   KINDS_DEBUG("Debug test: Starting test");
-  KINDS_INFO("Info test: Starting test");
+  KINDS_DEBUG("Info test: Starting test");
 
   StrandTree tree = makeDemoStrandTree();
 
@@ -499,8 +506,8 @@ TEST_CASE("KineticDelaunay CrossingData consistency on demo data", "[KineticDela
 
   // Debug: dump initial CrossingData mapping voronoi_vertex_id -> containing triangle.
   const HalfEdgeDelaunayGraph& graph_after_init = kd.getGraph();
-  const size_t face_count_after_init = graph_after_init.getFaces().size();
-  for (size_t face_id = 0; face_id < face_count_after_init; ++face_id)
+  const size_t face_count_after_init = graph_after_init.faceSlotCount();
+  for (size_t face_id : graph_after_init.liveFaces())
   {
     std::vector<size_t> voronoi_vertices = kd.getCrossingDataVoronoiVerticesInTri(face_id);
     for (size_t voronoi_vertex_id : voronoi_vertices)
@@ -512,8 +519,7 @@ TEST_CASE("KineticDelaunay CrossingData consistency on demo data", "[KineticDela
   }
 
   // Export SVG and validate immediately after initialization at t = 0.
-  exportSvgBeforeAssertion(kd, 0.0, "t0_after_init.svg");
-  REQUIRE_NOTHROW(validateCrossingData(kd, 0.0, "after init"));
+  REQUIRE_NOTHROW(exportSvgThenValidateCrossingData(kd, 0.0, "t0_after_init.svg", "after init"));
 
   // The test passes if validateCrossingData never throws during the full evolution
   REQUIRE_NOTHROW(kd.compute());

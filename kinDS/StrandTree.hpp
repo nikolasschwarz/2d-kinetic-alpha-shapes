@@ -42,6 +42,9 @@ class StrandTree
 
   size_t getHeight() const;
 
+  /// Number of branches at @p height (section index).
+  size_t getBranchCount(size_t height) const;
+
   size_t addTrajectory(const std::vector<glm::dvec2>& traj);
 
   glm::dvec2 evaluate(size_t strand_id, double t) const;
@@ -52,9 +55,30 @@ class StrandTree
   glm::dvec3 getPointInObjectSpace(size_t strand_id, double t) const;
 
   glm::dvec3 transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const;
+  glm::dvec3 transformToObjectSpace(
+    glm::dvec3 v_3d, double t, const std::vector<size_t>& branch_indices_by_height) const;
+  /// Profile → object using a fixed input branch id at both floor(t) and ceil(t) transforms.
+  glm::dvec3 transformToObjectSpaceForBranch(glm::dvec3 v_3d, double t, size_t branch_id) const;
 
-  // TODO: also adjust to different reference frame
-  Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index) const;
+  /**
+   * Linear motion on [@p index, @p index + 1]: support points at those heights are each transformed into the
+   * @p reference_branch frame at the same height, then connected by a linear segment in the section parameter.
+   */
+  Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const;
+
+  /**
+   * Linear motion on [@p index, @p index + 1] with asymmetric frames: start height uses @p start_reference_branch,
+   * end height uses @p end_reference_branch (post-split common→native blend).
+   */
+  Trajectory<2> getPiecePolynomialBlendingReference(size_t strand_id, size_t index, size_t start_reference_branch,
+    size_t end_reference_branch) const;
+
+  /// Linear motion on [@p index, @p index + 1] in the strand's native profile support coordinates (no frame transform).
+  Trajectory<2> getLocalPiecePolynomial(size_t strand_id, size_t index) const;
+
+  /// Transform support at @p index into @p reference_branch's frame at @p branch_lookup_height.
+  glm::dvec2 getPointTransformedAtSection(
+    size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const;
 
   // getters with named indices
   const std::vector<glm::dvec2>& getSupportPoints(size_t strand_id) const { return support_points[strand_id]; }
@@ -68,7 +92,8 @@ class StrandTree
     return transforms_by_height_and_branch[height][branch_id];
   }
   const std::vector<size_t>& getBranchIndices(size_t strand_id) const { return branch_indices[strand_id]; }
-  size_t getBranchIndex(size_t strand_id, size_t height) const { return branch_indices[strand_id][height]; }
+  /** Input branch id at @p height; clamps @p height to the last entry when the strand ended earlier. */
+  size_t getBranchIndex(size_t strand_id, size_t height) const;
   const std::vector<std::vector<size_t>>& getStrandBranchesByHeight(size_t height) const
   {
     return strands_by_branch_id[height];
@@ -84,6 +109,11 @@ class StrandTree
   const std::vector<std::vector<int>>& getPhysicsStrandToSegmentIndices() const
   {
     return physics_strand_to_segment_indices;
+  }
+  std::vector<std::vector<int>>& getPhysicsStrandToSegmentIndices() { return physics_strand_to_segment_indices; }
+  void setPhysicsStrandToSegmentIndices(std::vector<std::vector<int>> indices)
+  {
+    physics_strand_to_segment_indices = std::move(indices);
   }
   const std::vector<std::vector<glm::dmat4>>& getTransformsByHeightAndBranch() const
   {
@@ -104,5 +134,17 @@ class StrandTree
 
  private:
   void computeNormalTransforms();
+
+  /**
+   * Preprocessing: snap every profile-to-world transform to a similarity (orthogonal * scalar). The source frames
+   * carry a small in-plane shear and length anisotropy between the two profile axes; left unconditioned this injects
+   * skew whenever points are projected between branch frames (see @ref PlaneProjector). Each transform's basis is
+   * replaced by the nearest orthogonal, equal-length frame while preserving the plane, the origin, and the branch's
+   * own scale.
+   */
+  void conditionProfileTransforms();
+
+  /** Valid branch id at @p height; if absent, parent from a strand in @p branch_id at @p branch_lookup_height. */
+  size_t resolveBranchAtHeight(size_t height, size_t branch_id, size_t branch_lookup_height) const;
 };
 }; // namespace kinDS

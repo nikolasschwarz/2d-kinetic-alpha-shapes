@@ -2,6 +2,7 @@
 #include "Logger.hpp"
 #include "MeshCGAL.hpp"
 #include "VoronoiMesh.hpp"
+#include <optional>
 
 #ifdef USE_CGAL
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
@@ -12,10 +13,12 @@
 #include <CGAL/Polygon_mesh_processing/corefinement.h> // for corefine_and_compute_intersection()
 #include <CGAL/Polygon_mesh_processing/measure.h> // optional area/volume utils
 #include <CGAL/Polygon_mesh_processing/orientation.h> // for orient_to_bound_a_volume()
-#include <CGAL/Polygon_mesh_processing/repair.h> // for merge_duplicate_vertices(), remove_isolated_vertices()
+#include <CGAL/Polygon_mesh_processing/repair.h> // for remove_isolated_vertices(), duplicate_non_manifold_vertices()
 #include <CGAL/Polygon_mesh_processing/repair_degeneracies.h> // for remove_degenerate_faces()
+#include <CGAL/Polygon_mesh_processing/self_intersections.h> // for does_self_intersect()
 #include <CGAL/Polygon_mesh_processing/stitch_borders.h> // for stitch_borders()
 #include <CGAL/Polygon_mesh_processing/triangulate_faces.h> // (optional) triangulate_face if needed
+#include <CGAL/Polygon_mesh_processing/triangulate_hole.h> // for triangulate_hole()
 #include <CGAL/Surface_mesh.h>
 #endif
 namespace kinDS
@@ -122,13 +125,40 @@ struct MatchResult
   double u, v, w; // barycentric
 };
 
+/// Optional UV remapping applied after boolean intersection (e.g. editor clipping).
+struct MeshIntersectionUvOptions
+{
+  /// When true, clip-face seam vertices take UVs from adjacent meshlet-origin corners (or meshlet surface match).
+  bool prefer_meshlet_uv_on_seam = false;
+  /// When true, clip-boundary-origin faces use interior-style (a,b,h) UVs; bark seam UVs are converted.
+  /// Interior clip vertices are filled by harmonic interpolation over seam-delimited boundary manifolds.
+  bool boundary_faces_use_interior_uv = false;
+  double texture_diameter = 0.9;
+  double uv_height_factor = 1.0;
+  double uv_circum_factor = 1.0;
+  double seam_epsilon = 1e-5;
+};
+
 class MeshIntersection
 {
  public:
+  /// True when the kinDS library was built with @c USE_CGAL (required for intersection).
+  [[nodiscard]] static bool IsCgalAvailable();
+
   MeshIntersection(const VoronoiMesh& static_mesh);
 
-  std::pair<VoronoiMesh, std::vector<int>> Intersect(
-    const VoronoiMesh& mesh, const std::vector<int>& neighbor_segments = {});
+  /**
+   * Intersect @p mesh with the boundary mesh, returning the portion of @p mesh inside the boundary.
+   *
+   * \param mesh Input mesh to clip.
+   * \param neighbor_segments Per-triangle neighbor segment indices for @p mesh.
+   * \param meshlet_index Optional meshlet index included in failure log messages.
+   * \param failed Optional out-flag set to true when intersection fails (non-manifold, self-intersecting, etc.).
+   * \param uv_options Optional UV remapping for seam / boundary-origin faces.
+   */
+  std::pair<VoronoiMesh, std::vector<int>> Intersect(const VoronoiMesh& mesh,
+    const std::vector<int>& neighbor_segments = {}, std::optional<size_t> meshlet_index = std::nullopt,
+    bool* failed = nullptr, const std::optional<MeshIntersectionUvOptions>& uv_options = std::nullopt);
 
   MatchResult MatchPointOnSurface(const glm::dvec3& p, double epsilon = 1e-6) const;
 
