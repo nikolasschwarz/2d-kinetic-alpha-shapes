@@ -142,6 +142,9 @@ struct MeshIntersectionUvOptions
 class MeshIntersection
 {
  public:
+  /// True when the kinDS library was built with @c USE_CGAL (required for intersection).
+  [[nodiscard]] static bool IsCgalAvailable();
+
   MeshIntersection(const VoronoiMesh& static_mesh);
 
   /**

@@ -391,6 +391,13 @@ void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesy
 
 TreeMesher::BoundaryTruncateResult TreeMesher::truncateToBoundary(const VoronoiMesh& boundary_mesh)
 {
+  if (!MeshIntersection::IsCgalAvailable())
+  {
+    KINDS_ERROR("CGAL is required for meshlet intersection (truncateToBoundary) but was not found. "
+                "Skipping all meshlets; install/link CGAL and rebuild kinDS with USE_CGAL.");
+    return {};
+  }
+
   // intersect all meshes with the boundary mesh and save the result
   // Build an AABB-tree of the boundary-mesh to prefilter
   kinDS::MeshIntersection boundary_intersector(boundary_mesh);

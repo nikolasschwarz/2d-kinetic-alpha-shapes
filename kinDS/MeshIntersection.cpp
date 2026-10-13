@@ -25,6 +25,15 @@
 
 using namespace kinDS;
 
+bool MeshIntersection::IsCgalAvailable()
+{
+#ifdef USE_CGAL
+  return true;
+#else
+  return false;
+#endif
+}
+
 namespace
 {
 #ifdef USE_CGAL
@@ -450,9 +459,9 @@ kinDS::MeshIntersection::MeshIntersection(const VoronoiMesh& static_mesh)
   tree.accelerate_distance_queries();
 }
 #else
-kinDS::MeshIntersection::MeshIntersection(const VoronoiMesh& static_mesh)
+kinDS::MeshIntersection::MeshIntersection(const VoronoiMesh& /*static_mesh*/)
 {
-  KINDS_ERROR("CGAL was not found, acceleration data structure could not be constructed!");
+  // Logged once by TreeMesher::truncateToBoundary / callers via IsCgalAvailable(); avoid spam here.
 }
 #endif
 
@@ -1200,6 +1209,8 @@ std::pair<VoronoiMesh, std::vector<int>> MeshIntersection::Intersect(const Voron
       mesh, meshlet_matcher.value(), meshlet_profile_centroid.value(), neighbor_segments);
   }
 #else
+  // Prefer TreeMesher::truncateToBoundary / MeshIntersection::IsCgalAvailable() to fail once up front.
+  // Keep a single failure flag here if this path is still reached.
   mark_failed(
     "CGAL is required for the intersection computation but was not found. Returning empty intersection mesh.");
 #endif
@@ -1266,7 +1277,7 @@ kinDS::MeshIntersection::MeshRelation kinDS::MeshIntersection::ClassifyMeshRelat
     return MeshRelation::INSIDE;
   return MeshRelation::OUTSIDE;
 #else
-  KINDS_ERROR("CGAL was not found, cannot determine mesh relation!");
+  // Prefer TreeMesher::truncateToBoundary / MeshIntersection::IsCgalAvailable() to fail once up front.
   return MeshRelation::UNDEFINED;
 #endif
 }

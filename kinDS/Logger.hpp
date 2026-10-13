@@ -8,6 +8,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -58,6 +59,7 @@ class Logger
   LogLevel log_level = LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
   ofstream log_file; // File stream for the log file (optional)
   bool console_enabled_ = true;
+  mutable std::mutex mutex_;
 
  public:
   // Default constructor: no log file
@@ -69,6 +71,7 @@ class Logger
   // Destructor: Closes the log file if open
   ~Logger()
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (log_file.is_open())
     {
       log_file.close();
@@ -78,6 +81,7 @@ class Logger
   // Set or change the log file path. Returns true if the file is open for writing.
   bool setLogFile(const string& filename)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     // Close existing file if open
     if (log_file.is_open())
     {
@@ -100,40 +104,62 @@ class Logger
   }
 
   /// When false, @ref log writes only to the log file (if open), not stdout.
-  void setConsoleEnabled(bool enabled) { console_enabled_ = enabled; }
+  void setConsoleEnabled(bool enabled)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    console_enabled_ = enabled;
+  }
 
-  bool getConsoleEnabled() const { return console_enabled_; }
+  bool getConsoleEnabled() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return console_enabled_;
+  }
 
   // Explicitly set the full log level bitmask (overwrites existing mask).
-  void setLogLevelMask(LogLevel mask) { log_level = mask; }
-
-  void setLogLevel(LogLevel log_level, bool set = true)
+  void setLogLevelMask(LogLevel mask)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
+    log_level = mask;
+  }
+
+  void setLogLevel(LogLevel level, bool set = true)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (set)
     {
-      this->log_level |= log_level;
+      log_level |= level;
     }
     else
     {
-      log_level = ~log_level;
-      this->log_level &= log_level;
+      log_level &= ~level;
     }
   }
 
-  LogLevel getLogLevel() const { return log_level; }
+  LogLevel getLogLevel() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return log_level;
+  }
 
   // Logs a message with a given log level
   void log(LogLevel level, const string& message)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!static_cast<unsigned>(log_level & level))
     {
       return; // Log level not enabled
     }
-    // Get current timestamp
-    time_t now = time(0);
-    tm* timeinfo = localtime(&now);
+    // Get current timestamp (thread-safe)
+    time_t now = time(nullptr);
+    tm timeinfo{};
+#ifdef _WIN32
+    localtime_s(&timeinfo, &now);
+#else
+    localtime_r(&now, &timeinfo);
+#endif
     char timestamp[20];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
     // Create log entry
     ostringstream logEntry;
@@ -157,11 +183,14 @@ class Logger
 
   void log(LogLevel level, const char* fmt, ...)
   {
-
-    if (!static_cast<unsigned>(log_level & level))
     {
-      return; // Log level not enabled
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!static_cast<unsigned>(log_level & level))
+      {
+        return; // Log level not enabled
+      }
     }
+
     va_list args;
     va_start(args, fmt);
 
@@ -175,13 +204,14 @@ class Logger
     {
       va_end(args);
       log(level, std::string("formatting error in log"));
+      return;
     }
 
-    std::vector<char> buffer(size + 1);
+    std::vector<char> buffer(static_cast<size_t>(size) + 1);
     std::vsnprintf(buffer.data(), buffer.size(), fmt, args);
     va_end(args);
 
-    std::string log_string(buffer.data(), size);
+    std::string log_string(buffer.data(), static_cast<size_t>(size));
     log(level, log_string);
   }
 
