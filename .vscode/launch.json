@@ -62,7 +62,8 @@
         "--log-add",
         "monitor",
         "--cutoff",
-        "3"
+        "3",
+        "--parallelize-branches"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -92,7 +93,8 @@
         "--log-add",
         "monitor",
         "--cutoff",
-        "3"
+        "3",
+        "--parallelize-branches"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",
@@ -118,7 +120,8 @@
         "--validate",
         "--section-shading",
         "--cutoff",
-        "3"
+        "3",
+        "--parallelize-branches"
       ],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

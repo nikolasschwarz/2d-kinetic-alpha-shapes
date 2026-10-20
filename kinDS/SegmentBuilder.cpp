@@ -1074,36 +1074,6 @@ void setMeshVertexUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec3& u
   }
 }
 
-struct AdjustedBoundaryTriangleUvs
-{
-  glm::dvec3 u {};
-  glm::dvec3 v {};
-  glm::dvec3 w {};
-};
-
-AdjustedBoundaryTriangleUvs adjustedBoundaryTriangleUvs(const glm::dvec2& raw_u, const glm::dvec2& raw_v,
-  const glm::dvec2& raw_w, double uv_circum_factor, double uv_height_factor)
-{
-  AdjustedBoundaryTriangleUvs adjusted;
-  adjusted.u = glm::dvec3(raw_u.x, raw_u.y, 0.0);
-  adjusted.v = glm::dvec3(raw_v.x, raw_v.y, 0.0);
-  adjusted.w = glm::dvec3(raw_w.x, raw_w.y, 0.0);
-
-  const double base_angle = adjusted.u.x;
-  double& angle_v = adjusted.v.x;
-  angle_v -= std::round(angle_v - base_angle);
-  double& angle_w = adjusted.w.x;
-  angle_w -= std::round(angle_w - base_angle);
-
-  adjusted.u.x *= uv_circum_factor;
-  adjusted.v.x *= uv_circum_factor;
-  adjusted.w.x *= uv_circum_factor;
-  adjusted.u.y *= uv_height_factor;
-  adjusted.v.y *= uv_height_factor;
-  adjusted.w.y *= uv_height_factor;
-  return adjusted;
-}
-
 bool vertexPositionFinite(const glm::dvec3& p)
 {
   return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
@@ -2628,7 +2598,7 @@ SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, std::vector<std::pair<s
   , separation_callback_(std::make_unique<SegmentBuilderSeparationCallback>(*this))
   , visual_debug(visual_debug)
   , create_transformed_mesh(create_transformed_mesh)
-  , boundary_mesh({ "bark", "interior" })
+  , boundary_mesh_({ "bark", "interior" })
 {
   if (!this->parallel_for)
   {
@@ -2657,7 +2627,7 @@ SegmentBuilder::SegmentBuilder(KineticDelaunay& kin_del, bool create_transformed
   , separation_callback_(std::make_unique<SegmentBuilderSeparationCallback>(*this))
   , visual_debug(visual_debug)
   , create_transformed_mesh(create_transformed_mesh)
-  , boundary_mesh({ "bark", "interior" })
+  , boundary_mesh_({ "bark", "interior" })
 {
   if (!this->parallel_for)
   {
@@ -6052,22 +6022,8 @@ void SegmentBuilder::invalidateStaleAlphaBoundaryMeshLinksOnEvenHalfEdge(size_t 
   const size_t odd_half_edge_id = even_half_edge_id ^ 1;
   clearIntersectionMeshPairLinksOnDelaunayEdge(even_half_edge_id / 2);
 
-  if (even_half_edge_id < boundary_mesh_last_left_and_right_vertex.size())
-  {
-    boundary_mesh_last_left_and_right_vertex[even_half_edge_id] = std::make_pair(-1, -1);
-  }
-  if (odd_half_edge_id < boundary_mesh_last_left_and_right_vertex.size())
-  {
-    boundary_mesh_last_left_and_right_vertex[odd_half_edge_id] = std::make_pair(-1, -1);
-  }
-  if (even_half_edge_id < half_edge_to_boundary_vertex_index.size())
-  {
-    half_edge_to_boundary_vertex_index[even_half_edge_id] = -1;
-  }
-  if (odd_half_edge_id < half_edge_to_boundary_vertex_index.size())
-  {
-    half_edge_to_boundary_vertex_index[odd_half_edge_id] = -1;
-  }
+  boundary_mesh_.clearHalfEdge(even_half_edge_id);
+  boundary_mesh_.clearHalfEdge(odd_half_edge_id);
 }
 
 void SegmentBuilder::invalidateStaleAlphaBoundaryMeshLinksOnTriangleEdgesLeftBoundary(
@@ -6338,70 +6294,14 @@ size_t kinDS::SegmentBuilder::registerBarkOnlyMeshlet(VoronoiMesh&& mesh, std::s
 
 void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right, double t)
 {
-  const std::string face_metadata = composeBoundaryMeshFaceMetadata(t, "boundary_section", he_id);
-  const auto& last_left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
-  if (last_left_and_right.first != -1)
-  {
-    // distinguish the case that we have previously flipped an infinite edge that became a boundary edge
-    if (half_edge_to_boundary_vertex_index[he_id] == -1)
-    {
-      // no edge flip
-      addBoundaryTriangle(last_left_and_right.first, new_right, new_left, face_metadata);
-      if (last_left_and_right.second != -1)
-      {
-        addBoundaryTriangle(last_left_and_right.second, new_right, last_left_and_right.first, face_metadata);
-      }
-    }
-    else
-    {
-      assert(last_left_and_right.second != -1);
-      // he_id was previously flipped, it's corresponding vertex is no longer part of the boundary
-      addBoundaryTriangle(
-        last_left_and_right.second, new_right, half_edge_to_boundary_vertex_index[he_id], face_metadata);
-      addBoundaryTriangle(
-        new_left, last_left_and_right.first, half_edge_to_boundary_vertex_index[he_id], face_metadata);
-      addBoundaryTriangle(new_left, half_edge_to_boundary_vertex_index[he_id], new_right, face_metadata);
-
-      // reset the half-edge to boundary vertex index
-      half_edge_to_boundary_vertex_index[he_id] = -1;
-    }
-  }
-  else
-  {
-    // assert(last_left_and_right.second == -1);
-  }
+  boundary_mesh_.completeSection(he_id, new_left, new_right,
+    composeBoundaryMeshFaceMetadata(t, "boundary_section", he_id), uv_circum_factor, uv_height_factor);
 }
 
 size_t kinDS::SegmentBuilder::addBoundaryTriangle(
   size_t u, size_t v, size_t w, const std::string& metadata, int material_id)
 {
-  // check bounds
-  if (u >= boundary_mesh.getVertexCount() || v >= boundary_mesh.getVertexCount() || w >= boundary_mesh.getVertexCount())
-  {
-    KINDS_ERROR("Vertex index " + std::to_string(u) + ", " + std::to_string(v) + ", " + std::to_string(w)
-      + " out of boundary mesh range.");
-    return -1;
-  }
-
-  if (u >= boundary_mesh_raw_uvs.size() || v >= boundary_mesh_raw_uvs.size() || w >= boundary_mesh_raw_uvs.size())
-  {
-    KINDS_ERROR("Vertex index " + std::to_string(u) + ", " + std::to_string(v) + ", " + std::to_string(w)
-      + " out of raw uv range.");
-    return -1;
-  }
-
-  const AdjustedBoundaryTriangleUvs adjusted = adjustedBoundaryTriangleUvs(
-    boundary_mesh_raw_uvs[u], boundary_mesh_raw_uvs[v], boundary_mesh_raw_uvs[w], uv_circum_factor, uv_height_factor);
-
-  size_t uv_index_u = boundary_mesh.addUV(adjusted.u);
-  size_t uv_index_v = boundary_mesh.addUV(adjusted.v);
-  size_t uv_index_w = boundary_mesh.addUV(adjusted.w);
-
-  /*KINDS_DEBUG("UVs after adjustment: u(" + std::to_string(uv_u[0]) + ", " + std::to_string(uv_u[1]) + "), v(" +
-                std::to_string(uv_v[0]) + ", " + std::to_string(uv_v[1]) + "), w(" + std::to_string(uv_w[0]) + ", " +
-                std::to_string(uv_w[1]) + ")");*/
-  // warnIfTriangleKineticTimesNotInUnitSection(u, v, w, boundary_mesh.getVertices(), "boundary_mesh", 0);
-  return boundary_mesh.addTriangle(u, v, w, uv_index_u, uv_index_v, uv_index_w, material_id, metadata);
+  return boundary_mesh_.addTriangle(u, v, w, metadata, material_id, uv_circum_factor, uv_height_factor);
 }
 
 size_t kinDS::SegmentBuilder::addBoundaryIntervalTriangle(
@@ -6626,7 +6526,7 @@ void SegmentBuilder::applyMeshVirtualShiftToProfileVertex(
 void SegmentBuilder::applyUntransformedMeshViewTransform()
 {
   const glm::dmat4 transform = VoronoiMesh::profileSpaceSwapYAndZTransform();
-  boundary_mesh.applyTransform(transform);
+  boundary_mesh_.applyTransform(transform);
   for (VoronoiMesh& mesh : meshes)
   {
     mesh.applyTransform(transform);
@@ -6685,12 +6585,7 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(
       .build();
   }()
                                                    : std::string {};
-  size_t index = boundary_mesh.addVertex(vertex, metadata);
-  boundary_vertex_to_strand_id.push_back(strand_id);
-  boundary_mesh_raw_uvs.resize(index + 1, glm::dvec2 {});
-  boundary_mesh_raw_uvs[index] = raw_uv;
-
-  return index;
+  return boundary_mesh_.addVertex(vertex, strand_id, raw_uv, metadata);
 }
 
 size_t kinDS::SegmentBuilder::addMeshletTriangle(
@@ -6840,6 +6735,19 @@ glm::dvec3 SegmentBuilder::transformFromInputBranchToObjectSpace(glm::dvec3 vert
   {
     throw std::runtime_error("transformFromInputBranchToObjectSpace: invalid strand id.");
   }
+  if (!kin_del.strandHasProfileAt(strand_id, t))
+  {
+    const size_t samples = strand_id < kin_del.getStrandTree().getBranchIndices().size()
+      ? kin_del.getStrandTree().getBranchIndices()[strand_id].size()
+      : 0;
+    throw std::out_of_range(
+      "transformFromInputBranchToObjectSpace: strand " + std::to_string(strand_id) + " has "
+      + std::to_string(samples) + " profile samples; t=" + std::to_string(t) + " needs height "
+      + std::to_string(static_cast<size_t>(std::ceil(t))) + " input_branch="
+      + (samples == 0
+          ? std::string("none")
+          : std::to_string(kin_del.getStrandTree().getBranchIndex(strand_id, static_cast<size_t>(std::ceil(t))))));
+  }
 
   return kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
 }
@@ -6887,20 +6795,11 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlan
   const size_t other_branch = (shared_ref == branch_a) ? branch_b : branch_a;
 
   const auto& tree = kin_del.getStrandTree();
-  const auto& transforms = tree.getTransformsByHeightAndBranch();
-  if (transforms.empty())
-  {
-    return entry;
-  }
-
-  const size_t section = static_cast<size_t>(std::floor(std::max(0.0, t)));
-  const size_t height = std::min(section, transforms.size() - 1);
-  if (shared_ref >= transforms[height].size() || other_branch >= transforms[height].size())
-  {
-    return entry;
-  }
-
-  const PlaneProjector projector(transforms[height][shared_ref], transforms[height][other_branch]);
+  const size_t height = static_cast<size_t>(std::floor(std::max(0.0, t)));
+  const size_t lookup_height = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+  const PlaneProjector projector(
+    tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height),
+    tree.getResolvedTransformByHeightAndBranch(height, other_branch, lookup_height));
   if (projector.isParallel())
   {
     return entry;
@@ -7047,18 +6946,13 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
         if (majority_branch != shared_ref)
         {
           const auto& tree = kin_del.getStrandTree();
-          const auto& transforms = tree.getTransformsByHeightAndBranch();
-          if (!transforms.empty())
-          {
-            const size_t section = static_cast<size_t>(std::floor(std::max(0.0, t)));
-            const size_t height = std::min(section, transforms.size() - 1);
-            if (shared_ref < transforms[height].size() && majority_branch < transforms[height].size())
-            {
-              const PlaneProjector shared_to_majority(
-                transforms[height][shared_ref], transforms[height][majority_branch]);
-              local_on_majority = shared_to_majority.project(shared_xy);
-            }
-          }
+          const size_t height = static_cast<size_t>(std::floor(std::max(0.0, t)));
+          const size_t lookup_height
+            = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+          const PlaneProjector shared_to_majority(
+            tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height),
+            tree.getResolvedTransformByHeightAndBranch(height, majority_branch, lookup_height));
+          local_on_majority = shared_to_majority.project(shared_xy);
         }
 
         return kin_del.getStrandTree().transformToObjectSpaceForBranch(
@@ -7068,6 +6962,17 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
   }
 
   // Object-space mesh: local profile → object space (also without separation).
+  if (!kin_del.strandHasProfileAt(strand_id, t))
+  {
+    const size_t samples = kin_del.getStrandTree().getBranchIndices()[strand_id].size();
+    throw std::out_of_range(
+      "getPointInMeshSpace: strand " + std::to_string(strand_id) + " has " + std::to_string(samples)
+      + " profile samples; t=" + std::to_string(t) + " needs height "
+      + std::to_string(static_cast<size_t>(std::ceil(t))) + " input_branch="
+      + (samples == 0
+          ? std::string("none")
+          : std::to_string(kin_del.getStrandTree().getBranchIndex(strand_id, static_cast<size_t>(std::ceil(t))))));
+  }
   const glm::dvec2 local_xy = kin_del.getStrandTree().evaluate(strand_id, t);
   return transformFromInputBranchToObjectSpace(glm::dvec3(local_xy.x, local_xy.y, t), strand_id, t);
 }
@@ -8248,6 +8153,7 @@ void SegmentBuilder::collapseDegreeTwoFlexibleVerticesOnIntersectionMeshes()
 void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
   double t, size_t input_branch_id, bool invert_orientation, double offset)
 {
+  boundary_mesh_.withLock([&] {
   auto& graph = kin_del.getGraph();
   const size_t section = static_cast<size_t>(t);
   const auto& branch_strands = kin_del.getStrandTree().getStrandsByBranch(section, input_branch_id);
@@ -8260,7 +8166,7 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
   size_t skip_no_mesh_vertex = 0;
   size_t skip_outside_face = 0;
   size_t triangles_added = 0;
-  const size_t boundary_tris_before = diagnostics ? boundary_mesh.getTriangleCount() : 0;
+  const size_t boundary_tris_before = diagnostics ? boundary_mesh_.triangleCount() : 0;
 
   std::vector<int> strand_to_mesh_vertex(graph.getVertexCount(), -1);
 
@@ -8348,8 +8254,6 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
       {
         completeBoundaryMeshSection(
           he_ids[i], static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex), t);
-        boundary_mesh_last_left_and_right_vertex[he_ids[i]]
-          = std::make_pair(static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex));
       }
     }
 
@@ -8393,7 +8297,7 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
         << " skip_not_in_branch=" << skip_not_in_branch << " skip_no_mesh_vertex=" << skip_no_mesh_vertex
         << " skip_outside_face=" << skip_outside_face << " triangles_added=" << triangles_added
         << " boundary_tris_before=" << boundary_tris_before
-        << " boundary_tris_after=" << boundary_mesh.getTriangleCount();
+        << " boundary_tris_after=" << boundary_mesh_.triangleCount();
     strandInitDiagnosticLogLine("boundary_mesh_summary",
       branch_contains_strand_0   ? 0
         : branch_strands.empty() ? 0
@@ -8405,6 +8309,7 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
         "boundary_mesh_strand0_missing", 0, t, "strand 0 is in branch but no boundary mesh vertex was added");
     }
   }
+  });
 }
 
 std::vector<BoundaryPoint> kinDS::SegmentBuilder::traceConvexHull(double t) const
@@ -8416,39 +8321,37 @@ std::vector<BoundaryPoint> kinDS::SegmentBuilder::traceConvexHull(double t) cons
   {
     size_t he_id = *it;
     size_t strand_index = graph.halfEdge(he_id).origin;
-
     glm::dvec2 convex_hull_point = kin_del.getPointAt(t, strand_index, false, false);
     convex_hull_points.push_back({ strand_index, he_id, convex_hull_point });
   }
-
   return convex_hull_points;
 }
 
 void kinDS::SegmentBuilder::advanceBoundaryMesh(
   double t, const std::vector<BoundaryPoint>& boundary_points, const glm::dvec2& centroid)
 {
-  std::vector<size_t> new_vertex_indices;
-
-  for (size_t i = 0; i < boundary_points.size(); i++)
+  for (const auto& point : boundary_points)
   {
-    glm::dvec2 boundary_point = boundary_points[i].p;
-
-    new_vertex_indices.push_back(addBoundaryVertex(
-      glm::dvec3 { boundary_point[0], boundary_point[1], t }, centroid, boundary_points[i].vertex_id, t, false));
+    if (!kin_del.isDummyBoundary(point.vertex_id) && !kin_del.strandHasProfileAt(point.vertex_id, t))
+    {
+      return;
+    }
   }
-
-  for (size_t i = 0; i < boundary_points.size(); i++)
-  {
-    size_t he_id = boundary_points[i].he_id;
-    size_t left_vertex_index = new_vertex_indices[i];
-    size_t right_vertex_index = new_vertex_indices[(i + 1) % boundary_points.size()];
-    auto& left_and_right = boundary_mesh_last_left_and_right_vertex[he_id];
-    completeBoundaryMeshSection(he_id, left_vertex_index, right_vertex_index, t);
-
-    // KINDS_DEBUG("Assigning boundary last vertices for he_id " << he_id);
-    left_and_right.first = left_vertex_index;
-    left_and_right.second = right_vertex_index;
-  }
+  boundary_mesh_.withLock([&] {
+    std::vector<size_t> new_vertex_indices;
+    new_vertex_indices.reserve(boundary_points.size());
+    for (size_t i = 0; i < boundary_points.size(); i++)
+    {
+      const glm::dvec2 boundary_point = boundary_points[i].p;
+      new_vertex_indices.push_back(addBoundaryVertex(
+        glm::dvec3 { boundary_point[0], boundary_point[1], t }, centroid, boundary_points[i].vertex_id, t, false));
+    }
+    for (size_t i = 0; i < boundary_points.size(); i++)
+    {
+      completeBoundaryMeshSection(boundary_points[i].he_id, new_vertex_indices[i],
+        new_vertex_indices[(i + 1) % boundary_points.size()], t);
+    }
+  });
 }
 
 bool kinDS::SegmentBuilder::isComponentLive(size_t component_index) const
@@ -8524,10 +8427,58 @@ void kinDS::SegmentBuilder::updateBoundaries(
   double t, const std::vector<size_t>& component_indices, bool force)
 {
   std::vector<bool> visited(kin_del.getGraph().halfEdgeSlotCount(), false);
-
   for (size_t component_index : component_indices)
   {
     updateBoundary(t, visited, component_index, force);
+  }
+}
+
+void kinDS::SegmentBuilder::advanceBoundaryMeshes(double t, size_t runtime_branch_id)
+{
+  std::vector<size_t> component_indices;
+  for (size_t component_index : collectLiveComponentIndices())
+  {
+    if (runtime_branch_id != BranchScheduler::no_branch)
+    {
+      bool owned = false;
+      for (size_t strand_id : kin_del.component_data.components[component_index])
+      {
+        if (kin_del.unsplitRuntimeBranchForStrand(strand_id) == runtime_branch_id)
+        {
+          owned = true;
+          break;
+        }
+      }
+      if (!owned)
+      {
+        continue;
+      }
+    }
+    bool any_profile = false;
+    for (size_t strand_id : kin_del.component_data.components[component_index])
+    {
+      if (!kin_del.isDummyBoundary(strand_id) && kin_del.strandHasProfileAt(strand_id, t))
+      {
+        any_profile = true;
+        break;
+      }
+    }
+    if (!any_profile)
+    {
+      continue;
+    }
+    component_indices.push_back(component_index);
+  }
+
+  updateBoundaries(t, component_indices);
+  for (size_t component_index : component_indices)
+  {
+    auto& boundaries = kin_del.component_data.component_boundaries[component_index];
+    auto& centroid = kin_del.component_data.component_centroids[component_index];
+    for (auto& boundary_points : boundaries)
+    {
+      advanceBoundaryMesh(t, boundary_points, centroid);
+    }
   }
 }
 
@@ -8536,23 +8487,6 @@ void kinDS::SegmentBuilder::refreshComponentBoundariesAfterGraphTopologyChange(d
   // Must force: splitComponent often already stamped component_last_updated at this same real time
   // (pre-cut hull). After the cut the alpha-shape boundary changes and bark UV centroids must follow.
   updateBoundaries(t, collectLiveComponentIndices(), /*force=*/true);
-}
-
-void kinDS::SegmentBuilder::advanceBoundaryMeshes(double t)
-{
-  const std::vector<size_t> live_component_indices = collectLiveComponentIndices();
-  updateBoundaries(t, live_component_indices);
-
-  for (size_t component_index : live_component_indices)
-  {
-    auto& boundaries = kin_del.component_data.component_boundaries[component_index];
-    auto& centroid = kin_del.component_data.component_centroids[component_index];
-
-    for (auto& boundary_points : boundaries)
-    {
-      advanceBoundaryMesh(t, boundary_points, centroid);
-    }
-  }
 }
 
 std::vector<glm::dvec3> SegmentBuilder::computeClampedVoronoiVertices(
@@ -8773,15 +8707,7 @@ void kinDS::SegmentBuilder::growGraphSlotArrays()
   {
     corner_to_cutoff_mesh_indices.resize(he_slots, -1);
   }
-  if (boundary_mesh_last_left_and_right_vertex.size() < he_slots)
-  {
-    boundary_mesh_last_left_and_right_vertex.resize(
-      he_slots, std::make_pair(static_cast<size_t>(-1), static_cast<size_t>(-1)));
-  }
-  if (half_edge_to_boundary_vertex_index.size() < he_slots)
-  {
-    half_edge_to_boundary_vertex_index.resize(he_slots, -1);
-  }
+  boundary_mesh_.ensureHalfEdgeSlots(he_slots);
 }
 
 void kinDS::SegmentBuilder::clearDeadHalfEdgeState()
@@ -8802,15 +8728,7 @@ void kinDS::SegmentBuilder::clearDeadHalfEdgeState()
     {
       corner_to_cutoff_mesh_indices[he_id] = -1;
     }
-    if (he_id < boundary_mesh_last_left_and_right_vertex.size())
-    {
-      boundary_mesh_last_left_and_right_vertex[he_id]
-        = std::make_pair(static_cast<size_t>(-1), static_cast<size_t>(-1));
-    }
-    if (he_id < half_edge_to_boundary_vertex_index.size())
-    {
-      half_edge_to_boundary_vertex_index[he_id] = -1;
-    }
+    boundary_mesh_.clearHalfEdge(he_id);
   }
 }
 
@@ -10653,9 +10571,72 @@ void SegmentBuilder::maybeInduceSplitsAtSection(double t)
   }
 }
 
+size_t SegmentBuilder::expectedSegmentCountForStrand(const StrandTree& tree, size_t strand_id)
+{
+  const auto& physics = tree.getPhysicsStrandToSegmentIndices();
+  if (strand_id < physics.size() && !physics[strand_id].empty())
+  {
+    return physics[strand_id].size();
+  }
+  const auto& subdivs = tree.getSubdivisionsByStrand();
+  if (strand_id < subdivs.size())
+  {
+    return 1 + subdivs[strand_id].size();
+  }
+  return 1;
+}
+
+void SegmentBuilder::buildStableSegmentIdTable()
+{
+  const StrandTree& tree = kin_del.getStrandTree();
+  const size_t strand_count = tree.getPoints().size();
+  stable_segment_ids_by_strand_.assign(strand_count, {});
+  size_t next_id = 0;
+  for (size_t strand_id = 0; strand_id < strand_count; ++strand_id)
+  {
+    const size_t count = expectedSegmentCountForStrand(tree, strand_id);
+    stable_segment_ids_by_strand_[strand_id].resize(count);
+    for (size_t ordinal = 0; ordinal < count; ++ordinal)
+    {
+      stable_segment_ids_by_strand_[strand_id][ordinal] = next_id++;
+    }
+  }
+  segment_properties.assign(next_id, MeshStructure::SegmentProperties {});
+  segment_runtime_branch_.assign(next_id, KineticDelaunay::RuntimeBranchData::no_branch);
+  segment_slot_created_.assign(next_id, false);
+}
+
+size_t SegmentBuilder::allocateStableSegmentForStrand(size_t strand_id)
+{
+  if (stable_segment_ids_by_strand_.empty())
+  {
+    buildStableSegmentIdTable();
+  }
+  if (strand_id >= strand_to_segment_indices.size())
+  {
+    strand_to_segment_indices.resize(strand_id + 1);
+  }
+  if (strand_id >= stable_segment_ids_by_strand_.size())
+  {
+    throw std::runtime_error("allocateStableSegmentForStrand: strand_id out of range");
+  }
+  const size_t ordinal = strand_to_segment_indices[strand_id].size();
+  if (ordinal >= stable_segment_ids_by_strand_[strand_id].size())
+  {
+    throw std::runtime_error("allocateStableSegmentForStrand: ordinal exceeds precomputed segment count");
+  }
+  const size_t segment_id = stable_segment_ids_by_strand_[strand_id][ordinal];
+  if (segment_id >= segment_properties.size())
+  {
+    throw std::runtime_error("allocateStableSegmentForStrand: segment id exceeds table");
+  }
+  strand_to_segment_indices[strand_id].push_back(segment_id);
+  return segment_id;
+}
+
 void SegmentBuilder::init()
 {
-  configureMeshletStorage(boundary_mesh);
+  boundary_mesh_.setStoreMetadata(store_mesh_metadata);
 
   kin_del.registerEventCallbacks(
     section_callback_.get(), flip_callback_.get(), radius_callback_.get(), crossing_callback_.get());
@@ -10665,7 +10646,8 @@ void SegmentBuilder::init()
   auto& graph = kin_del.getGraph();
 
   size_t strand_count = graph.getVertexCount();
-  strand_to_segment_indices.resize(strand_count);
+  strand_to_segment_indices.assign(strand_count, {});
+  buildStableSegmentIdTable();
   half_edge_index_to_segment_mesh_pair_index.resize(graph.halfEdgeSlotCount(), -1);
   corner_to_cutoff_mesh_indices.resize(graph.halfEdgeSlotCount(), -1);
 
@@ -10685,11 +10667,7 @@ void SegmentBuilder::init()
       continue;
     }
 
-    size_t new_segment_id = segment_properties.size();
-    MeshStructure::SegmentProperties properties;
-    segment_properties.push_back(properties);
-    segment_runtime_branch_.push_back(KineticDelaunay::RuntimeBranchData::no_branch);
-    strand_to_segment_indices[strand_id].push_back(new_segment_id);
+    size_t new_segment_id = allocateStableSegmentForStrand(strand_id);
 
     size_t component_index = kin_del.component_data.component_map[strand_id];
     const auto& component = kin_del.component_data.components[component_index];
@@ -10709,15 +10687,15 @@ void SegmentBuilder::init()
     {
       // create a closing mesh
       size_t closing_mesh_index = createClosingMesh(strand_id, t, boundary_polygon, centroid);
-      MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[new_segment_id];
+      MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_mesh_pairs[closing_mesh_index];
       segment_mesh_pair.segment_index0 = -1;
       segment_mesh_pair.segment_index1 = strand_to_segment_indices[strand_id].back();
 
       if (diagnostics)
       {
         std::ostringstream oss;
-        oss << "closing_meshlet_index=" << closing_mesh_index << " mesh_pair_slot=" << new_segment_id
-            << " segment_index1=" << segment_mesh_pair.segment_index1;
+        oss << "closing_meshlet_index=" << closing_mesh_index << " mesh_pair_slot=" << closing_mesh_index
+            << " segment_id=" << new_segment_id << " segment_index1=" << segment_mesh_pair.segment_index1;
         if (closing_mesh_index < meshes.size())
         {
           oss << " cap_verts=" << meshes[closing_mesh_index].getVertexCount()
@@ -10782,9 +10760,7 @@ void SegmentBuilder::init()
     }
   }
 
-  // initialize boundary mesh
-  boundary_mesh_last_left_and_right_vertex.resize(half_edge_count, std::make_pair(-1, -1));
-  half_edge_to_boundary_vertex_index.resize(half_edge_count, -1);
+  boundary_mesh_.resetHalfEdgeSlots(half_edge_count);
   const size_t init_section = static_cast<size_t>(t);
   const auto& branches_at_section = kin_del.getStrandTree().getStrandBranchesByHeight(init_section);
   for (size_t input_branch_id = 0; input_branch_id < branches_at_section.size(); ++input_branch_id)
@@ -10994,7 +10970,6 @@ void SegmentBuilder::finalize(double t)
     degenerate_triangles_removed += meshlet.removeDegenerateTriangles();
   }
 
-  // compute normals
   for (auto& meshlet : meshes)
   {
     meshlet.ensureFaceMetadataSize();
@@ -11008,29 +10983,10 @@ void SegmentBuilder::finalize(double t)
     meshlet.validateUVLayout("finalized intersection meshlet");
   }
 
-  auto remap1 = boundary_mesh.mergeDuplicateVertices();
-  degenerate_triangles_removed += boundary_mesh.removeDegenerateTriangles();
-  auto remap2 = boundary_mesh.removeIsolatedVertices();
-  boundary_mesh.ensureFaceMetadataSize();
-  boundary_mesh.computeNormals(NormalMode::PerTriangleCorner);
-  boundary_mesh.validateUVLayout("finalized boundary mesh");
+  degenerate_triangles_removed += boundary_mesh_.finalize();
 
   KINDS_INFO("finalize: removed " << degenerate_triangles_removed
                                   << " degenerate triangle(s) across interior, intersection, and boundary meshes");
-
-  // Update boundary vertex to strand id mapping
-  std::vector<size_t> new_boundary_vertex_to_strand_id;
-  new_boundary_vertex_to_strand_id.resize(boundary_mesh.getVertices().size());
-  for (size_t old_index = 0; old_index < boundary_vertex_to_strand_id.size(); ++old_index)
-  {
-    size_t new_index = remap2[remap1[old_index]];
-    if (new_index != size_t(-1))
-    {
-      new_boundary_vertex_to_strand_id[new_index] = boundary_vertex_to_strand_id[old_index];
-    }
-  }
-
-  boundary_vertex_to_strand_id.swap(new_boundary_vertex_to_strand_id);
 
   if (store_mesh_metadata && validate_mesh_vertex_sources)
   {
@@ -11056,7 +11012,7 @@ void SegmentBuilder::finalize(double t)
       bark_meshlet_ptrs.push_back(&intersection_meshes[mesh_index]);
       bark_labels.push_back("intersection_mesh_" + std::to_string(mesh_index));
     }
-    bark_meshlet_ptrs.push_back(&boundary_mesh);
+    bark_meshlet_ptrs.push_back(&boundary_mesh_.mesh());
     bark_labels.push_back("boundary_mesh");
     Validator::validateAndReportBarkMeshletUvHeights(
       bark_meshlet_ptrs, "segment builder finalize bark", uv_height_factor, &bark_labels);
@@ -13811,11 +13767,11 @@ std::vector<std::string> kinDS::SegmentBuilder::extractBoundaryIntervalMeshletEx
   return out;
 }
 
-const VoronoiMesh& kinDS::SegmentBuilder::getBoundaryMesh() const { return boundary_mesh; }
+const VoronoiMesh& kinDS::SegmentBuilder::getBoundaryMesh() const { return boundary_mesh_.mesh(); }
 
 const std::vector<size_t>& kinDS::SegmentBuilder::getBoundaryVertexToStrandId() const
 {
-  return boundary_vertex_to_strand_id;
+  return boundary_mesh_.vertexToStrandId();
 }
 
 const std::vector<std::vector<size_t>>& kinDS::SegmentBuilder::getStrandToSegmentIndices() const

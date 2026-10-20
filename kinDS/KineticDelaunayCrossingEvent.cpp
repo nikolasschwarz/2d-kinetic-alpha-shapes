@@ -936,6 +936,25 @@ void KineticDelaunay::CrossingEvent::handleEvent()
     return;
   }
 
+  for (int v : graph.getTriangleVertexIndices(voronoi_vertex_id))
+  {
+    if (v >= 0 && !kd->strandHasProfileAt(static_cast<size_t>(v), t))
+    {
+      log_skip("voronoi face vertex past last profile sample");
+      clear_infinitesimal();
+      return;
+    }
+  }
+  const int origin = graph.halfEdge(half_edge_id).origin;
+  const int dest = graph.destination(half_edge_id);
+  if ((origin >= 0 && !kd->strandHasProfileAt(static_cast<size_t>(origin), t))
+    || (dest >= 0 && !kd->strandHasProfileAt(static_cast<size_t>(dest), t)))
+  {
+    log_skip("crossed Delaunay endpoints past last profile sample");
+    clear_infinitesimal();
+    return;
+  }
+
   size_t containing_tri_id = kd->crossing_data.getContainingTriId(voronoi_vertex_id);
 
   // Outdated if the containing Delaunay triangle was updated after this event was scheduled.

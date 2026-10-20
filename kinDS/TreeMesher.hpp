@@ -118,6 +118,9 @@ class TreeMesher
     bool export_separate_contributor_objects = true;
     /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.
     bool retriangulate_on_component_split = false;
+    /// When true, after a physical runtime-branch cut each child continues on its own event queue and
+    /// branch-local section schedule (may run concurrently). Default off preserves global serial scheduling.
+    bool parallelize_independent_runtime_branches = false;
     size_t max_meshlet_export = size_t(-1); // maximum number of meshlets to export for debugging
     /// When true, write full visual-debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps, …).
     /// Default off; CLI @c --debug-files enables this (also enables @ref error_files dumps).

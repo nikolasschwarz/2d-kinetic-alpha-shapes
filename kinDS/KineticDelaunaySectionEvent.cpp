@@ -91,27 +91,63 @@ void KineticDelaunay::SectionEvent::handleEvent()
   {
     throw std::runtime_error("SectionEvent has no KineticDelaunay pointer");
   }
+  // Retires, cuts and forks on the shared graph and runtime-branch tables.
+  const auto topology_lock = kd->lockSharedTopology();
 
   const size_t section_index = section_id;
   const size_t section_count = kd->getSectionCount();
 
+  if (const BranchScheduler* scheduler = kd->activeBranchScheduler(); scheduler != nullptr)
+  {
+    if (section_index >= scheduler->handoff_section
+      || (scheduler->independent && section_index >= kd->exclusiveEndSectionForScheduler(*scheduler)))
+    {
+      kd->kinetic_algorithm_->activeScheduler().clear();
+      return;
+    }
+    if (scheduler->independent && !scheduler->owned_strands.empty())
+    {
+      bool any_profile = false;
+      for (size_t strand_id : scheduler->owned_strands)
+      {
+        if (kd->strandHasProfileAt(strand_id, static_cast<double>(section_index)))
+        {
+          any_profile = true;
+          break;
+        }
+      }
+      if (!any_profile)
+      {
+        kd->kinetic_algorithm_->activeScheduler().clear();
+        return;
+      }
+    }
+  }
+
   assert(section_index < section_count);
 
-  // In-order processing is required for correct triangulation state updates.
-  assert(section_index == kd->sections_advanced);
+  // This thread's scheduler must run its own section events in order. Other branches may be at
+  // different heights; their cursors live on their schedulers, not in a global counter.
+  assert(section_index == kd->getActiveSectionsAdvanced());
 
   auto* event_handler = kd->section_event_manager_->getCallback();
 
   // Bootstrap section (normally 0, or @ref getStartSection when starting mid-tree): init already set up meshes.
-  const bool is_bootstrap_section = section_index == kd->getStartSection();
+  const bool is_bootstrap_section = section_index == kd->getStartSection()
+    && runtime_branch_id == BranchScheduler::no_branch;
   if (!is_bootstrap_section && event_handler)
   {
     event_handler->beforeEvent(*this);
   }
 
   // Retire finished input branches before graph cuts so vertex positions are not queried past strand data.
-  kd->retireFinishedInputBranches(static_cast<double>(section_index));
-  kd->post_split_frame_transitions_.expireBeforeHeight(section_index);
+  kd->retireFinishedInputBranches(static_cast<double>(section_index), runtime_branch_id);
+  // Lookups check their own height window, so expiry is only cleanup. Independent schedulers sit at different
+  // heights; expiring here would drop transitions another branch still needs and rebuild the table under it.
+  if (runtime_branch_id == BranchScheduler::no_branch)
+  {
+    kd->post_split_frame_transitions_.expireBeforeHeight(section_index);
+  }
 
   if (kd->collectStatistics())
   {
@@ -135,6 +171,11 @@ void KineticDelaunay::SectionEvent::handleEvent()
         {
           return;
         }
+        if (runtime_branch_id != BranchScheduler::no_branch
+          && split.parent_runtime_branch != runtime_branch_id)
+        {
+          return;
+        }
         if (kd->isPendingRuntimeBranchOnHiatus(split.parent_runtime_branch))
         {
           return;
@@ -151,15 +192,21 @@ void KineticDelaunay::SectionEvent::handleEvent()
     }
   }
 
+  if (BranchScheduler* scheduler = kd->activeBranchScheduler();
+    scheduler != nullptr && scheduler->independent)
+  {
+    kd->continueIndependentSchedulerFromSection(*scheduler, section_index + 1);
+  }
+
   if (!is_bootstrap_section)
   {
     kd->scheduleRadiusEventsForCutoffRegimeChanges(static_cast<double>(section_index));
   }
 
-  kd->precomputeStep(static_cast<double>(section_index));
+  kd->precomputeStepForRuntimeBranch(static_cast<double>(section_index), runtime_branch_id);
 
   kd->section_event_manager_->updateProgress(section_index);
-  kd->sections_advanced++;
+  kd->mutableActiveSectionsAdvanced()++;
   kd->section_event_manager_->finishProgressIfNeeded(section_index);
 
   if (!is_bootstrap_section && event_handler)

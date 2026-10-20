@@ -3,51 +3,92 @@
 #include "Logger.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 
 using namespace kinDS;
+
+namespace
+{
+bool profileAxesAreUsable(const glm::dmat4& transform)
+{
+  return glm::length(glm::dvec3(transform[0])) > 0.0 && glm::length(glm::dvec3(transform[2])) > 0.0;
+}
+
+const glm::dmat4& requireProfileTransform(
+  const std::vector<std::vector<glm::dmat4>>& transforms, size_t height, size_t branch_id)
+{
+  if (height >= transforms.size())
+  {
+    throw std::out_of_range(
+      "StrandTree: no profile transform at height " + std::to_string(height) + " (count=" + std::to_string(transforms.size()) + ")");
+  }
+  if (branch_id >= transforms[height].size())
+  {
+    throw std::out_of_range("StrandTree: no profile transform at height " + std::to_string(height) + " branch "
+      + std::to_string(branch_id) + " (count=" + std::to_string(transforms[height].size()) + ")");
+  }
+  const glm::dmat4& transform = transforms[height][branch_id];
+  if (!profileAxesAreUsable(transform))
+  {
+    throw std::runtime_error("StrandTree: profile transform at height " + std::to_string(height) + " branch "
+      + std::to_string(branch_id) + " has zero profile axes");
+  }
+  return transform;
+}
+} // namespace
+
+static std::string profileInputBranchSuffix(const std::vector<size_t>& branch_indices, size_t requested_height)
+{
+  if (branch_indices.empty())
+  {
+    return " input_branch=none";
+  }
+  return " input_branch=" + std::to_string(branch_indices[std::min(requested_height, branch_indices.size() - 1)]);
+}
 
 static glm::dvec3 ProfileToModelCoordinatesBranch(
   const std::vector<std::vector<glm::dmat4>>& profile_to_model_transforms, glm::dvec3 point, float t,
   const std::vector<size_t>& branch_indices, double w = 1.0)
 {
-  size_t lower_section_index = static_cast<size_t>(std::max(0.0f, glm::floor(t)));
-
-  size_t upper_section_index = std::min(profile_to_model_transforms.size() - 1, static_cast<size_t>(glm::ceil(t)));
-
-  // check range
-  auto coord_str = std::to_string(t);
-  if (lower_section_index >= profile_to_model_transforms.size())
+  if (profile_to_model_transforms.empty())
   {
-    std::cout << ("ProfileToModelCoordinates: lower bound of point z-coordinate out of range: " + coord_str).c_str()
-              << std::endl;
-  }
-  if (upper_section_index >= profile_to_model_transforms.size())
-  {
-    std::cout << ("ProfileToModelCoordinates: upper bound of point z-coordinate out of range: " + coord_str).c_str()
-              << std::endl;
+    throw std::out_of_range("ProfileToModelCoordinates: no profile transforms");
   }
 
-  // only set second coordinate to 0 for points, not for normal vectors
-  // TODO: I actually wanted to get rid of this coordinate swap at some point
+  const size_t lower_section_index = static_cast<size_t>(std::max(0.0f, glm::floor(t)));
+  const size_t upper_section_index = static_cast<size_t>(glm::ceil(t));
+  if (lower_section_index >= profile_to_model_transforms.size() || lower_section_index >= branch_indices.size())
+  {
+    throw std::out_of_range("ProfileToModelCoordinates: t=" + std::to_string(t) + " height " + std::to_string(lower_section_index)
+      + " is out of range (transforms=" + std::to_string(profile_to_model_transforms.size())
+      + " branch_indices=" + std::to_string(branch_indices.size()) + ")"
+      + profileInputBranchSuffix(branch_indices, lower_section_index));
+  }
+
   glm::dvec4 local_pos(point[0], (1.0f - w) * point[2], point[1], w);
-  if (lower_section_index >= branch_indices.size())
-  {
-    std::cout << ("ProfileToModelCoordinates: lower bound of point z-coordinate out of range: " + coord_str).c_str()
-              << ", index: " << lower_section_index << ", size: " << branch_indices.size() << std::endl;
-  }
-  size_t lower_branch_index = branch_indices[lower_section_index];
-  glm::dvec4 global_pos = profile_to_model_transforms[lower_section_index][lower_branch_index] * local_pos;
+  const size_t lower_branch_index = branch_indices[lower_section_index];
+  glm::dvec4 global_pos
+    = requireProfileTransform(profile_to_model_transforms, lower_section_index, lower_branch_index) * local_pos;
 
   if (upper_section_index != lower_section_index)
   {
-    size_t upper_branch_index = branch_indices[upper_section_index];
-    glm::dvec4 upper_global_pos = profile_to_model_transforms[upper_section_index][upper_branch_index] * local_pos;
+    if (upper_section_index >= profile_to_model_transforms.size() || upper_section_index >= branch_indices.size())
+    {
+      throw std::out_of_range("ProfileToModelCoordinates: t=" + std::to_string(t) + " height " + std::to_string(upper_section_index)
+        + " is out of range (transforms=" + std::to_string(profile_to_model_transforms.size())
+        + " branch_indices=" + std::to_string(branch_indices.size()) + ")"
+        + profileInputBranchSuffix(branch_indices, upper_section_index));
+    }
+    const size_t upper_branch_index = branch_indices[upper_section_index];
+    const glm::dvec4 upper_global_pos
+      = requireProfileTransform(profile_to_model_transforms, upper_section_index, upper_branch_index) * local_pos;
     double frac = t - static_cast<double>(lower_section_index);
     global_pos = glm::mix(global_pos, upper_global_pos, frac);
   }
@@ -100,12 +141,11 @@ size_t StrandTree::getBranchCount(size_t height) const
 
 size_t StrandTree::resolveBranchAtHeight(size_t height, size_t branch_id, size_t branch_lookup_height) const
 {
-  if (transforms_by_height_and_branch.empty())
+  if (height >= transforms_by_height_and_branch.size())
   {
-    return 0;
+    throw std::out_of_range("StrandTree::resolveBranchAtHeight: height " + std::to_string(height)
+      + " is out of range (count=" + std::to_string(transforms_by_height_and_branch.size()) + ")");
   }
-
-  height = std::min(height, transforms_by_height_and_branch.size() - 1);
 
   if (branch_id < getBranchCount(height))
   {
@@ -114,30 +154,33 @@ size_t StrandTree::resolveBranchAtHeight(size_t height, size_t branch_id, size_t
 
   if (strands_by_branch_id.empty())
   {
-    return 0;
+    throw std::runtime_error("StrandTree::resolveBranchAtHeight: no strand-to-branch tables");
   }
 
-  size_t lookup = std::min(branch_lookup_height, strands_by_branch_id.size() - 1);
+  size_t lookup = branch_lookup_height;
   while (lookup < strands_by_branch_id.size() && branch_id >= getBranchCount(lookup))
   {
     ++lookup;
   }
 
-  if (branch_id >= getBranchCount(lookup))
+  if (lookup >= strands_by_branch_id.size() || branch_id >= getBranchCount(lookup))
   {
-    return 0;
+    throw std::runtime_error("StrandTree::resolveBranchAtHeight: branch " + std::to_string(branch_id)
+      + " is not present at height " + std::to_string(height) + " or lookup " + std::to_string(branch_lookup_height));
   }
 
   const auto& strands = strands_by_branch_id[lookup][branch_id];
   if (strands.empty())
   {
-    return 0;
+    throw std::runtime_error("StrandTree::resolveBranchAtHeight: branch " + std::to_string(branch_id)
+      + " has no strands at lookup height " + std::to_string(lookup));
   }
 
   const size_t representative_strand = strands.front();
   if (representative_strand >= branch_indices.size() || height >= branch_indices[representative_strand].size())
   {
-    return 0;
+    throw std::out_of_range("StrandTree::resolveBranchAtHeight: strand " + std::to_string(representative_strand)
+      + " has no branch id at height " + std::to_string(height));
   }
 
   return branch_indices[representative_strand][height];
@@ -147,17 +190,29 @@ size_t StrandTree::getBranchIndex(size_t strand_id, size_t height) const
 {
   if (strand_id >= branch_indices.size())
   {
-    return 0;
+    throw std::out_of_range("StrandTree::getBranchIndex: strand " + std::to_string(strand_id)
+      + " is out of range (count=" + std::to_string(branch_indices.size()) + ")");
   }
 
   const std::vector<size_t>& per_strand = branch_indices[strand_id];
   if (per_strand.empty())
   {
-    return 0;
+    throw std::runtime_error("StrandTree::getBranchIndex: strand " + std::to_string(strand_id) + " has no branch ids");
   }
 
   const size_t clamped_height = std::min(height, per_strand.size() - 1);
   return per_strand[clamped_height];
+}
+
+const glm::dmat4& StrandTree::getTransformByHeightAndBranch(size_t height, size_t branch_id) const
+{
+  return requireProfileTransform(transforms_by_height_and_branch, height, branch_id);
+}
+
+const glm::dmat4& StrandTree::getResolvedTransformByHeightAndBranch(
+  size_t height, size_t branch_id, size_t branch_lookup_height) const
+{
+  return getTransformByHeightAndBranch(height, resolveBranchAtHeight(height, branch_id, branch_lookup_height));
 }
 
 size_t StrandTree::addTrajectory(const std::vector<glm::dvec2>& traj)
@@ -228,7 +283,7 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
   }
 
   PlaneProjector plane_projector(
-    transforms_by_height_and_branch[index][reference_branch], transforms_by_height_and_branch[index][actual_branch]);
+    getTransformByHeightAndBranch(index, reference_branch), getTransformByHeightAndBranch(index, actual_branch));
 
   glm::dvec2 result = plane_projector.project(glm::dvec2(point[0], point[1]));
   return glm::dvec2 { result.x, result.y };
@@ -263,12 +318,31 @@ glm::dvec3 StrandTree::getPointInObjectSpace(size_t strand_id, double t) const
   glm::dvec2 v = evaluate(strand_id, t);
 
   glm::dvec3 v_3d { v[0], 0.0, v[1] };
-  return ProfileToModelCoordinatesBranch(transforms_by_height_and_branch, v_3d, t, branch_indices[strand_id]);
+  return transformToObjectSpace(v_3d, strand_id, t);
 }
 
 glm::dvec3 StrandTree::transformToObjectSpace(glm::dvec3& v_3d, size_t strand_id, double t) const
 {
-  return transformToObjectSpace(v_3d, t, branch_indices[strand_id]);
+  if (strand_id >= branch_indices.size() || branch_indices[strand_id].empty()
+    || static_cast<size_t>(std::ceil(std::max(0.0, t))) >= branch_indices[strand_id].size())
+  {
+    const size_t samples = strand_id < branch_indices.size() ? branch_indices[strand_id].size() : 0;
+    throw std::out_of_range("StrandTree::transformToObjectSpace: strand " + std::to_string(strand_id) + " has "
+      + std::to_string(samples) + " profile samples; t=" + std::to_string(t) + " needs height "
+      + std::to_string(static_cast<size_t>(std::ceil(std::max(0.0, t))))
+      + (samples == 0 ? " input_branch=none" : " input_branch=" + std::to_string(getBranchIndex(strand_id,
+          static_cast<size_t>(std::ceil(std::max(0.0, t)))))));
+  }
+  try
+  {
+    return transformToObjectSpace(v_3d, t, branch_indices[strand_id]);
+  }
+  catch (const std::out_of_range& ex)
+  {
+    throw std::out_of_range(
+      std::string(ex.what()) + " strand=" + std::to_string(strand_id)
+      + " input_branch=" + std::to_string(getBranchIndex(strand_id, static_cast<size_t>(std::ceil(std::max(0.0, t))))));
+  }
 }
 
 glm::dvec3 StrandTree::transformToObjectSpace(
@@ -282,7 +356,7 @@ glm::dvec3 StrandTree::transformToObjectSpaceForBranch(glm::dvec3 v_3d, double t
 {
   if (transforms_by_height_and_branch.empty())
   {
-    return v_3d;
+    throw std::runtime_error("StrandTree::transformToObjectSpaceForBranch: no profile transforms");
   }
 
   std::vector<size_t> constant_branch(transforms_by_height_and_branch.size(), branch_id);
@@ -720,11 +794,12 @@ StrandTree StrandTree::loadFromFile(const std::filesystem::path& path)
 
 void StrandTree::conditionProfileTransforms()
 {
-  for (auto& transforms_at_height : transforms_by_height_and_branch)
+  for (size_t height = 0; height < transforms_by_height_and_branch.size(); ++height)
   {
-    for (glm::dmat4& transform : transforms_at_height)
+    auto& transforms_at_height = transforms_by_height_and_branch[height];
+    for (size_t branch_id = 0; branch_id < transforms_at_height.size(); ++branch_id)
     {
-      // Columns 0 and 2 are the in-plane profile axes; column 1 is the plane normal; column 3 is the origin.
+      glm::dmat4& transform = transforms_at_height[branch_id];
       const glm::dvec3 u(transform[0]);
       const glm::dvec3 normal(transform[1]);
       const glm::dvec3 v(transform[2]);
@@ -733,6 +808,13 @@ void StrandTree::conditionProfileTransforms()
       const double lv = glm::length(v);
       if (lu <= 0.0 || lv <= 0.0)
       {
+        const bool live = height < strands_by_branch_id.size() && branch_id < strands_by_branch_id[height].size()
+          && !strands_by_branch_id[height][branch_id].empty();
+        if (live)
+        {
+          throw std::runtime_error("StrandTree::conditionProfileTransforms: zero profile axes at height "
+            + std::to_string(height) + " branch " + std::to_string(branch_id));
+        }
         continue;
       }
 

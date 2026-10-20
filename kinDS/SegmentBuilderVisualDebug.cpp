@@ -376,7 +376,7 @@ std::unordered_map<size_t, glm::dvec3> buildVoronoiVertexWorldPositions(
 
 void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector<glm::dvec2>& points,
   const HalfEdgeDelaunayGraph& graph, KineticDelaunay& kin_del,
-  const std::vector<size_t>& containing_tri_ids,
+  const SlotTable<size_t>& containing_tri_ids,
   const std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo>& intersection_debug_data,
   const VisualDebugHighlight& highlight, const std::unordered_set<size_t>* highlighted_strands,
   const std::unordered_set<size_t>& positioned_strands,
@@ -391,8 +391,15 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   {
     std::filesystem::create_directories(filepath.parent_path());
   }
-  HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &kin_del.getFacesInside(), true,
-    &containing_tri_ids, &intersection_debug_data, &highlight, highlighted_strands, &site_input_branch_labels,
+  const auto& face_inside_table = kin_del.getFacesInside();
+  std::vector<bool> face_inside_flags(face_inside_table.size());
+  for (size_t face_index = 0; face_index < face_inside_table.size(); ++face_index)
+  {
+    face_inside_flags[face_index] = face_inside_table[face_index] != 0;
+  }
+  const std::vector<size_t> containing_tri_copy(containing_tri_ids.begin(), containing_tri_ids.end());
+  HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &face_inside_flags, true,
+    &containing_tri_copy, &intersection_debug_data, &highlight, highlighted_strands, &site_input_branch_labels,
     &positioned_strands, &site_world_positions, &voronoi_vertex_world_positions, separation_offset_segments,
     seam_outlines);
 }

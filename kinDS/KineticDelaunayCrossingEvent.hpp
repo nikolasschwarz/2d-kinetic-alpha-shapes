@@ -1,6 +1,7 @@
 #pragma once
 
 #include "KineticDelaunay.hpp"
+#include "SlotTable.hpp"
 
 #include <cassert>
 #include <glm/glm.hpp>
@@ -35,23 +36,12 @@ struct KineticDelaunay::CrossingData
       {
         return;
       }
-
-      const size_t old_count = slots_.size();
-      slots_.resize(count);
-      for (size_t edge_id = old_count; edge_id < count; ++edge_id)
-      {
-        slots_[edge_id] = std::make_unique<RefList>();
-      }
+      slots_.resizeWith(count, [] { return std::make_unique<RefList>(); });
     }
 
     void resize(size_t count)
     {
-      const size_t old_count = slots_.size();
-      slots_.resize(count);
-      for (size_t edge_id = old_count; edge_id < count; ++edge_id)
-      {
-        slots_[edge_id] = std::make_unique<RefList>();
-      }
+      slots_.resizeWith(count, [] { return std::make_unique<RefList>(); });
     }
 
     void clearAllLists()
@@ -66,7 +56,7 @@ struct KineticDelaunay::CrossingData
     }
 
    private:
-    std::vector<std::unique_ptr<RefList>> slots_;
+    SlotTable<std::unique_ptr<RefList>> slots_;
   };
 
   static constexpr size_t invalid_containing_tri_id = static_cast<size_t>(-1);
@@ -75,18 +65,13 @@ struct KineticDelaunay::CrossingData
   using VoronoiVertexList = std::list<size_t>;
   using VoronoiVertexListIterator = VoronoiVertexList::iterator;
 
-  std::vector<size_t> voronoi_vertex_to_containing_tri_id;
-  std::vector<std::unique_ptr<VoronoiVertexList>> tri_id_to_voronoi_vertices;
-  std::vector<std::optional<VoronoiVertexListIterator>> voronoi_vertex_to_iterator;
+  SlotTable<size_t> voronoi_vertex_to_containing_tri_id;
+  SlotTable<std::unique_ptr<VoronoiVertexList>> tri_id_to_voronoi_vertices;
+  SlotTable<std::optional<VoronoiVertexListIterator>> voronoi_vertex_to_iterator;
 
   void ensureTriListSlots(size_t face_count)
   {
-    const size_t old_count = tri_id_to_voronoi_vertices.size();
-    tri_id_to_voronoi_vertices.resize(face_count);
-    for (size_t tri_id = old_count; tri_id < face_count; ++tri_id)
-    {
-      tri_id_to_voronoi_vertices[tri_id] = std::make_unique<VoronoiVertexList>();
-    }
+    tri_id_to_voronoi_vertices.resizeWith(face_count, [] { return std::make_unique<VoronoiVertexList>(); });
   }
 
   VoronoiVertexList& triList(size_t tri_id)
@@ -112,7 +97,7 @@ struct KineticDelaunay::CrossingData
   EdgeIntersectionRefListSlots delaunay_edge_intersections;
 
   /// Last time a crossing was handled for this Voronoi vertex, or its crossing events were rescheduled/invalidated.
-  std::vector<EventTime> last_crossing;
+  SlotTable<EventTime> last_crossing;
 
   struct VoronoiDelaunayEdgeIntersection
   {
@@ -291,7 +276,7 @@ struct KineticDelaunay::CrossingData
     return voronoi_vertex_to_containing_tri_id[voronoi_vertex_id];
   }
 
-  const std::vector<size_t>& getContainingTriIds() const { return voronoi_vertex_to_containing_tri_id; }
+  const SlotTable<size_t>& getContainingTriIds() const { return voronoi_vertex_to_containing_tri_id; }
 
   // Note: we copy this into a vector because we need this for reassigning Voronoi vertices in a quadrilateral and we
   // will be modifying the underlying list while iterating

@@ -64,7 +64,8 @@ struct InfinitesimalComputeContext
   size_t parent_component_id = static_cast<size_t>(-1);
 };
 
-class KineticAlgorithm
+/// Priority queue of kinetic events with enqueue-order sequence ids.
+class EventScheduler
 {
  public:
   class Event
@@ -108,30 +109,6 @@ class KineticAlgorithm
     }
   };
 
-  class EventCallback
-  {
-   public:
-    virtual ~EventCallback() = default;
-    virtual void beforeEvent(Event& e) { }
-    virtual void afterEvent(Event& e) { }
-  };
-
-  class EventManager
-  {
-   public:
-    virtual ~EventManager() = default;
-
-    /// @param infinitesimal When set, use virtual/infinitesimal polynomials and time; otherwise kinetic.
-    virtual void computeEvents(double t, size_t event_id,
-      std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt)
-      = 0;
-    void setCallback(EventCallback* callback) { callback_ = callback; }
-    EventCallback* getCallback() const { return callback_; }
-
-  private:
-    EventCallback* callback_ = nullptr;
-  };
-
  private:
   struct EventPtrCompare
   {
@@ -160,5 +137,71 @@ class KineticAlgorithm
   /// event has @c occurrence_time >= @p end_time (that event is not executed).
   /// When @p statistics is set, each dequeued event is recorded before @c handleEvent.
   void processEvents(std::optional<double> end_time = std::nullopt, Statistics* statistics = nullptr);
+};
+
+/// Facade that routes enqueue/process to an active @ref EventScheduler (branch-local or root).
+class KineticAlgorithm
+{
+ public:
+  using Event = EventScheduler::Event;
+
+  class EventCallback
+  {
+   public:
+    virtual ~EventCallback() = default;
+    virtual void beforeEvent(Event& e) { }
+    virtual void afterEvent(Event& e) { }
+  };
+
+  class EventManager
+  {
+   public:
+    virtual ~EventManager() = default;
+
+    /// @param infinitesimal When set, use virtual/infinitesimal polynomials and time; otherwise kinetic.
+    virtual void computeEvents(double t, size_t event_id,
+      std::optional<InfinitesimalComputeContext> infinitesimal = std::nullopt)
+      = 0;
+    void setCallback(EventCallback* callback) { callback_ = callback; }
+    EventCallback* getCallback() const { return callback_; }
+
+  private:
+    EventCallback* callback_ = nullptr;
+  };
+
+  EventScheduler& rootScheduler() { return root_scheduler_; }
+  const EventScheduler& rootScheduler() const { return root_scheduler_; }
+
+  /// Queue this thread enqueues into. Falls back to @ref rootScheduler until @ref setActiveScheduler.
+  EventScheduler& activeScheduler() { return *activeSchedulerPtr(); }
+  const EventScheduler& activeScheduler() const { return *activeSchedulerPtr(); }
+
+  void setActiveScheduler(EventScheduler* scheduler)
+  {
+    threadActiveScheduler() = scheduler != nullptr ? scheduler : &root_scheduler_;
+  }
+
+  void enqueueEvent(const std::shared_ptr<Event>& event) { activeScheduler().enqueueEvent(event); }
+  bool empty() const { return activeScheduler().empty(); }
+  void clear() { activeScheduler().clear(); }
+  void processEvents(std::optional<double> end_time = std::nullopt, Statistics* statistics = nullptr)
+  {
+    activeScheduler().processEvents(end_time, statistics);
+  }
+
+ private:
+  EventScheduler*& threadActiveScheduler() const
+  {
+    thread_local EventScheduler* scheduler = nullptr;
+    return scheduler;
+  }
+
+  EventScheduler* activeSchedulerPtr() const
+  {
+    EventScheduler* scheduler = threadActiveScheduler();
+    return scheduler != nullptr ? scheduler : &root_scheduler_;
+  }
+
+  mutable EventScheduler root_scheduler_ {};
 };
 } // namespace kinDS

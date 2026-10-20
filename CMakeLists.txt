@@ -75,6 +75,7 @@ set(KINDS_SOURCES
     "kinDS/Polygon2D.cpp"
 	"kinDS/Polynomial.cpp"
 	"kinDS/SegmentBuilder.cpp"
+	"kinDS/BoundaryMesh.cpp"
     "kinDS/SegmentBuilderSectionCallback.cpp"
     "kinDS/SegmentBuilderFlipCallback.cpp"
     "kinDS/SegmentBuilderRadiusCallback.cpp"

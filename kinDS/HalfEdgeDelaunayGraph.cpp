@@ -1253,8 +1253,9 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
 
   // now link the half-edges together
   // triangle edges first
-  for (auto& face : triangles)
+  for (size_t face_index = 0; face_index < triangles.size(); ++face_index)
   {
+    auto& face = triangles[face_index];
     for (size_t j = 0; j < 3; ++j)
     {
       size_t he_index = face.half_edges[j];
@@ -1265,7 +1266,7 @@ void HalfEdgeDelaunayGraph::build(const std::vector<size_t>& index_buffer)
       }
       else
       {
-        KINDS_DEBUG("Face " << (&face - &triangles[0]) << " has a missing half-edge at index " << j << ".");
+        KINDS_DEBUG("Face " << face_index << " has a missing half-edge at index " << j << ".");
       }
     }
   }
@@ -2245,9 +2246,9 @@ void kinDS::HalfEdgeDelaunayGraph::update(
     }
   }
 
-  // copy old data:
-  auto old_triangles = triangles;
-  auto old_half_edges = half_edges;
+  // Snapshot before build() replaces the live slot tables.
+  const std::vector<Triangle> old_triangles(triangles.begin(), triangles.end());
+  const std::vector<HalfEdge> old_half_edges(half_edges.begin(), half_edges.end());
 
   build(index_buffer);
 
@@ -2461,27 +2462,6 @@ std::vector<size_t> kinDS::HalfEdgeDelaunayGraph::neighbors(size_t v)
   return nbrs;
 }
 
-std::vector<size_t> kinDS::HalfEdgeDelaunayGraph::inducedNeighbors(size_t v, const std::vector<bool>& face_inside) const
-{
-  std::vector<size_t> nbrs;
-
-  // Iterate over incident edges
-  for (IncidentEdgeIterator it = incidentEdgesBegin(v); it != incidentEdgesEnd(v); ++it)
-  {
-    size_t he_id = *it;
-
-    // Check if the face on the half-edge or its twin is inside
-    if (!face_inside[half_edges[he_id].face] && !face_inside[half_edges[he_id ^ 1].face])
-    {
-      continue; // skip this neighbor
-    }
-
-    nbrs.push_back(destination(he_id));
-  }
-
-  return nbrs;
-}
-
 std::vector<size_t> kinDS::HalfEdgeDelaunayGraph::inducedNeighborsFromLiveGraph(size_t v) const
 {
   std::vector<size_t> nbrs;
@@ -2598,9 +2578,8 @@ std::array<size_t, 4> kinDS::HalfEdgeDelaunayGraph::getQuadBoundaryHalfEdgeIndic
 // getters
 size_t HalfEdgeDelaunayGraph::getVertexCount() const { return vertex_count; }
 
-static std::array<int, 3> triangle_vertex_key(
-  size_t tri_idx, const std::vector<HalfEdgeDelaunayGraph::Triangle>& tris,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& hes)
+template<class Tris, class Hes>
+static std::array<int, 3> triangle_vertex_key(size_t tri_idx, const Tris& tris, const Hes& hes)
 {
   std::array<int, 3> key;
   for (int i = 0; i < 3; ++i)
@@ -2624,9 +2603,8 @@ struct TriangleVertexKeyHash
   }
 };
 
-static bool is_live_face_slot(
-  size_t face_id, const std::vector<HalfEdgeDelaunayGraph::Triangle>& tris,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& hes)
+template<class Tris, class Hes>
+static bool is_live_face_slot(size_t face_id, const Tris& tris, const Hes& hes)
 {
   if (face_id >= tris.size())
   {
@@ -2654,11 +2632,9 @@ static bool is_live_face_slot(
   return true;
 }
 
-static void map_triangle_half_edges_by_directed_edge(
-  size_t new_tri_idx, size_t old_tri_idx, const std::vector<HalfEdgeDelaunayGraph::Triangle>& new_tris,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& new_hes,
-  const std::vector<HalfEdgeDelaunayGraph::Triangle>& old_tris,
-  const std::vector<HalfEdgeDelaunayGraph::HalfEdge>& old_hes, std::vector<int>& he_remap)
+template<class NewTris, class NewHes, class OldTris, class OldHes>
+static void map_triangle_half_edges_by_directed_edge(size_t new_tri_idx, size_t old_tri_idx, const NewTris& new_tris,
+  const NewHes& new_hes, const OldTris& old_tris, const OldHes& old_hes, std::vector<int>& he_remap)
 {
   std::array<bool, 3> old_slot_used = { false, false, false };
 
@@ -2695,7 +2671,7 @@ void HalfEdgeDelaunayGraph::reorder_from_old(
   const std::vector<Triangle>& old_triangles, const std::vector<HalfEdge>& old_half_edges)
 {
   // Fresh per-branch retriangulation is authoritative for convex-hull / infinite-face incidence.
-  const std::vector<HalfEdge> fresh_half_edges = half_edges;
+  const std::vector<HalfEdge> fresh_half_edges(half_edges.begin(), half_edges.end());
 
   // Map sorted triangle vertex triple -> old triangle index (each old triangle used at most once).
   std::unordered_map<std::array<int, 3>, size_t, TriangleVertexKeyHash> old_tri_map;
@@ -2810,8 +2786,8 @@ void HalfEdgeDelaunayGraph::reorder_from_old(
     new_half_edges[static_cast<size_t>(dst_he)] = he;
   }
 
-  triangles.swap(new_triangles);
-  half_edges.swap(new_half_edges);
+  triangles.replaceWith(std::move(new_triangles));
+  half_edges.replaceWith(std::move(new_half_edges));
 
   vertex_to_half_edge.assign(vertex_count, size_t(-1));
 

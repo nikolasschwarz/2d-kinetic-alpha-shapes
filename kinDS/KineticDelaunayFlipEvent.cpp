@@ -684,6 +684,33 @@ void KineticDelaunay::FlipEvent::handleEvent()
     return;
   }
 
+  const int face0 = graph.halfEdge(half_edge_id).face;
+  const int face1 = graph.halfEdge(half_edge_id ^ 1).face;
+  const auto face_has_profile = [&](int face_id)
+  {
+    if (face_id < 0 || !graph.isLiveFace(static_cast<size_t>(face_id)))
+    {
+      return true;
+    }
+    for (int v : graph.getTriangleVertexIndices(static_cast<size_t>(face_id)))
+    {
+      if (v >= 0 && !kd->strandHasProfileAt(static_cast<size_t>(v), t))
+      {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (!face_has_profile(face0) || !face_has_profile(face1))
+  {
+    log_skip("quad vertex past last profile sample");
+    if (is_infinitesimal)
+    {
+      kd->current_infinitesimal_t_ = 0.0;
+    }
+    return;
+  }
+
   // Check if the event is still valid
   if (creation_time < kd->quadrilateral_last_updated[half_edge_id / 2])
   {

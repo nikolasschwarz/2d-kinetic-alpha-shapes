@@ -1,6 +1,7 @@
 #pragma once
 #include "Delaunator2D.hpp"
 #include "KineticAlgorithm.hpp"
+#include "SlotTable.hpp"
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -49,8 +50,8 @@ class HalfEdgeDelaunayGraph
 
  private:
   size_t vertex_count = 0; // Number of vertices in the triangulation
-  std::vector<Triangle> triangles;
-  std::vector<HalfEdge> half_edges; // List of half-edges in the triangulation
+  SlotTable<Triangle> triangles;
+  SlotTable<HalfEdge> half_edges; // List of half-edges in the triangulation
   std::vector<size_t> vertex_to_half_edge; // Maps each vertex to one of its outgoing half-edges for easy access
   std::vector<size_t> live_even_half_edges_;
   std::vector<size_t> live_faces_;
@@ -250,7 +251,21 @@ class HalfEdgeDelaunayGraph
   size_t prevOnConvexBoundaryId(size_t he_id) const;
 
   std::vector<size_t> neighbors(size_t v);
-  std::vector<size_t> inducedNeighbors(size_t v, const std::vector<bool>& face_inside) const;
+  template<class InsideFlags>
+  std::vector<size_t> inducedNeighbors(size_t v, const InsideFlags& face_inside) const
+  {
+    std::vector<size_t> nbrs;
+    for (IncidentEdgeIterator it = incidentEdgesBegin(v); it != incidentEdgesEnd(v); ++it)
+    {
+      size_t he_id = *it;
+      if (!face_inside[half_edges[he_id].face] && !face_inside[half_edges[he_id ^ 1].face])
+      {
+        continue;
+      }
+      nbrs.push_back(destination(he_id));
+    }
+    return nbrs;
+  }
 
   /** Neighbors connected by a live half-edge with at least one live incident face. */
   std::vector<size_t> inducedNeighborsFromLiveGraph(size_t v) const;

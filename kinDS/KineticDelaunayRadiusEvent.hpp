@@ -64,6 +64,8 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
   {
     throw std::runtime_error("RadiusEvent has no KineticDelaunay pointer");
   }
+  // Radius events note pending splits (allocating runtime ids) and may cut the shared graph.
+  const auto topology_lock = kd->lockSharedTopology();
 
   auto& graph = kd->graph;
   const double t = occurrence_time.real_time;
@@ -108,6 +110,14 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
   {
     clear_infinitesimal();
     return;
+  }
+  for (int v : graph.getTriangleVertexIndices(face_id))
+  {
+    if (v >= 0 && !kd->strandHasProfileAt(static_cast<size_t>(v), t))
+    {
+      clear_infinitesimal();
+      return;
+    }
   }
 
   // Check if the event is still valid

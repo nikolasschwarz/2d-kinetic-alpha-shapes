@@ -493,6 +493,9 @@ MeshingBufferHashStats computeMeshingInputHash(
       if (settings.hinge_only_profile_plane_mix) {
         hash.MixPod(static_cast<uint8_t>(1));
       }
+      if (settings.parallelize_independent_runtime_branches) {
+        hash.MixPod(static_cast<uint8_t>(1));
+      }
     }
   };
 

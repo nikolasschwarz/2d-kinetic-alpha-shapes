@@ -4,7 +4,7 @@
 
 using namespace kinDS;
 
-void KineticAlgorithm::clear()
+void EventScheduler::clear()
 {
   while (!events_.empty())
   {
@@ -13,7 +13,7 @@ void KineticAlgorithm::clear()
   next_queue_sequence_ = 0;
 }
 
-void KineticAlgorithm::processEvents(std::optional<double> end_time, Statistics* statistics)
+void EventScheduler::processEvents(std::optional<double> end_time, Statistics* statistics)
 {
   while (!events_.empty())
   {

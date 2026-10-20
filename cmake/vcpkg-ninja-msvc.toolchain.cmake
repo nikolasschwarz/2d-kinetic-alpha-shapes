@@ -44,10 +44,12 @@ elseif(_kinds_clang)
   message(FATAL_ERROR
     "kinDS: Ninja builds on Windows require MSVC (cl.exe), not Clang.\n"
     "vcpkg CGAL headers fail to compile with Clang (CGAL/boost/graph/iterator.h).\n"
-    "Open 'Developer PowerShell for VS 2022' (or run vcvars64.bat), then reconfigure.\n"
+    "Open a VS Developer PowerShell (VS 2022/2026) or run vcvars64.bat, then reconfigure.\n"
+    "If you recently installed a newer Visual Studio, delete the build directory and\n"
+    "reconfigure so cl.exe and the STL headers come from the same toolset.\n"
     "Alternatively use the Visual Studio generator preset: cmake --preset vcpkg-x64-vs")
 else()
   message(FATAL_ERROR
     "kinDS: MSVC (cl.exe) not found on PATH.\n"
-    "Open 'Developer PowerShell for VS 2022' or install the VS 2022 C++ workload.")
+    "Open a VS Developer PowerShell (VS 2022/2026) or install the C++ workload.")
 endif()

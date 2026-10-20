@@ -1,22 +1,33 @@
 #include "PlaneProjector.hpp"
 
-#include <cassert>
 #include <cmath>
-#include "Logger.hpp"
+#include <stdexcept>
+#include <string>
 
 using namespace kinDS;
 
 static const double EPS = 1e-8;
 
+static void requireSpanningAxes(const glm::dvec3& u, const glm::dvec3& v, const char* plane)
+{
+  const double lu = glm::length(u);
+  const double lv = glm::length(v);
+  const double area = glm::length(glm::cross(u, v));
+  if (lu <= EPS || lv <= EPS || area <= EPS)
+  {
+    throw std::runtime_error(std::string("PlaneProjector: ") + plane
+      + " transform is degenerate (zero or collinear profile axes, |u|=" + std::to_string(lu)
+      + " |v|=" + std::to_string(lv) + ")");
+  }
+}
+
 PlaneProjector::PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4& planeBToWorld)
 {
-  // Extract plane A
   extractPlaneFromTransform(planeAToWorld, m_oA, m_uA, m_vA);
-
-  // Extract plane B
   extractPlaneFromTransform(planeBToWorld, m_oB, m_uB, m_vB);
+  requireSpanningAxes(m_uA, m_vA, "plane A");
+  requireSpanningAxes(m_uB, m_vB, "plane B");
 
-  // Compute normals
   m_nA = glm::normalize(glm::cross(m_uA, m_vA));
   m_nB = glm::normalize(glm::cross(m_uB, m_vB));
 
@@ -50,7 +61,11 @@ PlaneProjector::PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4
     // Point on intersection line
     double denom = glm::dot(m_nA, glm::cross(m_nB, m_axis));
 
-    assert(std::abs(denom) > EPS);
+    if (std::abs(denom) <= EPS)
+    {
+      throw std::runtime_error(
+        "PlaneProjector: intersection-line denominator is degenerate (denom=" + std::to_string(denom) + ")");
+    }
 
     // BUG (suspected): for planes n·x + d = 0 this formula yields nA·m_p0 = dA and nB·m_p0 = dB,
     // but points on the planes must satisfy n·x = -d. So m_p0 generally does NOT lie on either
@@ -102,11 +117,11 @@ glm::dvec2 PlaneProjector::worldToLocalOnPlane(
   double wu = glm::dot(w, u);
   double wv = glm::dot(w, v);
 
-  double det = uu * vv - uv * uv;
-  if (std::abs(det) < EPS)
+  const double det = uu * vv - uv * uv;
+  if (!(std::abs(det) > EPS * EPS))
   {
-    // Degenerate case, warn
-    //KINDS_WARNING("Degenerate plane in PlaneProjector");
+    throw std::runtime_error("PlaneProjector: degenerate in-plane basis (det=" + std::to_string(det)
+      + " |u|=" + std::to_string(std::sqrt(uu)) + " |v|=" + std::to_string(std::sqrt(vv)) + ")");
   }
 
   double c = (wu * vv - wv * uv) / det;

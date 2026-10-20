@@ -25,6 +25,8 @@ struct MeshingBufferHashSettings {
   double branch_alpha_cutoff = 10.0;
   size_t look_ahead = 0;
   bool hinge_only_profile_plane_mix = false;
+  /// Included in the cache key when enabled (branch-parallel kinetic scheduling).
+  bool parallelize_independent_runtime_branches = false;
 };
 
 struct MeshingBufferHashStats {

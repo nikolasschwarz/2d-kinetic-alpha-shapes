@@ -1,5 +1,7 @@
 #pragma once
+#include "BranchScheduler.hpp"
 #include "HalfEdgeDelaunayGraph.hpp"
+#include "SlotTable.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "KineticAlgorithm.hpp"
 #include "Logger.hpp"
@@ -7,19 +9,21 @@
 #include "ProgressBar.hpp"
 #include "StrandTree.hpp"
 #include "Trajectory.hpp"
+#include <array>
 #include <filesystem>
 #include <format>
 #include <functional>
-#include <array>
 #include <glm/gtx/exterior_product.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <map>
 #include <memory>
-#include <unordered_map>
-#include <unordered_set>
+#include <mutex>
 #include <optional>
 #include <queue>
+#include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -242,8 +246,8 @@ class KineticDelaunay
     std::vector<std::vector<size_t>> branches;
     /// Parent runtime branch each branch split from (index = branch id); @ref no_branch for original branches.
     std::vector<size_t> parent;
-    /// Liveness per runtime branch id (index = branch id).
-    std::vector<bool> alive;
+    /// Liveness per runtime branch id (index = branch id). Bytes, not bits: branches retire from different threads.
+    std::vector<uint8_t> alive;
     /// For a parent branch mid-split, the child branch ids whose split has not been executed yet. Populated when the
     /// pending split is first noted and cleared when the split is executed.
     std::unordered_map<size_t, std::vector<size_t>> pending_splits;
@@ -268,10 +272,16 @@ class KineticDelaunay
     }
 
     /// Allocate a fresh, live runtime branch id, optionally recording its @p parent_branch.
+    /// Callers must hold @ref KineticDelaunay::lockSharedTopology; ids are otherwise racy.
     size_t allocate(size_t parent_branch = no_branch)
     {
       const size_t branch_id = next_branch_id++;
       ensureBranchCapacity(branch_id);
+      if (alive[branch_id])
+      {
+        throw std::runtime_error(
+          "RuntimeBranchData::allocate: id " + std::to_string(branch_id) + " is already live");
+      }
       alive[branch_id] = true;
       parent[branch_id] = parent_branch;
       return branch_id;
@@ -418,6 +428,20 @@ class KineticDelaunay
   std::vector<std::pair<size_t, double>> subdivision_schedule_;
   CallbackManager* callback_manager_ = nullptr;
   size_t sections_advanced = 0; // Counter for the number of sections advanced; starts at @ref start_section_
+  /// When true, after a physical runtime-branch cut each child runs on its own @ref BranchScheduler.
+  bool parallelize_independent_runtime_branches_ = false;
+  /// Root / pre-fork scheduler (also used for serial mode). Queue lives in @ref kinetic_algorithm_ root.
+  std::unique_ptr<BranchScheduler> root_branch_scheduler_;
+  /// Independent child schedulers created at fork (not including @ref root_branch_scheduler_).
+  std::vector<std::unique_ptr<BranchScheduler>> independent_branch_schedulers_;
+  std::mutex independent_scheduler_mutex_;
+  /// Serializes runtime-branch id allocation, pending-split bookkeeping, cuts, retirement and forks across
+  /// independent schedulers. Recursive: section events cut, retire and fork on the same stack.
+  mutable std::recursive_mutex shared_topology_mutex_;
+  /// Owner runtime branch per even half-edge slot (@c no_branch = unowned / shared serial).
+  SlotTable<size_t> even_half_edge_owner_runtime_branch_;
+  /// Owner runtime branch per face slot.
+  SlotTable<size_t> face_owner_runtime_branch_;
   /// First section index to initialize and process (inclusive). Default 0.
   size_t start_section_ = 0;
   /// Last section index to process (inclusive). Empty means @ref getSectionCount() - 1.
@@ -434,7 +458,8 @@ class KineticDelaunay
   double branch_cutoff;
   /// Extra sections above floor(t)+1 for branch_alpha same-branch classification (0 = default).
   size_t branch_alpha_look_ahead_ = 0;
-  std::vector<bool> face_inside; // Tracks whether faces are inside or outside the boundary
+  /// Per-face inside flag, stored as a byte so neighboring slots do not share a word.
+  SlotTable<uint8_t> face_inside;
 
   std::vector<std::vector<size_t>> branches; // track which vertices/splines belong to which branch
   std::vector<glm::dvec2> dummy_boundary;
@@ -454,8 +479,8 @@ class KineticDelaunay
   mutable double infinitesimal_schedule_t_ = 0.0;
   mutable size_t infinitesimal_schedule_parent_ = static_cast<size_t>(-1);
   mutable uint64_t infinitesimal_schedule_epoch_ = 0;
-  std::vector<EventTime> quadrilateral_last_updated;
-  std::vector<EventTime> face_last_updated;
+  SlotTable<EventTime> quadrilateral_last_updated;
+  SlotTable<EventTime> face_last_updated;
   bool on_the_fly_boundary = true;
   std::optional<std::filesystem::path> visual_debug_output_root_;
   bool visual_debug_enabled_ = false;
@@ -507,6 +532,31 @@ class KineticDelaunay
   void clearPendingBranchSplits();
   /// Drop pending kinetic entries for @p parent_runtime_branch_id and mark its runtime children as final.
   void completePendingRuntimeBranchSplit(size_t parent_runtime_branch_id, double t);
+  /// After a physical cut, fork independent @ref BranchScheduler instances for each child (when enabled).
+  void maybeForkBranchSchedulers(size_t parent_runtime_branch_id, const std::vector<size_t>& child_runtime_ids,
+    double t);
+  void setActiveBranchScheduler(BranchScheduler* scheduler);
+  /// Section counter for the active scheduler (falls back to @ref sections_advanced).
+  size_t& mutableActiveSectionsAdvanced();
+  size_t getActiveSectionsAdvanced() const;
+  /// Restrict @ref precomputeStep to simplices owned by @p runtime_branch_id (or all when no_branch).
+  void precomputeStepForRuntimeBranch(double t, size_t runtime_branch_id);
+  /// Populate owned HE/face sets for @p scheduler from current live graph + branch_map.
+  void rebuildSchedulerTopologyOwnership(BranchScheduler& scheduler);
+  /// Process @p scheduler's queue with the correct active context.
+  void processBranchScheduler(BranchScheduler& scheduler, std::optional<double> end_time = std::nullopt);
+  /// After the root queue drains, process independent child schedulers (serially or in parallel).
+  void processIndependentBranchSchedulers();
+  /// Schedule branch-local section events on @p scheduler for [@p from_section, exclusive end).
+  void scheduleBranchLocalSectionEvents(BranchScheduler& scheduler, size_t from_section);
+  /// After a section retire, enqueue a new independent scheduler for strands that still have later profiles.
+  void continueIndependentSchedulerFromSection(BranchScheduler& scheduler, size_t from_section);
+  /// Exclusive stop section: one past the earliest last support height of @p strand_ids, capped by @ref getEndSection.
+  size_t exclusiveEndSectionForStrands(const std::vector<size_t>& strand_ids) const;
+  /// Exclusive stop section for a forked scheduler (prefers @ref BranchScheduler::owned_strands).
+  size_t exclusiveEndSectionForScheduler(const BranchScheduler& scheduler) const;
+  /// processEvents cutoff: just after the last scheduled section time, so section H runs but t>H kinetics do not.
+  double exclusiveEndTimeForScheduler(const BranchScheduler& scheduler) const;
   /// Build a runtime-branch cut map that severs only @p target_parent_runtime_branch from its pending children.
   /// Other pending-split children are collapsed to their unsplit parent so they are not cut yet.
   std::vector<size_t> buildRuntimeBranchCutMapForParent(size_t target_parent_runtime_branch) const;
@@ -571,7 +621,13 @@ class KineticDelaunay
     std::optional<size_t> input_branch_id = std::nullopt);
   void logRuntimeBranchEvent(double t, const std::string& event_line);
   bool runtime_branch_log_header_written_ = false;
-  void retireFinishedInputBranches(double t);
+  /// Retire input branches whose last section is @p t. @p scope_runtime_branch limits this to one
+  /// scheduler's unsplit branch; @c BranchScheduler::no_branch retires every finished input branch.
+  void retireFinishedInputBranches(double t, size_t scope_runtime_branch);
+  /// Runtime branch of the active scheduler, or @c BranchScheduler::no_branch for the global queue.
+  size_t activeRuntimeBranchScope() const;
+  /// True when @p face_id belongs to @p scope_runtime_branch (pending split children count as their parent).
+  bool faceInRuntimeScope(size_t face_id, size_t scope_runtime_branch) const;
   void validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const;
   std::vector<std::vector<size_t>> extractGraphConnectedComponents() const;
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
@@ -612,6 +668,18 @@ class KineticDelaunay
     double branch_cutoff = -1.0);
   ~KineticDelaunay();
 
+  void setParallelizeIndependentRuntimeBranches(bool enabled)
+  {
+    parallelize_independent_runtime_branches_ = enabled;
+  }
+  bool parallelizeIndependentRuntimeBranches() const { return parallelize_independent_runtime_branches_; }
+  /// Hold while changing runtime-branch ids, pending splits or shared graph topology.
+  std::unique_lock<std::recursive_mutex> lockSharedTopology() const
+  {
+    return std::unique_lock<std::recursive_mutex>(shared_topology_mutex_);
+  }
+  BranchScheduler* activeBranchScheduler() const;
+
   bool isDummyBoundary(size_t v) const;
 
   /// True when @p strand_id has at least one incident half-edge in the live Delaunay graph.
@@ -627,6 +695,9 @@ class KineticDelaunay
 
   glm::dvec2 getPointAt(double t, size_t v, bool apply_reference_transform = true,
     bool include_virtual_offset = true) const;
+
+  /// True when @p strand_id has profile samples at @c ceil(t) (dummy strands are treated as always valid).
+  bool strandHasProfileAt(size_t strand_id, double t) const;
 
   /// Kinetic Delaunay / SVG coordinates: reference-branch frame with virtual separation (never object-space).
   glm::dvec2 getPointInDelaunaySpace(size_t v, double t) const;
@@ -688,6 +759,11 @@ class KineticDelaunay
   /// Input branch ids whose last real-strand section is @p t (same criterion as @ref retireFinishedInputBranches).
   /// When @ref setStartInputBranches is active, only branches that touch tracked strands are returned.
   std::vector<size_t> inputBranchesFinishingAtSection(double t) const;
+  /// True when @p input_branch_id at @p section belongs to @p scope_runtime_branch. Pending split children
+  /// count as their parent until the cut. @c BranchScheduler::no_branch matches every input branch.
+  bool inputBranchInRuntimeScope(size_t section, size_t input_branch_id, size_t scope_runtime_branch) const;
+  /// Unsplit runtime branch of @p strand_id (a pending split child maps to its parent); @c no_branch if unassigned.
+  size_t unsplitRuntimeBranchForStrand(size_t strand_id) const;
 
   void setVisualDebugOutputRoot(const std::filesystem::path& root);
   const std::optional<std::filesystem::path>& getVisualDebugOutputRoot() const;
@@ -921,12 +997,14 @@ class KineticDelaunay
 
   std::vector<std::vector<size_t>> checkForSplit(const std::array<int, 3>& tri_vertices, double t) const;
   /// Same split check using an explicit face-inside state, allowing callbacks to predict a radius event's target state.
+  template<class InsideFlags>
   std::vector<std::vector<size_t>> checkForSplit(
-    const std::array<int, 3>& tri_vertices, const std::vector<bool>& inside_state, double t) const;
+    const std::array<int, 3>& tri_vertices, const InsideFlags& inside_state, double t) const;
   /// Usual @ref checkForSplit criterion on a kinetic component (no radius-triangle seed required).
   std::vector<std::vector<size_t>> checkForSplitOnComponent(size_t parent_component_id, double t) const;
+  template<class InsideFlags>
   std::vector<std::vector<size_t>> checkForSplitOnComponent(size_t parent_component_id,
-    const std::vector<bool>& inside_state, double t,
+    const InsideFlags& inside_state, double t,
     std::optional<size_t> preferred_retained_seed = std::nullopt) const;
 
   std::vector<std::vector<size_t>> extractConnectedComponents() const;
@@ -940,7 +1018,7 @@ class KineticDelaunay
   std::vector<BoundaryPoint> extractComponentBoundary(const std::vector<size_t>& component, double t,
     bool apply_reference_transform = true, bool include_virtual_offset = true) const;
 
-  const std::vector<bool>& getFacesInside() const;
+  const SlotTable<uint8_t>& getFacesInside() const;
 
   bool getFaceInside(size_t face_index) const;
 
@@ -1014,7 +1092,7 @@ class KineticDelaunay
 
   /**
    * Runtime branch of a live half-edge, resolved from its incident face(s).
-   * Returns 0 when the half-edge is dead or the branch cannot be resolved.
+   * Returns @ref RuntimeBranchData::no_branch when the half-edge is dead or mixed.
    */
   size_t getRuntimeBranchIdForHalfEdge(size_t half_edge_id) const;
 

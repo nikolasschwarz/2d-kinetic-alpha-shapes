@@ -87,12 +87,12 @@ class StrandTree
   {
     return physics_strand_to_segment_indices[strand_id];
   }
-  const glm::dmat4& getTransformByHeightAndBranch(size_t height, size_t branch_id) const
-  {
-    return transforms_by_height_and_branch[height][branch_id];
-  }
+  const glm::dmat4& getTransformByHeightAndBranch(size_t height, size_t branch_id) const;
+  /// Profile transform at @p height for @p branch_id, or for the parent that exists there if the branch is born later.
+  const glm::dmat4& getResolvedTransformByHeightAndBranch(
+    size_t height, size_t branch_id, size_t branch_lookup_height) const;
   const std::vector<size_t>& getBranchIndices(size_t strand_id) const { return branch_indices[strand_id]; }
-  /** Input branch id at @p height; clamps @p height to the last entry when the strand ended earlier. */
+  /** Input branch id at @p height; uses the last entry when the strand ended earlier. Throws if the strand is unknown. */
   size_t getBranchIndex(size_t strand_id, size_t height) const;
   const std::vector<std::vector<size_t>>& getStrandBranchesByHeight(size_t height) const
   {

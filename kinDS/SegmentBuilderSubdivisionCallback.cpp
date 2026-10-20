@@ -77,8 +77,6 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
   }
   segment_builder_.markInteriorMeshletsCompletedForVoronoiCell(strand_id);
 
-  size_t new_segment_id = segment_builder_.segment_properties.size();
-
   // Closing mesh tracing is the authoritative boundary-interval list for finish/start.
   std::vector<SegmentBuilder::BoundaryIntersectionInterval> traced_boundary_intervals;
   size_t closing_mesh_index
@@ -158,17 +156,16 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
     segment_builder_.markBoundaryMeshletCompleted(mesh_id);
   }
 
-  MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_builder_.segment_mesh_pairs[closing_mesh_index];
-  segment_mesh_pair.segment_index0 = segment_builder_.strand_to_segment_indices[strand_id].back();
-  segment_mesh_pair.segment_index1 = new_segment_id;
-
   // Old segment is finished at this subdivision; record runtime branch before allocating the next.
   segment_builder_.recordRuntimeBranchForStrandCurrentSegment(strand_id);
 
-  MeshStructure::SegmentProperties properties;
-  segment_builder_.segment_properties.push_back(properties);
-  segment_builder_.segment_runtime_branch_.push_back(KineticDelaunay::RuntimeBranchData::no_branch);
-  segment_builder_.strand_to_segment_indices[strand_id].push_back(new_segment_id);
+  const size_t new_segment_id = segment_builder_.allocateStableSegmentForStrand(strand_id);
+
+  MeshStructure::SegmentMeshPair& segment_mesh_pair = segment_builder_.segment_mesh_pairs[closing_mesh_index];
+  // Previous segment is one before the newly allocated back().
+  const auto& strand_segs = segment_builder_.strand_to_segment_indices[strand_id];
+  segment_mesh_pair.segment_index0 = strand_segs.size() >= 2 ? strand_segs[strand_segs.size() - 2] : strand_segs.back();
+  segment_mesh_pair.segment_index1 = new_segment_id;
 
   // Start new regular Voronoi-edge strips and extend adjacent inside strips.
   for (HalfEdgeDelaunayGraph::IncidentEdgeIterator it = graph.incidentEdgesBegin(strand_id),

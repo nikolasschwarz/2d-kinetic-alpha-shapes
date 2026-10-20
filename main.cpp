@@ -9,6 +9,7 @@
 #include "kinDS/Validator.hpp"
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <ctime>
 #include <filesystem>
@@ -18,8 +19,45 @@
 #include <queue>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility> // for std::pair
 #include <vector>
+
+/// Whole-string numeric parse. Does not throw, so a non-numeric token is not a first-chance exception.
+static bool parse_finite_double(std::string_view text, double& out)
+{
+  if (text.empty())
+  {
+    return false;
+  }
+  double parsed = 0.0;
+  const char* const begin = text.data();
+  const std::from_chars_result result = std::from_chars(begin, begin + text.size(), parsed);
+  if (result.ec != std::errc() || result.ptr != begin + text.size() || !std::isfinite(parsed))
+  {
+    return false;
+  }
+  out = parsed;
+  return true;
+}
+
+static bool parse_nonnegative_size(std::string_view text, size_t& out)
+{
+  if (text.empty())
+  {
+    return false;
+  }
+  unsigned long long parsed = 0;
+  const char* const begin = text.data();
+  const std::from_chars_result result = std::from_chars(begin, begin + text.size(), parsed);
+  if (result.ec != std::errc() || result.ptr != begin + text.size())
+  {
+    return false;
+  }
+  out = static_cast<size_t>(parsed);
+  return true;
+}
 
 std::vector<std::pair<size_t, double>> merge_sorted_vectors(const std::vector<std::vector<double>>& inputs)
 {
@@ -515,6 +553,9 @@ static void print_usage(const char* program_name)
             << "  --branch-cutoff <value>   Cross-branch radius cutoff; disabled when equal to --cutoff\n"
             << "                            (default: same as --cutoff)\n"
             << "  --look-ahead <n>          Extra sections above floor(t)+1 for branch-alpha same-branch checks (default: 0)\n"
+            << "  --parallelize-branches    After a physical runtime-branch cut, continue each child on its own\n"
+            << "                            event queue and branch-local section schedule (may run concurrently).\n"
+            << "                            Default: off (global serial kinetic scheduling).\n"
             << "  --debug-files [path] [lower] [upper]\n"
             << "                            Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
             << "                            and error dumps). Optional output directory (default: cwd).\n"
@@ -547,6 +588,7 @@ static void print_usage(const char* program_name)
             << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
             << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
             << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
+            << "  " << program_name << " --parallelize-branches --mesh strandtree.txt\n"
             << "  " << program_name << " --export-mode combined --export-gpu-attributes --mesh strandtree.txt combined.obj\n";
 }
 
@@ -576,6 +618,7 @@ static const std::vector<std::string>& known_cli_flags()
     "--cutoff",
     "--branch-cutoff",
     "--look-ahead",
+    "--parallelize-branches",
     "--debug-files",
     "--svg-separate-pending-splits",
     "--error-files",
@@ -694,8 +737,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   bool export_gpu_attributes_json, const std::string& validate_log_path, bool alternate_section_shading,
   size_t start_section, const std::optional<std::vector<size_t>>& start_input_branches,
   std::optional<size_t> end_section, bool mesh_cap_at_start, bool mesh_cap_at_end,
-  double alpha_cutoff, double branch_alpha_cutoff, size_t look_ahead, bool visual_debug, bool error_files,
-  bool visual_debug_separate_pending_splits,
+  double alpha_cutoff, double branch_alpha_cutoff, size_t look_ahead, bool parallelize_independent_runtime_branches,
+  bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
   const std::optional<std::filesystem::path>& visual_debug_output_root,
   const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
   bool check_sites_inside_convex_hull)
@@ -746,6 +789,7 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().alpha_cutoff = alpha_cutoff;
     mesher.getSettings().branch_alpha_cutoff = branch_alpha_cutoff;
     mesher.getSettings().look_ahead = look_ahead;
+    mesher.getSettings().parallelize_independent_runtime_branches = parallelize_independent_runtime_branches;
     mesher.getSettings().visual_debug = visual_debug;
     mesher.getSettings().error_files = error_files || visual_debug;
     mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
@@ -760,6 +804,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     std::cout << "Branch alpha cutoff: " << branch_alpha_cutoff
               << (branch_alpha_cutoff == alpha_cutoff ? " (disabled, equal to alpha cutoff)" : "") << std::endl;
     std::cout << "Look ahead: " << look_ahead << std::endl;
+    std::cout << "Parallelize independent runtime branches: "
+              << (parallelize_independent_runtime_branches ? "enabled" : "disabled") << std::endl;
     if (check_sites_inside_convex_hull)
     {
       std::cout << "Sites-in-hull check: enabled" << std::endl;
@@ -968,6 +1014,8 @@ int main(int argc, char* argv[])
   double mesh_alpha_cutoff = kinDS::TreeMesher::Settings {}.alpha_cutoff;
   std::optional<double> mesh_branch_alpha_cutoff; // unset → inherit mesh_alpha_cutoff after parsing
   size_t mesh_look_ahead = kinDS::TreeMesher::Settings {}.look_ahead;
+  bool mesh_parallelize_independent_runtime_branches =
+    kinDS::TreeMesher::Settings {}.parallelize_independent_runtime_branches;
   bool mesh_visual_debug = false;
   bool mesh_error_files = false;
   bool mesh_visual_debug_separate_pending_splits = false;
@@ -1131,16 +1179,7 @@ int main(int argc, char* argv[])
         print_usage(argv[0]);
         return 1;
       }
-      try
-      {
-        const long long parsed = std::stoll(argv[arg_idx + 1]);
-        if (parsed < 0)
-        {
-          throw std::out_of_range("negative");
-        }
-        mesh_start_section = static_cast<size_t>(parsed);
-      }
-      catch (const std::exception&)
+      if (!parse_nonnegative_size(argv[arg_idx + 1], mesh_start_section))
       {
         std::cerr << "Error: --start expects a non-negative integer section index." << std::endl;
         print_usage(argv[0]);
@@ -1178,22 +1217,15 @@ int main(int argc, char* argv[])
           continue; // allow "1,,2" / trailing commas
         }
         const std::string trimmed = token.substr(begin, end - begin);
-        try
-        {
-          const long long parsed = std::stoll(trimmed);
-          if (parsed < 0)
-          {
-            throw std::out_of_range("negative");
-          }
-          ids.push_back(static_cast<size_t>(parsed));
-        }
-        catch (const std::exception&)
+        size_t parsed = 0;
+        if (!parse_nonnegative_size(trimmed, parsed))
         {
           std::cerr << "Error: --start-branches expects comma-separated non-negative integers; got '" << trimmed
                     << "'." << std::endl;
           print_usage(argv[0]);
           return 1;
         }
+        ids.push_back(parsed);
       }
       mesh_start_input_branches = std::move(ids);
       arg_idx += 2;
@@ -1206,21 +1238,14 @@ int main(int argc, char* argv[])
         print_usage(argv[0]);
         return 1;
       }
-      try
-      {
-        const long long parsed = std::stoll(argv[arg_idx + 1]);
-        if (parsed < 0)
-        {
-          throw std::out_of_range("negative");
-        }
-        mesh_end_section = static_cast<size_t>(parsed);
-      }
-      catch (const std::exception&)
+      size_t parsed_end = 0;
+      if (!parse_nonnegative_size(argv[arg_idx + 1], parsed_end))
       {
         std::cerr << "Error: --end expects a non-negative integer section index." << std::endl;
         print_usage(argv[0]);
         return 1;
       }
+      mesh_end_section = parsed_end;
       arg_idx += 2;
     }
     else if (arg == "--mesh-cap-at-start")
@@ -1241,21 +1266,14 @@ int main(int argc, char* argv[])
         print_usage(argv[0]);
         return 1;
       }
-      try
-      {
-        const double parsed = std::stod(argv[arg_idx + 1]);
-        if (!(parsed >= 0.0) || !std::isfinite(parsed))
-        {
-          throw std::out_of_range("non-finite or negative");
-        }
-        mesh_alpha_cutoff = parsed;
-      }
-      catch (const std::exception&)
+      double parsed_cutoff = 0.0;
+      if (!parse_finite_double(argv[arg_idx + 1], parsed_cutoff) || !(parsed_cutoff >= 0.0))
       {
         std::cerr << "Error: --cutoff expects a non-negative finite number." << std::endl;
         print_usage(argv[0]);
         return 1;
       }
+      mesh_alpha_cutoff = parsed_cutoff;
       arg_idx += 2;
     }
     else if (arg == "--branch-cutoff")
@@ -1266,21 +1284,14 @@ int main(int argc, char* argv[])
         print_usage(argv[0]);
         return 1;
       }
-      try
-      {
-        const double parsed = std::stod(argv[arg_idx + 1]);
-        if (!(parsed >= 0.0) || !std::isfinite(parsed))
-        {
-          throw std::out_of_range("non-finite or negative");
-        }
-        mesh_branch_alpha_cutoff = parsed;
-      }
-      catch (const std::exception&)
+      double parsed_branch_cutoff = 0.0;
+      if (!parse_finite_double(argv[arg_idx + 1], parsed_branch_cutoff) || !(parsed_branch_cutoff >= 0.0))
       {
         std::cerr << "Error: --branch-cutoff expects a non-negative finite number." << std::endl;
         print_usage(argv[0]);
         return 1;
       }
+      mesh_branch_alpha_cutoff = parsed_branch_cutoff;
       arg_idx += 2;
     }
     else if (arg == "--look-ahead")
@@ -1291,16 +1302,7 @@ int main(int argc, char* argv[])
         print_usage(argv[0]);
         return 1;
       }
-      try
-      {
-        const long long parsed = std::stoll(argv[arg_idx + 1]);
-        if (parsed < 0)
-        {
-          throw std::out_of_range("negative");
-        }
-        mesh_look_ahead = static_cast<size_t>(parsed);
-      }
-      catch (const std::exception&)
+      if (!parse_nonnegative_size(argv[arg_idx + 1], mesh_look_ahead))
       {
         std::cerr << "Error: --look-ahead expects a non-negative integer." << std::endl;
         print_usage(argv[0]);
@@ -1308,30 +1310,16 @@ int main(int argc, char* argv[])
       }
       arg_idx += 2;
     }
+    else if (arg == "--parallelize-branches")
+    {
+      mesh_parallelize_independent_runtime_branches = true;
+      ++arg_idx;
+    }
     else if (arg == "--debug-files")
     {
       mesh_visual_debug = true;
       // Optional trailing args. Numeric tokens are time bounds; a non-numeric first token is a path.
       // Forms: (none) | <path> | <lower> | <lower> <upper> | <path> <lower> | <path> <lower> <upper>
-      auto try_parse_finite_double = [](const std::string& text, double& out) -> bool
-      {
-        try
-        {
-          size_t consumed = 0;
-          const double parsed = std::stod(text, &consumed);
-          if (consumed != text.size() || !std::isfinite(parsed))
-          {
-            return false;
-          }
-          out = parsed;
-          return true;
-        }
-        catch (const std::exception&)
-        {
-          return false;
-        }
-      };
-
       std::vector<std::string> extras;
       while (arg_idx + 1 < argc && extras.size() < 3)
       {
@@ -1348,7 +1336,7 @@ int main(int argc, char* argv[])
       if (extras.size() == 1)
       {
         double lower = 0.0;
-        if (try_parse_finite_double(extras[0], lower))
+        if (parse_finite_double(extras[0], lower))
         {
           mesh_visual_debug_time_lower = lower;
         }
@@ -1361,8 +1349,8 @@ int main(int argc, char* argv[])
       {
         double first_num = 0.0;
         double second_num = 0.0;
-        const bool first_is_number = try_parse_finite_double(extras[0], first_num);
-        const bool second_is_number = try_parse_finite_double(extras[1], second_num);
+        const bool first_is_number = parse_finite_double(extras[0], first_num);
+        const bool second_is_number = parse_finite_double(extras[1], second_num);
         if (first_is_number && second_is_number)
         {
           if (!(first_num <= second_num))
@@ -1391,14 +1379,14 @@ int main(int argc, char* argv[])
       {
         double lower = 0.0;
         double upper = 0.0;
-        if (try_parse_finite_double(extras[0], lower))
+        if (parse_finite_double(extras[0], lower))
         {
           std::cerr << "Error: --debug-files <path> <lower> <upper> expects a non-numeric path as the first argument."
                     << std::endl;
           print_usage(argv[0]);
           return 1;
         }
-        if (!try_parse_finite_double(extras[1], lower) || !try_parse_finite_double(extras[2], upper))
+        if (!parse_finite_double(extras[1], lower) || !parse_finite_double(extras[2], upper))
         {
           std::cerr << "Error: --debug-files expects <path> <lower> <upper> with finite numeric bounds."
                     << std::endl;
@@ -1529,7 +1517,8 @@ int main(int argc, char* argv[])
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
           mesh_export_gpu_attributes_json, mesh_validate_log_path, mesh_alternate_section_shading,
           mesh_start_section, mesh_start_input_branches, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,
-          mesh_alpha_cutoff, resolved_branch_alpha_cutoff, mesh_look_ahead, mesh_visual_debug, mesh_error_files,
+          mesh_alpha_cutoff, resolved_branch_alpha_cutoff, mesh_look_ahead,
+          mesh_parallelize_independent_runtime_branches, mesh_visual_debug, mesh_error_files,
           mesh_visual_debug_separate_pending_splits,
           mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
           mesh_check_sites_inside_convex_hull))

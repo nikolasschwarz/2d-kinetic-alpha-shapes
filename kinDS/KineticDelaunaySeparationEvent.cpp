@@ -13,6 +13,7 @@ void KineticDelaunay::SeparationEvent::handleEvent()
   {
     throw std::runtime_error("SeparationEvent has no KineticDelaunay pointer");
   }
+  const auto topology_lock = kd->lockSharedTopology();
 
   const std::optional<PendingBranchSplit> split = kd->getPendingBranchSplit(parent_component_id);
   if (!split.has_value() || split->on_hiatus || split->split_component_ids.size() < 2)

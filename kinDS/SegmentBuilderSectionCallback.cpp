@@ -30,7 +30,8 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     /*explicit_runtime_branch_ids=*/nullptr, section->creation_time,
     /*fan_out_active_runtime_branches=*/true, section->eventId());
 
-  segment_builder_.advanceBoundaryMeshes(t);
+  const size_t section_runtime_branch = section->runtime_branch_id;
+  segment_builder_.advanceBoundaryMeshes(t, section_runtime_branch);
 
   segment_builder_.maybeInduceSplitsAtSection(t);
 
@@ -39,6 +40,38 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     [&](size_t live_index)
   {
     const size_t i = graph.liveDelaunayEdgeId(live_index);
+    if (section_runtime_branch != BranchScheduler::no_branch)
+    {
+      const int origin = graph.halfEdge(i).origin;
+      const int dest = graph.destination(i);
+      const size_t o_branch = origin >= 0
+        ? segment_builder_.kin_del.unsplitRuntimeBranchForStrand(static_cast<size_t>(origin))
+        : BranchScheduler::no_branch;
+      const size_t d_branch = dest >= 0
+        ? segment_builder_.kin_del.unsplitRuntimeBranchForStrand(static_cast<size_t>(dest))
+        : BranchScheduler::no_branch;
+      if (o_branch != section_runtime_branch && d_branch != section_runtime_branch)
+      {
+        return;
+      }
+      // After a cut, do not mesh a parent-owned edge that still touches another runtime branch's strands.
+      if (origin >= 0 && o_branch != BranchScheduler::no_branch && o_branch != section_runtime_branch)
+      {
+        return;
+      }
+      if (dest >= 0 && d_branch != BranchScheduler::no_branch && d_branch != section_runtime_branch)
+      {
+        return;
+      }
+      if (origin >= 0 && !segment_builder_.kin_del.strandHasProfileAt(static_cast<size_t>(origin), t))
+      {
+        return;
+      }
+      if (dest >= 0 && !segment_builder_.kin_del.strandHasProfileAt(static_cast<size_t>(dest), t))
+      {
+        return;
+      }
+    }
     // use the origin of the half edge to obtain the correct component
     auto vertex = graph.halfEdge(i).origin;
 
@@ -97,10 +130,14 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     }
   });
 
-  segment_builder_.createClosingCapsForInputBranchesFinishingAtSection(t);
-
   for (size_t input_branch_id : segment_builder_.kin_del.inputBranchesFinishingAtSection(t))
   {
+    if (!segment_builder_.kin_del.inputBranchInRuntimeScope(
+          static_cast<size_t>(t), input_branch_id, section_runtime_branch))
+    {
+      continue;
+    }
+    segment_builder_.createClosingCapsForInputBranchFinishingAtSection(t, input_branch_id);
     segment_builder_.addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
   }
 

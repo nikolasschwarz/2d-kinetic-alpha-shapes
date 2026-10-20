@@ -647,7 +647,12 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   if (segment_builder_.radius_pending_split_triangle_fallback_enabled
     && segment_builder_.radius_boundary_transition_shift_enabled)
   {
-    std::vector<bool> target_face_inside = segment_builder_.kin_del.getFacesInside();
+    const auto& live_face_inside = segment_builder_.kin_del.getFacesInside();
+    std::vector<bool> target_face_inside(live_face_inside.size());
+    for (size_t inside_index = 0; inside_index < live_face_inside.size(); ++inside_index)
+    {
+      target_face_inside[inside_index] = live_face_inside[inside_index] != 0;
+    }
     if (face_id < target_face_inside.size())
     {
       target_face_inside[face_id] = radius->target_inside;
@@ -831,27 +836,27 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
                                     + segment_builder_.getPointInMeshSpace(vertices[2], radius->occurrence_time))
       / 3.0;
 
-    size_t new_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
-    segment_builder_.addBoundaryVertex(glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time },
-      glm::dvec2 { 0.0, 0.0 }, vertices[0], radius->occurrence_time, false, mesh_point);
+    segment_builder_.boundary_mesh_.withLock([&] {
+      const size_t new_vertex_index
+        = segment_builder_.addBoundaryVertex(glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time },
+          glm::dvec2 { 0.0, 0.0 }, vertices[0], radius->occurrence_time, false, mesh_point);
 
-    if (is_inside)
-    {
-      for (size_t i = 0; i < 3; ++i)
+      if (is_inside)
       {
-        segment_builder_.boundary_mesh_last_left_and_right_vertex[face_half_edges[i]]
-          = std::make_pair(new_vertex_index, new_vertex_index);
+        for (size_t i = 0; i < 3; ++i)
+        {
+          segment_builder_.boundary_mesh_.setLastLeftAndRight(face_half_edges[i], new_vertex_index, new_vertex_index);
+        }
       }
-    }
-    else
-    {
-      for (size_t i = 0; i < 3; ++i)
+      else
       {
-        size_t outer_he_id = face_half_edges[i] ^ 1;
-        segment_builder_.boundary_mesh_last_left_and_right_vertex[outer_he_id]
-          = std::make_pair(new_vertex_index, new_vertex_index);
+        for (size_t i = 0; i < 3; ++i)
+        {
+          const size_t outer_he_id = face_half_edges[i] ^ 1;
+          segment_builder_.boundary_mesh_.setLastLeftAndRight(outer_he_id, new_vertex_index, new_vertex_index);
+        }
       }
-    }
+    });
 
     break;
   }
@@ -894,25 +899,6 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       boundary_he_id = inner_he_id;
     }
 
-    const auto& boundary_last_vertices = segment_builder_.boundary_mesh_last_left_and_right_vertex[boundary_he_id];
-
-    size_t new_boundary_vertex_index = segment_builder_.addBoundaryVertex(
-      glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], radius->occurrence_time }, centroid, opposite_vertex,
-      radius->occurrence_time, false, mesh_point);
-
-    size_t index
-      = segment_builder_.addBoundaryTriangle(boundary_last_vertices.first, boundary_last_vertices.second, new_boundary_vertex_index);
-
-    if (index == size_t(-1))
-    {
-      KINDS_DEBUG("\ninner_he_id: " << inner_he_id << "\nouter_he_id: " << outer_he_id
-                                    << "\nlast_vertices: " << boundary_last_vertices.first << ", "
-                                    << boundary_last_vertices.second << "\ninner last vertices: "
-                                    << segment_builder_.boundary_mesh_last_left_and_right_vertex[inner_he_id].first << ", "
-                                    << segment_builder_.boundary_mesh_last_left_and_right_vertex[inner_he_id].second << "\nu: " << u
-                                    << ", v: " << v << ", opposite: " << opposite_vertex);
-    }
-
     size_t he1_id = graph.halfEdge(inner_he_id).next;
     size_t he2_id = graph.halfEdge(he1_id).next;
 
@@ -922,11 +908,32 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       he2_id = he2_id ^ 1;
     }
 
-    segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id]
-      = std::make_pair(boundary_last_vertices.first, new_boundary_vertex_index);
-    segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id]
-      = std::make_pair(new_boundary_vertex_index, boundary_last_vertices.second);
-    segment_builder_.boundary_mesh_last_left_and_right_vertex[boundary_he_id] = std::make_pair(-1, -1);
+    segment_builder_.boundary_mesh_.withLock([&] {
+      const auto boundary_last_vertices = segment_builder_.boundary_mesh_.lastLeftAndRight(boundary_he_id);
+      const auto inner_last = segment_builder_.boundary_mesh_.lastLeftAndRight(inner_he_id);
+      const size_t new_boundary_vertex_index = segment_builder_.addBoundaryVertex(
+        glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], radius->occurrence_time }, centroid,
+        opposite_vertex, radius->occurrence_time, false, mesh_point);
+
+      const size_t index = segment_builder_.addBoundaryTriangle(
+        boundary_last_vertices.first, boundary_last_vertices.second, new_boundary_vertex_index);
+
+      if (index == static_cast<size_t>(-1))
+      {
+        KINDS_DEBUG("\ninner_he_id: " << inner_he_id << "\nouter_he_id: " << outer_he_id
+                                      << "\nlast_vertices: " << boundary_last_vertices.first << ", "
+                                      << boundary_last_vertices.second << "\ninner last vertices: " << inner_last.first
+                                      << ", " << inner_last.second << "\nu: " << u << ", v: " << v
+                                      << ", opposite: " << opposite_vertex);
+      }
+
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(
+        he1_id, boundary_last_vertices.first, new_boundary_vertex_index);
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(
+        he2_id, new_boundary_vertex_index, boundary_last_vertices.second);
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(
+        boundary_he_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
+    });
 
     break;
   }
@@ -963,11 +970,6 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
     auto centroid = polygonCentroid(boundary_polygon);
 
-    size_t old_boundary_vertex_index = segment_builder_.boundary_mesh.getVertices().size();
-    segment_builder_.addBoundaryVertex(
-      glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], radius->occurrence_time }, centroid, opposite_vertex,
-      radius->occurrence_time, false, mesh_point);
-
     size_t he1_id = graph.halfEdge(inner_he_id).next;
     size_t he2_id = graph.halfEdge(he1_id).next;
     if (is_inside)
@@ -976,47 +978,46 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       he2_id = he2_id ^ 1;
     }
 
-    size_t index = segment_builder_.addBoundaryTriangle(segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id].first,
-      segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id].second, old_boundary_vertex_index);
-    if (index == size_t(-1))
-    {
-      KINDS_DEBUG("he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1)
-                             << "\nlast_vertices: " << segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id].first << ", "
-                             << segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id].second
-                             << "\ntwin last vertices: " << segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].first
-                             << ", " << segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id ^ 1].second
-                             << "\nopposite: " << opposite_vertex);
-    }
+    segment_builder_.boundary_mesh_.withLock([&] {
+      const auto he1_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he1_id);
+      const auto he1_twin_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he1_id ^ 1);
+      const auto he2_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he2_id);
+      const auto he2_twin_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he2_id ^ 1);
+      const size_t old_boundary_vertex_index = segment_builder_.addBoundaryVertex(
+        glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], radius->occurrence_time }, centroid,
+        opposite_vertex, radius->occurrence_time, false, mesh_point);
 
-    index = segment_builder_.addBoundaryTriangle(segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id].first,
-      segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id].second, old_boundary_vertex_index);
-    if (index == size_t(-1))
-    {
-      KINDS_DEBUG("he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1)
-                             << "\nlast_vertices: " << segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id].first << ", "
-                             << segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id].second
-                             << "\ntwin last vertices: " << segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].first
-                             << ", " << segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id ^ 1].second
-                             << "\nopposite: " << opposite_vertex);
-    }
+      size_t index
+        = segment_builder_.addBoundaryTriangle(he1_last.first, he1_last.second, old_boundary_vertex_index);
+      if (index == static_cast<size_t>(-1))
+      {
+        KINDS_DEBUG("he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1) << "\nlast_vertices: " << he1_last.first << ", "
+                               << he1_last.second << "\ntwin last vertices: " << he1_twin_last.first << ", "
+                               << he1_twin_last.second << "\nopposite: " << opposite_vertex);
+      }
 
-    segment_builder_.half_edge_to_boundary_vertex_index[outer_he_id] = old_boundary_vertex_index;
+      index = segment_builder_.addBoundaryTriangle(he2_last.first, he2_last.second, old_boundary_vertex_index);
+      if (index == static_cast<size_t>(-1))
+      {
+        KINDS_DEBUG("he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1) << "\nlast_vertices: " << he2_last.first << ", "
+                               << he2_last.second << "\ntwin last vertices: " << he2_twin_last.first << ", "
+                               << he2_twin_last.second << "\nopposite: " << opposite_vertex);
+      }
 
-    if (!is_inside)
-    {
-      segment_builder_.boundary_mesh_last_left_and_right_vertex[outer_he_id]
-        = std::make_pair(segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id].first,
-          segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id].second);
-    }
-    else
-    {
-      segment_builder_.boundary_mesh_last_left_and_right_vertex[inner_he_id]
-        = std::make_pair(segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id].second,
-          segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id].first);
-    }
+      segment_builder_.boundary_mesh_.setHalfEdgeBoundaryVertex(outer_he_id, old_boundary_vertex_index);
 
-    segment_builder_.boundary_mesh_last_left_and_right_vertex[he1_id] = std::make_pair(-1, -1);
-    segment_builder_.boundary_mesh_last_left_and_right_vertex[he2_id] = std::make_pair(-1, -1);
+      if (!is_inside)
+      {
+        segment_builder_.boundary_mesh_.setLastLeftAndRight(outer_he_id, he1_last.first, he2_last.second);
+      }
+      else
+      {
+        segment_builder_.boundary_mesh_.setLastLeftAndRight(inner_he_id, he2_last.second, he1_last.first);
+      }
+
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(he1_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(he2_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
+    });
     break;
   }
   case 3:
@@ -1035,14 +1036,17 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
                                     + segment_builder_.getPointInMeshSpace(vertices[2], radius->occurrence_time))
       / 3.0;
 
-    size_t new_vertex_index = segment_builder_.addBoundaryVertex(glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time },
-      glm::dvec2 { 0.0, 0.0 }, vertices[0], radius->occurrence_time, false, mesh_point);
+    segment_builder_.boundary_mesh_.withLock([&] {
+      const size_t new_vertex_index = segment_builder_.addBoundaryVertex(
+        glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time }, glm::dvec2 { 0.0, 0.0 }, vertices[0],
+        radius->occurrence_time, false, mesh_point);
 
-    for (size_t i = 0; i < 3; ++i)
-    {
-      const auto& last_vertices = segment_builder_.boundary_mesh_last_left_and_right_vertex[face_half_edges[i]];
-      segment_builder_.addBoundaryTriangle(last_vertices.first, last_vertices.second, new_vertex_index);
-    }
+      for (size_t i = 0; i < 3; ++i)
+      {
+        const auto last_vertices = segment_builder_.boundary_mesh_.lastLeftAndRight(face_half_edges[i]);
+        segment_builder_.addBoundaryTriangle(last_vertices.first, last_vertices.second, new_vertex_index);
+      }
+    });
 
     break;
   }

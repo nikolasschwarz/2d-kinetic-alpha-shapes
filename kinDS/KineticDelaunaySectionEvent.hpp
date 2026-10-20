@@ -11,12 +11,16 @@ class KineticDelaunay::SectionEvent final : public KineticDelaunay::Event
   KineticDelaunay* kd_;
   size_t section_id;
   glm::dvec2 position;
+  /// @c BranchScheduler::no_branch = global / pre-fork section spanning all live topology.
+  size_t runtime_branch_id = BranchScheduler::no_branch;
 
-  SectionEvent(KineticDelaunay* kd, double t, size_t section_id, double creation_time, glm::dvec2 position)
+  SectionEvent(KineticDelaunay* kd, double t, size_t section_id, double creation_time, glm::dvec2 position,
+    size_t runtime_branch_id = BranchScheduler::no_branch)
     : KineticDelaunay::Event(t, creation_time, 10u)
     , kd_(kd)
     , section_id(section_id)
     , position(position)
+    , runtime_branch_id(runtime_branch_id)
   {
   }
 

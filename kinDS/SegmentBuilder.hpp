@@ -1,4 +1,5 @@
 #pragma once
+#include "BoundaryMesh.hpp"
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "MeshStructure.hpp"
@@ -237,6 +238,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
+  /// Precomputed dense meshing segment ids: [strand][ordinal] from subdivision / physics input.
+  std::vector<std::vector<size_t>> stable_segment_ids_by_strand_;
+  /// True once @ref allocateStableSegmentForStrand has claimed the slot.
+  std::vector<bool> segment_slot_created_;
   std::vector<MeshStructure::SegmentProperties> segment_properties; // Properties for each segment mesh
   /// Runtime branch id for each meshing segment / combined meshlet index, recorded when that segment's
   /// meshlets are finished (section event, branch tip, subdivision, finalize). @c no_branch until then.
@@ -253,7 +258,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   };
   std::optional<glm::dvec3> active_crossing_mesh_position_;
   std::optional<glm::dvec2> active_crossing_delaunay_xy_;
-  std::vector<size_t>
+  SlotTable<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
   std::vector<std::string> meshlet_export_suffixes; // Parallel to `meshes`, e.g. "_strandX" / "_voronoiX".
@@ -388,7 +393,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void markInteriorMeshletsCompletedForVoronoiCell(size_t voronoi_cell_id);
   // Maps corner indices (correspoding to outgoing half-edge inside the cell) to the index of the cutoff mesh, -1 if no
   // cutoff mesh exists
-  std::vector<int> corner_to_cutoff_mesh_indices;
+  SlotTable<int> corner_to_cutoff_mesh_indices;
   bool create_transformed_mesh;
 
   // We no longer use these two factors, they are instead adjusted dynamically in the shader at runtime
@@ -398,18 +403,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   // 2.0;
   double texture_diameter = 0.9;
 
-  // for the boundary
-  VoronoiMesh boundary_mesh; // Mesh for the boundary cuts
-  std::vector<std::pair<size_t, size_t>> boundary_mesh_last_left_and_right_vertex;
-  std::vector<size_t> boundary_vertex_to_strand_id;
-
-  // UVs must be adjusted to avoid seams, these are the raw UVs before adjustment
-  std::vector<glm::dvec2> boundary_mesh_raw_uvs;
+  /// Single bark/interior shell. Every runtime branch appends to this mesh; mutations are serialized inside it.
+  BoundaryMesh boundary_mesh_;
   /// Parallel to @ref intersection_meshes: unscaled polar raw UV per boundary-interval vertex (angle/2pi, t).
   std::vector<std::vector<glm::dvec2>> intersection_mesh_raw_uvs;
-
-  // Map half-edges to a vertex index in the boundary mesh if a flip created a new boundary edge
-  std::vector<int> half_edge_to_boundary_vertex_index;
 
   KineticDelaunay& kin_del;
   std::function<void(size_t, std::function<void(size_t)>)> parallel_for;
@@ -978,15 +975,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right, double t);
 
-  /**
-   * Add a triangle to the boundary mesh. Automatically takes the raw UVs and adjusts them to avoid seams.
-   * @param u first vertex index
-   * @param v second vertex index
-   * @param w third vertex index
-   */
-  size_t addBoundaryTriangle(
-    size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 0);
-  /// Per-corner bark UV for boundary-interval meshlets (same pipeline as @ref addBoundaryTriangle).
+  size_t addBoundaryTriangle(size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 0);
+
+  /// Per-corner bark UV for boundary-interval meshlets (same UV adjustment as @ref BoundaryMesh).
   size_t addBoundaryIntervalTriangle(
     VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 1);
   std::vector<glm::dvec2>& boundaryIntervalRawUvs(VoronoiMesh& mesh);
@@ -1121,7 +1112,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   std::vector<size_t> collectLiveComponentIndices() const;
 
-  void advanceBoundaryMeshes(double t);
+  /// @p runtime_branch_id limits the shell update to components that contain that branch.
+  /// @ref BranchScheduler::no_branch advances every live component (serial / pre-fork).
+  void advanceBoundaryMeshes(double t, size_t runtime_branch_id);
 
   /**
    * @brief Counts Delaunay edges incident to a strand vertex (graph iterator pass).
@@ -1327,6 +1320,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t owner_segment_id, size_t voronoi_cell_id = static_cast<size_t>(-1));
 
  public:
+  /// Build dense stable meshing segment ids from StrandTree physics / subdivision counts.
+  /// Id(strand, ordinal) is independent of creation order (required for parallel workers).
+  void buildStableSegmentIdTable();
+  /// Claim the next precomputed segment id for @p strand_id (ordinal = current strand list size).
+  size_t allocateStableSegmentForStrand(size_t strand_id);
+  /// Expected segment count for @p strand_id from physics map, else 1 + subdivision count.
+  static size_t expectedSegmentCountForStrand(const StrandTree& tree, size_t strand_id);
+
   double getUvHeightFactor() const { return uv_height_factor; }
   double getUvCircumFactor() const { return uv_circum_factor; }
   double getTextureDiameter() const { return texture_diameter; }
