@@ -69,6 +69,7 @@ class HalfEdgeDelaunayGraph
   void build(const std::vector<size_t>& index_buffer);
 
   void rebuildLiveIndices();
+  void appendRemappedPart(const HalfEdgeDelaunayGraph& part, const std::vector<size_t>& local_to_global);
   void applyFreshHalfEdgeFaceReferences(
     const std::vector<HalfEdge>& fresh_half_edges, const std::vector<int>& tri_remap);
   bool halfEdgeInFaceCycle(size_t he_id, size_t face_id) const;
@@ -139,6 +140,15 @@ class HalfEdgeDelaunayGraph
    */
   void combine(size_t global_vertex_count, const std::vector<HalfEdgeDelaunayGraph>& parts,
     const std::vector<std::vector<size_t>>& local_to_global_vertex);
+
+  /**
+   * Append one independently triangulated part onto this graph without rebuilding siblings.
+   *
+   * @p part uses local vertex indices [0, part.getVertexCount()). @p local_to_global[local_v] is the
+   * global strand id. Twin pairing is preserved because the part is appended at an even half-edge offset.
+   * Existing live topology is left in place; callers must tombstone the replaced region first.
+   */
+  void appendPart(const HalfEdgeDelaunayGraph& part, const std::vector<size_t>& local_to_global);
 
   /**
    * Retriangulate from connected components (used after graph splits): Delaunay each component,

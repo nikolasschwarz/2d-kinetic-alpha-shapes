@@ -20,6 +20,7 @@ enum class KineticEventType : size_t
   Flip,
   Radius,
   Crossing,
+  Failsafe,
   Count
 };
 
@@ -99,6 +100,8 @@ class Statistics
   void setTotalsMeshCounts(size_t triangle_count, size_t vertex_count);
   /// Optional failure note for the totals row (e.g. meshing exception during a parameter sweep).
   void setTotalsFailure(std::string message);
+  /// Append a recoverable-failure note; keeps prior messages so failsafe skips are not silent.
+  void appendTotalsFailure(const std::string& message);
 
   /// Optional experiment tag inserted into the timestamped CSV stem
   /// (@c meshing_statistics_<tag>_<sectionCount>_YYYYMMDD_…). Spaces should already be underscores.

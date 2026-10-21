@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -1554,9 +1555,22 @@ void KineticDelaunay::initializeNewFacesAfterGraphUpdate(double t, size_t first_
   }
 }
 
+void KineticDelaunay::clearDeadCrossingState()
+{
+  for (size_t voronoi_vertex_id = 0; voronoi_vertex_id < graph.faceSlotCount(); ++voronoi_vertex_id)
+  {
+    if (!graph.isLiveFace(voronoi_vertex_id))
+    {
+      crossing_data.unsetVoronoiVertex(voronoi_vertex_id);
+    }
+  }
+  crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
+}
+
 void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots)
 {
   growGraphSlotArrays();
+  clearDeadCrossingState();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
   // Runtime branch ids for the targeted split are already assigned at notePendingBranchSplit; do not remap all
   // live-graph components (that would finalize / reassign unrelated pending splits).
@@ -1597,15 +1611,7 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
     }
   }
 
-  for (size_t voronoi_vertex_id = 0; voronoi_vertex_id < graph.faceSlotCount(); ++voronoi_vertex_id)
-  {
-    if (!graph.isLiveFace(voronoi_vertex_id))
-    {
-      crossing_data.unsetVoronoiVertex(voronoi_vertex_id);
-    }
-  }
-
-  crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
+  clearDeadCrossingState();
 
   if (refresh_flip_events && split_result != nullptr)
   {
@@ -1818,10 +1824,7 @@ void KineticDelaunay::handleEvents()
     root_branch_scheduler_->independent = false;
   }
   root_branch_scheduler_->handoff_section = BranchScheduler::no_branch;
-  setActiveBranchScheduler(root_branch_scheduler_.get());
-  kinetic_algorithm_->setActiveScheduler(&kinetic_algorithm_->rootScheduler());
-  kinetic_algorithm_->processEvents(
-    static_cast<double>(getEndSection()), collect_statistics_ ? &statistics_ : nullptr);
+  processBranchScheduler(*root_branch_scheduler_, static_cast<double>(getEndSection()));
   processIndependentBranchSchedulers();
 }
 
@@ -3934,17 +3937,295 @@ void KineticDelaunay::maybeForkBranchSchedulers(size_t parent_runtime_branch_id,
   }
 }
 
-void KineticDelaunay::processBranchScheduler(BranchScheduler& scheduler, std::optional<double> end_time)
+EventScheduler& KineticDelaunay::schedulerQueue(BranchScheduler& scheduler)
 {
-  setActiveBranchScheduler(&scheduler);
-  Statistics* stats = collect_statistics_ ? &statistics_ : nullptr;
   if (scheduler.independent)
   {
-    scheduler.queue.processEvents(end_time, stats);
+    return scheduler.queue;
+  }
+  return kinetic_algorithm_->rootScheduler();
+}
+
+void KineticDelaunay::recordFailsafeReport(
+  const std::string& message, double failure_t, size_t failed_section, size_t resume_section)
+{
+  KINDS_ERROR(message);
+  std::lock_guard<std::mutex> lock(statistics_mutex_);
+  if (!collect_statistics_ || !statistics_.isCollecting())
+  {
+    return;
+  }
+  statistics_.appendTotalsFailure(message);
+  Statistics::EventListRow row;
+  row.occurrence_t = failure_t;
+  row.type = KineticEventType::Failsafe;
+  row.section_id = failed_section;
+  row.split_time = static_cast<double>(resume_section);
+  statistics_.recordEvent(std::move(row));
+}
+
+std::vector<size_t> KineticDelaunay::failsafeStrandsForScheduler(BranchScheduler& scheduler, size_t section)
+{
+  std::vector<size_t> strands;
+  const double t = static_cast<double>(section);
+  auto consider = [&](size_t strand_id)
+  {
+    if (isDummyBoundary(strand_id) || !strandHasProfileAt(strand_id, t))
+    {
+      return;
+    }
+    strands.push_back(strand_id);
+  };
+
+  if (!scheduler.owned_strands.empty())
+  {
+    for (size_t strand_id : scheduler.owned_strands)
+    {
+      consider(strand_id);
+    }
+    return strands;
+  }
+  if (scheduler.runtime_branch_id != BranchScheduler::no_branch
+    && scheduler.runtime_branch_id < runtime_branch_data_.branches.size())
+  {
+    for (size_t strand_id : runtime_branch_data_.branches[scheduler.runtime_branch_id])
+    {
+      consider(strand_id);
+    }
+    return strands;
+  }
+
+  std::unordered_set<size_t> independent_owned;
+  {
+    std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+    for (const auto& independent : independent_branch_schedulers_)
+    {
+      if (independent == nullptr)
+      {
+        continue;
+      }
+      independent_owned.insert(independent->owned_strands.begin(), independent->owned_strands.end());
+    }
+  }
+  for (size_t strand_id = 0; strand_id < tracked_strand_.size(); ++strand_id)
+  {
+    if (independent_owned.count(strand_id) != 0 || !isTrackedStrand(strand_id))
+    {
+      continue;
+    }
+    consider(strand_id);
+  }
+  return strands;
+}
+
+std::vector<std::shared_ptr<EventScheduler::Event>> KineticDelaunay::failsafeConsumeQueue(
+  BranchScheduler& scheduler, double until_t, bool consume_all_subdivisions)
+{
+  auto pending = schedulerQueue(scheduler).takeAll();
+  std::vector<std::shared_ptr<EventScheduler::Event>> kept;
+  kept.reserve(pending.size());
+  for (auto& event : pending)
+  {
+    if (event == nullptr || event->eventType() != KineticEventType::Subdivision)
+    {
+      continue;
+    }
+    auto* sub = dynamic_cast<SubdivisionEvent*>(event.get());
+    if (sub == nullptr)
+    {
+      continue;
+    }
+    const double t = event->occurrence_time.real_time;
+    if (consume_all_subdivisions || t < until_t)
+    {
+      if (callback_manager_ != nullptr)
+      {
+        callback_manager_->failsafeAdvanceSubdivision(sub->strand_id, t);
+      }
+      continue;
+    }
+    kept.push_back(std::move(event));
+  }
+  return kept;
+}
+
+void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler, size_t section)
+{
+  const std::vector<size_t> strands = failsafeStrandsForScheduler(scheduler, section);
+  if (strands.size() < 3)
+  {
+    throw std::runtime_error("failsafe retriangulation needs at least 3 profiled strands at section "
+      + std::to_string(section) + " (got " + std::to_string(strands.size()) + ")");
+  }
+
+  std::vector<bool> dead_vertex_mask(graph.getVertexCount(), false);
+  for (size_t strand_id : strands)
+  {
+    if (strand_id < dead_vertex_mask.size())
+    {
+      dead_vertex_mask[strand_id] = true;
+    }
+  }
+  graph.killVertices(dead_vertex_mask);
+
+  const double t = static_cast<double>(section);
+  std::vector<glm::dvec2> sites;
+  sites.reserve(strands.size());
+  for (size_t strand_id : strands)
+  {
+    sites.push_back(getPointAt(strand_id, t));
+  }
+
+  HalfEdgeDelaunayGraph part;
+  part.init(sites);
+  if (part.liveFaceCount() == 0)
+  {
+    throw std::runtime_error("failsafe Delaunay produced no live faces at section " + std::to_string(section));
+  }
+
+  const size_t prev_face_slots = graph.faceSlotCount();
+  const size_t prev_he_slots = graph.halfEdgeSlotCount();
+  const size_t reserve_faces = std::max(graph.faceSlotCount() * 2, graph.faceSlotCount() + part.faceSlotCount() + 64);
+  const size_t reserve_quads
+    = std::max((graph.halfEdgeSlotCount() / 2) * 2, graph.halfEdgeSlotCount() / 2 + part.halfEdgeSlotCount() / 2 + 64);
+  face_inside.reserve(reserve_faces);
+  face_last_updated.reserve(reserve_faces);
+  face_owner_runtime_branch_.reserve(reserve_faces);
+  quadrilateral_last_updated.reserve(reserve_quads);
+  even_half_edge_owner_runtime_branch_.reserve(reserve_quads);
+  crossing_data.growTo(reserve_faces);
+  crossing_data.growEdgeSlotsTo(reserve_quads);
+
+  graph.appendPart(part, strands);
+  rebuildSchedulerTopologyOwnership(scheduler);
+  onGraphRetriangulated(t, prev_face_slots, prev_he_slots);
+}
+
+void KineticDelaunay::rescheduleSchedulerFromSection(BranchScheduler& scheduler, size_t from_section)
+{
+  if (scheduler.independent)
+  {
+    scheduleBranchLocalSectionEvents(scheduler, from_section);
+    return;
+  }
+  sections_advanced = from_section;
+  scheduler.sections_advanced = from_section;
+  EventScheduler& queue = kinetic_algorithm_->rootScheduler();
+  queue.clear();
+  const size_t end_section = exclusiveEndSectionForScheduler(scheduler);
+  for (size_t i = from_section; i < end_section; ++i)
+  {
+    const double time = static_cast<double>(i);
+    queue.enqueueEvent(std::make_shared<SectionEvent>(
+      this, time, i, time, glm::dvec2 { 0.0, 0.0 }, scheduler.runtime_branch_id));
+  }
+}
+
+bool KineticDelaunay::failsafeResumeBranchAtNextSection(BranchScheduler& scheduler, const char* what)
+{
+  const auto topology_lock = lockSharedTopology();
+  setActiveBranchScheduler(&scheduler);
+
+  const size_t failed_section = scheduler.independent ? scheduler.sections_advanced : sections_advanced;
+  double failure_t = static_cast<double>(failed_section);
+  if (const std::optional<EventTime> last = schedulerQueue(scheduler).lastProcessedOccurrence())
+  {
+    failure_t = last->real_time;
+  }
+  size_t next_section = std::max(failed_section, static_cast<size_t>(std::floor(failure_t)) + 1);
+  const size_t end_section = exclusiveEndSectionForScheduler(scheduler);
+
+  std::ostringstream report;
+  report << "Failsafe meshing: runtime_branch=";
+  if (scheduler.runtime_branch_id == BranchScheduler::no_branch)
+  {
+    report << "root";
   }
   else
   {
-    kinetic_algorithm_->rootScheduler().processEvents(end_time, stats);
+    report << scheduler.runtime_branch_id;
+  }
+  report << " failed_section=" << failed_section << " failure_t=" << failure_t
+         << " resume_section=" << next_section << ": " << (what != nullptr ? what : "unknown error");
+
+  if (next_section >= end_section)
+  {
+    report << " (no remaining section on this branch; abandoning scheduler)";
+    recordFailsafeReport(report.str(), failure_t, failed_section, next_section);
+    failsafeConsumeQueue(scheduler, static_cast<double>(next_section), true);
+    return true;
+  }
+
+  std::vector<std::shared_ptr<EventScheduler::Event>> kept_subdivisions;
+  try
+  {
+    const std::vector<size_t> strands = failsafeStrandsForScheduler(scheduler, next_section);
+    if (strands.size() < 3)
+    {
+      report << " (fewer than 3 profiled strands at resume section; abandoning scheduler)";
+      recordFailsafeReport(report.str(), failure_t, failed_section, next_section);
+      failsafeConsumeQueue(scheduler, static_cast<double>(next_section), true);
+      return true;
+    }
+    recordFailsafeReport(report.str(), failure_t, failed_section, next_section);
+    kept_subdivisions = failsafeConsumeQueue(scheduler, static_cast<double>(next_section), false);
+    retriangulateSchedulerAtSection(scheduler, next_section);
+    rescheduleSchedulerFromSection(scheduler, next_section);
+    EventScheduler& queue = schedulerQueue(scheduler);
+    for (auto& event : kept_subdivisions)
+    {
+      queue.enqueueEvent(event);
+    }
+    return true;
+  }
+  catch (const std::exception& rebuild_ex)
+  {
+    std::ostringstream rebuild_report;
+    rebuild_report << report.str() << " | retriangulation failed: " << rebuild_ex.what()
+                   << " (abandoning scheduler)";
+    recordFailsafeReport(rebuild_report.str(), failure_t, failed_section, next_section);
+    if (callback_manager_ != nullptr)
+    {
+      for (auto& event : kept_subdivisions)
+      {
+        auto* sub = dynamic_cast<SubdivisionEvent*>(event.get());
+        if (sub != nullptr)
+        {
+          callback_manager_->failsafeAdvanceSubdivision(sub->strand_id, event->occurrence_time.real_time);
+        }
+      }
+    }
+    failsafeConsumeQueue(scheduler, static_cast<double>(next_section), true);
+    return true;
+  }
+}
+
+void KineticDelaunay::processBranchScheduler(
+  BranchScheduler& scheduler, std::optional<double> end_time, bool record_event_statistics)
+{
+  setActiveBranchScheduler(&scheduler);
+  Statistics* stats = (record_event_statistics && collect_statistics_) ? &statistics_ : nullptr;
+  for (;;)
+  {
+    try
+    {
+      schedulerQueue(scheduler).processEvents(end_time, stats);
+      return;
+    }
+    catch (const std::exception& ex)
+    {
+      if (!failsafeResumeBranchAtNextSection(scheduler, ex.what()))
+      {
+        throw;
+      }
+    }
+    catch (...)
+    {
+      if (!failsafeResumeBranchAtNextSection(scheduler, "unknown non-std exception"))
+      {
+        throw;
+      }
+    }
   }
 }
 
@@ -3981,30 +4262,45 @@ void KineticDelaunay::processIndependentBranchSchedulers()
       continue;
     }
 
-    // Concurrent workers: skip shared Statistics writes (not synchronized).
-    std::vector<std::thread> workers;
-    workers.reserve(batch.size());
-    for (BranchScheduler* sched : batch)
+    // Concurrent workers: skip per-event Statistics writes (not synchronized). Failsafe reports lock.
+    std::mutex error_mutex;
+    std::exception_ptr first_error;
+    auto run_one = [this, &batch, &endTimeFor, &error_mutex, &first_error](size_t index)
     {
-      const std::optional<double> end_time = endTimeFor(sched);
-      workers.emplace_back([this, sched, end_time]()
+      try
       {
-        try
+        processBranchScheduler(*batch[index], endTimeFor(batch[index]), /*record_event_statistics=*/false);
+      }
+      catch (...)
+      {
+        std::lock_guard<std::mutex> lock(error_mutex);
+        if (!first_error)
         {
-          setActiveBranchScheduler(sched);
-          sched->queue.processEvents(end_time, nullptr);
+          first_error = std::current_exception();
         }
-        catch (const std::exception& ex)
-        {
-          std::cerr << "Independent branch scheduler runtime_branch=" << sched->runtime_branch_id << " failed: "
-                    << ex.what() << std::endl;
-          throw;
-        }
-      });
-    }
-    for (auto& worker : workers)
+      }
+    };
+
+    if (parallel_for_)
     {
-      worker.join();
+      parallel_for_(batch.size(), run_one);
+    }
+    else
+    {
+      std::vector<std::thread> workers;
+      workers.reserve(batch.size());
+      for (size_t i = 0; i < batch.size(); ++i)
+      {
+        workers.emplace_back([run_one, i]() { run_one(i); });
+      }
+      for (auto& worker : workers)
+      {
+        worker.join();
+      }
+    }
+    if (first_error)
+    {
+      std::rethrow_exception(first_error);
     }
   }
 }

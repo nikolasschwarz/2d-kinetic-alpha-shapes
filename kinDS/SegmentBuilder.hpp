@@ -1385,6 +1385,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) override;
   void onBeforeComponentGraphSplit(double t) override;
   void onInfinitesimalSeparationActivated(size_t parent_component_id, double t) override;
+  void failsafeAdvanceSubdivision(size_t strand_id, double t) override;
 
   void finalize(double t) override;
 

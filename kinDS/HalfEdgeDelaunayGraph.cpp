@@ -1763,53 +1763,91 @@ void HalfEdgeDelaunayGraph::combine(size_t global_vertex_count, const std::vecto
       claimed[global_v] = 1;
     }
 
-    const size_t he_offset = half_edges.size();
-    const size_t face_offset = triangles.size();
-
-    for (const HalfEdge& he : part.half_edges)
-    {
-      HalfEdge out = he;
-      if (out.origin >= 0)
-      {
-        const size_t local_origin = static_cast<size_t>(out.origin);
-        if (local_origin >= local_to_global.size())
-        {
-          throw std::runtime_error("HalfEdgeDelaunayGraph::combine: half-edge origin out of local range");
-        }
-        out.origin = static_cast<int>(local_to_global[local_origin]);
-      }
-      if (out.next >= 0)
-      {
-        out.next = static_cast<int>(static_cast<size_t>(out.next) + he_offset);
-      }
-      if (out.face >= 0)
-      {
-        out.face = static_cast<int>(static_cast<size_t>(out.face) + face_offset);
-      }
-      half_edges.push_back(out);
-    }
-
-    for (const Triangle& tri : part.triangles)
-    {
-      Triangle out = tri;
-      for (size_t i = 0; i < 3; ++i)
-      {
-        out.half_edges[i] += he_offset;
-      }
-      triangles.push_back(out);
-    }
-
-    for (size_t local_v = 0; local_v < local_to_global.size(); ++local_v)
-    {
-      const size_t local_he = part.vertex_to_half_edge[local_v];
-      if (local_he == static_cast<size_t>(-1) || local_he >= part.half_edges.size())
-      {
-        continue;
-      }
-      vertex_to_half_edge[local_to_global[local_v]] = local_he + he_offset;
-    }
+    appendRemappedPart(part, local_to_global);
   }
 
+  rebuildLiveIndices();
+  validateLiveHalfEdgeFaceReferences();
+}
+
+void HalfEdgeDelaunayGraph::appendRemappedPart(
+  const HalfEdgeDelaunayGraph& part, const std::vector<size_t>& local_to_global)
+{
+  if (local_to_global.size() != part.vertex_count)
+  {
+    throw std::runtime_error("HalfEdgeDelaunayGraph::appendPart: local_to_global size must equal part vertex_count");
+  }
+  if ((part.half_edges.size() & 1u) != 0u)
+  {
+    throw std::runtime_error("HalfEdgeDelaunayGraph::appendPart: part half-edge count must be even (twin pairing)");
+  }
+  if ((half_edges.size() & 1u) != 0u)
+  {
+    throw std::runtime_error("HalfEdgeDelaunayGraph::appendPart: internal half-edge offset must stay even");
+  }
+
+  const size_t he_offset = half_edges.size();
+  const size_t face_offset = triangles.size();
+
+  for (const HalfEdge& he : part.half_edges)
+  {
+    HalfEdge out = he;
+    if (out.origin >= 0)
+    {
+      const size_t local_origin = static_cast<size_t>(out.origin);
+      if (local_origin >= local_to_global.size())
+      {
+        throw std::runtime_error("HalfEdgeDelaunayGraph::appendPart: half-edge origin out of local range");
+      }
+      const size_t global_v = local_to_global[local_origin];
+      if (global_v >= vertex_count)
+      {
+        throw std::runtime_error("HalfEdgeDelaunayGraph::appendPart: global vertex index out of range");
+      }
+      out.origin = static_cast<int>(global_v);
+    }
+    if (out.next >= 0)
+    {
+      out.next = static_cast<int>(static_cast<size_t>(out.next) + he_offset);
+    }
+    if (out.face >= 0)
+    {
+      out.face = static_cast<int>(static_cast<size_t>(out.face) + face_offset);
+    }
+    half_edges.push_back(out);
+  }
+
+  for (const Triangle& tri : part.triangles)
+  {
+    Triangle out = tri;
+    for (size_t i = 0; i < 3; ++i)
+    {
+      out.half_edges[i] += he_offset;
+    }
+    triangles.push_back(out);
+  }
+
+  if (vertex_to_half_edge.size() < vertex_count)
+  {
+    vertex_to_half_edge.resize(vertex_count, static_cast<size_t>(-1));
+  }
+  for (size_t local_v = 0; local_v < local_to_global.size(); ++local_v)
+  {
+    const size_t local_he = part.vertex_to_half_edge[local_v];
+    if (local_he == static_cast<size_t>(-1) || local_he >= part.half_edges.size())
+    {
+      continue;
+    }
+    vertex_to_half_edge[local_to_global[local_v]] = local_he + he_offset;
+  }
+}
+
+void HalfEdgeDelaunayGraph::appendPart(
+  const HalfEdgeDelaunayGraph& part, const std::vector<size_t>& local_to_global)
+{
+  triangles.reserve(triangles.size() + part.triangles.size());
+  half_edges.reserve(half_edges.size() + part.half_edges.size());
+  appendRemappedPart(part, local_to_global);
   rebuildLiveIndices();
   validateLiveHalfEdgeFaceReferences();
 }

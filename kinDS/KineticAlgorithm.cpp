@@ -13,8 +13,21 @@ void EventScheduler::clear()
   next_queue_sequence_ = 0;
 }
 
+std::vector<std::shared_ptr<EventScheduler::Event>> EventScheduler::takeAll()
+{
+  std::vector<std::shared_ptr<Event>> out;
+  out.reserve(events_.size());
+  while (!events_.empty())
+  {
+    out.push_back(events_.top());
+    events_.pop();
+  }
+  return out;
+}
+
 void EventScheduler::processEvents(std::optional<double> end_time, Statistics* statistics)
 {
+  last_processed_occurrence_.reset();
   while (!events_.empty())
   {
     auto event = events_.top();
@@ -25,6 +38,7 @@ void EventScheduler::processEvents(std::optional<double> end_time, Statistics* s
       break;
     }
     events_.pop();
+    last_processed_occurrence_ = event->occurrence_time;
     if (statistics != nullptr)
     {
       Statistics::EventListRow row;

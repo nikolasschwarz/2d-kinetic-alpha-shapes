@@ -777,6 +777,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
       ? KineticDelaunay::ComponentSplitPolicy::Retriangulate
       : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
   kinetic_delaunay->setParallelizeIndependentRuntimeBranches(settings.parallelize_independent_runtime_branches);
+  kinetic_delaunay->setParallelFor(parallel_for);
   kinetic_delaunay->setSectionRange(settings.start_section, settings.end_section);
   kinetic_delaunay->setStartInputBranches(settings.start_input_branches);
 

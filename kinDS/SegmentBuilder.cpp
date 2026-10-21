@@ -10634,6 +10634,135 @@ size_t SegmentBuilder::allocateStableSegmentForStrand(size_t strand_id)
   return segment_id;
 }
 
+void SegmentBuilder::failsafeAdvanceSubdivision(size_t strand_id, double t)
+{
+  if (kin_del.isDummyBoundary(strand_id))
+  {
+    return;
+  }
+
+  const size_t old_segment_id
+    = (strand_id < strand_to_segment_indices.size() && !strand_to_segment_indices[strand_id].empty())
+    ? strand_to_segment_indices[strand_id].back()
+    : static_cast<size_t>(-1);
+  std::unordered_set<size_t> retired_interior_pairs;
+  std::vector<size_t> retired_boundary_pairs;
+
+  try
+  {
+    if (old_segment_id != static_cast<size_t>(-1))
+    {
+      for (size_t pair_index = 0; pair_index < segment_mesh_pairs.size(); ++pair_index)
+      {
+        const MeshStructure::SegmentMeshPair& pair = segment_mesh_pairs[pair_index];
+        if (pair.segment_index0 == old_segment_id || pair.segment_index1 == old_segment_id)
+        {
+          markInteriorMeshletCompleted(pair_index);
+          retired_interior_pairs.insert(pair_index);
+        }
+      }
+      for (size_t pair_index = 0; pair_index < intersection_mesh_pair_metadata.size(); ++pair_index)
+      {
+        if (intersection_mesh_pair_metadata[pair_index].owner_segment_id == old_segment_id)
+        {
+          markBoundaryMeshletCompleted(pair_index);
+          retired_boundary_pairs.push_back(pair_index);
+        }
+      }
+      recordRuntimeBranchForStrandCurrentSegment(strand_id);
+    }
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_ERROR("failsafeAdvanceSubdivision mark-complete strand=" << strand_id << " t=" << t << ": " << ex.what());
+  }
+
+  try
+  {
+    const size_t new_segment_id = allocateStableSegmentForStrand(strand_id);
+    if (new_segment_id < segment_slot_created_.size())
+    {
+      segment_slot_created_[new_segment_id] = true;
+    }
+
+    auto replace_segment_id = [old_segment_id, new_segment_id](size_t& segment_index)
+    {
+      if (segment_index == old_segment_id)
+      {
+        segment_index = new_segment_id;
+      }
+    };
+
+    std::unordered_map<size_t, size_t> interior_replacement;
+    interior_replacement.reserve(retired_interior_pairs.size());
+    for (size_t he_id = 0; he_id < half_edge_index_to_segment_mesh_pair_index.size(); ++he_id)
+    {
+      const size_t old_pair = half_edge_index_to_segment_mesh_pair_index[he_id];
+      if (old_pair == static_cast<size_t>(-1) || retired_interior_pairs.count(old_pair) == 0)
+      {
+        continue;
+      }
+
+      auto found = interior_replacement.find(old_pair);
+      if (found == interior_replacement.end())
+      {
+        MeshStructure::SegmentMeshPair pair = old_pair < segment_mesh_pairs.size()
+          ? segment_mesh_pairs[old_pair]
+          : MeshStructure::SegmentMeshPair {};
+        replace_segment_id(pair.segment_index0);
+        replace_segment_id(pair.segment_index1);
+        segment_mesh_pairs.push_back(pair);
+        VoronoiMesh mesh(MeshletExportMaterialNames, NormalMode::PerTriangleCorner);
+        const size_t mesh_index = registerMeshletWithSuffix(
+          std::move(mesh), std::string("_failsafe_he") + std::to_string(he_id), t);
+        segment_mesh_pair_last_left_and_right_vertex.emplace_back();
+        found = interior_replacement.emplace(old_pair, mesh_index).first;
+      }
+      half_edge_index_to_segment_mesh_pair_index[he_id] = found->second;
+    }
+
+    for (size_t old_pair : retired_boundary_pairs)
+    {
+      MeshStructure::SegmentMeshPair pair = old_pair < intersection_segment_mesh_pairs.size()
+        ? intersection_segment_mesh_pairs[old_pair]
+        : MeshStructure::SegmentMeshPair {};
+      replace_segment_id(pair.segment_index0);
+      replace_segment_id(pair.segment_index1);
+
+      MeshStructure::IntersectionMeshPairMetadata meta
+        = old_pair < intersection_mesh_pair_metadata.size() ? intersection_mesh_pair_metadata[old_pair]
+                                                            : MeshStructure::IntersectionMeshPairMetadata {};
+      meta.owner_segment_id = new_segment_id;
+
+      const size_t index = intersection_meshes.size();
+      intersection_segment_mesh_pairs.push_back(pair);
+      if (intersection_mesh_pair_metadata.size() <= index)
+      {
+        intersection_mesh_pair_metadata.resize(index + 1);
+      }
+      intersection_mesh_pair_metadata[index] = meta;
+
+      VoronoiMesh mesh(MeshletExportMaterialNames, NormalMode::PerTriangleCorner);
+      configureMeshletStorage(mesh);
+      if (std::isfinite(t))
+      {
+        mesh.setCreationKineticTime(t);
+      }
+      intersection_meshes.push_back(std::move(mesh));
+      intersection_mesh_raw_uvs.emplace_back();
+      intersection_mesh_bark_vertex_uvs.emplace_back();
+      boundary_meshlet_completed_.push_back(false);
+      intersection_meshlet_export_suffixes.push_back(
+        std::string("_failsafe_boundary_strand") + std::to_string(strand_id));
+      intersection_mesh_pair_last_left_and_right_vertex.emplace_back();
+    }
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_ERROR("failsafeAdvanceSubdivision strand=" << strand_id << " t=" << t << ": " << ex.what());
+  }
+}
+
 void SegmentBuilder::init()
 {
   boundary_mesh_.setStoreMetadata(store_mesh_metadata);

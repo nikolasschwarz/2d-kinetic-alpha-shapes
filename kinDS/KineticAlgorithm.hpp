@@ -124,6 +124,7 @@ class EventScheduler
   using EventQueue = std::priority_queue<std::shared_ptr<Event>, std::vector<std::shared_ptr<Event>>, EventPtrCompare>;
   EventQueue events_;
   uint64_t next_queue_sequence_ = 0;
+  std::optional<EventTime> last_processed_occurrence_;
 
  public:
   void enqueueEvent(const std::shared_ptr<Event>& event)
@@ -133,6 +134,9 @@ class EventScheduler
   }
   bool empty() const { return events_.empty(); }
   void clear();
+  /// Pop every pending event (does not run @c handleEvent). Used by failsafe to keep subdivisions.
+  [[nodiscard]] std::vector<std::shared_ptr<Event>> takeAll();
+  std::optional<EventTime> lastProcessedOccurrence() const { return last_processed_occurrence_; }
   /// Process queued events in time order. If @p end_time is set, discard the remainder once the next
   /// event has @c occurrence_time >= @p end_time (that event is not executed).
   /// When @p statistics is set, each dequeued event is recorded before @c handleEvent.

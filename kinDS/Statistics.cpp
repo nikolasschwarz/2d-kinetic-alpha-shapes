@@ -31,6 +31,8 @@ const char* kineticEventTypeName(KineticEventType type)
     return "radius";
   case KineticEventType::Crossing:
     return "crossing";
+  case KineticEventType::Failsafe:
+    return "failsafe";
   case KineticEventType::Count:
     break;
   }
@@ -282,6 +284,21 @@ void Statistics::setTotalsMeshCounts(size_t triangle_count, size_t vertex_count)
 void Statistics::setTotalsFailure(std::string message)
 {
   totals_failure_ = std::move(message);
+}
+
+void Statistics::appendTotalsFailure(const std::string& message)
+{
+  if (message.empty())
+  {
+    return;
+  }
+  if (!totals_failure_.has_value() || totals_failure_->empty())
+  {
+    totals_failure_ = message;
+    return;
+  }
+  *totals_failure_ += " | ";
+  *totals_failure_ += message;
 }
 
 void Statistics::setFilenameExperimentTag(std::string tag)

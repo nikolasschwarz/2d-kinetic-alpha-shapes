@@ -199,6 +199,13 @@ class KineticDelaunay
       (void)parent_component_id;
       (void)t;
     }
+    /// Failsafe-only: finish the current meshlet for @p strand_id and start an empty one with the next
+    /// precomputed segment id. Must not produce geometry or walk a broken graph as a hard requirement.
+    virtual void failsafeAdvanceSubdivision(size_t strand_id, double t)
+    {
+      (void)strand_id;
+      (void)t;
+    }
   };
 
   class FlipEvent;
@@ -412,6 +419,7 @@ class KineticDelaunay
   HalfEdgeDelaunayGraph graph;
   std::unique_ptr<KineticAlgorithm> kinetic_algorithm_;
   Statistics statistics_;
+  mutable std::mutex statistics_mutex_;
   bool collect_statistics_ = false;
   std::string statistics_experiment_tag_ {};
   bool statistics_incremental_flush_ = false;
@@ -430,6 +438,7 @@ class KineticDelaunay
   size_t sections_advanced = 0; // Counter for the number of sections advanced; starts at @ref start_section_
   /// When true, after a physical runtime-branch cut each child runs on its own @ref BranchScheduler.
   bool parallelize_independent_runtime_branches_ = false;
+  std::function<void(size_t, std::function<void(size_t)>)> parallel_for_;
   /// Root / pre-fork scheduler (also used for serial mode). Queue lives in @ref kinetic_algorithm_ root.
   std::unique_ptr<BranchScheduler> root_branch_scheduler_;
   /// Independent child schedulers created at fork (not including @ref root_branch_scheduler_).
@@ -544,9 +553,24 @@ class KineticDelaunay
   /// Populate owned HE/face sets for @p scheduler from current live graph + branch_map.
   void rebuildSchedulerTopologyOwnership(BranchScheduler& scheduler);
   /// Process @p scheduler's queue with the correct active context.
-  void processBranchScheduler(BranchScheduler& scheduler, std::optional<double> end_time = std::nullopt);
+  /// On a meshing exception: report it, retriangulate this branch at the next section, and resume.
+  void processBranchScheduler(BranchScheduler& scheduler, std::optional<double> end_time = std::nullopt,
+    bool record_event_statistics = true);
   /// After the root queue drains, process independent child schedulers (serially or in parallel).
   void processIndependentBranchSchedulers();
+  /// Report @p what, failsafe-advance remaining subdivisions (no geometry), retriangulate at the next
+  /// section, and resume. Returns false if retriangulation itself fails (caller should abort the tree).
+  bool failsafeResumeBranchAtNextSection(BranchScheduler& scheduler, const char* what);
+  void recordFailsafeReport(const std::string& message, double failure_t, size_t failed_section, size_t resume_section);
+  std::vector<size_t> failsafeStrandsForScheduler(BranchScheduler& scheduler, size_t section);
+  /// Drain the scheduler queue: failsafe-advance subdivisions (all of them if
+  /// @p consume_all_subdivisions, otherwise those with t < @p until_t), keep later
+  /// subdivisions, drop stale kinetic/section events.
+  std::vector<std::shared_ptr<EventScheduler::Event>> failsafeConsumeQueue(
+    BranchScheduler& scheduler, double until_t, bool consume_all_subdivisions);
+  void retriangulateSchedulerAtSection(BranchScheduler& scheduler, size_t section);
+  void rescheduleSchedulerFromSection(BranchScheduler& scheduler, size_t from_section);
+  EventScheduler& schedulerQueue(BranchScheduler& scheduler);
   /// Schedule branch-local section events on @p scheduler for [@p from_section, exclusive end).
   void scheduleBranchLocalSectionEvents(BranchScheduler& scheduler, size_t from_section);
   /// After a section retire, enqueue a new independent scheduler for strands that still have later profiles.
@@ -633,6 +657,8 @@ class KineticDelaunay
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
   size_t getRuntimeBranchIdForFace(size_t face_id) const;
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots);
+  /// Drop CrossingData for tombstoned faces/edges so retriangulation can re-register live duals.
+  void clearDeadCrossingState();
   /// Post-cut bookkeeping. Does not clear pending splits or remap runtime branches — the caller finalizes the
   /// targeted pending parent via @ref completePendingRuntimeBranchSplit. Optional live-graph remap is off by default.
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots, bool update_runtime_branch_map = false,
@@ -673,6 +699,11 @@ class KineticDelaunay
     parallelize_independent_runtime_branches_ = enabled;
   }
   bool parallelizeIndependentRuntimeBranches() const { return parallelize_independent_runtime_branches_; }
+  /// Optional worker launcher for independent branch schedulers (EcoSysLab Jobs bind ApplicationContext).
+  void setParallelFor(std::function<void(size_t, std::function<void(size_t)>)> parallel_for)
+  {
+    parallel_for_ = std::move(parallel_for);
+  }
   /// Hold while changing runtime-branch ids, pending splits or shared graph topology.
   std::unique_lock<std::recursive_mutex> lockSharedTopology() const
   {
