@@ -1077,6 +1077,20 @@ class HalfEdgeDelaunayGraphToSVG
         intersection_group << svg::Circle(
           svg::Point(p.x, p.y), dot_radius, svg::Fill(dot_fill), svg::Stroke(0.0, dot_fill));
 
+        const bool first_error = highlight != nullptr && highlight->isFirstIntersectionError(delaunay_edge_id, voronoi_edge_id);
+        const bool repeat_error = !first_error && highlight != nullptr
+          && highlight->isRepeatIntersectionError(delaunay_edge_id, voronoi_edge_id);
+        if (first_error || repeat_error)
+        {
+          const svg::Color x_color = first_error ? svg::Color(220, 0, 0) : svg::Color(64, 64, 64);
+          const double arm = emphasized ? 0.07 : 0.055;
+          const svg::Stroke x_stroke(0.014, x_color);
+          intersection_group << svg::Line(
+            svg::Point(p.x - arm, p.y - arm), svg::Point(p.x + arm, p.y + arm), x_stroke);
+          intersection_group << svg::Line(
+            svg::Point(p.x - arm, p.y + arm), svg::Point(p.x + arm, p.y - arm), x_stroke);
+        }
+
         if (show_intersection_labels)
         {
           if (voronoi_edge_id < graph.halfEdgeSlotCount() / 2)

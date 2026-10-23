@@ -161,6 +161,7 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
   }
 
   kd->validateSitesInsideConvexHull("RadiusEvent:afterEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("RadiusEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

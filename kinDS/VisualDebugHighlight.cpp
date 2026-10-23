@@ -169,6 +169,18 @@ bool VisualDebugHighlight::emphasizesCrossing(size_t delaunay_edge_id, size_t vo
   return crossing_intersection_keys.find(key) != crossing_intersection_keys.end();
 }
 
+bool VisualDebugHighlight::isFirstIntersectionError(size_t delaunay_edge_id, size_t voronoi_edge_id) const
+{
+  const uint64_t key = (static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id;
+  return crossing_error_first_keys.find(key) != crossing_error_first_keys.end();
+}
+
+bool VisualDebugHighlight::isRepeatIntersectionError(size_t delaunay_edge_id, size_t voronoi_edge_id) const
+{
+  const uint64_t key = (static_cast<uint64_t>(delaunay_edge_id) << 32) | voronoi_edge_id;
+  return crossing_error_repeat_keys.find(key) != crossing_error_repeat_keys.end();
+}
+
 VisualDebugHighlight VisualDebugHighlight::forFlip(const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id)
 {
   VisualDebugHighlight highlight;

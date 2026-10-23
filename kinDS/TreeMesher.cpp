@@ -802,6 +802,16 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   mesh_builder->mesh_cap_at_end = settings.mesh_cap_at_end;
   kinetic_delaunay->setDiagnosticsEnabled(settings.diagnostics);
   kinetic_delaunay->setSitesInsideConvexHullCheckEnabled(settings.check_sites_inside_convex_hull);
+  kinetic_delaunay->setDelaunayVoronoiIntersectionCheckEnabled(settings.check_delaunay_voronoi_intersections);
+  if (settings.check_delaunay_voronoi_intersections)
+  {
+    std::filesystem::path csv = settings.intersection_errors_csv_path;
+    if (csv.empty())
+    {
+      csv = settings.visual_debug_output_root.value_or(std::filesystem::path {}) / "intersection_errors.csv";
+    }
+    kinetic_delaunay->beginIntersectionErrorCsv(std::move(csv));
+  }
 
   KINDS_INFO("Starting Kinetic Delaunay Voronoi Meshing with settings: alpha_cutoff=" << settings.alpha_cutoff
                                                                                       << ", branch_alpha_cutoff="
@@ -827,6 +837,8 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << settings.mesh_cap_at_end
                                                                                       << ", check_sites_inside_convex_hull="
                                                                                       << settings.check_sites_inside_convex_hull
+                                                                                      << ", check_delaunay_voronoi_intersections="
+                                                                                      << settings.check_delaunay_voronoi_intersections
                                                                                       << ", radius_vertex_shift_enabled="
                                                                                       << mesh_builder
                                                                                            ->radius_boundary_transition_shift_enabled);

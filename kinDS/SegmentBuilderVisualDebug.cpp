@@ -438,6 +438,12 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
 
   const auto& containing_tri_ids = kin_del.getCrossingData().getContainingTriIds();
   const auto intersection_debug_data = kin_del.getCrossingIntersectionDebugData();
+  VisualDebugHighlight svg_highlight = highlight;
+  if (kin_del.delaunayVoronoiIntersectionCheckEnabled())
+  {
+    kin_del.collectLiveIntersectionErrorMarks(occurrence_time.real_time, svg_highlight.crossing_error_first_keys,
+      svg_highlight.crossing_error_repeat_keys);
+  }
   const std::unordered_map<size_t, size_t> site_input_branch_labels
     = buildSiteInputBranchLabels(kin_del, graph, occurrence_time);
   const std::unordered_set<size_t> live_strand_ids = collectLiveStrandIds(graph);
@@ -467,7 +473,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     }
     const std::string filename = visualDebugSvgRelativePath(
       occurrence_time, phase, event_descriptor, folder_branch_id, output_root, creation_time, event_id);
-    writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
+    writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, svg_highlight,
       &branch_strands, positioned_strands, site_input_branch_labels, branch_site_world_positions,
       voronoi_vertex_world_positions, separation_offset_segments, seam_outlines);
     return true;
@@ -518,7 +524,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
       << kVisualDebugUnresolvedBranchFolder << ".");
     const std::string filename = visualDebugSvgRelativePath(
       occurrence_time, phase, event_descriptor, std::nullopt, output_root, creation_time, event_id);
-    writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, highlight,
+    writeVisualDebugSvgFile(filename, points, graph, kin_del, containing_tri_ids, intersection_debug_data, svg_highlight,
       nullptr, positioned_strands, site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions,
       separation_offset_segments, seam_outlines);
   };

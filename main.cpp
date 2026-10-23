@@ -574,6 +574,12 @@ static void print_usage(const char* program_name)
             << "  --check-sites-in-hull     After every kinetic event, warn if any live site lies outside its\n"
             << "                            component's graph convex hull (same topology as SVG blue hull edges).\n"
             << "                            May indicate an incorrect CCW flip. Off by default.\n"
+            << "  --check-intersections     After every kinetic event, recompute every Delaunay–Voronoi edge\n"
+            << "                            intersection and warn if either parameter lies outside its line segment\n"
+            << "                            (same interval as the out-of-range delaunay_edge_param warnings).\n"
+            << "                            Each unique (Delaunay, Voronoi) edge pair is logged and written once to\n"
+            << "                            intersection_errors.csv (under --debug-files/--error-files root if set).\n"
+            << "                            Off by default.\n"
             << "\n"
             << "Commands:\n"
             << "  --demo                    Run the kinetic Delaunay example\n"
@@ -589,6 +595,7 @@ static void print_usage(const char* program_name)
             << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
             << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
             << "  " << program_name << " --parallelize-branches --mesh strandtree.txt\n"
+            << "  " << program_name << " --check-intersections --mesh strandtree.txt\n"
             << "  " << program_name << " --export-mode combined --export-gpu-attributes --mesh strandtree.txt combined.obj\n";
 }
 
@@ -623,6 +630,7 @@ static const std::vector<std::string>& known_cli_flags()
     "--svg-separate-pending-splits",
     "--error-files",
     "--check-sites-in-hull",
+    "--check-intersections",
     "--help",
     "-h",
     "--demo",
@@ -741,7 +749,7 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
   const std::optional<std::filesystem::path>& visual_debug_output_root,
   const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
-  bool check_sites_inside_convex_hull)
+  bool check_sites_inside_convex_hull, bool check_delaunay_voronoi_intersections)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -794,6 +802,7 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().error_files = error_files || visual_debug;
     mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
     mesher.getSettings().check_sites_inside_convex_hull = check_sites_inside_convex_hull;
+    mesher.getSettings().check_delaunay_voronoi_intersections = check_delaunay_voronoi_intersections;
     mesher.getSettings().visual_debug_time_lower = visual_debug_time_lower;
     mesher.getSettings().visual_debug_time_upper = visual_debug_time_upper;
     if (visual_debug_output_root.has_value())
@@ -809,6 +818,11 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     if (check_sites_inside_convex_hull)
     {
       std::cout << "Sites-in-hull check: enabled" << std::endl;
+    }
+    if (check_delaunay_voronoi_intersections)
+    {
+      std::cout << "Delaunay-Voronoi intersection check: enabled (unique pairs -> intersection_errors.csv)"
+                << std::endl;
     }
     if (visual_debug || error_files)
     {
@@ -1023,6 +1037,7 @@ int main(int argc, char* argv[])
   std::optional<double> mesh_visual_debug_time_lower;
   std::optional<double> mesh_visual_debug_time_upper;
   bool mesh_check_sites_inside_convex_hull = false;
+  bool mesh_check_delaunay_voronoi_intersections = false;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -1415,6 +1430,11 @@ int main(int argc, char* argv[])
       mesh_check_sites_inside_convex_hull = true;
       arg_idx += 1;
     }
+    else if (arg == "--check-intersections")
+    {
+      mesh_check_delaunay_voronoi_intersections = true;
+      arg_idx += 1;
+    }
     else if (arg == "--error-files")
     {
       mesh_error_files = true;
@@ -1521,7 +1541,7 @@ int main(int argc, char* argv[])
           mesh_parallelize_independent_runtime_branches, mesh_visual_debug, mesh_error_files,
           mesh_visual_debug_separate_pending_splits,
           mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
-          mesh_check_sites_inside_convex_hull))
+          mesh_check_sites_inside_convex_hull, mesh_check_delaunay_voronoi_intersections))
     {
       return 1;
     }

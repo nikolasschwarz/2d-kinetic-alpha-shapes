@@ -29,6 +29,10 @@ struct VisualDebugHighlight
   std::unordered_set<size_t> label_crossings_on_voronoi_edges;
   /// (d,v) pairs drawn with a stronger intersection marker (@ref emphasizesCrossing).
   std::unordered_set<uint64_t> crossing_intersection_keys;
+  /// In-segment validator: first occurrence of a currently-wrong (d,v) pair (red X).
+  std::unordered_set<uint64_t> crossing_error_first_keys;
+  /// In-segment validator: still-wrong (d,v) pair from a previous pass (dark grey X).
+  std::unordered_set<uint64_t> crossing_error_repeat_keys;
 
   /// Queue-driven; does not recurse on the C++ call stack.
   void addUndirectedDelaunayEdge(const HalfEdgeDelaunayGraph& graph, size_t he_id);
@@ -42,6 +46,8 @@ struct VisualDebugHighlight
   bool affectsPrimaryVoronoiEdge(size_t voronoi_edge_id) const;
   bool shouldLabelCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const;
   bool emphasizesCrossing(size_t delaunay_edge_id, size_t voronoi_edge_id) const;
+  bool isFirstIntersectionError(size_t delaunay_edge_id, size_t voronoi_edge_id) const;
+  bool isRepeatIntersectionError(size_t delaunay_edge_id, size_t voronoi_edge_id) const;
 
   static VisualDebugHighlight forFlip(const HalfEdgeDelaunayGraph& graph, size_t flip_half_edge_id);
   static VisualDebugHighlight forRadius(const HalfEdgeDelaunayGraph& graph, size_t radius_half_edge_id);

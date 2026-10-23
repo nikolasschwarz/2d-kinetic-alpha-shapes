@@ -6081,6 +6081,12 @@ bool isDelaunayEdgeParamInExpectedWarningRange(
   return param >= -eps && param <= 1.0 + eps;
 }
 
+/// Voronoi edges are always finite segments after @ref KineticDelaunay::computeVoronoiVertexClampedInfinity.
+bool isVoronoiEdgeParamInExpectedWarningRange(double param, double eps)
+{
+  return std::isfinite(param) && param >= -eps && param <= 1.0 + eps;
+}
+
 const char* delaunayEdgeParamExpectedRangeDescription(const KineticDelaunay* kd, size_t delaunay_edge_id)
 {
   if (kd != nullptr && kd->getGraph().isInfinite(2 * delaunay_edge_id))
@@ -6259,6 +6265,207 @@ void kinDS::assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
       writeSegmentBuilderVisualDebugSvg(true, kd_mut, graph, kd_mut.eventTimeAt(t), "error", descriptor.str(),
         highlight, preferred_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
         explicit_branches);
+    }
+  }
+}
+
+void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, EventTime occurrence_time)
+{
+  if (!delaunay_voronoi_intersection_check_enabled_)
+  {
+    return;
+  }
+
+  constexpr double param_range_eps = 1e-9;
+  const double t = occurrence_time.real_time;
+  const char* label = context != nullptr ? context : "validateDelaunayVoronoiIntersections";
+  const size_t height = t < 0.0 ? 0 : static_cast<size_t>(t);
+  const auto csv_maybe = [](std::ostream& out, std::optional<size_t> value)
+  {
+    if (value.has_value())
+    {
+      out << *value;
+    }
+  };
+  auto input_branch_of = [&](std::optional<size_t> strand_id) -> std::optional<size_t>
+  {
+    if (!strand_id.has_value() || isDummyBoundary(*strand_id))
+    {
+      return std::nullopt;
+    }
+    try
+    {
+      return getBranchIndex(*strand_id, height);
+    }
+    catch (const std::exception&)
+    {
+      return std::nullopt;
+    }
+  };
+
+  struct WrongIntersection
+  {
+    size_t delaunay_edge_id = 0;
+    size_t voronoi_edge_id = 0;
+    double d_param = 0.0;
+    double v_param = 0.0;
+    double stored_d_param = 0.0;
+    bool d_ok = true;
+    bool v_ok = true;
+  };
+  std::set<std::pair<size_t, size_t>> current_wrong;
+  std::vector<WrongIntersection> wrongs;
+  for (const CrossingData::VoronoiDelaunayEdgeIntersection& intersection : crossing_data.edge_intersections)
+  {
+    const auto [d_param, v_param]
+      = delaunayVoronoiEdgeIntersection(intersection.delaunay_edge_id, intersection.voronoi_edge_id, t);
+    const bool d_ok = isDelaunayEdgeParamInExpectedWarningRange(this, intersection.delaunay_edge_id, d_param, param_range_eps);
+    const bool v_ok = isVoronoiEdgeParamInExpectedWarningRange(v_param, param_range_eps);
+    if (d_ok && v_ok)
+    {
+      continue;
+    }
+    current_wrong.emplace(intersection.delaunay_edge_id, intersection.voronoi_edge_id);
+    wrongs.push_back({ intersection.delaunay_edge_id, intersection.voronoi_edge_id, d_param, v_param,
+      intersection.delaunay_edge_param, d_ok, v_ok });
+  }
+
+  std::vector<WrongIntersection> firsts;
+  {
+    std::lock_guard<std::mutex> lock(intersection_error_mutex_);
+    firsts.reserve(wrongs.size());
+    for (const WrongIntersection& wrong : wrongs)
+    {
+      if (active_intersection_errors_.count({ wrong.delaunay_edge_id, wrong.voronoi_edge_id }) == 0)
+      {
+        firsts.push_back(wrong);
+      }
+    }
+    active_intersection_errors_ = std::move(current_wrong);
+  }
+
+  for (const WrongIntersection& wrong : firsts)
+  {
+    std::optional<size_t> origin_strand;
+    std::optional<size_t> dest_strand;
+    std::optional<size_t> vv0;
+    std::optional<size_t> vv1;
+    const size_t de_even = 2 * wrong.delaunay_edge_id;
+    if (de_even + 1 < graph.halfEdgeSlotCount())
+    {
+      const int origin = graph.halfEdge(de_even).origin;
+      const int dest = graph.halfEdge(de_even ^ 1).origin;
+      if (origin >= 0)
+      {
+        origin_strand = static_cast<size_t>(origin);
+      }
+      if (dest >= 0)
+      {
+        dest_strand = static_cast<size_t>(dest);
+      }
+    }
+    const size_t ve_even = 2 * wrong.voronoi_edge_id;
+    if (ve_even + 1 < graph.halfEdgeSlotCount())
+    {
+      const int face0 = graph.halfEdge(ve_even).face;
+      const int face1 = graph.halfEdge(ve_even ^ 1).face;
+      if (face0 >= 0)
+      {
+        vv0 = static_cast<size_t>(face0);
+      }
+      if (face1 >= 0)
+      {
+        vv1 = static_cast<size_t>(face1);
+      }
+    }
+    const std::optional<size_t> origin_input_branch = input_branch_of(origin_strand);
+    const std::optional<size_t> dest_input_branch = input_branch_of(dest_strand);
+    const char* d_expected = delaunayEdgeParamExpectedRangeDescription(this, wrong.delaunay_edge_id);
+    std::string failure;
+    if (!wrong.d_ok)
+    {
+      failure = "d_param";
+    }
+    if (!wrong.v_ok)
+    {
+      failure = failure.empty() ? std::string("v_param") : failure + ";v_param";
+    }
+
+    KINDS_WARNING(label << ": intersection not on both segments de=" << wrong.delaunay_edge_id << " ve="
+                        << wrong.voronoi_edge_id << " d_param=" << wrong.d_param << " expected " << d_expected
+                        << " v_param=" << wrong.v_param << " expected [0,1] stored_d_param=" << wrong.stored_d_param
+                        << " t=" << occurrence_time
+                        << (origin_input_branch.has_value()
+                              ? (" origin_input_branch=" + std::to_string(*origin_input_branch))
+                              : std::string())
+                        << (dest_input_branch.has_value()
+                              ? (" dest_input_branch=" + std::to_string(*dest_input_branch))
+                              : std::string())
+                        << " failure=" << failure);
+
+    if (intersection_errors_csv_header_written_ && !intersection_errors_csv_path_.empty())
+    {
+      std::ofstream out(intersection_errors_csv_path_, std::ios::app);
+      if (!out)
+      {
+        KINDS_WARNING("Intersection check: failed to append CSV " << intersection_errors_csv_path_.generic_string());
+        continue;
+      }
+      out << std::setprecision(std::numeric_limits<double>::max_digits10);
+      out << label << ',' << occurrence_time.real_time << ',' << occurrence_time.infinitesimal_time << ','
+          << wrong.delaunay_edge_id << ',' << wrong.voronoi_edge_id << ',' << wrong.d_param << ",\"" << d_expected
+          << "\"," << wrong.v_param << ",\"[0,1]\"," << wrong.stored_d_param << ',';
+      csv_maybe(out, origin_strand);
+      out << ',';
+      csv_maybe(out, dest_strand);
+      out << ',';
+      csv_maybe(out, origin_input_branch);
+      out << ',';
+      csv_maybe(out, dest_input_branch);
+      out << ',';
+      csv_maybe(out, vv0);
+      out << ',';
+      csv_maybe(out, vv1);
+      out << ',' << failure << '\n';
+    }
+  }
+}
+
+void KineticDelaunay::collectLiveIntersectionErrorMarks(double t, std::unordered_set<uint64_t>& first_keys,
+  std::unordered_set<uint64_t>& repeat_keys) const
+{
+  first_keys.clear();
+  repeat_keys.clear();
+  if (!delaunay_voronoi_intersection_check_enabled_)
+  {
+    return;
+  }
+
+  constexpr double param_range_eps = 1e-9;
+  std::set<std::pair<size_t, size_t>> known;
+  {
+    std::lock_guard<std::mutex> lock(intersection_error_mutex_);
+    known = active_intersection_errors_;
+  }
+
+  for (const CrossingData::VoronoiDelaunayEdgeIntersection& intersection : crossing_data.edge_intersections)
+  {
+    const auto [d_param, v_param]
+      = delaunayVoronoiEdgeIntersection(intersection.delaunay_edge_id, intersection.voronoi_edge_id, t);
+    if (isDelaunayEdgeParamInExpectedWarningRange(this, intersection.delaunay_edge_id, d_param, param_range_eps)
+      && isVoronoiEdgeParamInExpectedWarningRange(v_param, param_range_eps))
+    {
+      continue;
+    }
+    const uint64_t packed = (static_cast<uint64_t>(intersection.delaunay_edge_id) << 32)
+      | static_cast<uint64_t>(intersection.voronoi_edge_id);
+    if (known.count({ intersection.delaunay_edge_id, intersection.voronoi_edge_id }) != 0)
+    {
+      repeat_keys.insert(packed);
+    }
+    else
+    {
+      first_keys.insert(packed);
     }
   }
 }

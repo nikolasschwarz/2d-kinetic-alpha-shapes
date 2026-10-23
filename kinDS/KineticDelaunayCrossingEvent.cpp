@@ -1004,6 +1004,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
   kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", t);
   kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", t);
   kd->validateSitesInsideConvexHull("CrossingEvent:afterEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("CrossingEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

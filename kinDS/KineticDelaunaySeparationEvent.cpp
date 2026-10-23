@@ -44,4 +44,5 @@ void KineticDelaunay::SeparationEvent::handleEvent()
   }
 
   kd->validateSitesInsideConvexHull("SeparationEvent:afterEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("SeparationEvent:afterEvent", occurrence_time);
 }

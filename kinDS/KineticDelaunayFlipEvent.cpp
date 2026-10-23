@@ -1015,6 +1015,7 @@ void KineticDelaunay::FlipEvent::handleEvent()
   kd->validateVoronoiVertexIteratorInvariants("FlipEvent:afterEvent", t);
   kd->validateCrossingIntersectionInvariants("FlipEvent:afterEvent", t);
   kd->validateSitesInsideConvexHull("FlipEvent:afterEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("FlipEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

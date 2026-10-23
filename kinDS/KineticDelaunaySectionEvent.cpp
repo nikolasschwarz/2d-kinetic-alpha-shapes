@@ -214,4 +214,5 @@ void KineticDelaunay::SectionEvent::handleEvent()
     event_handler->afterEvent(*this);
   }
   kd->validateSitesInsideConvexHull("SectionEvent:afterEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("SectionEvent:afterEvent", occurrence_time);
 }

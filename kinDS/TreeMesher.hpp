@@ -139,6 +139,12 @@ class TreeMesher
     /// When true, after each kinetic event verify live sites lie inside the graph convex hull.
     /// Default off; CLI @c --check-sites-in-hull.
     bool check_sites_inside_convex_hull = false;
+    /// When true, after each kinetic event recompute every Delaunay–Voronoi edge intersection and warn if
+    /// either parameter is outside its line segment. Default off; CLI @c --check-intersections.
+    bool check_delaunay_voronoi_intersections = false;
+    /// Unique intersection-error CSV (one row per Delaunay/Voronoi edge pair). Empty uses
+    /// @c intersection_errors.csv under @ref visual_debug_output_root, or the working directory.
+    std::filesystem::path intersection_errors_csv_path;
     std::optional<double> flip_polynomial_dump_target_time;
     std::optional<size_t> flip_polynomial_dump_target_half_edge;
   };

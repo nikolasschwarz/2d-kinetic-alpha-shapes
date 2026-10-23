@@ -10979,6 +10979,16 @@ void SegmentBuilder::init()
   }
 
   logStrandInitDiagnosticsSummary(t);
+
+  // Bootstrap section events skip before/after callbacks (meshes are created here). Still export the
+  // same per-branch SVG snapshot that a section afterEvent would have written at start_section.
+  writeSegmentBuilderVisualDebugSvg(visual_debug, kin_del, graph, t, "init",
+    "section_" + std::to_string(init_section),
+    VisualDebugHighlight::forSectionBoundary(
+      graph, [&](size_t even_he) { return kin_del.isOnComponentBoundary(even_he); }),
+    /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
+    /*explicit_runtime_branch_ids=*/nullptr, /*creation_time=*/std::nullopt,
+    /*fan_out_active_runtime_branches=*/true);
 }
 
 void SegmentBuilder::finalize(double t)

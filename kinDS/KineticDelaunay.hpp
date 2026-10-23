@@ -10,6 +10,7 @@
 #include "StrandTree.hpp"
 #include "Trajectory.hpp"
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -20,6 +21,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -506,6 +508,16 @@ class KineticDelaunay
   /// When true, after each kinetic event verify every live site lies in its component's graph convex hull.
   /// Default off; CLI @c --check-sites-in-hull.
   bool sites_inside_convex_hull_check_enabled_ = false;
+  /// When true, after each kinetic event recompute every Delaunay–Voronoi edge intersection and warn if either
+  /// parameter lies outside its line segment (same interval as @ref assignCrossingIntersectionDelaunayParam).
+  /// Default off; CLI @c --check-intersections.
+  bool delaunay_voronoi_intersection_check_enabled_ = false;
+  std::filesystem::path intersection_errors_csv_path_;
+  bool intersection_errors_csv_header_written_ = false;
+  /// Pairs that failed the in-segment check at the last validator pass. Recovered pairs are dropped so
+  /// a later independent failure of the same edges is logged as a new first occurrence.
+  std::set<std::pair<size_t, size_t>> active_intersection_errors_;
+  mutable std::mutex intersection_error_mutex_;
 
   // crossing-related data (see public `CrossingData` forward declaration above).
 
@@ -1264,6 +1276,17 @@ class KineticDelaunay
   void setSitesInsideConvexHullCheckEnabled(bool enabled);
   bool sitesInsideConvexHullCheckEnabled() const;
   void validateSitesInsideConvexHull(const char* context, EventTime t) const;
+  /// Optional per-event check: every stored Delaunay–Voronoi crossing lies on both line segments.
+  /// Off by default; enable via CLI @c --check-intersections. A pair is logged/CSV'd on first failure,
+  /// forgotten when it becomes valid again or the crossing is removed, and treated as new if it fails later.
+  void setDelaunayVoronoiIntersectionCheckEnabled(bool enabled);
+  bool delaunayVoronoiIntersectionCheckEnabled() const;
+  void beginIntersectionErrorCsv(std::filesystem::path path);
+  void validateDelaunayVoronoiIntersections(const char* context, EventTime t);
+  /// Live in-segment failures at @p t vs the last validator pass: new failures in @p first_keys,
+  /// still-wrong pairs in @p repeat_keys. Packed as @c (delaunay_edge_id << 32) | voronoi_edge_id.
+  void collectLiveIntersectionErrorMarks(double t, std::unordered_set<uint64_t>& first_keys,
+    std::unordered_set<uint64_t>& repeat_keys) const;
   /// Bounds-checked diagnostic id queries; invalid ids are ignored by monitor logging.
   bool isDiagnosticsStrandIdValid(size_t strand_id) const;
   bool isDiagnosticsFaceIdValid(size_t face_id) const;

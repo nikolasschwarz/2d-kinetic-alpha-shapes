@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <sstream>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -345,6 +349,45 @@ void KineticDelaunay::setSitesInsideConvexHullCheckEnabled(bool enabled)
 bool KineticDelaunay::sitesInsideConvexHullCheckEnabled() const
 {
   return sites_inside_convex_hull_check_enabled_;
+}
+
+void KineticDelaunay::setDelaunayVoronoiIntersectionCheckEnabled(bool enabled)
+{
+  delaunay_voronoi_intersection_check_enabled_ = enabled;
+}
+
+bool KineticDelaunay::delaunayVoronoiIntersectionCheckEnabled() const
+{
+  return delaunay_voronoi_intersection_check_enabled_;
+}
+
+void KineticDelaunay::beginIntersectionErrorCsv(std::filesystem::path path)
+{
+  std::lock_guard<std::mutex> lock(intersection_error_mutex_);
+  active_intersection_errors_.clear();
+  intersection_errors_csv_path_.clear();
+  intersection_errors_csv_header_written_ = false;
+  if (path.empty())
+  {
+    return;
+  }
+  if (path.has_parent_path() && !path.parent_path().empty())
+  {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+  }
+  std::ofstream out(path, std::ios::trunc);
+  if (!out)
+  {
+    KINDS_WARNING("Intersection check: failed to open CSV " << path.generic_string());
+    return;
+  }
+  out << "context,t,infinitesimal_t,delaunay_edge_id,voronoi_edge_id,d_param,d_expected,v_param,v_expected,"
+         "stored_d_param,d_origin_strand,d_dest_strand,origin_input_branch,dest_input_branch,vv0,vv1,failure\n";
+  out.flush();
+  intersection_errors_csv_path_ = std::move(path);
+  intersection_errors_csv_header_written_ = true;
+  KINDS_INFO("Intersection check: CSV " << intersection_errors_csv_path_.generic_string());
 }
 
 bool KineticDelaunay::isDiagnosticsStrandIdValid(size_t strand_id) const
