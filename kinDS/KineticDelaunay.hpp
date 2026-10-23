@@ -549,6 +549,10 @@ class KineticDelaunay
   void growGraphSlotArrays();
   size_t findContainingTriForVoronoiVertex(size_t voronoi_vertex_id, double t) const;
   void initializeFaceState(size_t face_index, double t);
+  /// Lawson-style repair of Delaunator2D vs kinetic predicate sign mismatch at bootstrap.
+  /// Hull: @c ccw(origin, dest, opposite) of the interior hull edge; legal sign is <0.
+  /// Interior: FlipEvent @c inCircle order. Cascades along the four quadrilateral sides (BFS).
+  void legalizeInitialFlipCertificates(double t);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingBranchSplits();
   /// Drop pending kinetic entries for @p parent_runtime_branch_id and mark its runtime children as final.

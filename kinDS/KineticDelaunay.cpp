@@ -30,6 +30,7 @@
 #include <mutex>
 #include <utility>
 #include <optional>
+#include <queue>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -3230,6 +3231,11 @@ double inCircleNumeric(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec
   const double apb = glm::dot(db, db);
   const double apc = glm::dot(dc, dc);
   return da.x * (db.y * apc - apb * dc.y) - da.y * (db.x * apc - apb * dc.x) + apa * (db.x * dc.y - db.y * dc.x);
+}
+
+double ccwNumeric(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
+{
+  return a.x * b.y + b.x * c.y + c.x * a.y - a.y * b.x - b.y * c.x - c.y * a.x;
 }
 
 bool edgeConnectsSites(const HalfEdgeDelaunayGraph& graph, size_t even_he, size_t site_a, size_t site_b)
@@ -6691,6 +6697,302 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
   return std::make_pair(crossed_half_edge_ids, crossed_half_edge_params);
 }
 
+void KineticDelaunay::legalizeInitialFlipCertificates(double t)
+{
+  auto enqueue_even = [&](std::queue<size_t>& wait, std::unordered_set<size_t>& in_queue, size_t he_id)
+  {
+    if (!graph.isLiveHalfEdge(he_id))
+    {
+      return;
+    }
+    const size_t even = he_id & ~size_t { 1 };
+    if (in_queue.insert(even).second)
+    {
+      wait.push(even);
+    }
+  };
+
+  auto enqueue_quad_sides = [&](std::queue<size_t>& wait, std::unordered_set<size_t>& in_queue, size_t he_id)
+  {
+    if (!graph.isLiveHalfEdge(he_id) || !graph.isLiveHalfEdge(he_id ^ 1))
+    {
+      return;
+    }
+    const int n0 = graph.halfEdge(he_id).next;
+    const int m0 = graph.halfEdge(he_id ^ 1).next;
+    if (n0 < 0 || m0 < 0)
+    {
+      return;
+    }
+    const int n1 = graph.halfEdge(static_cast<size_t>(n0)).next;
+    const int m1 = graph.halfEdge(static_cast<size_t>(m0)).next;
+    if (n1 < 0 || m1 < 0)
+    {
+      return;
+    }
+    enqueue_even(wait, in_queue, static_cast<size_t>(n0));
+    enqueue_even(wait, in_queue, static_cast<size_t>(n1));
+    enqueue_even(wait, in_queue, static_cast<size_t>(m0));
+    enqueue_even(wait, in_queue, static_cast<size_t>(m1));
+  };
+
+  auto point_at = [&](int vertex) -> glm::dvec2
+  { return getPointAt(static_cast<size_t>(vertex), t); };
+
+  struct Certificate
+  {
+    bool hull = false;
+    double value = 0.0;
+  };
+
+  auto raw_certificate = [&](size_t he_id) -> std::optional<Certificate>
+  {
+    if (!graph.isLiveHalfEdge(he_id) || !graph.isLiveHalfEdge(he_id ^ 1))
+    {
+      return std::nullopt;
+    }
+    if (graph.halfEdge(he_id).face < 0 || graph.halfEdge(he_id ^ 1).face < 0)
+    {
+      return std::nullopt;
+    }
+    // True hull only (one finite face, one infinite). Infinite spokes also have origin==-1 but
+    // are not hull diagonals; FlipEvent's skip--1 filter would also reorder those three points.
+    // Finite triangle walk: origin(inside) -> dest(inside) -> opposite(inside). In getPointAt
+    // space that orientation is clockwise, so legal ccw is < 0.
+    if (graph.isOnConvexBoundary(he_id))
+    {
+      size_t inside = he_id;
+      if (graph.isOnConvexBoundaryOutside(inside))
+      {
+        inside ^= 1;
+      }
+      const int a = graph.halfEdge(inside).origin;
+      const int c = graph.halfEdge(inside ^ 1).origin;
+      const int b = graph.triangleOppositeVertex(inside);
+      if (a < 0 || b < 0 || c < 0)
+      {
+        return std::nullopt;
+      }
+      const double value = ccwNumeric(point_at(a), point_at(c), point_at(b));
+      if (!std::isfinite(value) || value == 0.0)
+      {
+        return std::nullopt;
+      }
+      return Certificate { true, value };
+    }
+
+    const int a = graph.halfEdge(he_id).origin;
+    const int b = graph.triangleOppositeVertex(he_id ^ 1);
+    const int c = graph.halfEdge(he_id ^ 1).origin;
+    const int d = graph.triangleOppositeVertex(he_id);
+    if (a < 0 || b < 0 || c < 0 || d < 0)
+    {
+      return std::nullopt;
+    }
+    const double value = inCircleNumeric(point_at(a), point_at(b), point_at(c), point_at(d));
+    if (!std::isfinite(value) || value == 0.0)
+    {
+      return std::nullopt;
+    }
+    return Certificate { false, value };
+  };
+
+  // Hull ccw: finite-triangle walk origin->dest->opposite is CW in getPointAt space (legal < 0).
+  // Interior inCircle uses FlipEvent order (a, opp(twin), dest, opp(he)); legal is d outside CCW abc.
+  constexpr bool hull_illegal_if_negative = false;
+  bool interior_illegal_if_positive = true;
+  {
+    size_t hull_pos = 0;
+    size_t hull_neg = 0;
+    size_t interior_pos = 0;
+    size_t interior_neg = 0;
+    for (size_t i = 0; i < graph.liveDelaunayEdgeCount(); ++i)
+    {
+      const auto cert = raw_certificate(graph.liveDelaunayEdgeId(i));
+      if (!cert.has_value())
+      {
+        continue;
+      }
+      if (cert->hull)
+      {
+        if (cert->value > 0.0)
+        {
+          ++hull_pos;
+        }
+        else
+        {
+          ++hull_neg;
+        }
+      }
+      else if (cert->value > 0.0)
+      {
+        ++interior_pos;
+      }
+      else
+      {
+        ++interior_neg;
+      }
+    }
+    if (interior_pos > interior_neg)
+    {
+      interior_illegal_if_positive = false;
+    }
+    const size_t hull_total = hull_pos + hull_neg;
+    const size_t hull_legal = hull_neg;
+    const size_t interior_total = interior_pos + interior_neg;
+    const size_t interior_legal = interior_illegal_if_positive ? interior_neg : interior_pos;
+    KINDS_INFO("legalizeInitialFlipCertificates ccw polarity <0 legal / >0 flip: " << hull_legal << "/"
+      << hull_total << " hull edges fulfilled it (+=" << hull_pos << ", -=" << hull_neg << ") at t=" << t);
+    KINDS_INFO("legalizeInitialFlipCertificates inCircle polarity "
+      << (interior_illegal_if_positive ? "<0 legal / >0 flip" : ">0 legal / <0 flip") << ": " << interior_legal << "/"
+      << interior_total << " interior edges fulfilled it (+=" << interior_pos << ", -=" << interior_neg
+      << ") at t=" << t);
+  }
+
+  auto certificate_requires_flip = [&](size_t he_id) -> bool
+  {
+    const auto cert = raw_certificate(he_id);
+    if (!cert.has_value())
+    {
+      return false;
+    }
+    if (cert->hull)
+    {
+      return hull_illegal_if_negative ? cert->value < 0.0 : cert->value > 0.0;
+    }
+    return interior_illegal_if_positive ? cert->value > 0.0 : cert->value < 0.0;
+  };
+
+  auto component_has_single_finite_triangle = [&](size_t he_id) -> bool
+  {
+    int vertex = graph.halfEdge(he_id).origin;
+    if (vertex < 0)
+    {
+      vertex = graph.halfEdge(he_id ^ 1).origin;
+    }
+    if (vertex < 0 || static_cast<size_t>(vertex) >= component_data.component_map.size())
+    {
+      return false;
+    }
+    const size_t component_id = component_data.component_map[static_cast<size_t>(vertex)];
+    size_t finite_faces = 0;
+    for (size_t face_id : graph.liveFaces())
+    {
+      const auto verts = graph.getTriangleVertexIndices(face_id);
+      if (verts[0] < 0 || verts[1] < 0 || verts[2] < 0)
+      {
+        continue;
+      }
+      const size_t v0 = static_cast<size_t>(verts[0]);
+      if (v0 >= component_data.component_map.size() || component_data.component_map[v0] != component_id)
+      {
+        continue;
+      }
+      if (++finite_faces > 1)
+      {
+        return false;
+      }
+    }
+    return finite_faces == 1;
+  };
+
+  auto try_flip = [&](std::queue<size_t>& wait, std::unordered_set<size_t>& in_queue, size_t he_id) -> bool
+  {
+    if (!certificate_requires_flip(he_id))
+    {
+      return false;
+    }
+
+    if ((graph.isOnConvexBoundary(he_id) || graph.isOutsideConvexBoundary(he_id))
+      && component_has_single_finite_triangle(he_id))
+    {
+      size_t inside_he = he_id;
+      if (graph.isOnConvexBoundaryOutside(he_id))
+      {
+        inside_he = he_id ^ 1;
+      }
+      else if (!graph.isOnConvexBoundaryOutside(he_id ^ 1))
+      {
+        inside_he = static_cast<size_t>(-1);
+      }
+      if (inside_he != static_cast<size_t>(-1))
+      {
+        const int opposite = graph.triangleOppositeVertex(inside_he);
+        if (opposite >= 0)
+        {
+          for (auto it = graph.incidentEdgesBegin(static_cast<size_t>(opposite));
+               it != graph.incidentEdgesEnd(static_cast<size_t>(opposite)); ++it)
+          {
+            if (graph.destination(*it) == -1)
+            {
+              enqueue_quad_sides(wait, in_queue, *it);
+              graph.flipEdge(*it);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    graph.flipEdge(he_id);
+    if (certificate_requires_flip(he_id))
+    {
+      KINDS_DEBUG("legalizeInitialFlipCertificates: he=" << he_id
+                                                         << " still fails after flip; not cascading");
+      return true;
+    }
+    enqueue_quad_sides(wait, in_queue, he_id);
+    KINDS_DEBUG("legalizeInitialFlipCertificates: flipped he=" << he_id << " at t=" << t);
+    return true;
+  };
+
+  std::queue<size_t> wait;
+  std::unordered_set<size_t> in_queue;
+  size_t flips = 0;
+  const size_t max_flips = std::max<size_t>(graph.liveDelaunayEdgeCount() * 8, 8);
+  bool hit_cap = false;
+
+  const size_t live_edge_count = graph.liveDelaunayEdgeCount();
+  ProgressBar progress(0, live_edge_count, "Legalizing initial flip certificates", ProgressBar::Display::Absolute);
+  for (size_t i = 0; i < live_edge_count && !hit_cap; ++i)
+  {
+    if (try_flip(wait, in_queue, graph.liveDelaunayEdgeId(i)))
+    {
+      ++flips;
+      while (!wait.empty())
+      {
+        const size_t he_id = wait.front();
+        wait.pop();
+        in_queue.erase(he_id);
+        if (!try_flip(wait, in_queue, he_id))
+        {
+          continue;
+        }
+        ++flips;
+        if (flips >= max_flips)
+        {
+          hit_cap = true;
+          break;
+        }
+      }
+    }
+    progress.Update(i + 1);
+  }
+  progress.Finish();
+
+  if (hit_cap)
+  {
+    KINDS_WARNING("legalizeInitialFlipCertificates: stopped after " << flips
+                                                                    << " flips (cascade cap) at t=" << t);
+  }
+  else if (flips > 0)
+  {
+    KINDS_WARNING("legalizeInitialFlipCertificates: applied " << flips
+                                                              << " immediate flip(s) at t=" << t
+                                                              << " (Delaunator2D vs kinetic inCircle/ccw sign)");
+  }
+}
+
 const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_manager)
 {
   callback_manager_ = callback_manager;
@@ -6865,6 +7167,8 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
   computeComponentData(bootstrap_t);
   // Branches already start as separate graph components; do not treat this as a pending split.
   prev_component_count = component_data.components.size();
+
+  legalizeInitialFlipCertificates(bootstrap_t);
 
   for (size_t face_index : graph.liveFaces())
   {
