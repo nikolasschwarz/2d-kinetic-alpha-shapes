@@ -144,12 +144,16 @@ class EventScheduler
   /// After @c handleEvent throws, return true to keep processing this queue (failsafe already rewound
   /// to the next section). Return false to rethrow. Empty handler rethrows.
   using MeshingErrorHandler = std::function<bool(const Event& failed, const std::exception& ex)>;
-  /// Process queued events in time order. If @p end_time is set, discard the remainder once the next
-  /// event has @c occurrence_time >= @p end_time (that event is not executed).
+  /// Recomputed each loop iteration so a parent remainder can keep going after exclusive end grows.
+  using EndTimeQuery = std::function<std::optional<double>()>;
+  /// Process queued events in time order. If @p get_end_time returns a cutoff, discard the remainder
+  /// once the next event has @c occurrence_time >= that cutoff (that event is not executed).
   /// When @p statistics is set, each dequeued event is recorded before @c handleEvent.
   /// @p runtime_branch_id is stored on event-list rows when the event did not already fill it.
   /// Meshing errors unwind @c handleEvent completely; @p on_meshing_error may rebuild the queue, then
   /// this loop continues as if that event had returned.
+  void processEvents(EndTimeQuery get_end_time, Statistics* statistics = nullptr,
+    std::optional<size_t> runtime_branch_id = std::nullopt, MeshingErrorHandler on_meshing_error = {});
   void processEvents(std::optional<double> end_time = std::nullopt, Statistics* statistics = nullptr,
     std::optional<size_t> runtime_branch_id = std::nullopt, MeshingErrorHandler on_meshing_error = {});
 };

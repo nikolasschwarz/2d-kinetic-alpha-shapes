@@ -4404,7 +4404,17 @@ void KineticDelaunay::processBranchScheduler(
   };
   try
   {
-    queue.processEvents(end_time, stats, runtime_branch_id,
+    queue.processEvents(
+      [this, &scheduler, frozen_end = end_time]() -> std::optional<double>
+      {
+        if (!scheduler.independent)
+        {
+          return frozen_end;
+        }
+        const auto topology_lock = lockSharedTopology();
+        return exclusiveEndTimeForScheduler(scheduler);
+      },
+      stats, runtime_branch_id,
       [this, &scheduler](const Event& failed, const std::exception& ex)
       {
         return failsafeResumeBranchAtNextSection(scheduler, failed, ex.what());

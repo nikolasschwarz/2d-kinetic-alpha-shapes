@@ -28,13 +28,14 @@ std::vector<std::shared_ptr<EventScheduler::Event>> EventScheduler::takeAll()
 }
 
 void EventScheduler::processEvents(
-  std::optional<double> end_time, Statistics* statistics, std::optional<size_t> runtime_branch_id,
+  EndTimeQuery get_end_time, Statistics* statistics, std::optional<size_t> runtime_branch_id,
   EventScheduler::MeshingErrorHandler on_meshing_error)
 {
   last_processed_occurrence_.reset();
   while (!events_.empty())
   {
     auto event = events_.top();
+    const std::optional<double> end_time = get_end_time ? get_end_time() : std::nullopt;
     if (end_time.has_value() && !(event->occurrence_time.real_time < *end_time))
     {
       KINDS_INFO("EventScheduler stop at end_time=" << *end_time << " next_event_t=" << event->occurrence_time
@@ -71,4 +72,11 @@ void EventScheduler::processEvents(
       }
     }
   }
+}
+
+void EventScheduler::processEvents(
+  std::optional<double> end_time, Statistics* statistics, std::optional<size_t> runtime_branch_id,
+  EventScheduler::MeshingErrorHandler on_meshing_error)
+{
+  processEvents([end_time]() { return end_time; }, statistics, runtime_branch_id, std::move(on_meshing_error));
 }
