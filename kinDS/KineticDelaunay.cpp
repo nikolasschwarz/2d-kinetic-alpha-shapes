@@ -1714,6 +1714,30 @@ void KineticDelaunay::refreshEventsAfterGraphCut(
 namespace
 {
 thread_local BranchScheduler* tls_active_branch_scheduler = nullptr;
+
+std::string formatRuntimeBranchId(size_t runtime_branch_id)
+{
+  if (runtime_branch_id == BranchScheduler::no_branch)
+  {
+    return "root";
+  }
+  return std::to_string(runtime_branch_id);
+}
+
+std::string describeSchedulerQueue(const EventScheduler& queue)
+{
+  std::ostringstream os;
+  os << "queue_size=" << queue.size();
+  if (const std::shared_ptr<EventScheduler::Event> front = queue.peek())
+  {
+    os << " first=" << kineticEventTypeName(front->eventType()) << " t=" << front->occurrence_time;
+  }
+  else
+  {
+    os << " first=empty";
+  }
+  return os.str();
+}
 } // namespace
 
 BranchScheduler* KineticDelaunay::activeBranchScheduler() const
@@ -1730,36 +1754,8 @@ void KineticDelaunay::precomputeStepForRuntimeBranch(double t, size_t runtime_br
   for (size_t he_id : graph.liveDelaunayEdges())
   {
     const size_t even = he_id & ~size_t(1);
-    if (runtime_branch_id != BranchScheduler::no_branch)
-    {
-      const size_t owner = even / 2 < even_half_edge_owner_runtime_branch_.size()
-        ? even_half_edge_owner_runtime_branch_[even / 2]
-        : BranchScheduler::no_branch;
-      if (owner != runtime_branch_id && owner != BranchScheduler::no_branch)
-      {
-        continue;
-      }
-      if (owner == BranchScheduler::no_branch)
-      {
-        // Fall back: ownership by endpoint strands.
-        const int origin = graph.halfEdge(even).origin;
-        const int dest = graph.destination(even);
-        const auto unsplit_of = [&](int v)
-        { return v >= 0 ? unsplitRuntimeBranchForStrand(static_cast<size_t>(v)) : BranchScheduler::no_branch; };
-        if (unsplit_of(origin) != runtime_branch_id && unsplit_of(dest) != runtime_branch_id)
-        {
-          continue;
-        }
-        if ((origin >= 0 && unsplit_of(origin) != runtime_branch_id && unsplit_of(origin) != BranchScheduler::no_branch)
-          || (dest >= 0 && unsplit_of(dest) != runtime_branch_id && unsplit_of(dest) != BranchScheduler::no_branch))
-        {
-          continue;
-        }
-      }
-    }
-    if ((graph.halfEdge(even).origin >= 0
-          && !strandHasProfileAt(static_cast<size_t>(graph.halfEdge(even).origin), t))
-      || (graph.destination(even) >= 0 && !strandHasProfileAt(static_cast<size_t>(graph.destination(even)), t)))
+    if (!delaunayEvenHalfEdgeInRuntimeScope(even, runtime_branch_id)
+      || !delaunayEvenHalfEdgeHasProfileAt(even, t))
     {
       continue;
     }
@@ -1825,8 +1821,30 @@ void KineticDelaunay::handleEvents()
     root_branch_scheduler_->independent = false;
   }
   root_branch_scheduler_->handoff_section = BranchScheduler::no_branch;
-  processBranchScheduler(*root_branch_scheduler_, static_cast<double>(getEndSection()));
-  processIndependentBranchSchedulers();
+  std::exception_ptr root_error;
+  try
+  {
+    processBranchScheduler(*root_branch_scheduler_, static_cast<double>(getEndSection()));
+  }
+  catch (...)
+  {
+    root_error = std::current_exception();
+  }
+  try
+  {
+    processIndependentBranchSchedulers();
+  }
+  catch (...)
+  {
+    if (!root_error)
+    {
+      root_error = std::current_exception();
+    }
+  }
+  if (root_error)
+  {
+    std::rethrow_exception(root_error);
+  }
 }
 
 size_t KineticDelaunay::getBranchIndex(size_t strand_id, size_t t) const
@@ -2250,6 +2268,7 @@ const StrandTree& KineticDelaunay::getStrandTree() const { return branch_trajs; 
 
 void KineticDelaunay::setVisualDebugOutputRoot(const std::filesystem::path& root)
 {
+  const std::lock_guard<std::mutex> log_lock(runtime_branch_log_mutex_);
   visual_debug_output_root_ = root;
   runtime_branch_log_header_written_ = false;
 
@@ -2344,6 +2363,7 @@ void KineticDelaunay::logRuntimeBranchEvent(double t, const std::string& event_l
     return;
   }
 
+  const std::lock_guard<std::mutex> log_lock(runtime_branch_log_mutex_);
   std::ofstream out(*log_path, std::ios::app);
   if (!out)
   {
@@ -2827,19 +2847,14 @@ void KineticDelaunay::assignPendingSplitChildRuntimeBranches(PendingBranchSplit&
     }
     assigned_any_strand = assigned_any_strand || assigned_strand_count > 0;
 
-    std::ostringstream line;
-    line << "event=pending_split_child id=" << child_branch << " parent=" << parent_branch
-         << " component=" << split_off_component << " strand_count=" << assigned_strand_count
-         << " input_branch=" << child_input_branch.value() << " section=" << branch_section;
-    if (!allocated_new_child)
+    if (allocated_new_child)
     {
-      line << " reused=1";
+      std::ostringstream line;
+      line << "event=pending_split_child id=" << child_branch << " parent=" << parent_branch
+           << " component=" << split_off_component << " strand_count=" << assigned_strand_count
+           << " input_branch=" << child_input_branch.value() << " section=" << branch_section;
+      logRuntimeBranchEvent(split_time, line.str());
     }
-    if (!allow_allocate)
-    {
-      line << " reactivate=1";
-    }
-    logRuntimeBranchEvent(split_time, line.str());
   }
 
   bool did_note_split = false;
@@ -3087,7 +3102,12 @@ bool KineticDelaunay::maybeFinalizeInfinitesimalSeparation(size_t parent_compone
 
   // Ensure primary creation stamps are EventTime(t) (not leftover infinitesimal from the handler).
   current_infinitesimal_t_ = 0.0;
-  rescheduleAllFlipRadiusCrossingEvents(t);
+  // Parallel forks already precompute each piece onto its own queue at t. A global reschedule here
+  // would stamp every last_updated and enqueue onto the forking scheduler instead.
+  if (!parallelize_independent_runtime_branches_)
+  {
+    rescheduleAllFlipRadiusCrossingEvents(t);
+  }
   return true;
 }
 
@@ -3670,6 +3690,37 @@ size_t KineticDelaunay::getActiveSectionsAdvanced() const
   return sections_advanced;
 }
 
+std::optional<size_t> KineticDelaunay::lowestNonRetiredSchedulerSection()
+{
+  const auto topology_lock = lockSharedTopology();
+  auto consider = [&](const BranchScheduler* scheduler, std::optional<size_t>& lowest)
+  {
+    if (scheduler == nullptr || scheduler->finished)
+    {
+      return;
+    }
+    const size_t runtime = scheduler->runtime_branch_id;
+    if (runtime != BranchScheduler::no_branch
+      && (runtime >= runtime_branch_data_.alive.size() || !runtime_branch_data_.alive[runtime]))
+    {
+      return;
+    }
+    const size_t section = scheduler->independent ? scheduler->sections_advanced : sections_advanced;
+    lowest = lowest.has_value() ? std::min(*lowest, section) : std::optional<size_t>(section);
+  };
+
+  std::optional<size_t> lowest;
+  consider(root_branch_scheduler_.get(), lowest);
+  {
+    const std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+    for (const auto& scheduler : independent_branch_schedulers_)
+    {
+      consider(scheduler.get(), lowest);
+    }
+  }
+  return lowest;
+}
+
 void KineticDelaunay::rebuildSchedulerTopologyOwnership(BranchScheduler& scheduler)
 {
   scheduler.owned_strands.clear();
@@ -3781,19 +3832,16 @@ size_t KineticDelaunay::exclusiveEndSectionForScheduler(const BranchScheduler& s
 
 double KineticDelaunay::exclusiveEndTimeForScheduler(const BranchScheduler& scheduler) const
 {
-  const size_t end_section = exclusiveEndSectionForScheduler(scheduler);
-  if (end_section == 0)
-  {
-    return 0.0;
-  }
-  return std::nextafter(static_cast<double>(end_section - 1), std::numeric_limits<double>::infinity());
+  return static_cast<double>(exclusiveEndSectionForScheduler(scheduler));
 }
 
-void KineticDelaunay::scheduleBranchLocalSectionEvents(BranchScheduler& scheduler, size_t from_section)
+void KineticDelaunay::enqueueBranchLocalSectionEvents(BranchScheduler& scheduler, size_t from_section)
 {
   const size_t end_section = exclusiveEndSectionForScheduler(scheduler);
-  scheduler.sections_advanced = from_section;
-  scheduler.queue.clear();
+  if (from_section >= end_section)
+  {
+    return;
+  }
   if (scheduler.independent && scheduler.owned_strands.empty()
     && (scheduler.runtime_branch_id == BranchScheduler::no_branch
       || scheduler.runtime_branch_id >= runtime_branch_data_.branches.size()
@@ -3801,6 +3849,7 @@ void KineticDelaunay::scheduleBranchLocalSectionEvents(BranchScheduler& schedule
   {
     return;
   }
+  EventScheduler& queue = schedulerQueue(scheduler);
   const std::vector<size_t>& owned
     = !scheduler.owned_strands.empty() ? scheduler.owned_strands
     : (scheduler.runtime_branch_id < runtime_branch_data_.branches.size()
@@ -3825,9 +3874,16 @@ void KineticDelaunay::scheduleBranchLocalSectionEvents(BranchScheduler& schedule
       }
     }
     const double time = static_cast<double>(i);
-    scheduler.queue.enqueueEvent(std::make_shared<SectionEvent>(
+    queue.enqueueEvent(std::make_shared<SectionEvent>(
       this, time, i, time, glm::dvec2 { 0.0, 0.0 }, scheduler.runtime_branch_id));
   }
+}
+
+void KineticDelaunay::scheduleBranchLocalSectionEvents(BranchScheduler& scheduler, size_t from_section)
+{
+  scheduler.sections_advanced = from_section;
+  schedulerQueue(scheduler).clear();
+  enqueueBranchLocalSectionEvents(scheduler, from_section);
 }
 
 void KineticDelaunay::continueIndependentSchedulerFromSection(BranchScheduler& scheduler, size_t from_section)
@@ -3844,56 +3900,24 @@ void KineticDelaunay::continueIndependentSchedulerFromSection(BranchScheduler& s
   {
     return;
   }
-  auto continuation = std::make_unique<BranchScheduler>();
-  continuation->runtime_branch_id = scheduler.runtime_branch_id;
-  continuation->independent = true;
-  rebuildSchedulerTopologyOwnership(*continuation);
-  scheduleBranchLocalSectionEvents(*continuation, from_section);
-  if (continuation->queue.empty())
-  {
-    return;
-  }
-  KINDS_INFO("Continued independent BranchScheduler runtime_branch=" << continuation->runtime_branch_id
-                                                                      << " from_section=" << from_section
-                                                                      << " end_section="
-                                                                      << exclusiveEndSectionForScheduler(*continuation)
-                                                                      << " owned_strands="
-                                                                      << continuation->owned_strands.size());
-  std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
-  independent_branch_schedulers_.push_back(std::move(continuation));
+  const size_t enqueue_from = std::max(from_section, previous_end);
+  enqueueBranchLocalSectionEvents(scheduler, enqueue_from);
+  KINDS_INFO("Extended independent BranchScheduler runtime_branch=" << scheduler.runtime_branch_id
+                                                                     << " from_section=" << enqueue_from
+                                                                     << " end_section=" << new_end
+                                                                     << " owned_strands=" << scheduler.owned_strands.size());
 }
 
-void KineticDelaunay::maybeForkBranchSchedulers(size_t parent_runtime_branch_id,
+bool KineticDelaunay::maybeForkBranchSchedulers(size_t parent_runtime_branch_id,
   const std::vector<size_t>& child_runtime_ids, double t)
 {
-  if (!parallelize_independent_runtime_branches_)
+  if (!parallelize_independent_runtime_branches_ || child_runtime_ids.empty())
   {
-    return;
-  }
-  if (child_runtime_ids.empty())
-  {
-    return;
-  }
-
-  std::vector<size_t> pieces;
-  pieces.reserve(child_runtime_ids.size() + 1);
-  pieces.push_back(parent_runtime_branch_id);
-  for (size_t child : child_runtime_ids)
-  {
-    pieces.push_back(child);
+    return false;
   }
 
   const size_t next_section = static_cast<size_t>(t) + 1;
-  // The forking queue finishes the current interval, then the forked schedulers take over at next_section.
-  // A nested fork hands off too; otherwise its queue keeps running next to the new one for the same branch.
-  if (BranchScheduler* active = activeBranchScheduler(); active != nullptr)
-  {
-    active->handoff_section = std::min(active->handoff_section, next_section);
-  }
-  else
-  {
-    kinetic_algorithm_->rootScheduler().clear();
-  }
+  BranchScheduler* const previous = activeBranchScheduler();
 
   // Capacity hint only. Do not publish extra face_inside slots: that size used to be treated as the
   // pre-cut face count, which skipped CrossingData registration for faces appended into the reserved range.
@@ -3908,39 +3932,124 @@ void KineticDelaunay::maybeForkBranchSchedulers(size_t parent_runtime_branch_id,
   crossing_data.growTo(reserve_faces);
   crossing_data.growEdgeSlotsTo(reserve_quads);
 
-  for (size_t runtime_branch_id : pieces)
+  auto can_fork_runtime = [&](size_t runtime_branch_id) -> bool
   {
     if (runtime_branch_id == RuntimeBranchData::no_branch)
     {
-      continue;
+      return false;
     }
     runtime_branch_data_.rebuildBranchStrandLists();
-    if (runtime_branch_id >= runtime_branch_data_.branches.size()
-      || runtime_branch_data_.branches[runtime_branch_id].empty())
-    {
-      continue;
-    }
-    if (!runtime_branch_data_.alive[runtime_branch_id])
-    {
-      continue;
-    }
+    return runtime_branch_id < runtime_branch_data_.branches.size()
+      && !runtime_branch_data_.branches[runtime_branch_id].empty()
+      && runtime_branch_data_.alive[runtime_branch_id];
+  };
 
+  // Claim child ownership first so the continuing parent remainder does not include child edges.
+  std::vector<std::unique_ptr<BranchScheduler>> child_schedulers;
+  child_schedulers.reserve(child_runtime_ids.size());
+  for (size_t child_runtime_id : child_runtime_ids)
+  {
+    if (!can_fork_runtime(child_runtime_id))
+    {
+      continue;
+    }
     auto scheduler = std::make_unique<BranchScheduler>();
-    scheduler->runtime_branch_id = runtime_branch_id;
+    scheduler->runtime_branch_id = child_runtime_id;
     scheduler->independent = true;
     rebuildSchedulerTopologyOwnership(*scheduler);
+    child_schedulers.push_back(std::move(scheduler));
+  }
+
+  const bool previous_is_parent = previous != nullptr
+    && (previous->runtime_branch_id == parent_runtime_branch_id
+      || previous->runtime_branch_id == BranchScheduler::no_branch);
+  std::vector<std::shared_ptr<EventScheduler::Event>> salvaged;
+  if (previous_is_parent && can_fork_runtime(parent_runtime_branch_id))
+  {
+    if (previous->runtime_branch_id == BranchScheduler::no_branch)
+    {
+      previous->runtime_branch_id = parent_runtime_branch_id;
+    }
+    previous->handoff_section = BranchScheduler::no_branch;
+    runtime_branch_data_.rebuildBranchStrandLists();
+    rebuildSchedulerTopologyOwnership(*previous);
+    // Keep sections_advanced: a force-cut SectionEvent still increments it after this returns.
+    salvaged = schedulerQueue(*previous).takeAll();
+    enqueueBranchLocalSectionEvents(*previous, next_section);
+    setActiveBranchScheduler(previous);
+    precomputeStepForRuntimeBranch(t, parent_runtime_branch_id);
+    KINDS_INFO("Continued parent BranchScheduler runtime_branch=" << parent_runtime_branch_id
+                                                                   << " split_t=" << t
+                                                                   << " next_section=" << next_section
+                                                                   << " end_section="
+                                                                   << exclusiveEndSectionForScheduler(*previous)
+                                                                   << " owned_strands=" << previous->owned_strands.size()
+                                                                   << " owned_edges=" << previous->owned_even_half_edges.size());
+  }
+
+  bool forked_any = false;
+  for (auto& scheduler : child_schedulers)
+  {
     scheduleBranchLocalSectionEvents(*scheduler, next_section);
-    KINDS_INFO("Forked independent BranchScheduler runtime_branch=" << runtime_branch_id
-                                                                     << " from_section=" << next_section
+    setActiveBranchScheduler(scheduler.get());
+    precomputeStepForRuntimeBranch(t, scheduler->runtime_branch_id);
+    KINDS_INFO("Forked independent BranchScheduler runtime_branch=" << scheduler->runtime_branch_id
+                                                                     << " split_t=" << t
+                                                                     << " next_section=" << next_section
                                                                      << " end_section="
                                                                      << exclusiveEndSectionForScheduler(*scheduler)
                                                                      << " owned_strands=" << scheduler->owned_strands.size()
-                                                                     << " owned_edges=" << scheduler->owned_even_half_edges.size());
+                                                                     << " owned_edges=" << scheduler->owned_even_half_edges.size()
+                                                                     << " " << describeSchedulerQueue(scheduler->queue));
+    forked_any = true;
+  }
+
+  if (previous_is_parent && previous != nullptr)
+  {
+    for (auto& event : salvaged)
+    {
+      auto* sub = dynamic_cast<SubdivisionEvent*>(event.get());
+      if (sub == nullptr)
+      {
+        continue;
+      }
+      const size_t strand_branch = unsplitRuntimeBranchForStrand(sub->strand_id);
+      if (strandInRuntimeScope(sub->strand_id, previous->runtime_branch_id))
+      {
+        schedulerQueue(*previous).enqueueEvent(std::move(event));
+        continue;
+      }
+      for (auto& child : child_schedulers)
+      {
+        if (child != nullptr && strand_branch == child->runtime_branch_id)
+        {
+          child->queue.enqueueEvent(std::move(event));
+          break;
+        }
+      }
+    }
+  }
+
+  for (auto& scheduler : child_schedulers)
+  {
+    if (scheduler == nullptr)
+    {
+      continue;
+    }
+    BranchScheduler* const raw = scheduler.get();
+    KINDS_INFO("Independent BranchScheduler initial schedule runtime_branch="
+      << raw->runtime_branch_id << " end_section=" << exclusiveEndSectionForScheduler(*raw)
+      << " end_time=" << exclusiveEndTimeForScheduler(*raw) << " sections_advanced=" << raw->sections_advanced
+      << " " << describeSchedulerQueue(raw->queue));
     {
       std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
       independent_branch_schedulers_.push_back(std::move(scheduler));
     }
+    launchIndependentBranchScheduler(*raw);
+    forked_any = true;
   }
+  setActiveBranchScheduler(previous);
+  return forked_any;
 }
 
 EventScheduler& KineticDelaunay::schedulerQueue(BranchScheduler& scheduler)
@@ -3967,10 +4076,15 @@ void KineticDelaunay::recordFailsafeReport(
   row.type = KineticEventType::Failsafe;
   row.section_id = failed_section;
   row.split_time = static_cast<double>(resume_section);
+  if (const BranchScheduler* scheduler = activeBranchScheduler();
+    scheduler != nullptr && scheduler->runtime_branch_id != BranchScheduler::no_branch)
+  {
+    row.runtime_branch_id = scheduler->runtime_branch_id;
+  }
   statistics_.recordEvent(std::move(row));
 }
 
-std::vector<size_t> KineticDelaunay::failsafeStrandsForScheduler(BranchScheduler& scheduler, size_t section)
+std::vector<size_t> KineticDelaunay::failsafeStrandsForScheduler(const BranchScheduler& scheduler, size_t section)
 {
   std::vector<size_t> strands;
   const double t = static_cast<double>(section);
@@ -4025,7 +4139,7 @@ std::vector<size_t> KineticDelaunay::failsafeStrandsForScheduler(BranchScheduler
 }
 
 std::vector<std::shared_ptr<EventScheduler::Event>> KineticDelaunay::failsafeConsumeQueue(
-  BranchScheduler& scheduler, double until_t, bool consume_all_subdivisions)
+  BranchScheduler& scheduler, double until_t)
 {
   auto pending = schedulerQueue(scheduler).takeAll();
   std::vector<std::shared_ptr<EventScheduler::Event>> kept;
@@ -4042,7 +4156,7 @@ std::vector<std::shared_ptr<EventScheduler::Event>> KineticDelaunay::failsafeCon
       continue;
     }
     const double t = event->occurrence_time.real_time;
-    if (consume_all_subdivisions || t < until_t)
+    if (t < until_t)
     {
       if (callback_manager_ != nullptr)
       {
@@ -4055,6 +4169,27 @@ std::vector<std::shared_ptr<EventScheduler::Event>> KineticDelaunay::failsafeCon
   return kept;
 }
 
+bool KineticDelaunay::schedulerHasProfileAtSection(const BranchScheduler& scheduler, size_t section)
+{
+  if (section >= exclusiveEndSectionForScheduler(scheduler))
+  {
+    return false;
+  }
+  const double t = static_cast<double>(section);
+  if (!scheduler.owned_strands.empty())
+  {
+    for (size_t strand_id : scheduler.owned_strands)
+    {
+      if (strandHasProfileAt(strand_id, t))
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+  return !failsafeStrandsForScheduler(scheduler, section).empty();
+}
+
 void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler, size_t section)
 {
   const std::vector<size_t> strands = failsafeStrandsForScheduler(scheduler, section);
@@ -4065,16 +4200,42 @@ void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler
   }
 
   std::vector<bool> dead_vertex_mask(graph.getVertexCount(), false);
-  for (size_t strand_id : strands)
+  auto mark_dead = [&](size_t strand_id)
   {
     if (strand_id < dead_vertex_mask.size())
     {
       dead_vertex_mask[strand_id] = true;
     }
+  };
+  const double t = static_cast<double>(section);
+  auto consider_unprofiled = [&](size_t strand_id)
+  {
+    if (!isDummyBoundary(strand_id) && !strandHasProfileAt(strand_id, t))
+    {
+      mark_dead(strand_id);
+    }
+  };
+  if (!scheduler.owned_strands.empty())
+  {
+    for (size_t strand_id : scheduler.owned_strands)
+    {
+      consider_unprofiled(strand_id);
+    }
+  }
+  else if (scheduler.runtime_branch_id != BranchScheduler::no_branch
+    && scheduler.runtime_branch_id < runtime_branch_data_.branches.size())
+  {
+    for (size_t strand_id : runtime_branch_data_.branches[scheduler.runtime_branch_id])
+    {
+      consider_unprofiled(strand_id);
+    }
+  }
+  for (size_t strand_id : strands)
+  {
+    mark_dead(strand_id);
   }
   graph.killVertices(dead_vertex_mask);
 
-  const double t = static_cast<double>(section);
   std::vector<glm::dvec2> sites;
   sites.reserve(strands.size());
   for (size_t strand_id : strands)
@@ -4104,6 +4265,31 @@ void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler
 
   graph.appendPart(part, strands);
   rebuildSchedulerTopologyOwnership(scheduler);
+
+  std::unordered_set<size_t> branch_edges = scheduler.owned_even_half_edges;
+  if (branch_edges.empty())
+  {
+    std::unordered_set<size_t> strand_set(strands.begin(), strands.end());
+    for (size_t he_id : graph.liveDelaunayEdges())
+    {
+      const size_t even = he_id & ~size_t { 1 };
+      const int origin = graph.halfEdge(even).origin;
+      const int dest = graph.destination(even);
+      const bool origin_ok = origin < 0 || strand_set.count(static_cast<size_t>(origin)) != 0;
+      const bool dest_ok = dest < 0 || strand_set.count(static_cast<size_t>(dest)) != 0;
+      const bool any_owned = (origin >= 0 && strand_set.count(static_cast<size_t>(origin)) != 0)
+        || (dest >= 0 && strand_set.count(static_cast<size_t>(dest)) != 0);
+      if (any_owned && origin_ok && dest_ok)
+      {
+        branch_edges.insert(even);
+      }
+    }
+  }
+  if (!branch_edges.empty())
+  {
+    legalizeInitialFlipCertificates(t, &branch_edges);
+  }
+
   onGraphRetriangulated(t, prev_face_slots, prev_he_slots);
 }
 
@@ -4127,19 +4313,16 @@ void KineticDelaunay::rescheduleSchedulerFromSection(BranchScheduler& scheduler,
   }
 }
 
-bool KineticDelaunay::failsafeResumeBranchAtNextSection(BranchScheduler& scheduler, const char* what)
+bool KineticDelaunay::failsafeResumeBranchAtNextSection(
+  BranchScheduler& scheduler, const Event& failed, const char* what)
 {
   const auto topology_lock = lockSharedTopology();
   setActiveBranchScheduler(&scheduler);
+  exportEventDiagnosticSvg(failed, "failsafe");
 
   const size_t failed_section = scheduler.independent ? scheduler.sections_advanced : sections_advanced;
-  double failure_t = static_cast<double>(failed_section);
-  if (const std::optional<EventTime> last = schedulerQueue(scheduler).lastProcessedOccurrence())
-  {
-    failure_t = last->real_time;
-  }
+  double failure_t = failed.occurrence_time.real_time;
   size_t next_section = std::max(failed_section, static_cast<size_t>(std::floor(failure_t)) + 1);
-  const size_t end_section = exclusiveEndSectionForScheduler(scheduler);
 
   std::ostringstream report;
   report << "Failsafe meshing: runtime_branch=";
@@ -4154,27 +4337,28 @@ bool KineticDelaunay::failsafeResumeBranchAtNextSection(BranchScheduler& schedul
   report << " failed_section=" << failed_section << " failure_t=" << failure_t
          << " resume_section=" << next_section << ": " << (what != nullptr ? what : "unknown error");
 
-  if (next_section >= end_section)
+  auto abandon = [&](const std::string& reason) -> bool
   {
-    report << " (no remaining section on this branch; abandoning scheduler)";
+    report << " (" << reason << "; abandoning scheduler)";
     recordFailsafeReport(report.str(), failure_t, failed_section, next_section);
-    failsafeConsumeQueue(scheduler, static_cast<double>(next_section), true);
+    schedulerQueue(scheduler).clear();
     return true;
-  }
+  };
 
-  std::vector<std::shared_ptr<EventScheduler::Event>> kept_subdivisions;
   try
   {
-    const std::vector<size_t> strands = failsafeStrandsForScheduler(scheduler, next_section);
-    if (strands.size() < 3)
+    retireFinishedInputBranches(static_cast<double>(next_section), scheduler.runtime_branch_id);
+    if (!schedulerHasProfileAtSection(scheduler, next_section))
     {
-      report << " (fewer than 3 profiled strands at resume section; abandoning scheduler)";
-      recordFailsafeReport(report.str(), failure_t, failed_section, next_section);
-      failsafeConsumeQueue(scheduler, static_cast<double>(next_section), true);
-      return true;
+      return abandon("no remaining profiled section on this branch");
     }
+    if (failsafeStrandsForScheduler(scheduler, next_section).size() < 3)
+    {
+      return abandon("fewer than 3 profiled strands at resume section");
+    }
+
     recordFailsafeReport(report.str(), failure_t, failed_section, next_section);
-    kept_subdivisions = failsafeConsumeQueue(scheduler, static_cast<double>(next_section), false);
+    auto kept_subdivisions = failsafeConsumeQueue(scheduler, static_cast<double>(next_section));
     retriangulateSchedulerAtSection(scheduler, next_section);
     rescheduleSchedulerFromSection(scheduler, next_section);
     EventScheduler& queue = schedulerQueue(scheduler);
@@ -4184,25 +4368,9 @@ bool KineticDelaunay::failsafeResumeBranchAtNextSection(BranchScheduler& schedul
     }
     return true;
   }
-  catch (const std::exception& rebuild_ex)
+  catch (const std::exception& resume_ex)
   {
-    std::ostringstream rebuild_report;
-    rebuild_report << report.str() << " | retriangulation failed: " << rebuild_ex.what()
-                   << " (abandoning scheduler)";
-    recordFailsafeReport(rebuild_report.str(), failure_t, failed_section, next_section);
-    if (callback_manager_ != nullptr)
-    {
-      for (auto& event : kept_subdivisions)
-      {
-        auto* sub = dynamic_cast<SubdivisionEvent*>(event.get());
-        if (sub != nullptr)
-        {
-          callback_manager_->failsafeAdvanceSubdivision(sub->strand_id, event->occurrence_time.real_time);
-        }
-      }
-    }
-    failsafeConsumeQueue(scheduler, static_cast<double>(next_section), true);
-    return true;
+    return abandon(std::string("resume failed: ") + resume_ex.what());
   }
 }
 
@@ -4210,104 +4378,167 @@ void KineticDelaunay::processBranchScheduler(
   BranchScheduler& scheduler, std::optional<double> end_time, bool record_event_statistics)
 {
   setActiveBranchScheduler(&scheduler);
+  EventScheduler& queue = schedulerQueue(scheduler);
+  KINDS_INFO("BranchScheduler start runtime_branch=" << formatRuntimeBranchId(scheduler.runtime_branch_id)
+                                                     << " independent=" << (scheduler.independent ? "true" : "false")
+                                                     << " end_time="
+                                                     << (end_time.has_value() ? std::to_string(*end_time) : "none")
+                                                     << " sections_advanced=" << scheduler.sections_advanced << " "
+                                                     << describeSchedulerQueue(queue));
   Statistics* stats = (record_event_statistics && collect_statistics_) ? &statistics_ : nullptr;
-  for (;;)
+  std::optional<size_t> runtime_branch_id;
+  if (scheduler.runtime_branch_id != BranchScheduler::no_branch)
+  {
+    runtime_branch_id = scheduler.runtime_branch_id;
+  }
+  auto mark_scheduler_finished = [&]()
+  {
+    {
+      const auto topology_lock = lockSharedTopology();
+      scheduler.finished = true;
+    }
+    if (section_event_manager_)
+    {
+      section_event_manager_->updateProgress();
+    }
+  };
+  try
+  {
+    queue.processEvents(end_time, stats, runtime_branch_id,
+      [this, &scheduler](const Event& failed, const std::exception& ex)
+      {
+        return failsafeResumeBranchAtNextSection(scheduler, failed, ex.what());
+      });
+  }
+  catch (...)
+  {
+    mark_scheduler_finished();
+    throw;
+  }
+  std::string last = "none";
+  if (const std::optional<EventTime> last_occ = queue.lastProcessedOccurrence())
+  {
+    std::ostringstream os;
+    os << *last_occ;
+    last = os.str();
+  }
+  KINDS_INFO("BranchScheduler retired runtime_branch=" << formatRuntimeBranchId(scheduler.runtime_branch_id)
+                                                       << " last=" << last << " remaining=" << queue.size());
+  mark_scheduler_finished();
+}
+
+void KineticDelaunay::launchIndependentBranchScheduler(BranchScheduler& scheduler)
+{
+  BranchScheduler* const raw = &scheduler;
+  const double end_time = exclusiveEndTimeForScheduler(scheduler);
+  auto work = [this, raw, end_time]()
   {
     try
     {
-      schedulerQueue(scheduler).processEvents(end_time, stats);
-      return;
+      processBranchScheduler(*raw, end_time);
     }
     catch (const std::exception& ex)
     {
-      if (!failsafeResumeBranchAtNextSection(scheduler, ex.what()))
+      KINDS_ERROR("Independent BranchScheduler runtime_branch=" << formatRuntimeBranchId(raw->runtime_branch_id)
+                                                               << " aborted: " << ex.what());
+      std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+      if (!independent_scheduler_error_)
       {
-        throw;
+        independent_scheduler_error_ = std::current_exception();
       }
     }
     catch (...)
     {
-      if (!failsafeResumeBranchAtNextSection(scheduler, "unknown non-std exception"))
+      KINDS_ERROR("Independent BranchScheduler runtime_branch=" << formatRuntimeBranchId(raw->runtime_branch_id)
+                                                               << " aborted: unknown non-std exception");
+      std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+      if (!independent_scheduler_error_)
       {
-        throw;
+        independent_scheduler_error_ = std::current_exception();
       }
     }
+    {
+      std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+      ++independent_schedulers_joined_;
+    }
+    independent_scheduler_cv_.notify_all();
+  };
+
+  KINDS_INFO("Launching independent BranchScheduler runtime_branch="
+    << formatRuntimeBranchId(scheduler.runtime_branch_id) << " on std::thread context_binder="
+    << (async_run_ ? "true" : "false") << " end_time=" << end_time << " " << describeSchedulerQueue(scheduler.queue));
+
+  {
+    std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+    ++independent_schedulers_launched_;
+    try
+    {
+      independent_scheduler_workers_.emplace_back(
+        [this, binder = async_run_, work = std::move(work)]() mutable
+        {
+          try
+          {
+            if (binder)
+            {
+              binder(std::move(work));
+            }
+            else
+            {
+              work();
+            }
+          }
+          catch (...)
+          {
+            std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+            if (!independent_scheduler_error_)
+            {
+              independent_scheduler_error_ = std::current_exception();
+            }
+            ++independent_schedulers_joined_;
+          }
+          independent_scheduler_cv_.notify_all();
+        });
+    }
+    catch (...)
+    {
+      --independent_schedulers_launched_;
+      throw;
+    }
   }
+  independent_scheduler_cv_.notify_all();
 }
 
 void KineticDelaunay::processIndependentBranchSchedulers()
 {
-  size_t cursor = 0;
-  // Nested forks append new schedulers; keep draining until none remain.
+  std::vector<std::thread> snapshot;
+  std::unique_lock<std::mutex> lock(independent_scheduler_mutex_);
   for (;;)
   {
-    std::vector<BranchScheduler*> batch;
+    if (!independent_scheduler_workers_.empty())
     {
-      std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
-      while (cursor < independent_branch_schedulers_.size())
+      snapshot.swap(independent_scheduler_workers_);
+      lock.unlock();
+      for (auto& worker : snapshot)
       {
-        batch.push_back(independent_branch_schedulers_[cursor++].get());
+        if (worker.joinable())
+        {
+          worker.join();
+        }
       }
+      snapshot.clear();
+      lock.lock();
+      continue;
     }
-    if (batch.empty())
+    if (independent_schedulers_joined_ >= independent_schedulers_launched_)
     {
       break;
     }
-
-    auto endTimeFor = [this](const BranchScheduler* scheduler) -> std::optional<double>
-    {
-      return exclusiveEndTimeForScheduler(*scheduler);
-    };
-
-    if (!parallelize_independent_runtime_branches_ || batch.size() == 1)
-    {
-      for (BranchScheduler* scheduler : batch)
-      {
-        processBranchScheduler(*scheduler, endTimeFor(scheduler));
-      }
-      continue;
-    }
-
-    // Concurrent workers: skip per-event Statistics writes (not synchronized). Failsafe reports lock.
-    std::mutex error_mutex;
-    std::exception_ptr first_error;
-    auto run_one = [this, &batch, &endTimeFor, &error_mutex, &first_error](size_t index)
-    {
-      try
-      {
-        processBranchScheduler(*batch[index], endTimeFor(batch[index]), /*record_event_statistics=*/false);
-      }
-      catch (...)
-      {
-        std::lock_guard<std::mutex> lock(error_mutex);
-        if (!first_error)
-        {
-          first_error = std::current_exception();
-        }
-      }
-    };
-
-    if (parallel_for_)
-    {
-      parallel_for_(batch.size(), run_one);
-    }
-    else
-    {
-      std::vector<std::thread> workers;
-      workers.reserve(batch.size());
-      for (size_t i = 0; i < batch.size(); ++i)
-      {
-        workers.emplace_back([run_one, i]() { run_one(i); });
-      }
-      for (auto& worker : workers)
-      {
-        worker.join();
-      }
-    }
-    if (first_error)
-    {
-      std::rethrow_exception(first_error);
-    }
+    independent_scheduler_cv_.wait(lock);
+  }
+  lock.unlock();
+  if (independent_scheduler_error_)
+  {
+    std::rethrow_exception(independent_scheduler_error_);
   }
 }
 
@@ -4989,6 +5220,10 @@ void KineticDelaunay::markRuntimeBranchDead(size_t runtime_branch_id, double t, 
 {
   if (runtime_branch_id < runtime_branch_data_.alive.size())
   {
+    if (!runtime_branch_data_.alive[runtime_branch_id])
+    {
+      return;
+    }
     runtime_branch_data_.alive[runtime_branch_id] = false;
   }
 
@@ -5217,18 +5452,23 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
       throw std::runtime_error("Finished input branch validation: runtime branch map is out of date");
     }
 
+    const size_t mapped = runtime_branch_data_.branch_map[strand_id];
+    if (mapped == RuntimeBranchData::no_branch)
+    {
+      continue;
+    }
     if (!runtime_branch_id.has_value())
     {
-      runtime_branch_id = runtime_branch_data_.branch_map[strand_id];
+      runtime_branch_id = mapped;
     }
-    else if (runtime_branch_id.value() != runtime_branch_data_.branch_map[strand_id])
+    else if (runtime_branch_id.value() != mapped)
     {
       throw std::runtime_error("Finished input branch " + std::to_string(input_branch_id)
         + " spans multiple runtime branches at section " + std::to_string(section));
     }
   }
 
-  if (!runtime_branch_id.has_value())
+  if (!runtime_branch_id.has_value() || runtime_branch_id.value() == RuntimeBranchData::no_branch)
   {
     return;
   }
@@ -5272,6 +5512,10 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
         continue;
       }
       const size_t unsplit = runtime_branch_data_.unsplitBranchId(runtime_branch_data_.branch_map[vs]);
+      if (unsplit == RuntimeBranchData::no_branch)
+      {
+        continue;
+      }
       if (!face_unsplit.has_value())
       {
         face_unsplit = unsplit;
@@ -5282,7 +5526,11 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
       }
     }
     const size_t strand_unsplit = runtime_branch_data_.unsplitBranchId(runtime_branch_id.value());
-    if (mixed_unsplit || !face_unsplit.has_value() || face_unsplit.value() != strand_unsplit)
+    if (!face_unsplit.has_value())
+    {
+      continue;
+    }
+    if (mixed_unsplit || face_unsplit.value() != strand_unsplit)
     {
       std::ostringstream detail;
       detail << "Finished input branch " << input_branch_id
@@ -5409,15 +5657,64 @@ bool KineticDelaunay::inputBranchInRuntimeScope(
   {
     return true;
   }
-  for (size_t strand_id : branch_trajs.getStrandsByBranch(section, input_branch_id))
+
+  const auto& branch_strands = branch_trajs.getStrandsByBranch(section, input_branch_id);
+  bool any_assigned_here = false;
+  bool any_assigned_elsewhere = false;
+  bool any_unassigned_live = false;
+  for (size_t strand_id : branch_strands)
   {
-    const size_t unsplit = unsplitRuntimeBranchForStrand(strand_id);
-    if (unsplit != RuntimeBranchData::no_branch)
+    if (isDummyBoundary(strand_id))
     {
-      return unsplit == scope_runtime_branch;
+      continue;
+    }
+    const size_t unsplit = unsplitRuntimeBranchForStrand(strand_id);
+    if (unsplit == scope_runtime_branch)
+    {
+      any_assigned_here = true;
+    }
+    else if (unsplit != RuntimeBranchData::no_branch)
+    {
+      any_assigned_elsewhere = true;
+    }
+    else if (isStrandLiveInGraph(strand_id))
+    {
+      any_unassigned_live = true;
     }
   }
-  return false;
+  if (any_assigned_here)
+  {
+    return true;
+  }
+  if (any_assigned_elsewhere || !any_unassigned_live)
+  {
+    return false;
+  }
+
+  const BranchScheduler* scheduler = activeBranchScheduler();
+  if (scheduler == nullptr || scheduler->runtime_branch_id != scope_runtime_branch)
+  {
+    return false;
+  }
+  for (size_t strand_id : branch_strands)
+  {
+    if (isDummyBoundary(strand_id))
+    {
+      continue;
+    }
+    if (std::find(scheduler->owned_strands.begin(), scheduler->owned_strands.end(), strand_id)
+      != scheduler->owned_strands.end())
+    {
+      return true;
+    }
+  }
+  const size_t finishing_end = exclusiveEndSectionForStrands(branch_strands);
+  if (finishing_end > 0 && finishing_end == exclusiveEndSectionForScheduler(*scheduler))
+  {
+    return true;
+  }
+  // Never assigned to a runtime: leftover live strands stay on the continuing parent/root thread.
+  return !scheduler->independent;
 }
 
 size_t KineticDelaunay::unsplitRuntimeBranchForStrand(size_t strand_id) const
@@ -5448,12 +5745,13 @@ bool KineticDelaunay::strandHasProfileAt(size_t strand_id, double t) const
 
 bool KineticDelaunay::faceInRuntimeScope(size_t face_id, size_t scope_runtime_branch) const
 {
-  if (scope_runtime_branch == BranchScheduler::no_branch)
-  {
-    return true;
-  }
   const size_t owner
     = face_id < face_owner_runtime_branch_.size() ? face_owner_runtime_branch_[face_id] : BranchScheduler::no_branch;
+  if (scope_runtime_branch == BranchScheduler::no_branch)
+  {
+    // Global/root queue: skip primitives already owned by an independent scheduler.
+    return owner == BranchScheduler::no_branch;
+  }
   if (owner != BranchScheduler::no_branch)
   {
     return owner == scope_runtime_branch;
@@ -5476,6 +5774,227 @@ bool KineticDelaunay::faceInRuntimeScope(size_t face_id, size_t scope_runtime_br
     }
   }
   return any_mine;
+}
+
+bool KineticDelaunay::delaunayEvenHalfEdgeInRuntimeScope(size_t even_he, size_t scope_runtime_branch) const
+{
+  const size_t owner = even_he / 2 < even_half_edge_owner_runtime_branch_.size()
+    ? even_half_edge_owner_runtime_branch_[even_he / 2]
+    : BranchScheduler::no_branch;
+  if (scope_runtime_branch == BranchScheduler::no_branch)
+  {
+    return owner == BranchScheduler::no_branch;
+  }
+  if (owner != BranchScheduler::no_branch)
+  {
+    return owner == scope_runtime_branch;
+  }
+  if (even_he + 1 >= graph.halfEdgeSlotCount())
+  {
+    return false;
+  }
+  const int origin = graph.halfEdge(even_he).origin;
+  const int dest = graph.destination(even_he);
+  const auto unsplit_of = [&](int v)
+  { return v >= 0 ? unsplitRuntimeBranchForStrand(static_cast<size_t>(v)) : BranchScheduler::no_branch; };
+  const size_t o_branch = unsplit_of(origin);
+  const size_t d_branch = unsplit_of(dest);
+  if (o_branch != scope_runtime_branch && d_branch != scope_runtime_branch)
+  {
+    return false;
+  }
+  if ((origin >= 0 && o_branch != scope_runtime_branch && o_branch != BranchScheduler::no_branch)
+    || (dest >= 0 && d_branch != scope_runtime_branch && d_branch != BranchScheduler::no_branch))
+  {
+    return false;
+  }
+  return true;
+}
+
+bool KineticDelaunay::strandInRuntimeScope(size_t strand_id, size_t scope_runtime_branch) const
+{
+  if (scope_runtime_branch == BranchScheduler::no_branch)
+  {
+    return true;
+  }
+  if (isDummyBoundary(strand_id))
+  {
+    return true;
+  }
+  return unsplitRuntimeBranchForStrand(strand_id) == scope_runtime_branch;
+}
+
+bool KineticDelaunay::eventInRuntimeScope(const Event& event, size_t scope_runtime_branch) const
+{
+  switch (event.eventType())
+  {
+  case KineticEventType::Flip:
+  {
+    const auto& flip = static_cast<const FlipEvent&>(event);
+    return delaunayEvenHalfEdgeInRuntimeScope(flip.half_edge_id & ~size_t(1), scope_runtime_branch);
+  }
+  case KineticEventType::Radius:
+  {
+    const auto& radius = static_cast<const RadiusEvent&>(event);
+    const size_t even = radius.half_edge_id & ~size_t(1);
+    if (!delaunayEvenHalfEdgeInRuntimeScope(even, scope_runtime_branch))
+    {
+      return false;
+    }
+    if (radius.half_edge_id < graph.halfEdgeSlotCount())
+    {
+      const int face = graph.halfEdge(radius.half_edge_id).face;
+      if (face >= 0 && !faceInRuntimeScope(static_cast<size_t>(face), scope_runtime_branch))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+  case KineticEventType::Crossing:
+  {
+    const auto& crossing = static_cast<const CrossingEvent&>(event);
+    return delaunayEvenHalfEdgeInRuntimeScope(crossing.half_edge_id & ~size_t(1), scope_runtime_branch)
+      && faceInRuntimeScope(crossing.voronoi_vertex_id, scope_runtime_branch);
+  }
+  case KineticEventType::Subdivision:
+  {
+    const auto& sub = static_cast<const SubdivisionEvent&>(event);
+    return strandInRuntimeScope(sub.strand_id, scope_runtime_branch);
+  }
+  case KineticEventType::Section:
+  {
+    const auto& section = static_cast<const SectionEvent&>(event);
+    if (scope_runtime_branch == BranchScheduler::no_branch
+      || section.runtime_branch_id == BranchScheduler::no_branch)
+    {
+      return true;
+    }
+    return section.runtime_branch_id == scope_runtime_branch;
+  }
+  case KineticEventType::Separation:
+  {
+    const auto& separation = static_cast<const SeparationEvent&>(event);
+    if (scope_runtime_branch == BranchScheduler::no_branch)
+    {
+      return true;
+    }
+    const PendingBranchSplit* split = pending_branch_splits_.findByParent(separation.parent_component_id);
+    if (split == nullptr || split->parent_runtime_branch == RuntimeBranchData::no_branch)
+    {
+      return true;
+    }
+    return split->parent_runtime_branch == scope_runtime_branch;
+  }
+  default:
+    return true;
+  }
+}
+
+bool KineticDelaunay::eventInActiveRuntimeScope(const Event& event) const
+{
+  return eventInRuntimeScope(event, activeRuntimeBranchScope());
+}
+
+void KineticDelaunay::exportRuntimeScopeSkipSvg(const Event& event)
+{
+  exportEventDiagnosticSvg(event, "skipped");
+}
+
+void KineticDelaunay::exportEventDiagnosticSvg(const Event& event, const char* phase)
+{
+  if (!isVisualDebugEnabled())
+  {
+    return;
+  }
+  try
+  {
+    VisualDebugHighlight highlight;
+    std::string descriptor = "event";
+    switch (event.eventType())
+    {
+    case KineticEventType::Flip:
+    {
+      const auto& flip = static_cast<const FlipEvent&>(event);
+      highlight = VisualDebugHighlight::forFlip(graph, flip.half_edge_id);
+      descriptor = "flip_he" + std::to_string(flip.half_edge_id);
+      break;
+    }
+    case KineticEventType::Radius:
+    {
+      const auto& radius = static_cast<const RadiusEvent&>(event);
+      highlight = VisualDebugHighlight::forRadius(graph, radius.half_edge_id);
+      descriptor = "radius_he" + std::to_string(radius.half_edge_id);
+      break;
+    }
+    case KineticEventType::Crossing:
+    {
+      const auto& crossing = static_cast<const CrossingEvent&>(event);
+      highlight = VisualDebugHighlight::forCrossing(graph, crossing.half_edge_id, crossing.voronoi_vertex_id);
+      descriptor = "crossing_he" + std::to_string(crossing.half_edge_id) + "_v"
+        + std::to_string(crossing.voronoi_vertex_id);
+      break;
+    }
+    case KineticEventType::Subdivision:
+    {
+      const auto& sub = static_cast<const SubdivisionEvent&>(event);
+      highlight = VisualDebugHighlight::forSubdivisionStrand(graph, sub.strand_id);
+      descriptor = "subdivision_s" + std::to_string(sub.strand_id);
+      break;
+    }
+    case KineticEventType::Section:
+    {
+      const auto& section = static_cast<const SectionEvent&>(event);
+      descriptor = "section_" + std::to_string(section.section_id);
+      break;
+    }
+    case KineticEventType::Separation:
+    {
+      const auto& separation = static_cast<const SeparationEvent&>(event);
+      descriptor = "separation_c" + std::to_string(separation.parent_component_id);
+      break;
+    }
+    default:
+      break;
+    }
+    std::optional<size_t> preferred;
+    const size_t scope = activeRuntimeBranchScope();
+    if (scope != BranchScheduler::no_branch)
+    {
+      preferred = scope;
+    }
+    writeSegmentBuilderVisualDebugSvg(true, *this, graph, event.occurrence_time, phase, descriptor, highlight,
+      preferred, nullptr, nullptr, nullptr, event.creation_time, false, event.eventId());
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_WARNING("visual debug SVG skipped phase=" << (phase != nullptr ? phase : "?")
+                                                    << " t=" << event.occurrence_time << ": " << ex.what());
+  }
+  catch (...)
+  {
+    KINDS_WARNING("visual debug SVG skipped phase=" << (phase != nullptr ? phase : "?")
+                                                    << " t=" << event.occurrence_time << ": unknown error");
+  }
+}
+
+bool KineticDelaunay::delaunayEvenHalfEdgeHasProfileAt(size_t even_he, double t) const
+{
+  if (even_he + 1 >= graph.halfEdgeSlotCount())
+  {
+    return false;
+  }
+  const int origin = graph.halfEdge(even_he).origin;
+  const int dest = graph.destination(even_he);
+  if (origin >= 0 && !strandHasProfileAt(static_cast<size_t>(origin), t))
+  {
+    return false;
+  }
+  if (dest >= 0 && !strandHasProfileAt(static_cast<size_t>(dest), t))
+  {
+    return false;
+  }
+  return true;
 }
 
 size_t KineticDelaunay::activeRuntimeBranchScope() const
@@ -5554,6 +6073,7 @@ void KineticDelaunay::retireFinishedInputBranches(double t, size_t scope_runtime
   std::vector<bool> dead_vertex_mask(graph.getVertexCount(), false);
   bool has_finished_branch = false;
   std::vector<std::pair<size_t, size_t>> finished_runtimes;
+  std::set<size_t> seen_runtime_ids;
 
   for (size_t input_branch_id : inputBranchesFinishingAtSection(t))
   {
@@ -5573,8 +6093,12 @@ void KineticDelaunay::retireFinishedInputBranches(double t, size_t scope_runtime
       {
         if (strand_id < runtime_branch_data_.branch_map.size())
         {
-          const size_t runtime_id = runtime_branch_data_.branch_map[strand_id];
-          if (runtime_id != RuntimeBranchData::no_branch)
+          size_t runtime_id = runtime_branch_data_.branch_map[strand_id];
+          if (runtime_id == RuntimeBranchData::no_branch)
+          {
+            runtime_id = scope_runtime_branch;
+          }
+          if (runtime_id != RuntimeBranchData::no_branch && seen_runtime_ids.insert(runtime_id).second)
           {
             finished_runtimes.emplace_back(runtime_id, input_branch_id);
           }
@@ -5602,7 +6126,6 @@ void KineticDelaunay::retireFinishedInputBranches(double t, size_t scope_runtime
   const size_t prev_face_slots = graph.faceSlotCount();
   const size_t prev_he_slots = graph.halfEdgeSlotCount();
   graph.killVertices(dead_vertex_mask);
-  logRuntimeBranchEvent(t, "event=skip_remap reason=input_branch_vertex_kill");
   onGraphCutApplied(t, prev_face_slots, prev_he_slots, false);
 }
 
@@ -5886,10 +6409,14 @@ void kinDS::validateClosingCapCrossingRef([[maybe_unused]] const KineticDelaunay
   }
 }
 
-std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> KineticDelaunay::getCrossingIntersectionDebugData() const
+std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> KineticDelaunay::getCrossingIntersectionDebugData(
+  EventTime occurrence_time) const
 {
   std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> result;
   result.reserve(crossing_data.edge_intersections.size());
+
+  const ScopedCurrentInfinitesimalTime infinitesimal_shift(const_cast<KineticDelaunay&>(*this), occurrence_time);
+  const double t = occurrence_time.real_time;
 
   for (size_t d_edge_id = 0; d_edge_id < crossing_data.delaunay_edge_intersections.size(); ++d_edge_id)
   {
@@ -5911,7 +6438,8 @@ std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> KineticDelaunay::
           info.voronoi_list_index = v_index;
           info.prev_segment_mesh_pair_index = ref->prev_segment_mesh_pair_index;
           info.next_segment_mesh_pair_index = ref->next_segment_mesh_pair_index;
-          info.delaunay_edge_param = ref->delaunay_edge_param;
+          info.delaunay_edge_param
+            = delaunayVoronoiEdgeIntersection(info.delaunay_edge_id, info.voronoi_edge_id, t).first;
           result.push_back(info);
           break;
         }
@@ -6135,157 +6663,71 @@ void kinDS::assignCrossingIntersectionDelaunayParam(const KineticDelaunay* kd,
       << (opposite_voronoi_vertex.has_value()
             ? (" opposite_vv=" + std::to_string(opposite_voronoi_vertex.value()))
             : std::string()));
-
-    if (kd != nullptr && kd->shouldDumpErrorFiles())
-    {
-      // SVG writer needs a non-const KineticDelaunay (branch labels / path helpers); dump is read-mostly.
-      KineticDelaunay& kd_mut = const_cast<KineticDelaunay&>(*kd);
-      const auto& graph = kd_mut.getGraph();
-      const size_t delaunay_edge_id = intersection.delaunay_edge_id;
-      const size_t voronoi_edge_id = intersection.voronoi_edge_id;
-
-      VisualDebugHighlight highlight;
-      // Delaunay edge @c delaunay_edge_id: primal only (directed half-edges + site endpoints).
-      const size_t de_even = 2 * delaunay_edge_id;
-      if (de_even + 1 < graph.halfEdgeSlotCount())
-      {
-        highlight.directed_half_edges.insert(de_even);
-        highlight.directed_half_edges.insert(de_even ^ 1);
-        const int origin0 = graph.halfEdge(de_even).origin;
-        const int origin1 = graph.halfEdge(de_even ^ 1).origin;
-        if (origin0 >= 0)
-        {
-          highlight.delaunay_vertices.insert(static_cast<size_t>(origin0));
-        }
-        if (origin1 >= 0)
-        {
-          highlight.delaunay_vertices.insert(static_cast<size_t>(origin1));
-        }
-      }
-      // Voronoi edge @c voronoi_edge_id: dual only (do not also mark directed half-edges / primary for this id).
-      highlight.voronoi_edges.insert(voronoi_edge_id);
-      highlight.label_crossings_on_delaunay_edges.insert(delaunay_edge_id);
-      highlight.label_crossings_on_voronoi_edges.insert(voronoi_edge_id);
-      highlight.crossing_intersection_keys.insert(
-        (static_cast<uint64_t>(delaunay_edge_id) << 32) | static_cast<uint64_t>(voronoi_edge_id));
-
-      if (near_voronoi_vertex.has_value())
-      {
-        highlight.voronoi_vertices.insert(near_voronoi_vertex.value());
-      }
-      if (opposite_voronoi_vertex.has_value())
-      {
-        highlight.voronoi_vertices.insert(opposite_voronoi_vertex.value());
-      }
-      // If callers did not pass ends, fall back to the Voronoi edge's two face endpoints.
-      if (!near_voronoi_vertex.has_value() || !opposite_voronoi_vertex.has_value())
-      {
-        const size_t he_even = 2 * voronoi_edge_id;
-        if (he_even + 1 < graph.halfEdgeSlotCount())
-        {
-          const int face0 = graph.halfEdge(he_even).face;
-          const int face1 = graph.halfEdge(he_even ^ 1).face;
-          if (face0 >= 0)
-          {
-            highlight.voronoi_vertices.insert(static_cast<size_t>(face0));
-          }
-          if (face1 >= 0)
-          {
-            highlight.voronoi_vertices.insert(static_cast<size_t>(face1));
-          }
-        }
-      }
-
-      std::ostringstream descriptor;
-      descriptor << sanitizeCrossingParamErrorContextForFilename(context) << "_param_FAIL_de" << delaunay_edge_id
-                 << "_ve" << voronoi_edge_id << "_dparam";
-      {
-        std::ostringstream param_token;
-        param_token.setf(std::ios::fixed);
-        param_token.precision(kDebugExportTimePrecision);
-        param_token << std::showpoint << param;
-        std::string param_str = param_token.str();
-        for (char& ch : param_str)
-        {
-          if (ch == '-')
-          {
-            ch = 'm';
-          }
-          else if (ch == '+')
-          {
-            ch = 'p';
-          }
-          else if (ch == '.')
-          {
-            ch = '_';
-          }
-          else if (!std::isalnum(static_cast<unsigned char>(ch)))
-          {
-            ch = '_';
-          }
-        }
-        descriptor << param_str;
-      }
-      if (opposite_voronoi_vertex.has_value())
-      {
-        descriptor << "_oppvv" << opposite_voronoi_vertex.value();
-      }
-
-      // Route by the Delaunay edge's two site endpoints. Do not rely on highlight inference: this dump also
-      // marks Voronoi faces/edges whose vertices can span multiple runtime branches, which used to fan the
-      // SVG out to every active branch folder. With --svg-separate-pending-splits, endpoints on different
-      // pending children get a duplicate in each folder; otherwise both collapse to the unsplit parent.
-      std::vector<size_t> endpoint_runtime_branch_ids;
-      const bool separate_pending_splits = kd_mut.visualDebugSeparatePendingSplits();
-      auto add_endpoint_branch = [&](int vertex)
-      {
-        if (vertex < 0 || kd_mut.isDummyBoundary(static_cast<size_t>(vertex)))
-        {
-          return;
-        }
-        const size_t strand_id = static_cast<size_t>(vertex);
-        const size_t raw_branch_id = kd_mut.getRuntimeBranchData().branchForStrand(strand_id);
-        if (raw_branch_id == KineticDelaunay::RuntimeBranchData::no_branch)
-        {
-          return;
-        }
-        const size_t folder_branch_id
-          = separate_pending_splits ? raw_branch_id : kd_mut.unsplitRuntimeBranchId(raw_branch_id);
-        if (std::find(endpoint_runtime_branch_ids.begin(), endpoint_runtime_branch_ids.end(), folder_branch_id)
-          == endpoint_runtime_branch_ids.end())
-        {
-          endpoint_runtime_branch_ids.push_back(folder_branch_id);
-        }
-      };
-      if (de_even + 1 < graph.halfEdgeSlotCount())
-      {
-        add_endpoint_branch(graph.halfEdge(de_even).origin);
-        add_endpoint_branch(graph.halfEdge(de_even ^ 1).origin);
-      }
-
-      const std::optional<size_t> preferred_branch = !endpoint_runtime_branch_ids.empty()
-        ? std::optional<size_t>(endpoint_runtime_branch_ids.front())
-        : std::nullopt;
-      const std::vector<size_t>* explicit_branches
-        = endpoint_runtime_branch_ids.empty() ? nullptr : &endpoint_runtime_branch_ids;
-      writeSegmentBuilderVisualDebugSvg(true, kd_mut, graph, kd_mut.eventTimeAt(t), "error", descriptor.str(),
-        highlight, preferred_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
-        explicit_branches);
-    }
+    // Error SVGs are written only from validateDelaunayVoronoiIntersections, immediately after the
+    // event's kinetic update, using the live graph and sites at occurrence time.
   }
 }
 
-void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, EventTime occurrence_time)
+namespace
+{
+void markFirstIntersectionErrorHighlight(VisualDebugHighlight& highlight, const HalfEdgeDelaunayGraph& graph,
+  size_t delaunay_edge_id, size_t voronoi_edge_id)
+{
+  const uint64_t packed
+    = (static_cast<uint64_t>(delaunay_edge_id) << 32) | static_cast<uint64_t>(voronoi_edge_id);
+  highlight.crossing_error_first_keys.insert(packed);
+  highlight.crossing_intersection_keys.insert(packed);
+  highlight.label_crossings_on_delaunay_edges.insert(delaunay_edge_id);
+  highlight.label_crossings_on_voronoi_edges.insert(voronoi_edge_id);
+  highlight.voronoi_edges.insert(voronoi_edge_id);
+  const size_t de_even = 2 * delaunay_edge_id;
+  if (de_even + 1 < graph.halfEdgeSlotCount())
+  {
+    highlight.directed_half_edges.insert(de_even);
+    highlight.directed_half_edges.insert(de_even ^ 1);
+    const int origin0 = graph.halfEdge(de_even).origin;
+    const int origin1 = graph.halfEdge(de_even ^ 1).origin;
+    if (origin0 >= 0)
+    {
+      highlight.delaunay_vertices.insert(static_cast<size_t>(origin0));
+    }
+    if (origin1 >= 0)
+    {
+      highlight.delaunay_vertices.insert(static_cast<size_t>(origin1));
+    }
+  }
+  const size_t ve_even = 2 * voronoi_edge_id;
+  if (ve_even + 1 < graph.halfEdgeSlotCount())
+  {
+    const int face0 = graph.halfEdge(ve_even).face;
+    const int face1 = graph.halfEdge(ve_even ^ 1).face;
+    if (face0 >= 0)
+    {
+      highlight.voronoi_vertices.insert(static_cast<size_t>(face0));
+    }
+    if (face1 >= 0)
+    {
+      highlight.voronoi_vertices.insert(static_cast<size_t>(face1));
+    }
+  }
+}
+} // namespace
+
+void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, EventTime occurrence_time,
+  std::optional<uint64_t> event_id, std::optional<EventTime> creation_time)
 {
   if (!delaunay_voronoi_intersection_check_enabled_)
   {
     return;
   }
 
+  const ScopedCurrentInfinitesimalTime infinitesimal_shift(*this, occurrence_time);
+
   constexpr double param_range_eps = 1e-9;
   const double t = occurrence_time.real_time;
   const char* label = context != nullptr ? context : "validateDelaunayVoronoiIntersections";
   const size_t height = t < 0.0 ? 0 : static_cast<size_t>(t);
+  const size_t scope = activeRuntimeBranchScope();
   const auto csv_maybe = [](std::ostream& out, std::optional<size_t> value)
   {
     if (value.has_value())
@@ -6323,6 +6765,12 @@ void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, 
   std::vector<WrongIntersection> wrongs;
   for (const CrossingData::VoronoiDelaunayEdgeIntersection& intersection : crossing_data.edge_intersections)
   {
+    const size_t even = 2 * intersection.delaunay_edge_id;
+    if (!graph.isLiveHalfEdge(even) || !delaunayEvenHalfEdgeInRuntimeScope(even, scope)
+      || !delaunayEvenHalfEdgeHasProfileAt(even, t))
+    {
+      continue;
+    }
     const auto [d_param, v_param]
       = delaunayVoronoiEdgeIntersection(intersection.delaunay_edge_id, intersection.voronoi_edge_id, t);
     const bool d_ok = isDelaunayEdgeParamInExpectedWarningRange(this, intersection.delaunay_edge_id, d_param, param_range_eps);
@@ -6347,7 +6795,18 @@ void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, 
         firsts.push_back(wrong);
       }
     }
-    active_intersection_errors_ = std::move(current_wrong);
+    // Independent schedulers sit at different heights: only replace this scope's pairs so another
+    // branch's errors are not evaluated at this t or forgotten because this pass did not see them.
+    std::set<std::pair<size_t, size_t>> kept;
+    for (const auto& pair : active_intersection_errors_)
+    {
+      if (!delaunayEvenHalfEdgeInRuntimeScope(2 * pair.first, scope))
+      {
+        kept.insert(pair);
+      }
+    }
+    kept.insert(current_wrong.begin(), current_wrong.end());
+    active_intersection_errors_ = std::move(kept);
   }
 
   for (const WrongIntersection& wrong : firsts)
@@ -6409,8 +6868,13 @@ void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, 
                               : std::string())
                         << " failure=" << failure);
 
-    if (intersection_errors_csv_header_written_ && !intersection_errors_csv_path_.empty())
+    if (!intersection_errors_csv_path_.empty() && intersection_errors_csv_header_written_)
     {
+      std::lock_guard<std::mutex> csv_lock(intersection_error_mutex_);
+      if (intersection_errors_csv_path_.empty() || !intersection_errors_csv_header_written_)
+      {
+        continue;
+      }
       std::ofstream out(intersection_errors_csv_path_, std::ios::app);
       if (!out)
       {
@@ -6435,44 +6899,26 @@ void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, 
       out << ',' << failure << '\n';
     }
   }
-}
 
-void KineticDelaunay::collectLiveIntersectionErrorMarks(double t, std::unordered_set<uint64_t>& first_keys,
-  std::unordered_set<uint64_t>& repeat_keys) const
-{
-  first_keys.clear();
-  repeat_keys.clear();
-  if (!delaunay_voronoi_intersection_check_enabled_)
+  if (!firsts.empty() && shouldDumpErrorFiles())
   {
-    return;
-  }
-
-  constexpr double param_range_eps = 1e-9;
-  std::set<std::pair<size_t, size_t>> known;
-  {
-    std::lock_guard<std::mutex> lock(intersection_error_mutex_);
-    known = active_intersection_errors_;
-  }
-
-  for (const CrossingData::VoronoiDelaunayEdgeIntersection& intersection : crossing_data.edge_intersections)
-  {
-    const auto [d_param, v_param]
-      = delaunayVoronoiEdgeIntersection(intersection.delaunay_edge_id, intersection.voronoi_edge_id, t);
-    if (isDelaunayEdgeParamInExpectedWarningRange(this, intersection.delaunay_edge_id, d_param, param_range_eps)
-      && isVoronoiEdgeParamInExpectedWarningRange(v_param, param_range_eps))
+    VisualDebugHighlight highlight;
+    for (const WrongIntersection& wrong : firsts)
     {
-      continue;
+      markFirstIntersectionErrorHighlight(highlight, graph, wrong.delaunay_edge_id, wrong.voronoi_edge_id);
     }
-    const uint64_t packed = (static_cast<uint64_t>(intersection.delaunay_edge_id) << 32)
-      | static_cast<uint64_t>(intersection.voronoi_edge_id);
-    if (known.count({ intersection.delaunay_edge_id, intersection.voronoi_edge_id }) != 0)
+    std::optional<size_t> preferred;
+    std::vector<size_t> explicit_scope;
+    const std::vector<size_t>* explicit_branches = nullptr;
+    if (scope != BranchScheduler::no_branch)
     {
-      repeat_keys.insert(packed);
+      preferred = scope;
+      explicit_scope.push_back(scope);
+      explicit_branches = &explicit_scope;
     }
-    else
-    {
-      first_keys.insert(packed);
-    }
+    writeSegmentBuilderVisualDebugSvg(true, *this, graph, occurrence_time, "error",
+      sanitizeCrossingParamErrorContextForFilename(label), highlight, preferred, nullptr, nullptr, explicit_branches,
+      creation_time, /*fan_out_active_runtime_branches=*/false, event_id);
   }
 }
 
@@ -6697,11 +7143,21 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
   return std::make_pair(crossed_half_edge_ids, crossed_half_edge_params);
 }
 
-void KineticDelaunay::legalizeInitialFlipCertificates(double t)
+void KineticDelaunay::legalizeInitialFlipCertificates(
+  double t, const std::unordered_set<size_t>* restrict_even_half_edges)
 {
+  auto edge_in_scope = [&](size_t he_id) -> bool
+  {
+    if (restrict_even_half_edges == nullptr)
+    {
+      return true;
+    }
+    return restrict_even_half_edges->count(he_id & ~size_t { 1 }) != 0;
+  };
+
   auto enqueue_even = [&](std::queue<size_t>& wait, std::unordered_set<size_t>& in_queue, size_t he_id)
   {
-    if (!graph.isLiveHalfEdge(he_id))
+    if (!graph.isLiveHalfEdge(he_id) || !edge_in_scope(he_id))
     {
       return;
     }
@@ -6806,12 +7262,12 @@ void KineticDelaunay::legalizeInitialFlipCertificates(double t)
     size_t hull_neg = 0;
     size_t interior_pos = 0;
     size_t interior_neg = 0;
-    for (size_t i = 0; i < graph.liveDelaunayEdgeCount(); ++i)
+    auto count_certificate = [&](size_t he_id)
     {
-      const auto cert = raw_certificate(graph.liveDelaunayEdgeId(i));
+      const auto cert = raw_certificate(he_id);
       if (!cert.has_value())
       {
-        continue;
+        return;
       }
       if (cert->hull)
       {
@@ -6832,6 +7288,20 @@ void KineticDelaunay::legalizeInitialFlipCertificates(double t)
       {
         ++interior_neg;
       }
+    };
+    if (restrict_even_half_edges != nullptr)
+    {
+      for (size_t he_id : *restrict_even_half_edges)
+      {
+        count_certificate(he_id);
+      }
+    }
+    else
+    {
+      for (size_t i = 0; i < graph.liveDelaunayEdgeCount(); ++i)
+      {
+        count_certificate(graph.liveDelaunayEdgeId(i));
+      }
     }
     if (interior_pos > interior_neg)
     {
@@ -6841,12 +7311,14 @@ void KineticDelaunay::legalizeInitialFlipCertificates(double t)
     const size_t hull_legal = hull_neg;
     const size_t interior_total = interior_pos + interior_neg;
     const size_t interior_legal = interior_illegal_if_positive ? interior_neg : interior_pos;
+    const char* scope = restrict_even_half_edges != nullptr ? "branch" : "all";
     KINDS_INFO("legalizeInitialFlipCertificates ccw polarity <0 legal / >0 flip: " << hull_legal << "/"
-      << hull_total << " hull edges fulfilled it (+=" << hull_pos << ", -=" << hull_neg << ") at t=" << t);
+      << hull_total << " hull edges fulfilled it (+=" << hull_pos << ", -=" << hull_neg << ") at t=" << t
+      << " scope=" << scope);
     KINDS_INFO("legalizeInitialFlipCertificates inCircle polarity "
       << (interior_illegal_if_positive ? "<0 legal / >0 flip" : ">0 legal / <0 flip") << ": " << interior_legal << "/"
       << interior_total << " interior edges fulfilled it (+=" << interior_pos << ", -=" << interior_neg
-      << ") at t=" << t);
+      << ") at t=" << t << " scope=" << scope);
   }
 
   auto certificate_requires_flip = [&](size_t he_id) -> bool
@@ -6863,8 +7335,36 @@ void KineticDelaunay::legalizeInitialFlipCertificates(double t)
     return interior_illegal_if_positive ? cert->value > 0.0 : cert->value < 0.0;
   };
 
+  bool restricted_single_finite_triangle = false;
+  if (restrict_even_half_edges != nullptr)
+  {
+    std::unordered_set<size_t> finite_faces;
+    for (size_t even : *restrict_even_half_edges)
+    {
+      for (size_t he : { even, even ^ 1 })
+      {
+        if (!graph.isLiveHalfEdge(he))
+        {
+          continue;
+        }
+        const int face = graph.halfEdge(he).face;
+        if (face < 0 || !graph.isLiveFace(static_cast<size_t>(face))
+          || graph.faceHasInfiniteVertex(static_cast<size_t>(face)))
+        {
+          continue;
+        }
+        finite_faces.insert(static_cast<size_t>(face));
+      }
+    }
+    restricted_single_finite_triangle = finite_faces.size() == 1;
+  }
+
   auto component_has_single_finite_triangle = [&](size_t he_id) -> bool
   {
+    if (restrict_even_half_edges != nullptr)
+    {
+      return restricted_single_finite_triangle;
+    }
     int vertex = graph.halfEdge(he_id).origin;
     if (vertex < 0)
     {
@@ -6898,7 +7398,7 @@ void KineticDelaunay::legalizeInitialFlipCertificates(double t)
 
   auto try_flip = [&](std::queue<size_t>& wait, std::unordered_set<size_t>& in_queue, size_t he_id) -> bool
   {
-    if (!certificate_requires_flip(he_id))
+    if (!edge_in_scope(he_id) || !certificate_requires_flip(he_id))
     {
       return false;
     }
@@ -6946,17 +7446,34 @@ void KineticDelaunay::legalizeInitialFlipCertificates(double t)
     return true;
   };
 
+  std::vector<size_t> seed_edges;
+  if (restrict_even_half_edges != nullptr)
+  {
+    seed_edges.assign(restrict_even_half_edges->begin(), restrict_even_half_edges->end());
+  }
+  else
+  {
+    seed_edges.reserve(graph.liveDelaunayEdgeCount());
+    for (size_t i = 0; i < graph.liveDelaunayEdgeCount(); ++i)
+    {
+      seed_edges.push_back(graph.liveDelaunayEdgeId(i));
+    }
+  }
+  if (seed_edges.empty())
+  {
+    return;
+  }
+
   std::queue<size_t> wait;
   std::unordered_set<size_t> in_queue;
   size_t flips = 0;
-  const size_t max_flips = std::max<size_t>(graph.liveDelaunayEdgeCount() * 8, 8);
+  const size_t max_flips = std::max<size_t>(seed_edges.size() * 8, 8);
   bool hit_cap = false;
 
-  const size_t live_edge_count = graph.liveDelaunayEdgeCount();
-  ProgressBar progress(0, live_edge_count, "Legalizing initial flip certificates", ProgressBar::Display::Absolute);
-  for (size_t i = 0; i < live_edge_count && !hit_cap; ++i)
+  ProgressBar progress(0, seed_edges.size(), "Legalizing initial flip certificates", ProgressBar::Display::Absolute);
+  for (size_t i = 0; i < seed_edges.size() && !hit_cap; ++i)
   {
-    if (try_flip(wait, in_queue, graph.liveDelaunayEdgeId(i)))
+    if (try_flip(wait, in_queue, seed_edges[i]))
     {
       ++flips;
       while (!wait.empty())
@@ -7189,6 +7706,7 @@ const HalfEdgeDelaunayGraph& KineticDelaunay::init(CallbackManager* callback_man
   {
     callback_manager->init();
   }
+  validateDelaunayVoronoiIntersections("init", EventTime(bootstrap_t));
 
   return graph;
 }
@@ -7508,7 +8026,7 @@ void exportCrossingInvariantFailureDebugSvg(
   }
   const auto& containing_tri_table = kd.getCrossingData().getContainingTriIds();
   const std::vector<size_t> containing_tri_ids(containing_tri_table.begin(), containing_tri_table.end());
-  const auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
+  const auto intersection_debug_data = kd.getCrossingIntersectionDebugData(kd.eventTimeAt(t));
 
   KINDS_ERROR("Writing crossing invariant failure debug SVG at t=" << kd.eventTimeAt(t) << ": " << filename);
   HalfEdgeDelaunayGraphToSVG::write(points, kd.getGraph(), filename, 0.1, &face_inside_flags, true,
@@ -8615,16 +9133,32 @@ bool KineticDelaunay::isStrandLiveInGraph(size_t strand_id) const
   return graph.incidentEdgesBegin(strand_id) != graph.incidentEdgesEnd(strand_id);
 }
 
-std::pair<size_t, size_t> KineticDelaunay::countLiveStrandsAndBranches() const
+std::pair<size_t, size_t> KineticDelaunay::countLiveStrandsAndBranches(size_t section, size_t scope_runtime_branch) const
 {
   size_t strand_count = 0;
+  std::unordered_set<size_t> input_branches;
   const size_t vertex_count = graph.getVertexCount();
   for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
   {
-    if (isStrandLiveInGraph(strand_id))
+    if (!isStrandLiveInGraph(strand_id))
     {
-      ++strand_count;
+      continue;
     }
+    if (scope_runtime_branch != BranchScheduler::no_branch
+      && unsplitRuntimeBranchForStrand(strand_id) != scope_runtime_branch)
+    {
+      continue;
+    }
+    ++strand_count;
+    if (scope_runtime_branch != BranchScheduler::no_branch && strandHasProfileAt(strand_id, static_cast<double>(section)))
+    {
+      input_branches.insert(getBranchIndex(strand_id, section));
+    }
+  }
+
+  if (scope_runtime_branch != BranchScheduler::no_branch)
+  {
+    return { strand_count, input_branches.size() };
   }
 
   size_t branch_count = 0;

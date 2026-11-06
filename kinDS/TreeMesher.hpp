@@ -5,6 +5,7 @@
 #include "Validator.hpp"
 #include "VoronoiMesh.hpp"
 #include <filesystem>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -95,8 +96,8 @@ class TreeMesher
     /// When true, also emit closing caps for strands still continuing past a premature @ref end_section
     /// (@c --end). Default false. Natural branch endings and the tree-top finalize always get caps regardless.
     bool mesh_cap_at_end = false;
-    /// When true, collect per-section runtime / event / topology statistics and write CSV after meshing.
-    /// Also writes a companion event-list CSV (@c meshing_event_list_*.csv) with one row per kinetic event.
+    /// When true, collect per-(section, runtime-branch) runtime / event / topology statistics and write CSV after
+    /// meshing. Also writes a companion event-list CSV (@c meshing_event_list_*.csv) with one row per kinetic event.
     bool collect_meshing_statistics = false;
     /// When true with @ref collect_meshing_statistics, skip writing CSVs inside @ref runMeshingAlgorithm
     /// so the caller can fill totals-row extras (alpha / mesh counts / experiment tag) then call
@@ -114,6 +115,13 @@ class TreeMesher
 
     // for debugging purposes:
     bool debug_export_meshes = false;
+    /// When true, after each kinetic section write a Combined OBJ of the live meshlets so a later
+    /// crash still leaves inspectable geometry. Duplicate dumps for the same section from different
+    /// runtime branches are expected. CLI @c --incremental-meshes.
+    bool export_incremental_meshes = false;
+    /// Directory for incremental OBJ dumps. Empty uses @c incremental_meshes (or under
+    /// @ref visual_debug_output_root / export path when those are set).
+    std::filesystem::path incremental_meshes_output_dir;
     /// When true, OBJ export emits one @c o object per interior/boundary contributor (iN / bN).
     bool export_separate_contributor_objects = true;
     /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.
@@ -162,11 +170,13 @@ class TreeMesher
 
   Settings settings;
   std::function<void(size_t, std::function<void(size_t)>)> parallel_for;
+  std::function<void(std::function<void()>)> async_run;
   bool mesh_vertex_source_validation_passed_ = true;
 
  public:
   TreeMesher(StrandTree& strand_tree);
-  TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::function<void(size_t)>)> parallel_for);
+  TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::function<void(size_t)>)> parallel_for,
+    std::function<void(std::function<void()>)> async_run = {});
   /// @param visual_debug When true, SegmentBuilder callbacks export full visual-debug SVG/TXT snapshots.
   /// Prefer setting @ref Settings::visual_debug / @ref Settings::error_files (CLI @c --debug-files / @c --error-files).
   const std::vector<VoronoiMesh>& runMeshingAlgorithm(bool visual_debug = false);

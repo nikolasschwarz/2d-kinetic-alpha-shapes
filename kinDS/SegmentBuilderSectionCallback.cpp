@@ -4,6 +4,8 @@
 #include "SegmentBuilder.hpp"
 #include "SegmentBuilderVisualDebug.hpp"
 
+#include <vector>
+
 namespace kinDS
 {
 void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
@@ -22,15 +24,43 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
   {
     segment_builder_.kin_del.logDiagnosticsMonitoredCrossingContainingTriangle(t, "section_event_before");
   }
+  const size_t section_runtime_branch = section->runtime_branch_id;
+  const std::optional<size_t> section_branch = section_runtime_branch != BranchScheduler::no_branch
+    ? std::optional<size_t>(section_runtime_branch)
+    : std::nullopt;
+  std::vector<size_t> explicit_section_branch;
+  const std::vector<size_t>* explicit_branches = nullptr;
+  if (section_branch.has_value())
+  {
+    explicit_section_branch.push_back(*section_branch);
+    explicit_branches = &explicit_section_branch;
+  }
+  auto section_boundary_edge = [&](size_t even_he) -> bool
+  {
+    if (!segment_builder_.kin_del.isOnComponentBoundary(even_he))
+    {
+      return false;
+    }
+    if (section_runtime_branch == BranchScheduler::no_branch)
+    {
+      return true;
+    }
+    const int origin = graph.halfEdge(even_he).origin;
+    const int dest = graph.destination(even_he);
+    const size_t o_branch = origin >= 0
+      ? segment_builder_.kin_del.unsplitRuntimeBranchForStrand(static_cast<size_t>(origin))
+      : BranchScheduler::no_branch;
+    const size_t d_branch = dest >= 0
+      ? segment_builder_.kin_del.unsplitRuntimeBranchForStrand(static_cast<size_t>(dest))
+      : BranchScheduler::no_branch;
+    return o_branch == section_runtime_branch || d_branch == section_runtime_branch;
+  };
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "before",
     "section_" + std::to_string(index),
-    VisualDebugHighlight::forSectionBoundary(
-      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }),
-    /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
-    /*explicit_runtime_branch_ids=*/nullptr, section->creation_time,
-    /*fan_out_active_runtime_branches=*/true, section->eventId());
-
-  const size_t section_runtime_branch = section->runtime_branch_id;
+    VisualDebugHighlight::forSectionBoundary(graph, section_boundary_edge),
+    section_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, explicit_branches,
+    section->creation_time,
+    /*fan_out_active_runtime_branches=*/explicit_branches == nullptr, section->eventId());
   segment_builder_.advanceBoundaryMeshes(t, section_runtime_branch);
 
   segment_builder_.maybeInduceSplitsAtSection(t);
@@ -163,13 +193,44 @@ void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)
     segment_builder_.logDiagnosticsMonitoredFaceInsideState(t, "section_event");
     segment_builder_.kin_del.logDiagnosticsMonitoredCrossingContainingTriangle(t, "section_event");
   }
+  const size_t section_runtime_branch = section->runtime_branch_id;
+  const std::optional<size_t> section_branch = section_runtime_branch != BranchScheduler::no_branch
+    ? std::optional<size_t>(section_runtime_branch)
+    : std::nullopt;
+  std::vector<size_t> explicit_section_branch;
+  const std::vector<size_t>* explicit_branches = nullptr;
+  if (section_branch.has_value())
+  {
+    explicit_section_branch.push_back(*section_branch);
+    explicit_branches = &explicit_section_branch;
+  }
+  auto section_boundary_edge = [&](size_t even_he) -> bool
+  {
+    if (!segment_builder_.kin_del.isOnComponentBoundary(even_he))
+    {
+      return false;
+    }
+    if (section_runtime_branch == BranchScheduler::no_branch)
+    {
+      return true;
+    }
+    const int origin = graph.halfEdge(even_he).origin;
+    const int dest = graph.destination(even_he);
+    const size_t o_branch = origin >= 0
+      ? segment_builder_.kin_del.unsplitRuntimeBranchForStrand(static_cast<size_t>(origin))
+      : BranchScheduler::no_branch;
+    const size_t d_branch = dest >= 0
+      ? segment_builder_.kin_del.unsplitRuntimeBranchForStrand(static_cast<size_t>(dest))
+      : BranchScheduler::no_branch;
+    return o_branch == section_runtime_branch || d_branch == section_runtime_branch;
+  };
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "after",
     "section_" + std::to_string(index),
-    VisualDebugHighlight::forSectionBoundary(
-      graph, [&](size_t even_he) { return segment_builder_.kin_del.isOnComponentBoundary(even_he); }),
-    /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
-    /*explicit_runtime_branch_ids=*/nullptr, section->creation_time,
-    /*fan_out_active_runtime_branches=*/true, section->eventId());
+    VisualDebugHighlight::forSectionBoundary(graph, section_boundary_edge),
+    section_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, explicit_branches,
+    section->creation_time,
+    /*fan_out_active_runtime_branches=*/explicit_branches == nullptr, section->eventId());
+  segment_builder_.exportIncrementalMeshes(index, section->runtime_branch_id);
 }
 } // namespace kinDS
 

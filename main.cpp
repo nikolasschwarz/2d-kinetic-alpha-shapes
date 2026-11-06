@@ -334,8 +334,7 @@ static bool kinetic_delaunay_example(bool validate_mesh_vertex_sources, bool sto
     demo_voronoi_vertex_to_tri[vid] = kinetic_delaunay.getCrossingDataContainingTriId(vid);
   }
 
-  // t=0 snapshot
-  auto demo_intersection_debug_data = kinetic_delaunay.getCrossingIntersectionDebugData();
+  auto demo_intersection_debug_data = kinetic_delaunay.getCrossingIntersectionDebugData(kinDS::EventTime(0.0));
   kinDS::HalfEdgeDelaunayGraphToSVG::write(points, demo_graph, "t0.000000_demo.svg", 0.1, nullptr, true,
     &demo_voronoi_vertex_to_tri, &demo_intersection_debug_data);
 
@@ -574,11 +573,19 @@ static void print_usage(const char* program_name)
             << "  --check-sites-in-hull     After every kinetic event, warn if any live site lies outside its\n"
             << "                            component's graph convex hull (same topology as SVG blue hull edges).\n"
             << "                            May indicate an incorrect CCW flip. Off by default.\n"
-            << "  --check-intersections     After every kinetic event, recompute every Delaunay–Voronoi edge\n"
-            << "                            intersection and warn if either parameter lies outside its line segment\n"
-            << "                            (same interval as the out-of-range delaunay_edge_param warnings).\n"
+            << "  --check-intersections     Immediately after every kinetic event's graph update (before afterEvent),\n"
+            << "                            recompute every Delaunay–Voronoi edge intersection at that occurrence\n"
+            << "                            time and warn if either parameter lies outside its line segment.\n"
             << "                            Each unique (Delaunay, Voronoi) edge pair is logged and written once to\n"
             << "                            intersection_errors.csv (under --debug-files/--error-files root if set).\n"
+            << "                            First failures also write an error SVG at that same event time.\n"
+            << "                            Off by default.\n"
+            << "  --incremental-meshes [path]\n"
+            << "                            After each kinetic section, write a Combined OBJ of the live meshlets\n"
+            << "                            so a crash still leaves inspectable geometry. Optional output directory\n"
+            << "                            (default: incremental_meshes under --export-path, else cwd).\n"
+            << "                            Duplicate dumps for the same section from different runtime branches\n"
+            << "                            are expected (filenames include section and branch id).\n"
             << "                            Off by default.\n"
             << "\n"
             << "Commands:\n"
@@ -596,6 +603,7 @@ static void print_usage(const char* program_name)
             << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
             << "  " << program_name << " --parallelize-branches --mesh strandtree.txt\n"
             << "  " << program_name << " --check-intersections --mesh strandtree.txt\n"
+            << "  " << program_name << " --incremental-meshes --mesh strandtree.txt\n"
             << "  " << program_name << " --export-mode combined --export-gpu-attributes --mesh strandtree.txt combined.obj\n";
 }
 
@@ -631,6 +639,7 @@ static const std::vector<std::string>& known_cli_flags()
     "--error-files",
     "--check-sites-in-hull",
     "--check-intersections",
+    "--incremental-meshes",
     "--help",
     "-h",
     "--demo",
@@ -749,7 +758,8 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
   bool visual_debug, bool error_files, bool visual_debug_separate_pending_splits,
   const std::optional<std::filesystem::path>& visual_debug_output_root,
   const std::optional<double>& visual_debug_time_lower, const std::optional<double>& visual_debug_time_upper,
-  bool check_sites_inside_convex_hull, bool check_delaunay_voronoi_intersections)
+  bool check_sites_inside_convex_hull, bool check_delaunay_voronoi_intersections, bool export_incremental_meshes,
+  const std::optional<std::filesystem::path>& incremental_meshes_output_dir)
 {
   std::cout << "Loading StrandTree from: " << filename << std::endl;
 
@@ -803,6 +813,19 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     mesher.getSettings().visual_debug_separate_pending_splits = visual_debug_separate_pending_splits;
     mesher.getSettings().check_sites_inside_convex_hull = check_sites_inside_convex_hull;
     mesher.getSettings().check_delaunay_voronoi_intersections = check_delaunay_voronoi_intersections;
+    mesher.getSettings().export_incremental_meshes = export_incremental_meshes;
+    if (export_incremental_meshes)
+    {
+      if (incremental_meshes_output_dir.has_value())
+      {
+        mesher.getSettings().incremental_meshes_output_dir = *incremental_meshes_output_dir;
+      }
+      else
+      {
+        mesher.getSettings().incremental_meshes_output_dir =
+          mesh_export_base_directory(export_path) / "incremental_meshes";
+      }
+    }
     mesher.getSettings().visual_debug_time_lower = visual_debug_time_lower;
     mesher.getSettings().visual_debug_time_upper = visual_debug_time_upper;
     if (visual_debug_output_root.has_value())
@@ -823,6 +846,12 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
     {
       std::cout << "Delaunay-Voronoi intersection check: enabled (unique pairs -> intersection_errors.csv)"
                 << std::endl;
+    }
+    if (export_incremental_meshes)
+    {
+      const std::filesystem::path incremental_dir = incremental_meshes_output_dir.value_or(
+        mesh_export_base_directory(export_path) / "incremental_meshes");
+      std::cout << "Incremental meshes: enabled (dir=" << incremental_dir.string() << ")" << std::endl;
     }
     if (visual_debug || error_files)
     {
@@ -1038,6 +1067,8 @@ int main(int argc, char* argv[])
   std::optional<double> mesh_visual_debug_time_upper;
   bool mesh_check_sites_inside_convex_hull = false;
   bool mesh_check_delaunay_voronoi_intersections = false;
+  bool mesh_export_incremental_meshes = false;
+  std::optional<std::filesystem::path> mesh_incremental_meshes_output_dir;
 
   int arg_idx = 1;
   while (arg_idx < argc)
@@ -1435,6 +1466,21 @@ int main(int argc, char* argv[])
       mesh_check_delaunay_voronoi_intersections = true;
       arg_idx += 1;
     }
+    else if (arg == "--incremental-meshes")
+    {
+      mesh_export_incremental_meshes = true;
+      if (arg_idx + 1 < argc)
+      {
+        const std::string next = argv[arg_idx + 1];
+        if (!next.empty() && next[0] != '-')
+        {
+          mesh_incremental_meshes_output_dir = std::filesystem::path(next);
+          arg_idx += 2;
+          continue;
+        }
+      }
+      arg_idx += 1;
+    }
     else if (arg == "--error-files")
     {
       mesh_error_files = true;
@@ -1541,7 +1587,8 @@ int main(int argc, char* argv[])
           mesh_parallelize_independent_runtime_branches, mesh_visual_debug, mesh_error_files,
           mesh_visual_debug_separate_pending_splits,
           mesh_visual_debug_output_root, mesh_visual_debug_time_lower, mesh_visual_debug_time_upper,
-          mesh_check_sites_inside_convex_hull, mesh_check_delaunay_voronoi_intersections))
+          mesh_check_sites_inside_convex_hull, mesh_check_delaunay_voronoi_intersections,
+          mesh_export_incremental_meshes, mesh_incremental_meshes_output_dir))
     {
       return 1;
     }

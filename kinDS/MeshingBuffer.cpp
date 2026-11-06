@@ -490,6 +490,9 @@ MeshingBufferHashStats computeMeshingInputHash(
       if (settings.look_ahead != 0) {
         hash.MixPod(settings.look_ahead);
       }
+      if (settings.start_section != 0) {
+        hash.MixPod(settings.start_section);
+      }
       if (settings.hinge_only_profile_plane_mix) {
         hash.MixPod(static_cast<uint8_t>(1));
       }

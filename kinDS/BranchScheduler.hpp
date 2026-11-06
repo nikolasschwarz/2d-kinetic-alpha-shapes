@@ -22,7 +22,9 @@ struct BranchScheduler
   size_t sections_advanced = 0;
   /// When true this scheduler is independent of the pre-fork global queue (post-cut).
   bool independent = false;
-  /// Section from which forked schedulers own this queue's branches; its section event drains the queue.
+  /// Set when @ref KineticDelaunay::processBranchScheduler returns (queue drained or abandoned).
+  bool finished = false;
+  /// If set, the section event at this index clears the queue. Default @ref no_branch means never.
   size_t handoff_section = no_branch;
   /// Owned strand ids (copied from runtime branch strand list at fork).
   std::vector<size_t> owned_strands {};

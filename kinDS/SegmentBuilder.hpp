@@ -5,6 +5,7 @@
 #include "MeshStructure.hpp"
 #include "VoronoiMesh.hpp"
 #include <array>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <list>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -216,6 +218,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// seals strands truncated by @c --end.
   bool mesh_cap_at_start = false;
   bool mesh_cap_at_end = false;
+  /// When true, after each section event write a Combined OBJ of the current live meshlets.
+  bool export_incremental_meshes = false;
+  /// Directory for incremental OBJ dumps. Empty uses @c incremental_meshes under the working directory.
+  std::filesystem::path incremental_meshes_output_dir;
   /// Failure SVG/TXT dumps (ring-walk / triangulate FAIL, …) plus common highlighted kinetic SVG.
   /// CLI --error-files; also implied by visual debug.
   void setErrorFiles(bool enabled) { error_files = enabled; }
@@ -262,6 +268,16 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
   std::vector<std::string> meshlet_export_suffixes; // Parallel to `meshes`, e.g. "_strandX" / "_voronoiX".
+  /// Writers take a shared lock for the duration of a mesh-storage mutation; incremental dump takes unique.
+  mutable std::shared_mutex mesh_storage_mutex_;
+  std::shared_lock<std::shared_mutex> lockMeshStorageShared() const
+  {
+    if (!export_incremental_meshes)
+    {
+      return {};
+    }
+    return std::shared_lock<std::shared_mutex>(mesh_storage_mutex_);
+  }
 
   struct MeshingData
   {
@@ -1390,6 +1406,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void finalize(double t) override;
 
   std::vector<VoronoiMesh> extractMeshes() const;
+
+  /// Snapshot live interior + boundary-interval meshlets and write a Combined OBJ.
+  /// Exclusive against in-flight writers; file I/O runs after the copy. Duplicate dumps for the same
+  /// section from different runtime branches are expected.
+  void exportIncrementalMeshes(size_t section_id, size_t runtime_branch_id);
 
   std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> extractSegmentMeshlets(
     bool merge_by_segment = true) const;

@@ -14,6 +14,13 @@ void KineticDelaunay::SeparationEvent::handleEvent()
     throw std::runtime_error("SeparationEvent has no KineticDelaunay pointer");
   }
   const auto topology_lock = kd->lockSharedTopology();
+  if (!kd->eventInActiveRuntimeScope(*this))
+  {
+    KINDS_DEBUG("SeparationEvent SKIP parent_component_id=" << parent_component_id
+                                                            << " not owned by active runtime branch");
+    kd->exportRuntimeScopeSkipSvg(*this);
+    return;
+  }
 
   const std::optional<PendingBranchSplit> split = kd->getPendingBranchSplit(parent_component_id);
   if (!split.has_value() || split->on_hiatus || split->split_component_ids.size() < 2)
@@ -38,11 +45,11 @@ void KineticDelaunay::SeparationEvent::handleEvent()
   // apply_cut_now=true: finalize convex cut (or start infinitesimal if seams are no longer convex).
   kd->handleSeparationEventAtTime(parent_component_id, occurrence_time);
 
+  kd->validateSitesInsideConvexHull("SeparationEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("SeparationEvent", occurrence_time, eventId(), creation_time);
+
   if (handler)
   {
     handler->afterEvent(*this);
   }
-
-  kd->validateSitesInsideConvexHull("SeparationEvent:afterEvent", occurrence_time);
-  kd->validateDelaunayVoronoiIntersections("SeparationEvent:afterEvent", occurrence_time);
 }

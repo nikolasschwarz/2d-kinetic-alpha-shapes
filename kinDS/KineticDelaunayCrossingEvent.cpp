@@ -836,6 +836,8 @@ void KineticDelaunay::CrossingEvent::handleEvent()
   {
     throw std::runtime_error("CrossingEvent has no KineticDelaunay pointer");
   }
+  // Crossing afterEvent and graph queries share live lists rebuilt by section/radius/separation.
+  const auto topology_lock = kd->lockSharedTopology();
 
   auto& graph = kd->graph;
   const double t = occurrence_time.real_time;
@@ -883,6 +885,13 @@ void KineticDelaunay::CrossingEvent::handleEvent()
                                                              << ", he_live="
                                                              << (graph.isLiveHalfEdge(half_edge_id) ? "true" : "false")
                                                              << ")");
+  }
+
+  if (!kd->eventInActiveRuntimeScope(*this))
+  {
+    log_skip("half-edge or Voronoi vertex not owned by active runtime branch");
+    kd->exportRuntimeScopeSkipSvg(*this);
+    return;
   }
 
   if (is_infinitesimal)
@@ -995,6 +1004,9 @@ void KineticDelaunay::CrossingEvent::handleEvent()
   // Recompute params on all three Delaunay edges of this Voronoi vertex (Delaunay face) before callbacks mesh.
   kd->refreshTriangleDelaunayEdgeIntersectionParams(voronoi_vertex_id, t);
 
+  kd->validateSitesInsideConvexHull("CrossingEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("CrossingEvent", occurrence_time, eventId(), creation_time);
+
   if (event_handler)
   {
     event_handler->afterEvent(*this);
@@ -1003,8 +1015,6 @@ void KineticDelaunay::CrossingEvent::handleEvent()
   // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
   kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", t);
   kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", t);
-  kd->validateSitesInsideConvexHull("CrossingEvent:afterEvent", occurrence_time);
-  kd->validateDelaunayVoronoiIntersections("CrossingEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

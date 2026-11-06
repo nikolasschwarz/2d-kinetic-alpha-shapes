@@ -620,6 +620,9 @@ void KineticDelaunay::FlipEvent::handleEvent()
   {
     throw std::runtime_error("FlipEvent has no KineticDelaunay pointer");
   }
+  // Flip afterEvent SVG iterates liveDelaunayEdges() on the shared graph. Section/radius/separation
+  // rebuild that list under this mutex; without it a concurrent clear() yields garbage he_ids.
+  const auto topology_lock = kd->lockSharedTopology();
 
   auto& graph = kd->graph;
   const double t = occurrence_time.real_time;
@@ -635,6 +638,13 @@ void KineticDelaunay::FlipEvent::handleEvent()
                                                  << ", creation_t=" << creation_time << "): " << reason);
     }
   };
+
+  if (!kd->eventInActiveRuntimeScope(*this))
+  {
+    log_skip("half-edge not owned by active runtime branch");
+    kd->exportRuntimeScopeSkipSvg(*this);
+    return;
+  }
 
   size_t parent_component_id = static_cast<size_t>(-1);
   std::optional<InfinitesimalComputeContext> infinitesimal_compute;
@@ -995,8 +1005,9 @@ void KineticDelaunay::FlipEvent::handleEvent()
     }
   }
 
-  // After flipping the edge, reassign Voronoi vertices, run callbacks (SVG/mesh), then recompute.
-  // Keep current_infinitesimal_t_ set through afterEvent so debug exports / meshing see the virtual shift.
+  // After flipping the edge, reassign Voronoi vertices, run the intersection check, then callbacks
+  // (SVG/mesh), then neighbor recompute. Keep current_infinitesimal_t_ set through afterEvent so
+  // debug exports / meshing see the virtual shift.
   if (!graph.isOnConvexBoundary(half_edge_id))
   {
     kd->reassignVoronoiVerticesInQuadrilateral(half_edge_id / 2, t, pre_flip_quad_faces, infinitesimal_compute);
@@ -1006,6 +1017,9 @@ void KineticDelaunay::FlipEvent::handleEvent()
     kd->reassignVoronoiVerticesOnBoundary(half_edge_id, t, infinitesimal_compute);
   }
 
+  kd->validateSitesInsideConvexHull("FlipEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("FlipEvent", occurrence_time, eventId(), creation_time);
+
   if (event_handler)
   {
     event_handler->afterEvent(*this);
@@ -1014,8 +1028,6 @@ void KineticDelaunay::FlipEvent::handleEvent()
   // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
   kd->validateVoronoiVertexIteratorInvariants("FlipEvent:afterEvent", t);
   kd->validateCrossingIntersectionInvariants("FlipEvent:afterEvent", t);
-  kd->validateSitesInsideConvexHull("FlipEvent:afterEvent", occurrence_time);
-  kd->validateDelaunayVoronoiIntersections("FlipEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

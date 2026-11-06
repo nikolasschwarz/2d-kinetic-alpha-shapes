@@ -9,6 +9,7 @@
 #include <iosfwd>
 #include <glm/glm.hpp>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -217,7 +218,9 @@ class HalfEdgeDelaunayGraph
   /** @throws std::runtime_error if any live half-edge references a dead or out-of-range face. */
   void validateLiveHalfEdgeFaceReferences() const;
 
+  /** @throws std::out_of_range if @p he_id is not in [0, halfEdgeSlotCount()). */
   const HalfEdge& halfEdge(size_t he_id) const;
+  /** @throws std::out_of_range if @p face_id is not in [0, faceSlotCount()). */
   const Triangle& face(size_t face_id) const;
 
   size_t halfEdgeSlotCount() const;
@@ -228,6 +231,8 @@ class HalfEdgeDelaunayGraph
   size_t liveFaceCount() const { return live_faces_.size(); }
   size_t liveDelaunayEdgeId(size_t live_index) const { return live_even_half_edges_.at(live_index); }
   size_t liveFaceId(size_t live_index) const { return live_faces_.at(live_index); }
+  std::vector<size_t> copyLiveDelaunayEdgeIds() const { return live_even_half_edges_; }
+  std::vector<size_t> copyLiveFaceIds() const { return live_faces_; }
 
   // utils
 
@@ -312,7 +317,16 @@ class HalfEdgeDelaunayGraph
     {
     }
 
-    value_type operator*() const { return (*live_)[idx_]; }
+    value_type operator*() const
+    {
+      if (live_ == nullptr || idx_ >= live_->size())
+      {
+        throw std::out_of_range("HalfEdgeDelaunayGraph live Delaunay-edge iterator idx="
+          + std::to_string(idx_) + " live_size="
+          + std::to_string(live_ == nullptr ? 0 : live_->size()));
+      }
+      return (*live_)[idx_];
+    }
 
     LiveDelaunayEdgeIterator& operator++()
     {
@@ -376,7 +390,15 @@ class HalfEdgeDelaunayGraph
     {
     }
 
-    value_type operator*() const { return (*live_)[idx_]; }
+    value_type operator*() const
+    {
+      if (live_ == nullptr || idx_ >= live_->size())
+      {
+        throw std::out_of_range("HalfEdgeDelaunayGraph live-face iterator idx=" + std::to_string(idx_)
+          + " live_size=" + std::to_string(live_ == nullptr ? 0 : live_->size()));
+      }
+      return (*live_)[idx_];
+    }
 
     LiveFaceIterator& operator++()
     {

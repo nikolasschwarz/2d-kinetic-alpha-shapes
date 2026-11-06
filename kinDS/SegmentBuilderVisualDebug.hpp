@@ -19,7 +19,7 @@ class KineticDelaunay;
 /// Folder for debug SVGs when runtime-branch resolution fails (all live strands are exported).
 inline constexpr const char* kVisualDebugUnresolvedBranchFolder = "branchX";
 
-/// Writes debug SVG snapshots when @p visual_debug is true.
+/// Writes debug SVGs from the live graph and sites at @p occurrence_time when @p visual_debug is true.
 /// Exports go under `branch{runtime_branch_id}/` when a unique runtime branch is resolved (preferred id, highlight
 /// inference, or a single active branch). When no unique branch is known, the SVG is written once under
 /// @ref kVisualDebugUnresolvedBranchFolder with all live strands — unless @p fan_out_active_runtime_branches is
@@ -32,12 +32,14 @@ inline constexpr const char* kVisualDebugUnresolvedBranchFolder = "branchX";
 /// Filename times use @ref formatDebugExportTimeToken(EventTime) / @ref kDebugExportTimePrecision
 /// (`t{real}_i0!` or `t{real}_i{…}` with the same digit precision as real time).
 /// Occurrence time is the leading `t…_i…` token; when @p event_id is set, `_eid{N}` follows (enqueue
-/// @ref KineticAlgorithm::Event::eventId). When @p creation_time is set, another `t…_i…` token is
-/// appended before the extension.
+/// @ref KineticAlgorithm::Event::eventId). `_tid{thread}` is the writing thread. When @p creation_time is
+/// set, another `t…_i…` token is appended before the extension. Intersection-check error dumps pass
+/// first-failure keys on @p highlight; those write a marked `_error_first` file from the live graph
+/// and sites at @p occurrence_time. Ordinary afterEvent SVGs stay unmarked and are not used as a later check.
 ///
 /// If @p explicit_runtime_branch_ids is non-null and non-empty, SVGs are written only for those runtime branch ids
-/// (duplicates allowed when endpoints span multiple branches). Failure to position any of them falls back to
-/// @ref kVisualDebugUnresolvedBranchFolder.
+/// (duplicates allowed when endpoints span multiple branches). Failure to position them skips the export rather than
+/// writing another live branch's strands into a different folder.
 void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_del, const HalfEdgeDelaunayGraph& graph,
   EventTime occurrence_time, const char* phase, const std::string& event_descriptor,
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id = std::nullopt,

@@ -1,7 +1,9 @@
 #include "KineticDelaunaySectionEvent.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace kinDS;
@@ -52,28 +54,23 @@ void KineticDelaunay::SectionEventManager::computeEvents(double /*t*/, size_t ev
   }
 }
 
-void KineticDelaunay::SectionEventManager::updateProgress(size_t section_index)
+void KineticDelaunay::SectionEventManager::updateProgress()
 {
   if (!progress_bar_)
-    return;
-  const size_t start_section = kd_->getStartSection();
-  if (section_index < start_section)
   {
     return;
   }
-  progress_bar_->Update(section_index - start_section + 1);
-}
-
-void KineticDelaunay::SectionEventManager::finishProgressIfNeeded(size_t section_index)
-{
-  if (!progress_bar_)
-    return;
-
-  // Last scheduled section event is end_section - 1.
-  if (kd_->getEndSection() > 0 && section_index + 1 >= kd_->getEndSection())
+  const size_t start_section = kd_->getStartSection();
+  const size_t end_section = kd_->getEndSection();
+  const std::optional<size_t> lowest = kd_->lowestNonRetiredSchedulerSection();
+  if (!lowest.has_value() || *lowest >= end_section)
   {
     progress_bar_->Finish();
+    progress_bar_.reset();
+    return;
   }
+  const size_t value = *lowest >= start_section ? *lowest - start_section : 0;
+  progress_bar_->Update(value);
 }
 
 void KineticDelaunay::SectionEventManager::finishProgress()
@@ -81,6 +78,7 @@ void KineticDelaunay::SectionEventManager::finishProgress()
   if (progress_bar_)
   {
     progress_bar_->Finish();
+    progress_bar_.reset();
   }
 }
 
@@ -93,6 +91,11 @@ void KineticDelaunay::SectionEvent::handleEvent()
   }
   // Retires, cuts and forks on the shared graph and runtime-branch tables.
   const auto topology_lock = kd->lockSharedTopology();
+  if (!kd->eventInActiveRuntimeScope(*this))
+  {
+    kd->exportRuntimeScopeSkipSvg(*this);
+    return;
+  }
 
   const size_t section_index = section_id;
   const size_t section_count = kd->getSectionCount();
@@ -102,6 +105,13 @@ void KineticDelaunay::SectionEvent::handleEvent()
     if (section_index >= scheduler->handoff_section
       || (scheduler->independent && section_index >= kd->exclusiveEndSectionForScheduler(*scheduler)))
     {
+      KINDS_INFO("SectionEvent skip runtime_branch="
+        << (scheduler->runtime_branch_id == BranchScheduler::no_branch
+              ? std::string("root")
+              : std::to_string(scheduler->runtime_branch_id))
+        << " section=" << section_index << " handoff=" << scheduler->handoff_section
+        << " exclusive_end=" << kd->exclusiveEndSectionForScheduler(*scheduler)
+        << " clearing queue size=" << kd->kinetic_algorithm_->activeScheduler().size());
       kd->kinetic_algorithm_->activeScheduler().clear();
       return;
     }
@@ -118,6 +128,10 @@ void KineticDelaunay::SectionEvent::handleEvent()
       }
       if (!any_profile)
       {
+        KINDS_INFO("SectionEvent skip runtime_branch=" << scheduler->runtime_branch_id
+                                                       << " section=" << section_index
+                                                       << " (no owned strand profile), clearing queue size="
+                                                       << kd->kinetic_algorithm_->activeScheduler().size());
         kd->kinetic_algorithm_->activeScheduler().clear();
         return;
       }
@@ -151,8 +165,13 @@ void KineticDelaunay::SectionEvent::handleEvent()
 
   if (kd->collectStatistics())
   {
-    const auto [strand_count, branch_count] = kd->countLiveStrandsAndBranches();
-    kd->statistics().setSectionTopology(section_index, strand_count, branch_count);
+    const auto [strand_count, branch_count] = kd->countLiveStrandsAndBranches(section_index, runtime_branch_id);
+    std::optional<size_t> stats_branch_id;
+    if (runtime_branch_id != BranchScheduler::no_branch)
+    {
+      stats_branch_id = runtime_branch_id;
+    }
+    kd->statistics().setSectionTopology(section_index, stats_branch_id, strand_count, branch_count);
   }
 
   // Look ahead to height section_index+1: if strands in a live component already sit on multiple input
@@ -205,14 +224,14 @@ void KineticDelaunay::SectionEvent::handleEvent()
 
   kd->precomputeStepForRuntimeBranch(static_cast<double>(section_index), runtime_branch_id);
 
-  kd->section_event_manager_->updateProgress(section_index);
   kd->mutableActiveSectionsAdvanced()++;
-  kd->section_event_manager_->finishProgressIfNeeded(section_index);
+  kd->section_event_manager_->updateProgress();
+
+  kd->validateSitesInsideConvexHull("SectionEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("SectionEvent", occurrence_time, eventId(), creation_time);
 
   if (!is_bootstrap_section && event_handler)
   {
     event_handler->afterEvent(*this);
   }
-  kd->validateSitesInsideConvexHull("SectionEvent:afterEvent", occurrence_time);
-  kd->validateDelaunayVoronoiIntersections("SectionEvent:afterEvent", occurrence_time);
 }

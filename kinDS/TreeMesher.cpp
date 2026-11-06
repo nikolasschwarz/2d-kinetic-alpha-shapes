@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <exception>
 #include <execution>
 #include <filesystem>
 #include <limits>
@@ -83,9 +84,11 @@ kinDS::TreeMesher::TreeMesher(StrandTree& strand_tree)
 {
 }
 
-TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::function<void(size_t)>)> parallel_for)
+TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::function<void(size_t)>)> parallel_for,
+  std::function<void(std::function<void()>)> async_run)
   : strand_tree(strand_tree)
-  , parallel_for(parallel_for)
+  , parallel_for(std::move(parallel_for))
+  , async_run(std::move(async_run))
 {
 }
 
@@ -778,6 +781,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
       : KineticDelaunay::ComponentSplitPolicy::InPlaceCut);
   kinetic_delaunay->setParallelizeIndependentRuntimeBranches(settings.parallelize_independent_runtime_branches);
   kinetic_delaunay->setParallelFor(parallel_for);
+  kinetic_delaunay->setAsyncRun(async_run);
   kinetic_delaunay->setSectionRange(settings.start_section, settings.end_section);
   kinetic_delaunay->setStartInputBranches(settings.start_input_branches);
 
@@ -800,6 +804,22 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   mesh_builder->diagnostics = settings.diagnostics;
   mesh_builder->mesh_cap_at_start = settings.mesh_cap_at_start;
   mesh_builder->mesh_cap_at_end = settings.mesh_cap_at_end;
+  mesh_builder->export_incremental_meshes = settings.export_incremental_meshes;
+  if (settings.export_incremental_meshes)
+  {
+    if (!settings.incremental_meshes_output_dir.empty())
+    {
+      mesh_builder->incremental_meshes_output_dir = settings.incremental_meshes_output_dir;
+    }
+    else if (settings.visual_debug_output_root.has_value())
+    {
+      mesh_builder->incremental_meshes_output_dir = *settings.visual_debug_output_root / "incremental_meshes";
+    }
+    else
+    {
+      mesh_builder->incremental_meshes_output_dir = "incremental_meshes";
+    }
+  }
   kinetic_delaunay->setDiagnosticsEnabled(settings.diagnostics);
   kinetic_delaunay->setSitesInsideConvexHullCheckEnabled(settings.check_sites_inside_convex_hull);
   kinetic_delaunay->setDelaunayVoronoiIntersectionCheckEnabled(settings.check_delaunay_voronoi_intersections);
@@ -823,6 +843,8 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                                                       << transform_mesh_at_construction
                                                                                       << ", debug_export_meshes="
                                                                                       << settings.debug_export_meshes
+                                                                                      << ", export_incremental_meshes="
+                                                                                      << settings.export_incremental_meshes
                                                                                       << ", max_meshlet_export="
                                                                                       << settings.max_meshlet_export
                                                                                       << ", fix_missing_meshes="
@@ -850,25 +872,60 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
                                                     settings.meshing_statistics_csv_path);
   }
   kinetic_delaunay->init(mesh_builder.get());
-  kinetic_delaunay->compute();
+  std::exception_ptr kinetic_error;
+  try
+  {
+    kinetic_delaunay->compute();
+  }
+  catch (...)
+  {
+    kinetic_error = std::current_exception();
+    KINDS_ERROR("Kinetic Delaunay compute failed; extracting incomplete mesh.");
+  }
   if (settings.collect_meshing_statistics && !settings.defer_meshing_statistics_write)
   {
-    writeCollectedMeshingStatistics();
-  }
-  KINDS_INFO("Kinetic Delaunay Voronoi Meshing finished.");
-
-  std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
-  segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(true);
-  size_t flipped_meshlet_count = 0;
-  for (VoronoiMesh& meshlet : segment_meshlets)
-  {
-    if (meshlet.orientFacesAwayFromCentroid())
+    try
     {
-      ++flipped_meshlet_count;
+      writeCollectedMeshingStatistics();
+    }
+    catch (const std::exception& ex)
+    {
+      KINDS_ERROR("Failed to write meshing statistics after compute: " << ex.what());
     }
   }
-  KINDS_INFO(flipped_meshlet_count << "/" << segment_meshlets.size()
-                                   << " meshlets flipped to orient faces away from centroid.");
+  if (!kinetic_error)
+  {
+    KINDS_INFO("Kinetic Delaunay Voronoi Meshing finished.");
+  }
+
+  try
+  {
+    std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
+    segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(true);
+    size_t flipped_meshlet_count = 0;
+    for (VoronoiMesh& meshlet : segment_meshlets)
+    {
+      if (meshlet.orientFacesAwayFromCentroid())
+      {
+        ++flipped_meshlet_count;
+      }
+    }
+    KINDS_INFO(flipped_meshlet_count << "/" << segment_meshlets.size()
+                                     << " meshlets flipped to orient faces away from centroid.");
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_ERROR("extractSegmentMeshlets failed: " << ex.what());
+    if (kinetic_error)
+    {
+      std::rethrow_exception(kinetic_error);
+    }
+    throw;
+  }
+  if (kinetic_error)
+  {
+    std::rethrow_exception(kinetic_error);
+  }
 }
 
 void TreeMesher::mapMeshingToPhysicsSegmentIndices()

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <fstream>
 #include <glm/geometric.hpp>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -1526,15 +1527,38 @@ void HalfEdgeDelaunayGraph::applyFreshHalfEdgeFaceReferences(
   }
 }
 
+namespace
+{
+[[noreturn]] void throwInvalidGraphSlot(
+  const char* accessor, size_t id, size_t slot_count, size_t live_count)
+{
+  std::ostringstream oss;
+  oss << "HalfEdgeDelaunayGraph::" << accessor << "() invalid id=" << id << " (0x" << std::hex << id << std::dec
+      << ") slot_count=" << slot_count << " even=" << (((id & 1) == 0) ? "yes" : "no")
+      << " live_count=" << live_count;
+  const std::string msg = oss.str();
+  KINDS_ERROR(msg);
+  throw std::out_of_range(msg);
+}
+} // namespace
+
 const HalfEdgeDelaunayGraph::HalfEdge& HalfEdgeDelaunayGraph::halfEdge(size_t he_id) const
 {
-  assert(he_id < half_edges.size());
+  const size_t n = half_edges.size();
+  if (he_id >= n)
+  {
+    throwInvalidGraphSlot("halfEdge", he_id, n, live_even_half_edges_.size());
+  }
   return half_edges[he_id];
 }
 
 const HalfEdgeDelaunayGraph::Triangle& HalfEdgeDelaunayGraph::face(size_t face_id) const
 {
-  assert(face_id < triangles.size());
+  const size_t n = triangles.size();
+  if (face_id >= n)
+  {
+    throwInvalidGraphSlot("face", face_id, n, live_faces_.size());
+  }
   return triangles[face_id];
 }
 

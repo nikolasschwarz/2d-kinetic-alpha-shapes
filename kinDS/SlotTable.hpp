@@ -7,6 +7,7 @@
 #include <iterator>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -185,20 +186,37 @@ class SlotTable
     T elements[chunk_size];
   };
 
-  T& element(size_t index)
+  static size_t checkedChunkIndex(size_t index)
   {
     const size_t chunk_index = index >> chunk_shift;
-    assert(chunk_index < max_chunks);
+    if (chunk_index >= max_chunks)
+    {
+      throw std::out_of_range("SlotTable index " + std::to_string(index) + " maps to chunk "
+        + std::to_string(chunk_index) + " (max_chunks=" + std::to_string(max_chunks) + ")");
+    }
+    return chunk_index;
+  }
+
+  T& element(size_t index)
+  {
+    const size_t chunk_index = checkedChunkIndex(index);
     Chunk* chunk = chunks_[chunk_index].load(std::memory_order_acquire);
-    assert(chunk != nullptr);
+    if (chunk == nullptr)
+    {
+      throw std::out_of_range(
+        "SlotTable index " + std::to_string(index) + " has no published chunk");
+    }
     return chunk->elements[index & (chunk_size - 1)];
   }
   const T& element(size_t index) const
   {
-    const size_t chunk_index = index >> chunk_shift;
-    assert(chunk_index < max_chunks);
+    const size_t chunk_index = checkedChunkIndex(index);
     Chunk* chunk = chunks_[chunk_index].load(std::memory_order_acquire);
-    assert(chunk != nullptr);
+    if (chunk == nullptr)
+    {
+      throw std::out_of_range(
+        "SlotTable index " + std::to_string(index) + " has no published chunk");
+    }
     return chunk->elements[index & (chunk_size - 1)];
   }
 

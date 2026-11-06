@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -59,6 +60,7 @@ class Logger
   LogLevel log_level = LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
   ofstream log_file; // File stream for the log file (optional)
   bool console_enabled_ = true;
+  std::function<void(LogLevel, const std::string&)> external_sink_;
   mutable std::mutex mutex_;
 
  public:
@@ -116,6 +118,13 @@ class Logger
     return console_enabled_;
   }
 
+  /// Optional host sink (EcoSysLab console, etc.). Invoked after the local log write.
+  void setExternalSink(std::function<void(LogLevel, const std::string&)> sink)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    external_sink_ = std::move(sink);
+  }
+
   // Explicitly set the full log level bitmask (overwrites existing mask).
   void setLogLevelMask(LogLevel mask)
   {
@@ -145,39 +154,56 @@ class Logger
   // Logs a message with a given log level
   void log(LogLevel level, const string& message)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!static_cast<unsigned>(log_level & level))
+    std::function<void(LogLevel, const std::string&)> sink;
     {
-      return; // Log level not enabled
-    }
-    // Get current timestamp (thread-safe)
-    time_t now = time(nullptr);
-    tm timeinfo{};
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!static_cast<unsigned>(log_level & level))
+      {
+        return; // Log level not enabled
+      }
+      // Get current timestamp (thread-safe)
+      time_t now = time(nullptr);
+      tm timeinfo{};
 #ifdef _WIN32
-    localtime_s(&timeinfo, &now);
+      localtime_s(&timeinfo, &now);
 #else
-    localtime_r(&now, &timeinfo);
+      localtime_r(&now, &timeinfo);
 #endif
-    char timestamp[20];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      char timestamp[20];
+      strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
-    // Create log entry
-    ostringstream logEntry;
-    logEntry << "[kinDS] [" << timestamp << "] " << levelToString(level) << ": " << message << endl;
+      // Create log entry
+      ostringstream logEntry;
+      logEntry << "[kinDS] [" << timestamp << "] " << levelToString(level) << ": " << message << endl;
 
-    // Output to console (flush so lines appear before a subsequent throw)
-    if (console_enabled_)
-    {
-      cout << logEntry.str();
-      cout.flush();
-      fflush(stdout);
+      // Output to console (flush so lines appear before a subsequent throw)
+      if (console_enabled_)
+      {
+        if (level == LogLevel::Error || level == LogLevel::Critical)
+        {
+          cerr << logEntry.str();
+          cerr.flush();
+          fflush(stderr);
+        }
+        else
+        {
+          cout << logEntry.str();
+          cout.flush();
+          fflush(stdout);
+        }
+      }
+
+      // Output to log file
+      if (log_file.is_open())
+      {
+        log_file << logEntry.str();
+        log_file.flush(); // Ensure immediate write to file
+      }
+      sink = external_sink_;
     }
-
-    // Output to log file
-    if (log_file.is_open())
+    if (sink)
     {
-      log_file << logEntry.str();
-      log_file.flush(); // Ensure immediate write to file
+      sink(level, message);
     }
   }
 

@@ -5,8 +5,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <iosfwd>
+#include <limits>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kinDS
@@ -29,12 +34,13 @@ inline constexpr size_t kineticEventTypeCount = static_cast<size_t>(KineticEvent
 const char* kineticEventTypeName(KineticEventType type);
 
 /**
- * @brief Per-section and total wall-clock / event-count statistics for one tree-meshing run.
+ * @brief Per-(section, runtime-branch) and total wall-clock / event-count statistics for one tree-meshing run.
  *
- * Section attribution uses @c floor(occurrence_time). Wall time for section @c i is the span from the first
- * dequeued event belonging to @c i until the first event of a later section (or @ref endRun / finalize).
- * Strand/branch snapshots are optional: per-section rows record live topology after retirement;
- * the totals row uses the full input strand inventory and all distinct input-tree branch IDs.
+ * Section attribution uses @c floor(occurrence_time). Each runtime branch has its own open-section timer:
+ * wall time for (@c i, branch) is the span from that branch's first dequeued event in @c i until its first
+ * event of a later section (or @ref endRun). Strand/branch snapshots are optional: per-row values record
+ * live topology of that runtime branch after retirement; the totals row uses the full input strand inventory
+ * and all distinct input-tree branch IDs. All mutators and CSV writers are internally synchronized.
  */
 class Statistics
 {
@@ -42,11 +48,15 @@ class Statistics
   struct SectionStats
   {
     size_t section_id = 0;
+    /// Blank on the pre-fork / serial scheduler (@c BranchScheduler::no_branch) and on the totals row.
+    std::optional<size_t> runtime_branch_id {};
     double runtime_seconds = 0.0;
     std::array<size_t, kineticEventTypeCount> event_counts {};
-    /// Per section: live non-dummy strands after retirement. Totals: full input strand inventory.
+    /// Per row: live non-dummy strands after retirement (scoped to the runtime branch when set).
+    /// Totals: full input strand inventory.
     std::optional<size_t> strand_count {};
-    /// Per section: alive runtime branches after retirement. Totals: all input-tree branches (alive + retired).
+    /// Per unscoped row: alive runtime branches after retirement. Per scoped row: distinct input-tree
+    /// branches among those live strands. Totals: all input-tree branches (alive + retired).
     std::optional<size_t> branch_count {};
   };
 
@@ -57,6 +67,7 @@ class Statistics
     double occurrence_t = 0.0;
     double occurrence_infinitesimal_t = 0.0;
     KineticEventType type = KineticEventType::Count;
+    std::optional<size_t> runtime_branch_id {};
     std::optional<size_t> half_edge_id {};
     std::optional<size_t> delaunay_edge_id {};
     std::optional<size_t> voronoi_vertex_id {};
@@ -69,6 +80,11 @@ class Statistics
     std::optional<bool> radius_shift {};
   };
 
+  Statistics();
+  ~Statistics();
+  Statistics(const Statistics&) = delete;
+  Statistics& operator=(const Statistics&) = delete;
+
   void reset();
 
   /// Start a new collection window (call before processing kinetic events).
@@ -77,11 +93,11 @@ class Statistics
   /// Close the open section timer (call after the last timed work, including finalize if attributed here).
   void endRun();
 
-  bool isCollecting() const { return run_active_; }
+  bool isCollecting() const;
 
-  /// Record a dequeued kinetic event (updates section timer + counts). Prefer @ref recordEvent when the
-  /// full event object is available so the event-list CSV gets typed columns.
-  void onEvent(KineticEventType type, double occurrence_time);
+  /// Record a dequeued kinetic event (updates that branch's section timer + counts). Prefer @ref recordEvent
+  /// when the full event object is available so the event-list CSV gets typed columns.
+  void onEvent(KineticEventType type, double occurrence_time, std::optional<size_t> runtime_branch_id = {});
 
   /// Record counts and append an event-list row (type-specific fields filled via @p row).
   void recordEvent(EventListRow row);
@@ -89,8 +105,9 @@ class Statistics
   /// Fill @c radius_shift on the event-list row matching @p event_id (no-op if not collecting / not found).
   void setRadiusShift(uint64_t event_id, bool shifted);
 
-  /// Snapshot live strand/branch counts for @p section_id (after phased-out strands are retired).
-  void setSectionTopology(size_t section_id, size_t strand_count, size_t branch_count);
+  /// Snapshot live strand/branch counts for (@p section_id, @p runtime_branch_id) after retirement.
+  void setSectionTopology(size_t section_id, std::optional<size_t> runtime_branch_id, size_t strand_count,
+    size_t branch_count);
 
   /// Totals-row topology: full strand inventory and all input-tree branches (alive + retired).
   void setTotalsTopology(size_t strand_count, size_t branch_count);
@@ -107,14 +124,15 @@ class Statistics
   /// (@c meshing_statistics_<tag>_<sectionCount>_YYYYMMDD_…). Spaces should already be underscores.
   void setFilenameExperimentTag(std::string tag);
 
-  /// After @ref beginRun, open a stable incremental CSV (header only) and append one row each time a
-  /// section closes so mid-run failures still leave completed section statistics on disk.
+  /// After @ref beginRun, open a stable incremental CSV (header only) and keep it open for the run.
+  /// On Windows the handle uses @c FILE_SHARE_READ so other processes (LibreOffice) can only open
+  /// read-only; our threads append through @ref mutex_. One row is written each time a section closes.
   void startIncrementalCsv(const std::filesystem::path& base_path);
 
-  /// Add wall time to the current open section (and totals), e.g. @c SegmentBuilder::finalize.
+  /// Add wall time to the totals row only (not branch-local), e.g. @c SegmentBuilder::finalize.
   void addWallTimeSeconds(double seconds);
 
-  bool empty() const { return sections_.empty(); }
+  bool empty() const;
   const std::vector<SectionStats>& sections() const { return sections_; }
   const SectionStats& totals() const { return totals_; }
   const std::vector<EventListRow>& eventList() const { return event_list_; }
@@ -132,9 +150,10 @@ class Statistics
   /// (@c meshing_statistics.csv → @c meshing_event_list.csv).
   static std::filesystem::path eventListCsvPathBeside(const std::filesystem::path& statistics_csv_path);
 
-  /// CSV: @c section_id,runtime_s,strand_count,branch_count,segment_count,<event types...>,
+  /// CSV: @c section_id,runtime_branch_id,runtime_s,strand_count,branch_count,segment_count,<event types...>,
   /// @c alpha,triangle_count,vertex_count,failure;
   /// @c segment_count is @c strand_count + subdivision events when strand_count is set (else blank).
+  /// Rows are sorted by @c section_id then @c runtime_branch_id (blank branch id first).
   /// Final @c total row (alpha / mesh counts / failure filled only there when set).
   /// Writes to a timestamped sibling of @p path so existing files are never overwritten.
   bool writeCsv(const std::filesystem::path& path) const;
@@ -146,18 +165,31 @@ class Statistics
  private:
   using Clock = std::chrono::steady_clock;
 
-  void closeOpenSection(Clock::time_point now);
-  void openSection(size_t section_id, Clock::time_point now);
-  SectionStats& ensureSection(size_t section_id);
+  struct OpenSectionTimer
+  {
+    size_t section_id = 0;
+    std::optional<size_t> runtime_branch_id {};
+    Clock::time_point started {};
+  };
+
+  static size_t branchTimerKey(std::optional<size_t> runtime_branch_id);
+  static bool sectionRowLess(const SectionStats& a, const SectionStats& b);
+
+  void resetLocked();
+  void onEventLocked(KineticEventType type, double occurrence_time, std::optional<size_t> runtime_branch_id);
+  void closeOpenBranch(size_t timer_key, Clock::time_point now);
+  void openBranchSection(size_t section_id, std::optional<size_t> runtime_branch_id, Clock::time_point now);
+  SectionStats& ensureSection(size_t section_id, std::optional<size_t> runtime_branch_id);
   std::filesystem::path statisticsCsvStemPath(const std::filesystem::path& path) const;
   void writeCsvHeader(std::ostream& out) const;
   void writeCsvSectionRow(std::ostream& out, const SectionStats& row) const;
   void appendIncrementalSectionRow(const SectionStats& row);
+  void closeIncrementalCsvLocked();
+  bool writeIncrementalCsvLocked(const std::string& text);
 
+  mutable std::mutex mutex_;
   bool run_active_ = false;
-  bool section_open_ = false;
-  size_t current_section_id_ = 0;
-  Clock::time_point section_started_ {};
+  std::unordered_map<size_t, OpenSectionTimer> open_by_branch_;
   std::vector<SectionStats> sections_;
   SectionStats totals_ {};
   std::vector<EventListRow> event_list_;
@@ -167,5 +199,7 @@ class Statistics
   std::optional<std::string> totals_failure_ {};
   std::string filename_experiment_tag_ {};
   std::filesystem::path incremental_csv_path_ {};
+  struct IncrementalCsvFile;
+  std::unique_ptr<IncrementalCsvFile> incremental_csv_file_;
 };
 } // namespace kinDS

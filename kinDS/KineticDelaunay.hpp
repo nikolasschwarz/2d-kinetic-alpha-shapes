@@ -10,7 +10,9 @@
 #include "StrandTree.hpp"
 #include "Trajectory.hpp"
 #include <array>
+#include <condition_variable>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -24,6 +26,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -441,11 +444,19 @@ class KineticDelaunay
   /// When true, after a physical runtime-branch cut each child runs on its own @ref BranchScheduler.
   bool parallelize_independent_runtime_branches_ = false;
   std::function<void(size_t, std::function<void(size_t)>)> parallel_for_;
+  /// Optional on-thread context binder for independent branch std::threads (EcoSysLab
+  /// ApplicationContextScope). Not a job post: long-running branch work must not occupy Jobs workers.
+  std::function<void(std::function<void()>)> async_run_;
   /// Root / pre-fork scheduler (also used for serial mode). Queue lives in @ref kinetic_algorithm_ root.
   std::unique_ptr<BranchScheduler> root_branch_scheduler_;
   /// Independent child schedulers created at fork (not including @ref root_branch_scheduler_).
   std::vector<std::unique_ptr<BranchScheduler>> independent_branch_schedulers_;
   std::mutex independent_scheduler_mutex_;
+  std::condition_variable independent_scheduler_cv_;
+  std::vector<std::thread> independent_scheduler_workers_;
+  size_t independent_schedulers_launched_ = 0;
+  size_t independent_schedulers_joined_ = 0;
+  std::exception_ptr independent_scheduler_error_;
   /// Serializes runtime-branch id allocation, pending-split bookkeeping, cuts, retirement and forks across
   /// independent schedulers. Recursive: section events cut, retire and fork on the same stack.
   mutable std::recursive_mutex shared_topology_mutex_;
@@ -508,8 +519,9 @@ class KineticDelaunay
   /// When true, after each kinetic event verify every live site lies in its component's graph convex hull.
   /// Default off; CLI @c --check-sites-in-hull.
   bool sites_inside_convex_hull_check_enabled_ = false;
-  /// When true, after each kinetic event recompute every Delaunay–Voronoi edge intersection and warn if either
-  /// parameter lies outside its line segment (same interval as @ref assignCrossingIntersectionDelaunayParam).
+  /// When true, immediately after each kinetic event's topology/intersection update (before afterEvent
+  /// callbacks) recompute every Delaunay–Voronoi edge intersection at that event's occurrence time
+  /// (live graph + site positions) and warn if either parameter lies outside its line segment.
   /// Default off; CLI @c --check-intersections.
   bool delaunay_voronoi_intersection_check_enabled_ = false;
   std::filesystem::path intersection_errors_csv_path_;
@@ -549,53 +561,64 @@ class KineticDelaunay
   void growGraphSlotArrays();
   size_t findContainingTriForVoronoiVertex(size_t voronoi_vertex_id, double t) const;
   void initializeFaceState(size_t face_index, double t);
-  /// Lawson-style repair of Delaunator2D vs kinetic predicate sign mismatch at bootstrap.
-  /// Hull: @c ccw(origin, dest, opposite) of the interior hull edge; legal sign is <0.
-  /// Interior: FlipEvent @c inCircle order. Cascades along the four quadrilateral sides (BFS).
-  void legalizeInitialFlipCertificates(double t);
+  /// Lawson-style repair of Delaunator2D vs kinetic predicate sign mismatch at bootstrap
+  /// and after failsafe retriangulation. Hull: @c ccw(origin, dest, opposite) of the interior hull
+  /// edge; legal sign is <0. Interior: FlipEvent @c inCircle order. Cascades along the four
+  /// quadrilateral sides (BFS). If @p restrict_even_half_edges is set, only those undirected edges
+  /// (and BFS sides in that set) are considered.
+  void legalizeInitialFlipCertificates(
+    double t, const std::unordered_set<size_t>* restrict_even_half_edges = nullptr);
   void initializeNewFacesAfterGraphUpdate(double t, size_t first_new_face_slot);
   void clearPendingBranchSplits();
   /// Drop pending kinetic entries for @p parent_runtime_branch_id and mark its runtime children as final.
   void completePendingRuntimeBranchSplit(size_t parent_runtime_branch_id, double t);
-  /// After a physical cut, fork independent @ref BranchScheduler instances for each child (when enabled).
-  void maybeForkBranchSchedulers(size_t parent_runtime_branch_id, const std::vector<size_t>& child_runtime_ids,
+  /// After a physical cut, spawn one independent @ref BranchScheduler per child (when enabled).
+  /// The parent keeps its current scheduler/thread; only children get a new queue, precomputed at @p t
+  /// so the remainder of the current section is not skipped.
+  /// @return true if at least one child scheduler was created.
+  bool maybeForkBranchSchedulers(size_t parent_runtime_branch_id, const std::vector<size_t>& child_runtime_ids,
     double t);
   void setActiveBranchScheduler(BranchScheduler* scheduler);
   /// Section counter for the active scheduler (falls back to @ref sections_advanced).
   size_t& mutableActiveSectionsAdvanced();
   size_t getActiveSectionsAdvanced() const;
-  /// Restrict @ref precomputeStep to simplices owned by @p runtime_branch_id (or all when no_branch).
+  /// Lowest @c sections_advanced among schedulers that are still live (not finished, runtime not dead).
+  std::optional<size_t> lowestNonRetiredSchedulerSection();
+  /// Restrict @ref precomputeStep to simplices owned by @p runtime_branch_id (unforked only when no_branch).
   void precomputeStepForRuntimeBranch(double t, size_t runtime_branch_id);
   /// Populate owned HE/face sets for @p scheduler from current live graph + branch_map.
   void rebuildSchedulerTopologyOwnership(BranchScheduler& scheduler);
   /// Process @p scheduler's queue with the correct active context.
-  /// On a meshing exception: report it, retriangulate this branch at the next section, and resume.
+  /// Meshing exceptions unwind to this queue loop, failsafe to the next section, then continue.
   void processBranchScheduler(BranchScheduler& scheduler, std::optional<double> end_time = std::nullopt,
     bool record_event_statistics = true);
-  /// After the root queue drains, process independent child schedulers (serially or in parallel).
+  /// Join child scheduler workers spawned at separations (they run concurrently with the parent).
   void processIndependentBranchSchedulers();
-  /// Report @p what, failsafe-advance remaining subdivisions (no geometry), retriangulate at the next
-  /// section, and resume. Returns false if retriangulation itself fails (caller should abort the tree).
-  bool failsafeResumeBranchAtNextSection(BranchScheduler& scheduler, const char* what);
+  /// Start @p scheduler on its own worker; the parent thread keeps running.
+  void launchIndependentBranchScheduler(BranchScheduler& scheduler);
+  /// Dump the failed event, retire if the branch is done, otherwise retriangulate at the next section
+  /// and enqueue from there. Returns false to abort the scheduler.
+  bool failsafeResumeBranchAtNextSection(BranchScheduler& scheduler, const Event& failed, const char* what);
   void recordFailsafeReport(const std::string& message, double failure_t, size_t failed_section, size_t resume_section);
-  std::vector<size_t> failsafeStrandsForScheduler(BranchScheduler& scheduler, size_t section);
-  /// Drain the scheduler queue: failsafe-advance subdivisions (all of them if
-  /// @p consume_all_subdivisions, otherwise those with t < @p until_t), keep later
+  std::vector<size_t> failsafeStrandsForScheduler(const BranchScheduler& scheduler, size_t section);
+  /// Drain the scheduler queue: failsafe-advance subdivisions with @c t < @p until_t, keep later
   /// subdivisions, drop stale kinetic/section events.
   std::vector<std::shared_ptr<EventScheduler::Event>> failsafeConsumeQueue(
-    BranchScheduler& scheduler, double until_t, bool consume_all_subdivisions);
+    BranchScheduler& scheduler, double until_t);
   void retriangulateSchedulerAtSection(BranchScheduler& scheduler, size_t section);
   void rescheduleSchedulerFromSection(BranchScheduler& scheduler, size_t from_section);
   EventScheduler& schedulerQueue(BranchScheduler& scheduler);
   /// Schedule branch-local section events on @p scheduler for [@p from_section, exclusive end).
   void scheduleBranchLocalSectionEvents(BranchScheduler& scheduler, size_t from_section);
-  /// After a section retire, enqueue a new independent scheduler for strands that still have later profiles.
+  /// Enqueue section events from @p from_section without clearing the existing queue.
+  void enqueueBranchLocalSectionEvents(BranchScheduler& scheduler, size_t from_section);
+  /// After a section retire, enqueue extra section events on the same scheduler if exclusive end grew.
   void continueIndependentSchedulerFromSection(BranchScheduler& scheduler, size_t from_section);
   /// Exclusive stop section: one past the earliest last support height of @p strand_ids, capped by @ref getEndSection.
   size_t exclusiveEndSectionForStrands(const std::vector<size_t>& strand_ids) const;
   /// Exclusive stop section for a forked scheduler (prefers @ref BranchScheduler::owned_strands).
   size_t exclusiveEndSectionForScheduler(const BranchScheduler& scheduler) const;
-  /// processEvents cutoff: just after the last scheduled section time, so section H runs but t>H kinetics do not.
+  /// processEvents cutoff: @c t < exclusive end section, matching the root scheduler.
   double exclusiveEndTimeForScheduler(const BranchScheduler& scheduler) const;
   /// Build a runtime-branch cut map that severs only @p target_parent_runtime_branch from its pending children.
   /// Other pending-split children are collapsed to their unsplit parent so they are not cut yet.
@@ -661,6 +684,7 @@ class KineticDelaunay
     std::optional<size_t> input_branch_id = std::nullopt);
   void logRuntimeBranchEvent(double t, const std::string& event_line);
   bool runtime_branch_log_header_written_ = false;
+  std::mutex runtime_branch_log_mutex_;
   /// Retire input branches whose last section is @p t. @p scope_runtime_branch limits this to one
   /// scheduler's unsplit branch; @c BranchScheduler::no_branch retires every finished input branch.
   void retireFinishedInputBranches(double t, size_t scope_runtime_branch);
@@ -668,6 +692,20 @@ class KineticDelaunay
   size_t activeRuntimeBranchScope() const;
   /// True when @p face_id belongs to @p scope_runtime_branch (pending split children count as their parent).
   bool faceInRuntimeScope(size_t face_id, size_t scope_runtime_branch) const;
+  /// Same ownership rule as @ref precomputeStepForRuntimeBranch for one even Delaunay half-edge.
+  bool delaunayEvenHalfEdgeInRuntimeScope(size_t even_he, size_t scope_runtime_branch) const;
+  /// True when @p strand_id belongs to @p scope_runtime_branch (pending split children count as their parent).
+  bool strandInRuntimeScope(size_t strand_id, size_t scope_runtime_branch) const;
+  /// True when @p event's half-edge / face / strand / branch still belongs to @p scope_runtime_branch.
+  bool eventInRuntimeScope(const Event& event, size_t scope_runtime_branch) const;
+  /// @ref eventInRuntimeScope against @ref activeRuntimeBranchScope.
+  bool eventInActiveRuntimeScope(const Event& event) const;
+  /// Debug SVG for a handler skip caused by @ref eventInActiveRuntimeScope (`skipped` in the filename).
+  void exportRuntimeScopeSkipSvg(const Event& event);
+  /// Debug SVG for @p event under @p phase. Must not throw (visual debug must not fail meshing).
+  void exportEventDiagnosticSvg(const Event& event, const char* phase);
+  /// True when this scheduler still has a profiled strand at @p section (same skip as SectionEvent).
+  bool schedulerHasProfileAtSection(const BranchScheduler& scheduler, size_t section);
   void validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const;
   std::vector<std::vector<size_t>> extractGraphConnectedComponents() const;
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
@@ -720,7 +758,13 @@ class KineticDelaunay
   {
     parallel_for_ = std::move(parallel_for);
   }
-  /// Hold while changing runtime-branch ids, pending splits or shared graph topology.
+  /// Optional binder run on the child std::thread (EcoSysLab ApplicationContextScope). Not a Jobs post.
+  void setAsyncRun(std::function<void(std::function<void()>)> async_run)
+  {
+    async_run_ = std::move(async_run);
+  }
+  /// Hold while changing runtime-branch ids, pending splits or shared graph topology, and while
+  /// iterating live graph indices (including visual-debug SVG).
   std::unique_lock<std::recursive_mutex> lockSharedTopology() const
   {
     return std::unique_lock<std::recursive_mutex>(shared_topology_mutex_);
@@ -745,6 +789,8 @@ class KineticDelaunay
 
   /// True when @p strand_id has profile samples at @c ceil(t) (dummy strands are treated as always valid).
   bool strandHasProfileAt(size_t strand_id, double t) const;
+  /// Both finite endpoints still have a profile sample at @p t (dummy/infinite ends are ignored).
+  bool delaunayEvenHalfEdgeHasProfileAt(size_t even_he, double t) const;
 
   /// Kinetic Delaunay / SVG coordinates: reference-branch frame with virtual separation (never object-space).
   glm::dvec2 getPointInDelaunaySpace(size_t v, double t) const;
@@ -806,8 +852,10 @@ class KineticDelaunay
   /// Input branch ids whose last real-strand section is @p t (same criterion as @ref retireFinishedInputBranches).
   /// When @ref setStartInputBranches is active, only branches that touch tracked strands are returned.
   std::vector<size_t> inputBranchesFinishingAtSection(double t) const;
-  /// True when @p input_branch_id at @p section belongs to @p scope_runtime_branch. Pending split children
-  /// count as their parent until the cut. @c BranchScheduler::no_branch matches every input branch.
+  /// True when this section event's runtime branch should retire / cap @p input_branch_id.
+  /// Pending split children count as their parent until the cut. Unassigned live strands belong to
+  /// the scheduler that still lists them as owned, else the scheduler whose exclusive end matches
+  /// the finishing height, else the continuing parent/root. @c no_branch matches every input.
   bool inputBranchInRuntimeScope(size_t section, size_t input_branch_id, size_t scope_runtime_branch) const;
   /// Unsplit runtime branch of @p strand_id (a pending split child maps to its parent); @c no_branch if unassigned.
   size_t unsplitRuntimeBranchForStrand(size_t strand_id) const;
@@ -984,7 +1032,9 @@ class KineticDelaunay
   /** Cached Voronoi-vertex list iterators must reference their own id in the containing triangle list. */
   void validateVoronoiVertexIteratorInvariants(const char* context, double t) const;
 
-  std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> getCrossingIntersectionDebugData() const;
+  /// Live crossing records at @p t: list indices from the current graph, parameters from
+  /// @ref delaunayVoronoiEdgeIntersection at @p t (not stored overlay params).
+  std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> getCrossingIntersectionDebugData(EventTime t) const;
 
   const HalfEdgeDelaunayGraph& init(CallbackManager* callback_manager = nullptr);
   void registerSectionEventCallback(EventCallback* callback);
@@ -1032,8 +1082,11 @@ class KineticDelaunay
     statistics_incremental_flush_ = enabled;
     statistics_incremental_csv_base_ = std::move(csv_base_path);
   }
-  /// Live non-dummy strands and alive runtime branches (excludes retired / phased-out).
-  std::pair<size_t, size_t> countLiveStrandsAndBranches() const;
+  /// Live non-dummy strands and branch counts (excludes retired / phased-out).
+  /// Unscoped (@c BranchScheduler::no_branch): all live strands and alive runtime branches.
+  /// Scoped: live strands of that runtime branch, and distinct input-tree branches among them at @p section.
+  std::pair<size_t, size_t> countLiveStrandsAndBranches(
+    size_t section, size_t scope_runtime_branch = BranchScheduler::no_branch) const;
 
   // Computes the Delaunay triangulation of the given splines
   void compute();
@@ -1280,17 +1333,19 @@ class KineticDelaunay
   void setSitesInsideConvexHullCheckEnabled(bool enabled);
   bool sitesInsideConvexHullCheckEnabled() const;
   void validateSitesInsideConvexHull(const char* context, EventTime t) const;
-  /// Optional per-event check: every stored Delaunay–Voronoi crossing lies on both line segments.
-  /// Off by default; enable via CLI @c --check-intersections. A pair is logged/CSV'd on first failure,
-  /// forgotten when it becomes valid again or the crossing is removed, and treated as new if it fails later.
+  /// Optional per-event check: every live Delaunay–Voronoi crossing lies on both line segments.
+  /// Off by default; enable via CLI @c --check-intersections. Runs in handleEvent immediately after the
+  /// kinetic update (not after afterEvent meshing/SVG). A pair is logged/CSV'd and, when error files
+  /// are enabled, written as an error SVG on first failure, forgotten when it becomes valid again, and
+  /// treated as new if it fails later.
   void setDelaunayVoronoiIntersectionCheckEnabled(bool enabled);
   bool delaunayVoronoiIntersectionCheckEnabled() const;
   void beginIntersectionErrorCsv(std::filesystem::path path);
-  void validateDelaunayVoronoiIntersections(const char* context, EventTime t);
-  /// Live in-segment failures at @p t vs the last validator pass: new failures in @p first_keys,
-  /// still-wrong pairs in @p repeat_keys. Packed as @c (delaunay_edge_id << 32) | voronoi_edge_id.
-  void collectLiveIntersectionErrorMarks(double t, std::unordered_set<uint64_t>& first_keys,
-    std::unordered_set<uint64_t>& repeat_keys) const;
+  /// Checks crossings owned by @ref activeRuntimeBranchScope using the live graph and site positions at @p t.
+  /// On first failure, writes the error SVG immediately (same graph and sites) into that runtime branch folder.
+  /// @p event_id / @p creation_time stamp the file next to the triggering event's before/after SVGs.
+  void validateDelaunayVoronoiIntersections(const char* context, EventTime t,
+    std::optional<uint64_t> event_id = std::nullopt, std::optional<EventTime> creation_time = std::nullopt);
   /// Bounds-checked diagnostic id queries; invalid ids are ignored by monitor logging.
   bool isDiagnosticsStrandIdValid(size_t strand_id) const;
   bool isDiagnosticsFaceIdValid(size_t face_id) const;

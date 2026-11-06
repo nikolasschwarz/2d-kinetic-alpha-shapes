@@ -859,13 +859,15 @@ class Text : public Shape
 {
  public:
   Text(Point const& origin, std::string const& content, Fill const& fill = Fill(), Font const& font = Font(),
-    Stroke const& stroke = Stroke(), double rotation_degrees = 0.0, bool center_on_origin = false)
+    Stroke const& stroke = Stroke(), double rotation_degrees = 0.0, bool center_on_origin = false,
+    bool start_middle = false)
     : Shape(fill, stroke)
     , origin(origin)
     , content(content)
     , font(font)
     , rotation_degrees(rotation_degrees)
     , center_on_origin(center_on_origin)
+    , start_middle(start_middle)
   {
   }
   std::string toString(Layout const& layout) const override
@@ -876,23 +878,24 @@ class Text : public Shape
     double y = translateY(origin.y, layout);
 
     // Adjust position based on layout origin
+    const bool skip_origin_nudge = center_on_origin || start_middle;
     switch (layout.origin)
     {
     case Layout::TopLeft:
-      if (!center_on_origin)
+      if (!skip_origin_nudge)
       {
         y += bbox.size.height;
       }
       break;
     case Layout::TopRight:
-      if (!center_on_origin)
+      if (!skip_origin_nudge)
       {
         x -= bbox.size.width;
         y += bbox.size.height;
       }
       break;
     case Layout::BottomRight:
-      if (!center_on_origin)
+      if (!skip_origin_nudge)
       {
         x -= bbox.size.width;
       }
@@ -906,6 +909,10 @@ class Text : public Shape
     if (center_on_origin)
     {
       ss << attribute("text-anchor", "middle") << attribute("dominant-baseline", "middle");
+    }
+    else if (start_middle)
+    {
+      ss << attribute("text-anchor", "start") << attribute("dominant-baseline", "middle");
     }
     if (rotation_degrees != 0.0)
     {
@@ -935,6 +942,7 @@ class Text : public Shape
   Font font;
   double rotation_degrees;
   bool center_on_origin;
+  bool start_middle;
 
   double measureTextWidth(std::string const& text, Font const& font) const
   {

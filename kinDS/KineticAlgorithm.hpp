@@ -4,6 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -133,14 +135,23 @@ class EventScheduler
     events_.push(event);
   }
   bool empty() const { return events_.empty(); }
+  size_t size() const { return events_.size(); }
+  std::shared_ptr<Event> peek() const { return events_.empty() ? nullptr : events_.top(); }
   void clear();
   /// Pop every pending event (does not run @c handleEvent). Used by failsafe to keep subdivisions.
   [[nodiscard]] std::vector<std::shared_ptr<Event>> takeAll();
   std::optional<EventTime> lastProcessedOccurrence() const { return last_processed_occurrence_; }
+  /// After @c handleEvent throws, return true to keep processing this queue (failsafe already rewound
+  /// to the next section). Return false to rethrow. Empty handler rethrows.
+  using MeshingErrorHandler = std::function<bool(const Event& failed, const std::exception& ex)>;
   /// Process queued events in time order. If @p end_time is set, discard the remainder once the next
   /// event has @c occurrence_time >= @p end_time (that event is not executed).
   /// When @p statistics is set, each dequeued event is recorded before @c handleEvent.
-  void processEvents(std::optional<double> end_time = std::nullopt, Statistics* statistics = nullptr);
+  /// @p runtime_branch_id is stored on event-list rows when the event did not already fill it.
+  /// Meshing errors unwind @c handleEvent completely; @p on_meshing_error may rebuild the queue, then
+  /// this loop continues as if that event had returned.
+  void processEvents(std::optional<double> end_time = std::nullopt, Statistics* statistics = nullptr,
+    std::optional<size_t> runtime_branch_id = std::nullopt, MeshingErrorHandler on_meshing_error = {});
 };
 
 /// Facade that routes enqueue/process to an active @ref EventScheduler (branch-local or root).

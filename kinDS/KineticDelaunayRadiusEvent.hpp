@@ -66,6 +66,11 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
   }
   // Radius events note pending splits (allocating runtime ids) and may cut the shared graph.
   const auto topology_lock = kd->lockSharedTopology();
+  if (!kd->eventInActiveRuntimeScope(*this))
+  {
+    kd->exportRuntimeScopeSkipSvg(*this);
+    return;
+  }
 
   auto& graph = kd->graph;
   const double t = occurrence_time.real_time;
@@ -155,13 +160,13 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
 
   kd->setFaceInside(face_id, target_inside, t);
 
+  kd->validateSitesInsideConvexHull("RadiusEvent", occurrence_time);
+  kd->validateDelaunayVoronoiIntersections("RadiusEvent", occurrence_time, eventId(), creation_time);
+
   if (event_handler)
   {
     event_handler->afterEvent(*this);
   }
-
-  kd->validateSitesInsideConvexHull("RadiusEvent:afterEvent", occurrence_time);
-  kd->validateDelaunayVoronoiIntersections("RadiusEvent:afterEvent", occurrence_time);
 
   if (is_infinitesimal)
   {

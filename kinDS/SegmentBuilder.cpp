@@ -6,6 +6,7 @@
 #include "KineticDelaunayFlipEvent.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
 #include "Logger.hpp"
+#include "ObjExporter.hpp"
 #include "PlaneProjector.hpp"
 #include "SegmentBuilderCrossingCallback.hpp"
 #include "SegmentBuilderFlipCallback.hpp"
@@ -33,7 +34,9 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <mutex>
 #include <set>
+#include <shared_mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -2419,6 +2422,7 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, bool only_adjacent_segment)
 {
   std::vector<MeshingData> operated_segments;
+  [[maybe_unused]] const auto mesh_storage_lock = lockMeshStorageShared();
   if (kin_del.getGraph().isInfinite(he_id) && kin_del.computeBoundaryOnTheFly())
   {
     meshletDiagnosticLogLine("finish_mesh_skip", he_id, t, "reason=infinite_boundary_on_the_fly");
@@ -2968,6 +2972,7 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
   const RadiusBoundaryTransitionShiftContext* boundary_transition_shift, bool only_adjacent_segment)
 {
   std::vector<MeshingData> operated_segments;
+  [[maybe_unused]] const auto mesh_storage_lock = lockMeshStorageShared();
   if (kin_del.getGraph().isInfinite(half_edge_id) && kin_del.computeBoundaryOnTheFly())
   {
     meshletDiagnosticLogLine("start_new_mesh_skip", half_edge_id, t, "reason=infinite_boundary_on_the_fly");
@@ -5181,6 +5186,7 @@ size_t SegmentBuilder::startNewMeshFromIntersections(size_t voronoi_cell_id, dou
     throw std::runtime_error("startNewMeshFromIntersections requires at least one intersection reference.");
   }
 
+  [[maybe_unused]] const auto mesh_storage_lock = lockMeshStorageShared();
   const auto& graph = kin_del.getGraph();
 
   // Interval semantics (start/end of the strip) and mesh topology are passed explicitly; only `SegmentBuilder`
@@ -5501,6 +5507,7 @@ void SegmentBuilder::finishMeshFromIntersections(size_t voronoi_cell_id, double 
   BoundarySegmentAction segment_action, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
   size_t intersection_pair_index)
 {
+  [[maybe_unused]] const auto mesh_storage_lock = lockMeshStorageShared();
   // voronoi_cell_id is the strand site (Delaunay vertex), not a Voronoi vertex (Delaunay face).
   // Validate circumcenters only via the intersection Voronoi-edge endpoints below.
   if (start_intersection.has_value())
@@ -6263,6 +6270,7 @@ size_t kinDS::SegmentBuilder::registerMeshletWithSuffix(
 size_t kinDS::SegmentBuilder::registerBarkOnlyMeshlet(VoronoiMesh&& mesh, std::string suffix,
   double creation_kinetic_time, size_t owner_segment_id, size_t voronoi_cell_id)
 {
+  [[maybe_unused]] const auto mesh_storage_lock = lockMeshStorageShared();
   configureMeshletStorage(mesh);
   if (mesh.getMaterialNames().empty())
   {
@@ -6290,6 +6298,90 @@ size_t kinDS::SegmentBuilder::registerBarkOnlyMeshlet(VoronoiMesh&& mesh, std::s
   intersection_meshlet_export_suffixes.push_back(std::move(suffix));
   intersection_mesh_pair_last_left_and_right_vertex.emplace_back();
   return index;
+}
+
+void kinDS::SegmentBuilder::exportIncrementalMeshes(size_t section_id, size_t runtime_branch_id)
+{
+  if (!export_incremental_meshes)
+  {
+    return;
+  }
+
+  std::vector<VoronoiMesh> interior;
+  std::vector<VoronoiMesh> boundary;
+  {
+    std::unique_lock<std::shared_mutex> lock(mesh_storage_mutex_);
+    interior = meshes;
+    boundary = intersection_meshes;
+  }
+
+  std::filesystem::path dir = incremental_meshes_output_dir.empty()
+    ? std::filesystem::path("incremental_meshes")
+    : incremental_meshes_output_dir;
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec)
+  {
+    KINDS_WARNING("incremental meshes: could not create " << dir.string() << ": " << ec.message());
+    return;
+  }
+
+  std::ostringstream filename;
+  filename << "incremental_s" << section_id;
+  if (runtime_branch_id != BranchScheduler::no_branch)
+  {
+    filename << "_b" << runtime_branch_id;
+  }
+  filename << ".obj";
+  const std::filesystem::path obj_path = dir / filename.str();
+
+  VoronoiMesh combined;
+  bool initialized = false;
+  auto append = [&](const std::vector<VoronoiMesh>& meshlets, const char* prefix)
+  {
+    for (size_t i = 0; i < meshlets.size(); ++i)
+    {
+      if (meshlets[i].getVertexCount() == 0 && meshlets[i].getTriangleCount() == 0)
+      {
+        continue;
+      }
+      if (!initialized)
+      {
+        combined = VoronoiMesh(MeshletExportMaterialNames, meshlets[i].getNormalMode());
+        combined.setGroupOffsets({ 0 });
+        combined.setGroupNames({ std::string(prefix) + std::to_string(i) });
+        initialized = true;
+      }
+      else
+      {
+        combined.startNewGroup(std::string(prefix) + std::to_string(i));
+      }
+      VoronoiMesh piece = meshlets[i];
+      piece.setGroupOffsets({});
+      piece.setGroupNames({});
+      combined += piece;
+    }
+  };
+  append(interior, "interior_");
+  append(boundary, "boundary_");
+  if (!initialized)
+  {
+    KINDS_DEBUG("incremental meshes: nothing to export at section " << section_id);
+    return;
+  }
+
+  try
+  {
+    ObjWriteOptions options;
+    options.include_metadata = store_mesh_metadata;
+    options.write_obj_groups = true;
+    ObjExporter::writeMesh(combined, obj_path, options);
+    KINDS_INFO("Wrote incremental mesh " << obj_path.string());
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_WARNING("incremental meshes: failed to write " << obj_path.string() << ": " << ex.what());
+  }
 }
 
 void kinDS::SegmentBuilder::completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right, double t)
@@ -6729,27 +6821,70 @@ std::string kinDS::SegmentBuilder::formatStrandBranchLogInfo(size_t strand_id, d
   return oss.str();
 }
 
+namespace
+{
+double lastProfileTimeForStrand(const KineticDelaunay& kin_del, size_t strand_id)
+{
+  const auto& ids = kin_del.getStrandTree().getBranchIndices();
+  if (strand_id >= ids.size() || ids[strand_id].empty())
+  {
+    return 0.0;
+  }
+  return static_cast<double>(ids[strand_id].size() - 1);
+}
+
+size_t profileSampleCount(const KineticDelaunay& kin_del, size_t strand_id)
+{
+  const auto& ids = kin_del.getStrandTree().getBranchIndices();
+  return strand_id < ids.size() ? ids[strand_id].size() : 0;
+}
+
+void reportMissingProfile(const char* context, size_t strand_id, double query_t, double used_t,
+  const KineticDelaunay& kin_del)
+{
+  const size_t samples = profileSampleCount(kin_del, strand_id);
+  KINDS_ERROR(context << ": strand " << strand_id << " has " << samples << " profile samples; t=" << query_t
+                      << " needs height " << static_cast<size_t>(std::ceil(std::max(0.0, query_t)))
+                      << "; clamping to t=" << used_t);
+}
+
+bool clampToLastProfileTime(const KineticDelaunay& kin_del, size_t strand_id, double& t, const char* context)
+{
+  if (strand_id == static_cast<size_t>(-1) || kin_del.isDummyBoundary(strand_id)
+    || kin_del.strandHasProfileAt(strand_id, t))
+  {
+    return true;
+  }
+  const double query_t = t;
+  t = lastProfileTimeForStrand(kin_del, strand_id);
+  reportMissingProfile(context, strand_id, query_t, t, kin_del);
+  return kin_del.strandHasProfileAt(strand_id, t);
+}
+} // namespace
+
 glm::dvec3 SegmentBuilder::transformFromInputBranchToObjectSpace(glm::dvec3 vertex, size_t strand_id, double t) const
 {
   if (strand_id == static_cast<size_t>(-1))
   {
-    throw std::runtime_error("transformFromInputBranchToObjectSpace: invalid strand id.");
+    KINDS_ERROR("transformFromInputBranchToObjectSpace: invalid strand id; leaving vertex unchanged");
+    return vertex;
   }
-  if (!kin_del.strandHasProfileAt(strand_id, t))
+  if (!clampToLastProfileTime(kin_del, strand_id, t, "transformFromInputBranchToObjectSpace"))
   {
-    const size_t samples = strand_id < kin_del.getStrandTree().getBranchIndices().size()
-      ? kin_del.getStrandTree().getBranchIndices()[strand_id].size()
-      : 0;
-    throw std::out_of_range(
-      "transformFromInputBranchToObjectSpace: strand " + std::to_string(strand_id) + " has "
-      + std::to_string(samples) + " profile samples; t=" + std::to_string(t) + " needs height "
-      + std::to_string(static_cast<size_t>(std::ceil(t))) + " input_branch="
-      + (samples == 0
-          ? std::string("none")
-          : std::to_string(kin_del.getStrandTree().getBranchIndex(strand_id, static_cast<size_t>(std::ceil(t))))));
+    KINDS_ERROR("transformFromInputBranchToObjectSpace: strand " << strand_id
+                                                                << " has no profile samples; leaving vertex unchanged");
+    return vertex;
   }
 
-  return kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
+  try
+  {
+    return kin_del.getStrandTree().transformToObjectSpace(vertex, strand_id, t);
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_ERROR("transformFromInputBranchToObjectSpace: " << ex.what() << "; leaving vertex unchanged");
+    return vertex;
+  }
 }
 
 SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlaneAssignmentForComponent(
@@ -6771,7 +6906,7 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlan
   sites.reserve(component_strands.size());
   for (size_t strand_id : component_strands)
   {
-    if (kin_del.isDummyBoundary(strand_id))
+    if (kin_del.isDummyBoundary(strand_id) || !kin_del.strandHasProfileAt(strand_id, t))
     {
       continue;
     }
@@ -6912,69 +7047,74 @@ std::optional<size_t> SegmentBuilder::majorityPlaneBranchForStrand(size_t strand
 
 glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
 {
+  const double query_t = t;
+  const auto placeholder = [&]() { return glm::dvec3(0.0, 0.0, query_t); };
+
   if (strand_id == static_cast<size_t>(-1))
   {
-    throw std::runtime_error("getPointInMeshSpace: invalid strand id.");
+    KINDS_ERROR("getPointInMeshSpace: invalid strand id; using placeholder");
+    return placeholder();
+  }
+  if (!clampToLastProfileTime(kin_del, strand_id, t, "getPointInMeshSpace"))
+  {
+    KINDS_ERROR("getPointInMeshSpace: strand " << strand_id << " has no profile samples; using placeholder");
+    return placeholder();
   }
 
-  // Never bake kinetic separation into mesh coordinates.
-  if (!create_transformed_mesh)
+  try
   {
-    // CLI --untransformed: local profile coords only (no reference-branch remap, no separation).
-    const glm::dvec2 xy
-      = kin_del.getPointAt(strand_id, t, /*apply_reference_transform=*/false, /*include_virtual_offset=*/false);
-    return glm::dvec3(xy.x, xy.y, t);
-  }
-
-  // Pre-split majority-plane placement: lift shared-frame 2D XY onto the side's majority profile plane.
-  // (Native evaluate + own branch is a no-op when sides are pure, so it never produced two planes.)
-  if (strand_id < kin_del.component_data.component_map.size())
-  {
-    const size_t component_id = kin_del.component_data.component_map[strand_id];
-    const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
-    if (entry.active)
+    // Never bake kinetic separation into mesh coordinates.
+    if (!create_transformed_mesh)
     {
-      const auto it = entry.strand_to_majority_branch.find(strand_id);
-      if (it != entry.strand_to_majority_branch.end())
+      // CLI --untransformed: local profile coords only (no reference-branch remap, no separation).
+      const glm::dvec2 xy
+        = kin_del.getPointAt(strand_id, t, /*apply_reference_transform=*/false, /*include_virtual_offset=*/false);
+      return glm::dvec3(xy.x, xy.y, t);
+    }
+
+    // Pre-split majority-plane placement: lift shared-frame 2D XY onto the side's majority profile plane.
+    // (Native evaluate + own branch is a no-op when sides are pure, so it never produced two planes.)
+    if (strand_id < kin_del.component_data.component_map.size())
+    {
+      const size_t component_id = kin_del.component_data.component_map[strand_id];
+      const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
+      if (entry.active)
       {
-        const size_t majority_branch = it->second;
-        const size_t shared_ref = entry.shared_ref_branch;
-        const glm::dvec2 shared_xy = kin_del.getPointAtWithReferenceBranch(
-          strand_id, t, shared_ref, /*apply_reference_transform=*/true, /*include_virtual_offset=*/false);
-
-        glm::dvec2 local_on_majority = shared_xy;
-        if (majority_branch != shared_ref)
+        const auto it = entry.strand_to_majority_branch.find(strand_id);
+        if (it != entry.strand_to_majority_branch.end())
         {
-          const auto& tree = kin_del.getStrandTree();
-          const size_t height = static_cast<size_t>(std::floor(std::max(0.0, t)));
-          const size_t lookup_height
-            = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
-          const PlaneProjector shared_to_majority(
-            tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height),
-            tree.getResolvedTransformByHeightAndBranch(height, majority_branch, lookup_height));
-          local_on_majority = shared_to_majority.project(shared_xy);
-        }
+          const size_t majority_branch = it->second;
+          const size_t shared_ref = entry.shared_ref_branch;
+          const glm::dvec2 shared_xy = kin_del.getPointAtWithReferenceBranch(
+            strand_id, t, shared_ref, /*apply_reference_transform=*/true, /*include_virtual_offset=*/false);
 
-        return kin_del.getStrandTree().transformToObjectSpaceForBranch(
-          glm::dvec3(local_on_majority.x, local_on_majority.y, t), t, majority_branch);
+          glm::dvec2 local_on_majority = shared_xy;
+          if (majority_branch != shared_ref)
+          {
+            const auto& tree = kin_del.getStrandTree();
+            const size_t height = static_cast<size_t>(std::floor(std::max(0.0, t)));
+            const size_t lookup_height
+              = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+            const PlaneProjector shared_to_majority(
+              tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height),
+              tree.getResolvedTransformByHeightAndBranch(height, majority_branch, lookup_height));
+            local_on_majority = shared_to_majority.project(shared_xy);
+          }
+
+          return kin_del.getStrandTree().transformToObjectSpaceForBranch(
+            glm::dvec3(local_on_majority.x, local_on_majority.y, t), t, majority_branch);
+        }
       }
     }
-  }
 
-  // Object-space mesh: local profile → object space (also without separation).
-  if (!kin_del.strandHasProfileAt(strand_id, t))
-  {
-    const size_t samples = kin_del.getStrandTree().getBranchIndices()[strand_id].size();
-    throw std::out_of_range(
-      "getPointInMeshSpace: strand " + std::to_string(strand_id) + " has " + std::to_string(samples)
-      + " profile samples; t=" + std::to_string(t) + " needs height "
-      + std::to_string(static_cast<size_t>(std::ceil(t))) + " input_branch="
-      + (samples == 0
-          ? std::string("none")
-          : std::to_string(kin_del.getStrandTree().getBranchIndex(strand_id, static_cast<size_t>(std::ceil(t))))));
+    const glm::dvec2 local_xy = kin_del.getStrandTree().evaluate(strand_id, t);
+    return transformFromInputBranchToObjectSpace(glm::dvec3(local_xy.x, local_xy.y, t), strand_id, t);
   }
-  const glm::dvec2 local_xy = kin_del.getStrandTree().evaluate(strand_id, t);
-  return transformFromInputBranchToObjectSpace(glm::dvec3(local_xy.x, local_xy.y, t), strand_id, t);
+  catch (const std::exception& ex)
+  {
+    KINDS_ERROR("getPointInMeshSpace: " << ex.what() << "; using placeholder");
+    return placeholder();
+  }
 }
 
 glm::dvec3 SegmentBuilder::getCrossingCoordsInMeshSpace(
@@ -10287,6 +10427,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid,
   std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals)
 {
+  [[maybe_unused]] const auto mesh_storage_lock = lockMeshStorageShared();
   KINDS_DEBUG("createClosingMesh strand " << strand_id << " t=" << t);
   const size_t num_incident_edges = closingMeshCountStrandIncidentEdges(strand_id);
   const size_t mesh_pair_index_before = segment_mesh_pairs.size();
@@ -10641,6 +10782,8 @@ void SegmentBuilder::failsafeAdvanceSubdivision(size_t strand_id, double t)
     return;
   }
 
+  [[maybe_unused]] const auto mesh_storage_lock = lockMeshStorageShared();
+
   const size_t old_segment_id
     = (strand_id < strand_to_segment_indices.size() && !strand_to_segment_indices[strand_id].empty())
     ? strand_to_segment_indices[strand_id].back()
@@ -10989,17 +11132,42 @@ void SegmentBuilder::init()
     /*event_runtime_branch_id=*/std::nullopt, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr,
     /*explicit_runtime_branch_ids=*/nullptr, /*creation_time=*/std::nullopt,
     /*fan_out_active_runtime_branches=*/true);
+  exportIncrementalMeshes(init_section, BranchScheduler::no_branch);
 }
 
 void SegmentBuilder::finalize(double t)
 {
-  updateBoundaries(t, collectLiveComponentIndices());
+  try
+  {
+    updateBoundaries(t, collectLiveComponentIndices());
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_ERROR("finalize updateBoundaries t=" << t << ": " << ex.what());
+  }
 
   // Finalize the segments by finishing all meshes
   auto& graph = kin_del.getGraph();
+  const auto skip_unprofiled_edge = [&](size_t he_id, const char* context) -> bool
+  {
+    if (kin_del.delaunayEvenHalfEdgeHasProfileAt(he_id & ~size_t { 1 }, t))
+    {
+      return false;
+    }
+    const int origin = graph.halfEdge(he_id).origin;
+    const int dest = graph.destination(he_id);
+    KINDS_ERROR(context << ": skipping he=" << he_id << " origin=" << origin << " dest=" << dest << " t=" << t
+                        << " (strand has no profile)");
+    return true;
+  };
 
   for (size_t he_id : graph.liveDelaunayEdges())
   {
+    if (skip_unprofiled_edge(he_id, "finalize finishMesh"))
+    {
+      continue;
+    }
+
     auto vertex = graph.halfEdge(he_id).origin;
 
     // fall back for infinite vertices
@@ -11008,16 +11176,23 @@ void SegmentBuilder::finalize(double t)
       vertex = graph.destination(he_id);
     }
 
-    size_t component_index = kin_del.component_data.component_map[vertex];
-    auto& boundary_points = kin_del.component_data.component_boundaries[component_index][0];
-
-    finishMesh(he_id, t, boundary_points);
+    try
+    {
+      size_t component_index = kin_del.component_data.component_map[vertex];
+      auto& boundary_points = kin_del.component_data.component_boundaries[component_index][0];
+      finishMesh(he_id, t, boundary_points);
+    }
+    catch (const std::exception& ex)
+    {
+      KINDS_ERROR("finalize finishMesh he=" << he_id << " t=" << t << ": " << ex.what());
+    }
   }
 
   // Finalize boundary-interval meshes once more at the final time for all boundary Delaunay-edge sections.
   for (size_t he_id : graph.liveDelaunayEdges())
   {
-    if (!kin_del.isOnComponentBoundary(he_id))
+    if (!kin_del.isOnComponentBoundary(he_id)
+      || !kin_del.delaunayEvenHalfEdgeHasProfileAt(he_id & ~size_t { 1 }, t))
     {
       continue;
     }
@@ -11028,33 +11203,42 @@ void SegmentBuilder::finalize(double t)
       continue;
     }
 
-    const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
-      = getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
+    try
+    {
+      const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef> refs
+        = getBoundaryIntersectionsInBoundaryOrder(d_edge_id);
 
-    {
-      const size_t first_cell
-        = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      finishMeshFromIntersections(
-        first_cell, t, std::nullopt, refs.front(), BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
-    }
-    for (size_t k = 0; k + 1 < refs.size(); ++k)
-    {
-      const size_t mid_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
-      if (mid_cell == static_cast<size_t>(-1))
       {
-        continue;
+        const size_t first_cell
+          = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
+        finishMeshFromIntersections(
+          first_cell, t, std::nullopt, refs.front(), BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
       }
-      finishMeshFromIntersections(
-        mid_cell, t, refs[k], refs[k + 1], BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
+      for (size_t k = 0; k + 1 < refs.size(); ++k)
+      {
+        const size_t mid_cell = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs[k], refs[k + 1]);
+        if (mid_cell == static_cast<size_t>(-1))
+        {
+          continue;
+        }
+        finishMeshFromIntersections(
+          mid_cell, t, refs[k], refs[k + 1], BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
+      }
+      {
+        const size_t last_cell
+          = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
+        finishMeshFromIntersections(
+          last_cell, t, refs.back(), std::nullopt, BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
+      }
     }
+    catch (const std::exception& ex)
     {
-      const size_t last_cell
-        = determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      finishMeshFromIntersections(
-        last_cell, t, refs.back(), std::nullopt, BoundaryEventType::Section, BoundarySegmentAction::SegmentCompleted);
+      KINDS_ERROR("finalize finishMeshFromIntersections he=" << he_id << " t=" << t << ": " << ex.what());
     }
   }
 
+  try
+  {
   // Radius complementary splits were queued when the target mid-interval meshlet was identified
   // (often with only seed verts 0/1 and no triangles yet). Apply them now that strips have faces,
   // before flexible resolution / dedupe / glue postprocess.
@@ -11168,6 +11352,11 @@ void SegmentBuilder::finalize(double t)
   if (!create_transformed_mesh)
   {
     applyUntransformedMeshViewTransform();
+  }
+  }
+  catch (const std::exception& ex)
+  {
+    KINDS_ERROR("finalize postprocess t=" << t << ": " << ex.what() << "; keeping incomplete mesh");
   }
 
   finalized = true; // Set the finalized flag to true

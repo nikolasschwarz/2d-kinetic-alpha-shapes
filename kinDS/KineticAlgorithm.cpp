@@ -1,5 +1,7 @@
 #include "KineticAlgorithm.hpp"
+#include "Logger.hpp"
 
+#include <exception>
 #include <optional>
 
 using namespace kinDS;
@@ -25,7 +27,9 @@ std::vector<std::shared_ptr<EventScheduler::Event>> EventScheduler::takeAll()
   return out;
 }
 
-void EventScheduler::processEvents(std::optional<double> end_time, Statistics* statistics)
+void EventScheduler::processEvents(
+  std::optional<double> end_time, Statistics* statistics, std::optional<size_t> runtime_branch_id,
+  EventScheduler::MeshingErrorHandler on_meshing_error)
 {
   last_processed_occurrence_.reset();
   while (!events_.empty())
@@ -33,6 +37,8 @@ void EventScheduler::processEvents(std::optional<double> end_time, Statistics* s
     auto event = events_.top();
     if (end_time.has_value() && !(event->occurrence_time.real_time < *end_time))
     {
+      KINDS_INFO("EventScheduler stop at end_time=" << *end_time << " next_event_t=" << event->occurrence_time
+                                                    << " discarded=" << events_.size());
       // Queue is ordered by occurrence_time; everything left is at/after the stop time.
       clear();
       break;
@@ -47,8 +53,22 @@ void EventScheduler::processEvents(std::optional<double> end_time, Statistics* s
       row.occurrence_infinitesimal_t = event->occurrence_time.infinitesimal_time;
       row.type = event->eventType();
       event->populateEventListFields(row);
+      if (!row.runtime_branch_id.has_value())
+      {
+        row.runtime_branch_id = runtime_branch_id;
+      }
       statistics->recordEvent(std::move(row));
     }
-    event->handleEvent();
+    try
+    {
+      event->handleEvent();
+    }
+    catch (const std::exception& ex)
+    {
+      if (!on_meshing_error || !on_meshing_error(*event, ex))
+      {
+        throw;
+      }
+    }
   }
 }
