@@ -38,7 +38,9 @@ void KineticDelaunay::SectionEventManager::computeEvents(double /*t*/, size_t ev
   // Align the in-order section counter with the first scheduled section.
   kd_->sections_advanced = start_section;
 
-  // Clear any queued events from previous runs.
+  // Bind this instance's root queue before clear(). Thread-local scheduler pointers from a previous
+  // TreeMesher / KineticDelaunay in this process would otherwise pop freed shared_ptr events.
+  kd_->kinetic_algorithm_->bindRootScheduler();
   kd_->kinetic_algorithm_->clear();
 
   if (section_count_ > 0)

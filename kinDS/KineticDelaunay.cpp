@@ -1713,6 +1713,7 @@ void KineticDelaunay::refreshEventsAfterGraphCut(
 
 namespace
 {
+thread_local KineticDelaunay* tls_active_kd = nullptr;
 thread_local BranchScheduler* tls_active_branch_scheduler = nullptr;
 
 std::string formatRuntimeBranchId(size_t runtime_branch_id)
@@ -1742,7 +1743,7 @@ std::string describeSchedulerQueue(const EventScheduler& queue)
 
 BranchScheduler* KineticDelaunay::activeBranchScheduler() const
 {
-  return tls_active_branch_scheduler;
+  return tls_active_kd == this ? tls_active_branch_scheduler : nullptr;
 }
 
 void KineticDelaunay::precomputeStep(double t) { precomputeStepForRuntimeBranch(t, activeRuntimeBranchScope()); }
@@ -1934,7 +1935,18 @@ KineticDelaunay::KineticDelaunay(
   }
 }
 
-KineticDelaunay::~KineticDelaunay() = default;
+KineticDelaunay::~KineticDelaunay()
+{
+  if (tls_active_kd == this)
+  {
+    tls_active_kd = nullptr;
+    tls_active_branch_scheduler = nullptr;
+  }
+  if (kinetic_algorithm_)
+  {
+    kinetic_algorithm_->unbindIfOwnedByThisThread();
+  }
+}
 
 bool KineticDelaunay::isDummyBoundary(size_t v) const
 {
@@ -3654,6 +3666,7 @@ void KineticDelaunay::completePendingRuntimeBranchSplit(size_t parent_runtime_br
 
 void KineticDelaunay::setActiveBranchScheduler(BranchScheduler* scheduler)
 {
+  tls_active_kd = this;
   tls_active_branch_scheduler = scheduler;
   if (kinetic_algorithm_ == nullptr)
   {
@@ -8797,6 +8810,12 @@ void KineticDelaunay::compute()
       total_branches = unique_input_branches.size();
     }
     statistics_.setTotalsTopology(total_strands, total_branches);
+  }
+  tls_active_kd = this;
+  tls_active_branch_scheduler = nullptr;
+  if (kinetic_algorithm_)
+  {
+    kinetic_algorithm_->bindRootScheduler();
   }
   section_event_manager_->computeEvents(static_cast<double>(start_section), static_cast<size_t>(-1));
   enqueueScheduledSubdivisionEvents();

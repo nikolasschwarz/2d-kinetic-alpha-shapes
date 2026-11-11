@@ -188,6 +188,11 @@ class KineticAlgorithm
     EventCallback* callback_ = nullptr;
   };
 
+  KineticAlgorithm() = default;
+  KineticAlgorithm(const KineticAlgorithm&) = delete;
+  KineticAlgorithm& operator=(const KineticAlgorithm&) = delete;
+  ~KineticAlgorithm() { unbindIfOwnedByThisThread(); }
+
   EventScheduler& rootScheduler() { return root_scheduler_; }
   const EventScheduler& rootScheduler() const { return root_scheduler_; }
 
@@ -195,9 +200,23 @@ class KineticAlgorithm
   EventScheduler& activeScheduler() { return *activeSchedulerPtr(); }
   const EventScheduler& activeScheduler() const { return *activeSchedulerPtr(); }
 
+  void bindRootScheduler() { setActiveScheduler(&root_scheduler_); }
+
   void setActiveScheduler(EventScheduler* scheduler)
   {
-    threadActiveScheduler() = scheduler != nullptr ? scheduler : &root_scheduler_;
+    ThreadBinding& binding = threadBinding();
+    binding.owner = this;
+    binding.scheduler = scheduler != nullptr ? scheduler : &root_scheduler_;
+  }
+
+  void unbindIfOwnedByThisThread()
+  {
+    ThreadBinding& binding = threadBinding();
+    if (binding.owner == this)
+    {
+      binding.owner = nullptr;
+      binding.scheduler = nullptr;
+    }
   }
 
   void enqueueEvent(const std::shared_ptr<Event>& event) { activeScheduler().enqueueEvent(event); }
@@ -209,16 +228,26 @@ class KineticAlgorithm
   }
 
  private:
-  EventScheduler*& threadActiveScheduler() const
+  struct ThreadBinding
   {
-    thread_local EventScheduler* scheduler = nullptr;
-    return scheduler;
+    const KineticAlgorithm* owner = nullptr;
+    EventScheduler* scheduler = nullptr;
+  };
+
+  static ThreadBinding& threadBinding()
+  {
+    thread_local ThreadBinding binding;
+    return binding;
   }
 
   EventScheduler* activeSchedulerPtr() const
   {
-    EventScheduler* scheduler = threadActiveScheduler();
-    return scheduler != nullptr ? scheduler : &root_scheduler_;
+    const ThreadBinding& binding = threadBinding();
+    if (binding.owner == this && binding.scheduler != nullptr)
+    {
+      return binding.scheduler;
+    }
+    return &root_scheduler_;
   }
 
   mutable EventScheduler root_scheduler_ {};
