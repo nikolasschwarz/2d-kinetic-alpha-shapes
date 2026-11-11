@@ -529,6 +529,8 @@ class KineticDelaunay
   /// Pairs that failed the in-segment check at the last validator pass. Recovered pairs are dropped so
   /// a later independent failure of the same edges is logged as a new first occurrence.
   std::set<std::pair<size_t, size_t>> active_intersection_errors_;
+  /// Delaunay edges whose crossing list is currently out of d_param order (reported once until fixed).
+  mutable std::set<size_t> active_intersection_order_errors_;
   mutable std::mutex intersection_error_mutex_;
 
   // crossing-related data (see public `CrossingData` forward declaration above).

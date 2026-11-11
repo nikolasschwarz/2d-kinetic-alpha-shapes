@@ -6158,8 +6158,47 @@ const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() c
 
 void KineticDelaunay::validateCrossingIntersectionInvariants(const char* context, double t) const
 {
-  (void)context;
-  (void)t;
+  if (!delaunay_voronoi_intersection_check_enabled_)
+  {
+    return;
+  }
+  // Crossings on one Delaunay edge only swap order at a crossing event, so after an event's callbacks the stored list
+  // must be sorted by the recomputed d_param. A stale order breaks later merge/split bookkeeping (merge_2_to_1).
+  constexpr double order_eps = 1e-9;
+  const size_t scope = activeRuntimeBranchScope();
+  for (size_t de = 0; de < crossing_data.delaunay_edge_intersections.size(); ++de)
+  {
+    const auto& refs = crossing_data.delaunay_edge_intersections[de];
+    const size_t even = 2 * de;
+    if (refs.size() < 2 || !graph.isLiveHalfEdge(even) || !delaunayEvenHalfEdgeInRuntimeScope(even, scope)
+      || !delaunayEvenHalfEdgeHasProfileAt(even, t))
+    {
+      continue;
+    }
+    std::ostringstream order;
+    order << std::setprecision(std::numeric_limits<double>::max_digits10);
+    double previous = -std::numeric_limits<double>::infinity();
+    bool sorted = true;
+    for (const CrossingData::EdgeIntersectionRef& ref : refs)
+    {
+      const double d_param = delaunayVoronoiEdgeIntersection(de, ref->voronoi_edge_id, t).first;
+      order << " ve" << ref->voronoi_edge_id << '@' << d_param;
+      sorted = sorted && d_param >= previous - order_eps;
+      previous = d_param;
+    }
+    bool first_report = false;
+    {
+      std::lock_guard<std::mutex> lock(intersection_error_mutex_);
+      first_report = sorted ? (active_intersection_order_errors_.erase(de), false)
+                            : active_intersection_order_errors_.insert(de).second;
+    }
+    if (first_report)
+    {
+      KINDS_WARNING(context << ": crossing order on de=" << de << " not sorted by d_param t="
+                            << std::setprecision(std::numeric_limits<double>::max_digits10) << t
+                            << " list:" << order.str());
+    }
+  }
 }
 
 void KineticDelaunay::validateVoronoiVertexIteratorInvariants(const char* context, double t) const
@@ -8597,13 +8636,17 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
   }
 
   // Now insert new intersection entries for the updated configuration.
-  // When two crossings are inserted, order them by orthogonal projection of each Voronoi edge's *other*
-  // endpoint onto the crossed Delaunay edge (same axis as dParam). Skip that for a single insert —
-  // ordering is unnecessary and the projection can be ill-defined if the Voronoi edge is orthogonal.
+  // When two crossings are inserted (split), order them by where they sit on the Delaunay edge just after the event.
+  // The vertex has moved a small distance delta to the far side of the edge; each new Voronoi edge (direction dir
+  // towards its other endpoint, which lies on the near side) then hits the edge at a tangential offset of
+  // delta * (dir . tangent) / (dir . normal). Sorting by the tangential projection of the other endpoint alone is
+  // wrong when the two endpoints sit at different distances from the edge. Single inserts need no ordering.
   struct PendingCrossingInsert
   {
     size_t voronoi_edge_id = 0;
     double other_endpoint_dparam = 0.0;
+    double other_endpoint_normal = 0.0;  // signed distance of the other endpoint from the edge line
+    double order_key = 0.0;              // tangential / |normal| offset of the other endpoint
     VoronoiDelaunayEdgeIntersection intersection {};
   };
 
@@ -8635,31 +8678,47 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
     const glm::dvec2 crossing_xy(e.position);
     const DelaunayEdgeAxis2D d_axis = delaunayEdgeAxisForDParam(kd, graph, crossed_delaunay_edge_id, t);
     const double crossing_dparam = projectPointOntoDelaunayEdgeAxis(d_axis, crossing_xy);
+    const double axis_length = glm::length(d_axis.direction);
 
     for (PendingCrossingInsert& pending_insert : pending)
     {
       const glm::dvec2 other_xy = voronoiEdgeOtherEndpointForDelaunayOrder(
         kd, graph, pending_insert.voronoi_edge_id, voronoi_vertex_id, crossing_xy, t);
       pending_insert.other_endpoint_dparam = projectPointOntoDelaunayEdgeAxis(d_axis, other_xy);
+      pending_insert.other_endpoint_normal
+        = axis_length > 0.0 ? glm::cross(glm::dvec3(d_axis.direction / axis_length, 0.0),
+                                glm::dvec3(other_xy - crossing_xy, 0.0)).z
+                            : 0.0;
 
-      // Relative to the crossing: using the crossing endpoint by mistake yields ~0.
+      // Relative to the crossing: using the crossing endpoint by mistake puts the other endpoint on the crossing.
       const double relative_dparam = pending_insert.other_endpoint_dparam - crossing_dparam;
-      if (!std::isfinite(relative_dparam) || std::abs(relative_dparam) < 1e-12)
+      if (!std::isfinite(relative_dparam) || !std::isfinite(pending_insert.other_endpoint_normal)
+        || (std::abs(relative_dparam) < 1e-12 && std::abs(pending_insert.other_endpoint_normal) < 1e-12))
       {
         std::ostringstream oss;
-        oss << "updateAfterCrossingEvent: other Voronoi-edge endpoint projects to the crossing on de="
+        oss << "updateAfterCrossingEvent: other Voronoi-edge endpoint coincides with the crossing on de="
             << crossed_delaunay_edge_id << " ve=" << pending_insert.voronoi_edge_id << " t=" << t
             << " (crossing_dparam=" << crossing_dparam
             << ", other_dparam=" << pending_insert.other_endpoint_dparam
-            << ", relative=" << relative_dparam
+            << ", relative=" << relative_dparam << ", normal=" << pending_insert.other_endpoint_normal
             << "). Likely used the crossing endpoint instead of the opposite Voronoi vertex.";
         throw std::runtime_error(oss.str());
       }
+      // An endpoint on the edge line means the Voronoi edge runs along the edge: offset grows without bound.
+      const double normal = std::abs(pending_insert.other_endpoint_normal);
+      pending_insert.order_key = normal > 1e-12 ? relative_dparam / normal
+                                                : std::copysign(std::numeric_limits<double>::infinity(), relative_dparam);
+    }
+    if (pending[0].other_endpoint_normal * pending[1].other_endpoint_normal < 0.0)
+    {
+      KINDS_WARNING("updateAfterCrossingEvent: split on de=" << crossed_delaunay_edge_id << " vv=" << voronoi_vertex_id
+                                                             << " t=" << t
+                                                             << " has other endpoints on both sides of the edge; "
+                                                                "crossing order may be wrong");
     }
 
     std::sort(pending.begin(), pending.end(),
-      [](const PendingCrossingInsert& a, const PendingCrossingInsert& b)
-      { return a.other_endpoint_dparam < b.other_endpoint_dparam; });
+      [](const PendingCrossingInsert& a, const PendingCrossingInsert& b) { return a.order_key < b.order_key; });
 
     // Both crossings coincide on the Delaunay edge at the event; force identical dParams so a later
     // param refresh + sort cannot reorder them due to tiny numeric differences.
@@ -8675,6 +8734,8 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
       << " crossing_dparam=" << crossing_dparam << " ve0=" << pending[0].voronoi_edge_id
       << " other_dparam0=" << pending[0].other_endpoint_dparam
       << " relative0=" << (pending[0].other_endpoint_dparam - crossing_dparam)
+      << " normal0=" << pending[0].other_endpoint_normal << " key0=" << pending[0].order_key
+      << " normal1=" << pending[1].other_endpoint_normal << " key1=" << pending[1].order_key
       << " ve1=" << pending[1].voronoi_edge_id << " other_dparam1=" << pending[1].other_endpoint_dparam
       << " relative1=" << (pending[1].other_endpoint_dparam - crossing_dparam)
       << " averaged_dparam=" << averaged_dparam);

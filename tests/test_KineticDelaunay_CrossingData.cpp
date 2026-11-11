@@ -35,7 +35,7 @@ static void exportSvgBeforeAssertion(const KineticDelaunay& kd, double t, const 
   {
     voronoi_vertex_to_tri[vid] = kd.getCrossingDataContainingTriId(vid);
   }
-  auto intersection_debug_data = kd.getCrossingIntersectionDebugData();
+  auto intersection_debug_data = kd.getCrossingIntersectionDebugData(EventTime(t));
 
   HalfEdgeDelaunayGraphToSVG::write(points, graph, filename, 0.1, nullptr, true, &voronoi_vertex_to_tri,
     &intersection_debug_data); // margin 0.1, draw Voronoi edges in red

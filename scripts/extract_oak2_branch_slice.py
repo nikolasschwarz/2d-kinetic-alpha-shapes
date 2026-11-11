@@ -170,7 +170,7 @@ def main() -> None:
 
     local_height = len(section_indices) - 1
     out_lines = [
-        "# Extracted from test_oak_2: input branches 1 and 2 at global sections "
+        f"# Extracted from {args.input.stem}: input branches {args.branches} at global sections "
         f"{args.section_start}-{args.section_end}.",
         "StrandTree 1",
         str(local_height),
