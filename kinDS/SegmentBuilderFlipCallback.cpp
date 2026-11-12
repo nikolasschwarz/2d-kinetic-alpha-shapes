@@ -172,8 +172,15 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     ? glm::dvec3(buffered_flip_delaunay_xy_->x, buffered_flip_delaunay_xy_->y, flip->occurrence_time)
     : unshiftedFlipEventPoint(segment_builder_.kin_del, graph, flip->half_edge_id, flip->occurrence_time);
   size_t segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[flip->half_edge_id];
+  // Infinite hull edges never get a segment mesh pair; indexing meshes with the unset id wrote out of bounds.
+  const bool has_segment_mesh = segment_mesh_pair_index < segment_builder_.meshes.size();
+  if (!has_segment_mesh && !graph.isInfinite(flip->half_edge_id))
+  {
+    KINDS_WARNING("Flip beforeEvent: finite flip edge he=" << flip->half_edge_id << " has no segment mesh pair at t="
+                                                           << flip->occurrence_time << "; not extending its meshlet.");
+  }
 
-  if(graph.isInfinite(flip->half_edge_id) && segment_builder_.kin_del.computeBoundaryOnTheFly())
+  if ((graph.isInfinite(flip->half_edge_id) && segment_builder_.kin_del.computeBoundaryOnTheFly()) || !has_segment_mesh)
   {
     // Do nothing for now
   }
@@ -293,17 +300,19 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   const size_t component_id = segment_builder_.kin_del.component_data.component_map[static_cast<size_t>(vertex)];
   segment_builder_.updateBoundaries(flip->occurrence_time, { component_id });
 
-  const auto& he = graph.halfEdge(flip->half_edge_id);
-  const auto& twin_he = graph.halfEdge(flip->half_edge_id ^ 1);
+  // In the single-triangle case the flipped edge becomes the hull edge and the auxiliary edge the finite one.
+  const size_t pair_he = flip->auxiliary_flip_half_edge_id != static_cast<size_t>(-1) && graph.isInfinite(flip->half_edge_id)
+    ? flip->auxiliary_flip_half_edge_id
+    : flip->half_edge_id;
+  const auto& he = graph.halfEdge(pair_he);
+  const auto& twin_he = graph.halfEdge(pair_he ^ 1);
   // Create a new segment mesh pair for the two new edges created by the flip
   MeshStructure::SegmentMeshPair segment_mesh_pair;
   segment_mesh_pair.segment_index0 = he.origin == -1 ? -1 : segment_builder_.strand_to_segment_indices[he.origin].back();
   segment_mesh_pair.segment_index1
     = twin_he.origin == -1 ? -1 : segment_builder_.strand_to_segment_indices[twin_he.origin].back();
-
-  segment_builder_.half_edge_index_to_segment_mesh_pair_index[flip->half_edge_id] = segment_builder_.segment_mesh_pairs.size();
-  segment_builder_.half_edge_index_to_segment_mesh_pair_index[flip->half_edge_id ^ 1]
-    = segment_builder_.segment_mesh_pairs.size();
+  segment_builder_.half_edge_index_to_segment_mesh_pair_index[pair_he] = segment_builder_.segment_mesh_pairs.size();
+  segment_builder_.half_edge_index_to_segment_mesh_pair_index[pair_he ^ 1] = segment_builder_.segment_mesh_pairs.size();
 
   segment_builder_.segment_mesh_pairs.push_back(segment_mesh_pair);
 
@@ -354,7 +363,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       SegmentBuilder::MeshingData { static_cast<int>(index), static_cast<int>(index), -1, -1 });
   }
 
-  segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::string("_voronoi") + std::to_string(flip->half_edge_id / 2),
+  segment_builder_.registerMeshletWithSuffix(std::move(mesh), std::string("_voronoi") + std::to_string(pair_he / 2),
     flip->occurrence_time);
 
   auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(flip->half_edge_id / 2);
@@ -368,6 +377,15 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     }
 
     size_t segment_mesh_pair_index = segment_builder_.half_edge_index_to_segment_mesh_pair_index[he_id];
+    if (segment_mesh_pair_index >= segment_builder_.meshes.size())
+    {
+      if (!segment_builder_.kin_del.getGraph().isInfinite(he_id))
+      {
+        KINDS_WARNING("Flip neighbor extension: finite half-edge " << he_id << " has no segment mesh pair at t="
+                                                                  << flip->occurrence_time << "; skipping.");
+      }
+      continue;
+    }
     VoronoiMesh& mesh_ref = segment_builder_.meshes[segment_mesh_pair_index];
 
     auto& segments = segment_builder_.segment_mesh_pair_last_left_and_right_vertex[segment_mesh_pair_index];
@@ -488,7 +506,13 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     });
   }
 
-  segment_builder_.refreshCrossingRefsForAllStrips();
+  // Only strips on Voronoi edges whose intersections changed can hold stale refs (see CrossingData notes).
+  segment_builder_.refreshStripCrossingRefsForVoronoiEdges(
+    segment_builder_.kin_del.getCrossingDataMutable().takeTouchedVoronoiEdges());
+  if (segment_builder_.kin_del.delaunayVoronoiIntersectionCheckEnabled())
+  {
+    segment_builder_.refreshCrossingRefsForAllStrips(/*verify_only=*/true);
+  }
   logFlipMonitoredEdgeDiagnostics(segment_builder_, segment_builder_.kin_del, graph, *flip, "after_post_refresh");
 
   // Force-recompute crossing params on every Delaunay edge of the flipped quad and restore list order.

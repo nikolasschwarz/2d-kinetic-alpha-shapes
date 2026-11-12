@@ -79,6 +79,8 @@ class EventScheduler
     EventTime creation_time;
     /// Epoch of the pending split that produced this event; stale after finalize / re-activate.
     uint64_t infinitesimal_epoch_ = 0;
+    /// Parent component of that pending split. Epochs are per split, so concurrent separations share epoch values.
+    size_t infinitesimal_parent_component_ = static_cast<size_t>(-1);
     /// Secondary order when @ref occurrence_time ties (e.g. strand subdivision before flip).
     uint32_t queue_dispatch_order_;
     /// Monotonic id assigned in @ref enqueueEvent (enqueue order). Used for queue tie-breaks and debug filenames.

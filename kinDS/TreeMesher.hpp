@@ -122,6 +122,9 @@ class TreeMesher
     /// Directory for incremental OBJ dumps. Empty uses @c incremental_meshes (or under
     /// @ref visual_debug_output_root / export path when those are set).
     std::filesystem::path incremental_meshes_output_dir;
+    /// When set, append one JSON line per failed radius-complementary split lookup ("finished-mid: failed (no
+    /// matching boundary meshlet)") with the failure classification. Empty (default) writes nothing.
+    std::filesystem::path radius_complementary_debug_log_path;
     /// When true, OBJ export emits one @c o object per interior/boundary contributor (iN / bN).
     bool export_separate_contributor_objects = true;
     /// When false, use @ref KineticDelaunay::ComponentSplitPolicy::InPlaceCut at section splits instead of retriangulation.

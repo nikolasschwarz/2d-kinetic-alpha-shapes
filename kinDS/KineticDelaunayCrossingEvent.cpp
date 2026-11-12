@@ -629,6 +629,7 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
         crossing_event->occurrence_time = EventTime(event_time, fractional_event_time);
         crossing_event->creation_time = EventTime(kd->infinitesimal_schedule_t_, kd->infinitesimal_recompute_min_x_);
         crossing_event->infinitesimal_epoch_ = kd->infinitesimal_schedule_epoch_;
+        crossing_event->infinitesimal_parent_component_ = kd->infinitesimal_schedule_parent_;
       }
       else
       {
@@ -818,6 +819,7 @@ void KineticDelaunay::CrossingEventManager::computeEvents(double t, size_t voron
         crossing_event->occurrence_time = EventTime(scheduled_occurrence, fractional_event_time);
         crossing_event->creation_time = EventTime(kd->infinitesimal_schedule_t_, kd->infinitesimal_recompute_min_x_);
         crossing_event->infinitesimal_epoch_ = kd->infinitesimal_schedule_epoch_;
+        crossing_event->infinitesimal_parent_component_ = kd->infinitesimal_schedule_parent_;
       }
       else
       {
@@ -896,16 +898,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
 
   if (is_infinitesimal)
   {
-    bool epoch_ok = false;
-    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
-    {
-      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
-      {
-        epoch_ok = true;
-        break;
-      }
-    }
-    if (!epoch_ok)
+    if (kd->activeInfinitesimalParentFor(*this) == static_cast<size_t>(-1))
     {
       log_skip("stale infinitesimal epoch");
       return;
@@ -1018,15 +1011,7 @@ void KineticDelaunay::CrossingEvent::handleEvent()
 
   if (is_infinitesimal)
   {
-    size_t parent_component_id = static_cast<size_t>(-1);
-    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
-    {
-      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
-      {
-        parent_component_id = entry.first;
-        break;
-      }
-    }
+    const size_t parent_component_id = kd->activeInfinitesimalParentFor(*this);
     // Finalize first: cut succeeds → full primary reschedule inside finalize; no local recompute.
     if (parent_component_id != static_cast<size_t>(-1)
       && kd->maybeFinalizeInfinitesimalSeparation(parent_component_id, t))

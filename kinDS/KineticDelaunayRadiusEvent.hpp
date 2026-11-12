@@ -79,16 +79,7 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
 
   if (is_infinitesimal)
   {
-    bool epoch_ok = false;
-    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
-    {
-      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
-      {
-        epoch_ok = true;
-        break;
-      }
-    }
-    if (!epoch_ok)
+    if (kd->activeInfinitesimalParentFor(*this) == static_cast<size_t>(-1))
     {
       return;
     }
@@ -170,15 +161,7 @@ inline void KineticDelaunay::RadiusEvent::handleEvent()
 
   if (is_infinitesimal)
   {
-    size_t parent_component_id = static_cast<size_t>(-1);
-    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
-    {
-      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
-      {
-        parent_component_id = entry.first;
-        break;
-      }
-    }
+    const size_t parent_component_id = kd->activeInfinitesimalParentFor(*this);
     // Finalize first. Kinetic radius events do not recompute neighbors afterward.
     if (parent_component_id != static_cast<size_t>(-1))
     {

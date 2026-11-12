@@ -531,6 +531,8 @@ void StrandTree::saveToFile(const std::filesystem::path& path) const
   if (!out)
     throw std::runtime_error(
       std::string("StrandTree::saveToFile: cannot open ") + path.string() + std::string(" for writing"));
+  // Lossless doubles: exported trees are re-meshed by workers / repro tools and must give the identical result.
+  out << std::setprecision(std::numeric_limits<double>::max_digits10);
 
   writeComment(out, "kinDS StrandTree text format. Lines starting with # are comments.");
   writeComment(out, "Section headers use [Section] <name>. Inline comments after # are ignored on load.");

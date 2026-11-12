@@ -702,6 +702,8 @@ class KineticDelaunay
   bool eventInRuntimeScope(const Event& event, size_t scope_runtime_branch) const;
   /// @ref eventInRuntimeScope against @ref activeRuntimeBranchScope.
   bool eventInActiveRuntimeScope(const Event& event) const;
+  /// Parent component of the still-active virtual separation that scheduled @p event, or -1 if it finalized/restarted.
+  size_t activeInfinitesimalParentFor(const Event& event) const;
   /// Debug SVG for a handler skip caused by @ref eventInActiveRuntimeScope (`skipped` in the filename).
   void exportRuntimeScopeSkipSvg(const Event& event);
   /// Debug SVG for @p event under @p phase. Must not throw (visual debug must not fail meshing).

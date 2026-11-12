@@ -513,6 +513,7 @@ void KineticDelaunay::RadiusEventManager::computeEvents(double t, size_t he_id,
       ev->occurrence_time = occurrence;
       ev->creation_time = creation;
       ev->infinitesimal_epoch_ = kd->infinitesimal_schedule_epoch_;
+      ev->infinitesimal_parent_component_ = kd->infinitesimal_schedule_parent_;
       kd->kinetic_algorithm_->enqueueEvent(std::move(ev));
     }
     else

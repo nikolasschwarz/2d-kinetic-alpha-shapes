@@ -146,6 +146,8 @@ class KineticDelaunay::FlipEvent final : public KineticDelaunay::Event
   KineticDelaunay* kd_;
   size_t half_edge_id;
   glm::dvec2 position;
+  // Single-triangle case: the opposite hull edge flipped together with half_edge_id (swaps finite/infinite roles).
+  size_t auxiliary_flip_half_edge_id = static_cast<size_t>(-1);
 
   FlipEvent(KineticDelaunay* kd, double t, size_t he_id, double creation_time, glm::dvec2 position)
     : KineticDelaunay::Event(t, creation_time, 20u)

@@ -797,6 +797,7 @@ void KineticDelaunay::reassignVoronoiVerticesOnBoundary(size_t he_id, double t,
       auto d_ref = boundary_edge_d_intersections.insert(boundary_edge_d_intersections.end(), intersection_it);
       intersection_it->voronoi_ref = v_ref;
       intersection_it->delaunay_ref = d_ref;
+      crossing_data.noteTouchedVoronoiEdge(intersection_it->voronoi_edge_id);
     };
 
     if (even != backwards)
@@ -1001,6 +1002,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
 
               auto& v_list = crossing_data.voronoi_edge_intersections[voronoi_edge_id];
               intersection->voronoi_ref = v_list.emplace(v_list.end(), intersection);
+              crossing_data.noteTouchedVoronoiEdge(voronoi_edge_id);
 
               auto& d_list = crossing_data.delaunay_edge_intersections[quad_index];
               intersection->delaunay_ref = d_list.emplace(d_list.end(), intersection);
@@ -1011,6 +1013,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
               const CrossingData::EdgeIntersectionRef intersection = v_intersections.front();
               const size_t old_delaunay_edge_id = intersection->delaunay_edge_id;
               intersection->delaunay_edge_id = quad_index;
+              crossing_data.noteTouchedVoronoiEdge(voronoi_edge_id);
               assignCrossingIntersectionDelaunayParam(this, *intersection,
                 delaunayVoronoiEdgeIntersection(quad_index, voronoi_edge_id, t).first, t,
                 "flipUpdate:existingVoronoiIntersection", voronoi_vertex, other_voronoi_vertex);
@@ -1253,6 +1256,7 @@ void KineticDelaunay::reassignVoronoiVerticesInQuadrilateral(size_t quad_index, 
         {
           new_intersection->voronoi_ref = v_edge_intersections.insert(std::next(insert_position), new_intersection);
         }
+        crossing_data.noteTouchedVoronoiEdge(voronoi_edge_id);
         crossing_data.delaunay_edge_intersections[delaunay_edge_id].push_back(new_intersection); // sort later
         // In a list, an iterator will not be invalidated by sorting, so we can safely set the delaunay_ref now and
         // sort later.
@@ -3087,6 +3091,14 @@ void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(
   recomputeEventsAfterInfinitesimalSeparation(parent_component_id, t, /*min_virtual_x=*/0.0);
 }
 
+size_t KineticDelaunay::activeInfinitesimalParentFor(const Event& event) const
+{
+  const PendingBranchSplit* split = pending_branch_splits_.findByParent(event.infinitesimal_parent_component_);
+  return split != nullptr && split->infinitesimal_active && split->infinitesimal_epoch == event.infinitesimal_epoch_
+    ? event.infinitesimal_parent_component_
+    : static_cast<size_t>(-1);
+}
+
 bool KineticDelaunay::maybeFinalizeInfinitesimalSeparation(size_t parent_component_id, double t)
 {
   auto it = pending_branch_splits_.by_parent_.find(parent_component_id);
@@ -3957,10 +3969,40 @@ bool KineticDelaunay::maybeForkBranchSchedulers(size_t parent_runtime_branch_id,
       && runtime_branch_data_.alive[runtime_branch_id];
   };
 
+  const bool previous_is_parent = previous != nullptr
+    && (previous->runtime_branch_id == parent_runtime_branch_id
+      || previous->runtime_branch_id == BranchScheduler::no_branch);
+  const bool root_becomes_parent = previous_is_parent && previous->runtime_branch_id == BranchScheduler::no_branch
+    && can_fork_runtime(parent_runtime_branch_id);
+
+  // When the root scheduler turns into the parent's branch-local scheduler, it stops driving every other runtime
+  // branch it still owned (several components after a mid-tree --start): fork those too instead of dropping them.
+  std::vector<size_t> fork_runtime_ids = child_runtime_ids;
+  if (root_becomes_parent)
+  {
+    std::unordered_set<size_t> independent_ids;
+    {
+      std::lock_guard<std::mutex> lock(independent_scheduler_mutex_);
+      for (const auto& scheduler : independent_branch_schedulers_)
+      {
+        independent_ids.insert(scheduler->runtime_branch_id);
+      }
+    }
+    for (size_t runtime_id = 0; runtime_id < runtime_branch_data_.branches.size(); ++runtime_id)
+    {
+      if (runtime_id != parent_runtime_branch_id && independent_ids.count(runtime_id) == 0
+        && std::find(child_runtime_ids.begin(), child_runtime_ids.end(), runtime_id) == child_runtime_ids.end()
+        && !runtime_branch_data_.isPendingSplitChild(runtime_id) && can_fork_runtime(runtime_id))
+      {
+        fork_runtime_ids.push_back(runtime_id);
+      }
+    }
+  }
+
   // Claim child ownership first so the continuing parent remainder does not include child edges.
   std::vector<std::unique_ptr<BranchScheduler>> child_schedulers;
-  child_schedulers.reserve(child_runtime_ids.size());
-  for (size_t child_runtime_id : child_runtime_ids)
+  child_schedulers.reserve(fork_runtime_ids.size());
+  for (size_t child_runtime_id : fork_runtime_ids)
   {
     if (!can_fork_runtime(child_runtime_id))
     {
@@ -3973,9 +4015,6 @@ bool KineticDelaunay::maybeForkBranchSchedulers(size_t parent_runtime_branch_id,
     child_schedulers.push_back(std::move(scheduler));
   }
 
-  const bool previous_is_parent = previous != nullptr
-    && (previous->runtime_branch_id == parent_runtime_branch_id
-      || previous->runtime_branch_id == BranchScheduler::no_branch);
   std::vector<std::shared_ptr<EventScheduler::Event>> salvaged;
   if (previous_is_parent && can_fork_runtime(parent_runtime_branch_id))
   {
@@ -4406,10 +4445,9 @@ void KineticDelaunay::processBranchScheduler(
   }
   auto mark_scheduler_finished = [&]()
   {
-    {
-      const auto topology_lock = lockSharedTopology();
-      scheduler.finished = true;
-    }
+    // The progress bar is shared by all branch workers; update it under the same lock.
+    const auto topology_lock = lockSharedTopology();
+    scheduler.finished = true;
     if (section_event_manager_)
     {
       section_event_manager_->updateProgress();
@@ -7198,6 +7236,14 @@ std::pair<std::vector<size_t>, std::vector<double>> KineticDelaunay::computeCros
     // Record the edge we are about to cross
     crossed_half_edge_ids.push_back(next_crossed_edge_id);
     crossed_half_edge_params.push_back(crossed_edge_param);
+    // A straight walk enters each face at most once; more steps mean the graph is inconsistent and the walk cycles.
+    if (crossed_half_edge_ids.size() > graph.faceSlotCount())
+    {
+      KINDS_ERROR("computeCrossedHalfEdges: walk from " << glm::to_string(start_point) << " to "
+                                                        << glm::to_string(destination) << " exceeded "
+                                                        << graph.faceSlotCount() << " faces; aborting cyclic walk.");
+      break;
+    }
     next_vertices = graph.adjacentTriangleVertices(next_crossed_edge_id ^ 1);
     next_tri_half_edges = graph.getTriangleHalfEdgeIndices(next_crossed_edge_id ^ 1);
   }
@@ -7836,8 +7882,10 @@ void KineticDelaunay::registerEventCallbacks(EventCallback* section_callback, Ev
 
 void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaunay& kd, double t)
 {
-  // Clear any previous intersections
+  // Clear any previous intersections. The Delaunay lists hold iterators into edge_intersections too; keeping them
+  // left dangling refs that the sort below read and the delaunay_ref loop wrote (use-after-free after failsafe).
   voronoi_edge_intersections.clearAllLists();
+  delaunay_edge_intersections.clearAllLists();
   edge_intersections.clear();
 
   size_t num_edges = kd.getGraph().halfEdgeSlotCount() / 2;
@@ -7895,6 +7943,7 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
       auto voronoi_ref = voronoi_edge_intersections[voronoi_edge_id].emplace(
         voronoi_edge_intersections[voronoi_edge_id].end(), edge_itr);
       edge_itr->voronoi_ref = voronoi_ref;
+      noteTouchedVoronoiEdge(voronoi_edge_id);
     }
   }
 
@@ -8549,6 +8598,7 @@ void KineticDelaunay::CrossingData::validateIntersectionInvariants(
 
 void KineticDelaunay::CrossingData::removeIntersection(EdgeIntersectionRef intersection_ref)
 {
+  noteTouchedVoronoiEdge(intersection_ref->voronoi_edge_id);
   // Remove from Delaunay list if the cached iterator is still initialized and points into the expected list.
   auto& d_list = delaunay_edge_intersections[intersection_ref->delaunay_edge_id];
   eraseIntersectionRefFromList(d_list, intersection_ref);
@@ -8618,6 +8668,7 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
       d_intersections.erase(*main_ref->delaunay_ref);
       v_intersections.erase(*main_ref->voronoi_ref);
       edge_intersections.erase(main_ref);
+      noteTouchedVoronoiEdge(voronoi_edge_id);
       erased[i] = true;
     }
     else if (!v_intersections.empty() && is_matching(v_intersections.back()))
@@ -8631,6 +8682,7 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
       d_intersections.erase(*main_ref->delaunay_ref);
       v_intersections.erase(*main_ref->voronoi_ref);
       edge_intersections.erase(main_ref);
+      noteTouchedVoronoiEdge(voronoi_edge_id);
       erased[i] = true;
     }
   }
@@ -8746,6 +8798,7 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
   {
     const size_t voronoi_edge_id = pending_insert.voronoi_edge_id;
     auto& v_intersections = voronoi_edge_intersections[voronoi_edge_id];
+    noteTouchedVoronoiEdge(voronoi_edge_id);
 
     edge_intersections.push_back(pending_insert.intersection);
     auto main_iter = std::prev(edge_intersections.end());

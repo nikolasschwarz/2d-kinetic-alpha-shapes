@@ -222,6 +222,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool export_incremental_meshes = false;
   /// Directory for incremental OBJ dumps. Empty uses @c incremental_meshes under the working directory.
   std::filesystem::path incremental_meshes_output_dir;
+  /// See @ref TreeMesher::Settings::radius_complementary_debug_log_path; empty writes nothing.
+  std::filesystem::path radius_complementary_debug_log_path;
   /// Failure SVG/TXT dumps (ring-walk / triangulate FAIL, …) plus common highlighted kinetic SVG.
   /// CLI --error-files; also implied by visual debug.
   void setErrorFiles(bool enabled) { error_files = enabled; }
@@ -1109,8 +1111,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Validates both circumcenters (Delaunay face ids) incident to a Voronoi edge.
   void requireLiveRegisteredVoronoiEdgeEndpoints(size_t voronoi_edge_id, const char* context) const;
 
-  void addDelaunayTriangulationToBoundaryMesh(
-    double t, size_t input_branch_id, bool invert_orientation, double offset);
+  /// @p strand_to_mesh_vertex_out (optional) receives the boundary-mesh vertex created for each strand of the branch.
+  void addDelaunayTriangulationToBoundaryMesh(double t, size_t input_branch_id, bool invert_orientation,
+    double offset, std::vector<int>* strand_to_mesh_vertex_out = nullptr);
 
   std::vector<BoundaryPoint> traceConvexHull(double t) const;
 
@@ -1177,8 +1180,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Refresh every segment strip whose dual Voronoi edge is incident to this Voronoi vertex (after a crossing event).
   void refreshStripCrossingRefsIncidentToVoronoiVertex(size_t voronoi_vertex_id);
 
-  /// Refresh all segment strips (after flips / broad `CrossingData` updates).
-  void refreshCrossingRefsForAllStrips();
+  /// Refresh the segment strips of the given Voronoi edges (those whose intersection set changed).
+  void refreshStripCrossingRefsForVoronoiEdges(const std::vector<size_t>& voronoi_edge_ids);
+
+  /// Refresh all segment strips (after broad `CrossingData` updates). With @p verify_only nothing is written and the
+  /// number of strip refs that a refresh would change is returned (shadow check for the local refresh).
+  size_t refreshCrossingRefsForAllStrips(bool verify_only = false);
 
   void growGraphSlotArrays();
   void clearDeadHalfEdgeState();
@@ -1453,7 +1460,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /// At section events: if a kinetic component already satisfies the usual input-strand isolation split
   /// check, note/schedule the infinitesimal separation path (same as after a radius @ref checkForSplit).
-  void maybeInduceSplitsAtSection(double t);
+  void maybeInduceSplitsAtSection(double t, size_t runtime_branch_id);
 };
 
 /// Close T-junctions across neighboring segment meshlets: a vertex on A that lies on a shared

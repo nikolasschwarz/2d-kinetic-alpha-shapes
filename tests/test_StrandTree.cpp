@@ -132,6 +132,24 @@ TEST_CASE("StrandTree serialization", "[StrandTree]")
     std::filesystem::remove(test_file);
   }
 
+  SECTION("Doubles round-trip exactly")
+  {
+    // Exported strand trees are replayed by workers and repro tools; they must mesh the identical input.
+    std::vector<std::vector<glm::dvec2>> precise_points = support_points;
+    precise_points[0][1] = { 0.12345678901234567, -18.743012345678901 };
+    std::vector<std::vector<double>> precise_subdivisions = subdivisions_by_strand;
+    precise_subdivisions[0][1] = 1.0 / 3.0;
+    StrandTree precise_tree(precise_points, precise_subdivisions, physics_strand_to_segment_indices,
+      transforms_by_height_and_branch, branch_indices, strands_by_branch_id);
+
+    precise_tree.saveToFile(test_file);
+    StrandTree loaded = StrandTree::loadFromFile(test_file);
+    REQUIRE(loaded.getPoints()[0][1].x == precise_tree.getPoints()[0][1].x);
+    REQUIRE(loaded.getPoints()[0][1].y == precise_tree.getPoints()[0][1].y);
+    REQUIRE(loaded.getSubdivisionsByStrand()[0][1] == precise_tree.getSubdivisionsByStrand()[0][1]);
+    std::filesystem::remove(test_file);
+  }
+
   SECTION("Legacy format without section prefix or comments still loads")
   {
     const std::string legacy_file = "test_strandtree_legacy.tmp";
@@ -206,12 +224,14 @@ TEST_CASE("StrandTree serialization", "[StrandTree]")
     tree.saveToFile(test_file);
     StrandTree loaded = StrandTree::loadFromFile(test_file);
 
+    // The constructor conditions profile transforms, so compare against what was actually saved, not raw `m`.
+    const glm::dmat4& saved_m = tree.getTransformsByHeightAndBranch()[0][0];
     const glm::dmat4& loaded_m = loaded.getTransformsByHeightAndBranch()[0][0];
     for (int row = 0; row < 4; ++row)
     {
       for (int col = 0; col < 4; ++col)
       {
-        REQUIRE(m[col][row] == Catch::Approx(loaded_m[col][row]));
+        REQUIRE(saved_m[col][row] == Catch::Approx(loaded_m[col][row]));
       }
     }
 

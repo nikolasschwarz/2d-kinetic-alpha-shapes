@@ -8,9 +8,12 @@
 #include <limits>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace kinDS
 {
@@ -69,6 +72,10 @@ struct KineticDelaunay::CrossingData
   SlotTable<std::unique_ptr<VoronoiVertexList>> tri_id_to_voronoi_vertices;
   SlotTable<std::optional<VoronoiVertexListIterator>> voronoi_vertex_to_iterator;
 
+  std::mutex touched_voronoi_edges_mutex_;
+  std::vector<size_t> touched_voronoi_edges_;
+  std::vector<char> touched_voronoi_edge_flags_;
+
   void ensureTriListSlots(size_t face_count)
   {
     tri_id_to_voronoi_vertices.resizeWith(face_count, [] { return std::make_unique<VoronoiVertexList>(); });
@@ -98,6 +105,33 @@ struct KineticDelaunay::CrossingData
 
   /// Last time a crossing was handled for this Voronoi vertex, or its crossing events were rescheduled/invalidated.
   SlotTable<EventTime> last_crossing;
+
+  /// Record that the intersection set of Voronoi edge @p voronoi_edge_id changed (created, erased or re-pointed), so
+  /// strip crossing refs on it may be stale. Every mutation site calls this.
+  void noteTouchedVoronoiEdge(size_t voronoi_edge_id)
+  {
+    std::lock_guard<std::mutex> lock(touched_voronoi_edges_mutex_);
+    if (voronoi_edge_id >= touched_voronoi_edge_flags_.size())
+    {
+      touched_voronoi_edge_flags_.resize(voronoi_edge_id + 1, 0);
+    }
+    if (!touched_voronoi_edge_flags_[voronoi_edge_id])
+    {
+      touched_voronoi_edge_flags_[voronoi_edge_id] = 1;
+      touched_voronoi_edges_.push_back(voronoi_edge_id);
+    }
+  }
+
+  /// Voronoi edges touched since the last call (each once); clears the record.
+  std::vector<size_t> takeTouchedVoronoiEdges()
+  {
+    std::lock_guard<std::mutex> lock(touched_voronoi_edges_mutex_);
+    for (size_t voronoi_edge_id : touched_voronoi_edges_)
+    {
+      touched_voronoi_edge_flags_[voronoi_edge_id] = 0;
+    }
+    return std::exchange(touched_voronoi_edges_, {});
+  }
 
   struct VoronoiDelaunayEdgeIntersection
   {

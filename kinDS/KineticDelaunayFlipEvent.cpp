@@ -594,6 +594,7 @@ void KineticDelaunay::FlipEventManager::computeEvents(double t, size_t quad_id,
       if (virtual_mode)
       {
         flip_event->infinitesimal_epoch_ = kd->infinitesimal_schedule_epoch_;
+        flip_event->infinitesimal_parent_component_ = kd->infinitesimal_schedule_parent_;
       }
       kd->kinetic_algorithm_->enqueueEvent(flip_event);
     }
@@ -650,17 +651,8 @@ void KineticDelaunay::FlipEvent::handleEvent()
   std::optional<InfinitesimalComputeContext> infinitesimal_compute;
   if (is_infinitesimal)
   {
-    bool epoch_ok = false;
-    for (const auto& entry : kd->pending_branch_splits_.by_parent_)
-    {
-      if (entry.second.infinitesimal_active && entry.second.infinitesimal_epoch == infinitesimal_epoch_)
-      {
-        epoch_ok = true;
-        parent_component_id = entry.first;
-        break;
-      }
-    }
-    if (!epoch_ok)
+    parent_component_id = kd->activeInfinitesimalParentFor(*this);
+    if (parent_component_id == static_cast<size_t>(-1))
     {
       log_skip("stale infinitesimal epoch");
       return;
@@ -920,7 +912,10 @@ void KineticDelaunay::FlipEvent::handleEvent()
   const size_t branch = kd->getRuntimeBranchIdForHalfEdge(half_edge_id);
 
   bool is_single_triangle = kd->runtimeBranchHasSingleFiniteTriangle(branch);
-  
+  // The auxiliary edge is the opposite edge of the quad, so the neighbor recompute below must also cover it, or its
+  // stale (now inverse) flip event fires and undoes this flip.
+  size_t& other_flip_edge_id = auxiliary_flip_half_edge_id;
+
   if(is_single_triangle){
     // First determine which edge is inside the triangle and which is outside.
     size_t inside_edge_id;
@@ -939,7 +934,6 @@ void KineticDelaunay::FlipEvent::handleEvent()
     }
 
     // Now find an infinite outgoing half-edge from the opposite vertex
-    size_t other_flip_edge_id = -1;
     for(auto incident_he_id = graph.incidentEdgesBegin(opposite_vertex_id); incident_he_id != graph.incidentEdgesEnd(opposite_vertex_id); ++incident_he_id){
       if(graph.destination(*incident_he_id) == -1){
         other_flip_edge_id = *incident_he_id;
@@ -1069,6 +1063,12 @@ void KineticDelaunay::FlipEvent::handleEvent()
 
       kd->radius_event_manager_->computeEvents(t, half_edge_id ^ 1, ctx);
       kd->face_last_updated[twin_face_id] = stamp;
+
+      if (other_flip_edge_id != static_cast<size_t>(-1))
+      {
+        kd->flip_event_manager_->computeEvents(t, other_flip_edge_id / 2, ctx);
+        kd->quadrilateral_last_updated[other_flip_edge_id / 2] = stamp;
+      }
     };
 
     if (infinitesimal_compute.has_value())

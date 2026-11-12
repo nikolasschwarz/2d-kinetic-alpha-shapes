@@ -22,16 +22,9 @@ struct MeshStructure
     size_t end_delaunay_edge_id = static_cast<size_t>(-1);
   };
 
-  // TODO: will a fixed size array be sufficient here? Alternatively, we need a separate buffer with start index and
-  // length
   struct SegmentProperties
   {
-    static const size_t MAX_NEIGHBORS = 63;
-
-    size_t mesh_pair_indices[MAX_NEIGHBORS];
-    size_t neighbor_count = 0;
-    size_t neighbor_indices[MAX_NEIGHBORS]; // TODO: do we need this? We can access it through the segment mesh pairs
-    size_t padding;
+    std::vector<size_t> mesh_pair_indices; // every segment mesh pair this segment's meshlet is assembled from
   };
 
  private:

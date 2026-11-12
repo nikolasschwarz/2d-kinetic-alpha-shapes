@@ -49,6 +49,25 @@ using namespace kinDS;
 
 namespace
 {
+/// True when @p runtime_branch_id is unscoped or owns a strand of the component (pending split children count as the
+/// parent). Independent schedulers mutate their own components on other threads, so callers must not touch the rest.
+bool componentInRuntimeBranchScope(
+  const KineticDelaunay& kin_del, const std::vector<size_t>& component, size_t runtime_branch_id)
+{
+  if (runtime_branch_id == BranchScheduler::no_branch)
+  {
+    return true;
+  }
+  for (size_t strand_id : component)
+  {
+    if (kin_del.unsplitRuntimeBranchForStrand(strand_id) == runtime_branch_id)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string jsonStringLiteral(const std::string& value)
 {
   std::string out = "\"";
@@ -2062,7 +2081,7 @@ void kinDS::SegmentBuilder::logStrandInitDiagnosticsSummary(double t) const
     if (segment_id < segment_properties.size())
     {
       std::ostringstream prop_oss;
-      prop_oss << "segment_id=" << segment_id << " neighbor_count=" << segment_properties[segment_id].neighbor_count
+      prop_oss << "segment_id=" << segment_id << " neighbor_count=" << segment_properties[segment_id].mesh_pair_indices.size()
                << " (0 until finalize/accumulateSegmentProperties)";
       strandInitDiagnosticLogLine("init_summary_segment_props", focus_strand, t, prop_oss.str().c_str());
     }
@@ -4169,6 +4188,7 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(double t, 
   if (pair_idx == static_cast<size_t>(-1) || pair_idx >= intersection_meshes.size())
   {
     // #region agent log
+    if (!radius_complementary_debug_log_path.empty())
     {
       size_t meta_target_mids = 0;
       size_t empty_strip = 0;
@@ -4227,8 +4247,10 @@ void SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid(double t, 
       {
         fail_class = "E_multi_mid_no_usable_strip";
       }
-      std::ofstream dbg(
-        R"(c:\Users\Nikolas\Source\EvoEngine\Extern\3rdParty\kinDS\debug-c3c75b.log)", std::ios::app);
+      // Parallel runtime branches can hit this concurrently; keep each JSON line intact.
+      static std::mutex debug_log_mutex;
+      const std::lock_guard<std::mutex> debug_log_lock(debug_log_mutex);
+      std::ofstream dbg(radius_complementary_debug_log_path, std::ios::app);
       if (dbg)
       {
         dbg << "{\"sessionId\":\"c3c75b\",\"hypothesisId\":\"" << fail_class
@@ -8290,8 +8312,8 @@ void SegmentBuilder::collapseDegreeTwoFlexibleVerticesOnIntersectionMeshes()
   }
 }
 
-void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
-  double t, size_t input_branch_id, bool invert_orientation, double offset)
+void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(double t, size_t input_branch_id,
+  bool invert_orientation, double offset, std::vector<int>* strand_to_mesh_vertex_out)
 {
   boundary_mesh_.withLock([&] {
   auto& graph = kin_del.getGraph();
@@ -8332,6 +8354,11 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(
       = addBoundaryVertex(glm::dvec3 { vertex[0], vertex[1], t + offset }, centroid, strand_id, t, false);
 
     strand_to_mesh_vertex[strand_id] = static_cast<int>(mesh_vertex_index);
+    if (strand_to_mesh_vertex_out != nullptr)
+    {
+      strand_to_mesh_vertex_out->resize(std::max(strand_to_mesh_vertex_out->size(), graph.getVertexCount()), -1);
+      (*strand_to_mesh_vertex_out)[strand_id] = static_cast<int>(mesh_vertex_index);
+    }
     ++strands_vertex_added;
 
     if (diagnostics && strand_id == 0)
@@ -8578,21 +8605,9 @@ void kinDS::SegmentBuilder::advanceBoundaryMeshes(double t, size_t runtime_branc
   std::vector<size_t> component_indices;
   for (size_t component_index : collectLiveComponentIndices())
   {
-    if (runtime_branch_id != BranchScheduler::no_branch)
+    if (!componentInRuntimeBranchScope(kin_del, kin_del.component_data.components[component_index], runtime_branch_id))
     {
-      bool owned = false;
-      for (size_t strand_id : kin_del.component_data.components[component_index])
-      {
-        if (kin_del.unsplitRuntimeBranchForStrand(strand_id) == runtime_branch_id)
-        {
-          owned = true;
-          break;
-        }
-      }
-      if (!owned)
-      {
-        continue;
-      }
+      continue;
     }
     bool any_profile = false;
     for (size_t strand_id : kin_del.component_data.components[component_index])
@@ -8626,7 +8641,19 @@ void kinDS::SegmentBuilder::refreshComponentBoundariesAfterGraphTopologyChange(d
 {
   // Must force: splitComponent often already stamped component_last_updated at this same real time
   // (pre-cut hull). After the cut the alpha-shape boundary changes and bark UV centroids must follow.
-  updateBoundaries(t, collectLiveComponentIndices(), /*force=*/true);
+  // Only the cutting scheduler's components: others run on their own threads at their own times (their strands may
+  // not even have a profile at t any more).
+  const BranchScheduler* scheduler = kin_del.activeBranchScheduler();
+  const size_t scope = scheduler != nullptr ? scheduler->runtime_branch_id : BranchScheduler::no_branch;
+  std::vector<size_t> component_indices;
+  for (size_t component_index : collectLiveComponentIndices())
+  {
+    if (componentInRuntimeBranchScope(kin_del, kin_del.component_data.components[component_index], scope))
+    {
+      component_indices.push_back(component_index);
+    }
+  }
+  updateBoundaries(t, component_indices, /*force=*/true);
 }
 
 std::vector<glm::dvec3> SegmentBuilder::computeClampedVoronoiVertices(
@@ -8783,22 +8810,15 @@ void kinDS::SegmentBuilder::refreshStripCrossingRefsIncidentToVoronoiVertex(size
   }
 }
 
-void kinDS::SegmentBuilder::refreshCrossingRefsForAllStrips()
+void kinDS::SegmentBuilder::refreshStripCrossingRefsForVoronoiEdges(const std::vector<size_t>& voronoi_edge_ids)
 {
-  for (size_t pair_idx = 0; pair_idx < segment_mesh_pair_last_left_and_right_vertex.size(); ++pair_idx)
+  const size_t pair_count = segment_mesh_pair_last_left_and_right_vertex.size();
+  for (size_t voronoi_edge_id : voronoi_edge_ids)
   {
-    size_t voronoi_edge_id = 0;
-    bool found = false;
-    for (size_t he = 0; he < half_edge_index_to_segment_mesh_pair_index.size(); ++he)
-    {
-      if (half_edge_index_to_segment_mesh_pair_index[he] == pair_idx)
-      {
-        voronoi_edge_id = (he & ~1) / 2;
-        found = true;
-        break;
-      }
-    }
-    if (!found)
+    const size_t he = 2 * voronoi_edge_id;
+    const size_t pair_idx
+      = he < half_edge_index_to_segment_mesh_pair_index.size() ? half_edge_index_to_segment_mesh_pair_index[he] : pair_count;
+    if (pair_idx >= pair_count)
     {
       continue;
     }
@@ -8807,6 +8827,56 @@ void kinDS::SegmentBuilder::refreshCrossingRefsForAllStrips()
       refreshMeshingDataCrossingRefs(seg, voronoi_edge_id);
     }
   }
+}
+
+size_t kinDS::SegmentBuilder::refreshCrossingRefsForAllStrips(bool verify_only)
+{
+  if (!verify_only)
+  {
+    // Everything is refreshed here, so pending local-refresh notes are covered.
+    kin_del.getCrossingDataMutable().takeTouchedVoronoiEdges();
+  }
+  // Voronoi edge of the first half-edge mapped to each pair. One pass over the half-edges: this runs after every flip,
+  // and scanning all half-edges per pair made it O(pairs * half-edges).
+  constexpr size_t npos = static_cast<size_t>(-1);
+  const size_t pair_count = segment_mesh_pair_last_left_and_right_vertex.size();
+  std::vector<size_t> pair_voronoi_edge(pair_count, npos);
+  for (size_t he = 0; he < half_edge_index_to_segment_mesh_pair_index.size(); ++he)
+  {
+    const size_t pair_idx = half_edge_index_to_segment_mesh_pair_index[he];
+    if (pair_idx < pair_count && pair_voronoi_edge[pair_idx] == npos)
+    {
+      pair_voronoi_edge[pair_idx] = (he & ~size_t { 1 }) / 2;
+    }
+  }
+  size_t mismatches = 0;
+  for (size_t pair_idx = 0; pair_idx < pair_count; ++pair_idx)
+  {
+    if (pair_voronoi_edge[pair_idx] == npos)
+    {
+      continue;
+    }
+    for (auto& seg : segment_mesh_pair_last_left_and_right_vertex[pair_idx])
+    {
+      if (!verify_only)
+      {
+        refreshMeshingDataCrossingRefs(seg, pair_voronoi_edge[pair_idx]);
+        continue;
+      }
+      MeshingData expected = seg;
+      refreshMeshingDataCrossingRefs(expected, pair_voronoi_edge[pair_idx]);
+      if (expected.start_crossing != seg.start_crossing || expected.end_crossing != seg.end_crossing)
+      {
+        if (mismatches++ < 5)
+        {
+          KINDS_ERROR("Local crossing-ref refresh mismatch: pair=" << pair_idx << " ve=" << pair_voronoi_edge[pair_idx]
+                                                                   << " start_he=" << seg.start_half_edge_id
+                                                                   << " end_he=" << seg.end_half_edge_id);
+        }
+      }
+    }
+  }
+  return mismatches;
 }
 
 void kinDS::SegmentBuilder::refreshCrossingRefsForAllIntersectionStrips()
@@ -10558,47 +10628,13 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
 
 void kinDS::SegmentBuilder::accumulateSegmentProperties()
 {
-  // Iterate through all pairs and accumulate properties
   for (size_t pair_id = 0; pair_id < segment_mesh_pairs.size(); ++pair_id)
   {
-    auto& pair = segment_mesh_pairs[pair_id];
-    if (pair.segment_index0 != -1)
+    for (const size_t segment_index : { segment_mesh_pairs[pair_id].segment_index0, segment_mesh_pairs[pair_id].segment_index1 })
     {
-      // make sure there is space left
-      if (segment_properties[pair.segment_index0].neighbor_count >= MeshStructure::SegmentProperties::MAX_NEIGHBORS)
+      if (segment_index != static_cast<size_t>(-1))
       {
-        KINDS_ERROR("Exceeded maximum number of neighbors for segment: "
-          << segment_properties[pair.segment_index0].neighbor_count
-          << " >= " << MeshStructure::SegmentProperties::MAX_NEIGHBORS);
-        // throw std::runtime_error("Exceeded maximum number of neighbors for segment.");
-      }
-      else
-      {
-        segment_properties[pair.segment_index0]
-          .mesh_pair_indices[segment_properties[pair.segment_index0].neighbor_count] = pair_id; // add mesh pair index
-        segment_properties[pair.segment_index0].neighbor_indices[segment_properties[pair.segment_index0].neighbor_count]
-          = pair.segment_index1; // add neighbor
-        segment_properties[pair.segment_index0].neighbor_count++;
-      }
-    }
-
-    if (pair.segment_index1 != -1)
-    {
-      // make sure there is space left
-      if (segment_properties[pair.segment_index1].neighbor_count >= MeshStructure::SegmentProperties::MAX_NEIGHBORS)
-      {
-        KINDS_ERROR("Exceeded maximum number of neighbors for segment: "
-          << segment_properties[pair.segment_index1].neighbor_count
-          << " >= " << MeshStructure::SegmentProperties::MAX_NEIGHBORS);
-        // throw std::runtime_error("Exceeded maximum number of neighbors for segment.");
-      }
-      else
-      {
-        segment_properties[pair.segment_index1]
-          .mesh_pair_indices[segment_properties[pair.segment_index1].neighbor_count] = pair_id; // add mesh pair index
-        segment_properties[pair.segment_index1].neighbor_indices[segment_properties[pair.segment_index1].neighbor_count]
-          = pair.segment_index0; // add neighbor
-        segment_properties[pair.segment_index1].neighbor_count++;
+        segment_properties[segment_index].mesh_pair_indices.push_back(pair_id);
       }
     }
   }
@@ -10685,14 +10721,17 @@ void kinDS::SegmentBuilder::splitComponent(
   kin_del.maybeScheduleSeparationOrApplyPendingSplit(component_id, t);
 }
 
-void SegmentBuilder::maybeInduceSplitsAtSection(double t)
+void SegmentBuilder::maybeInduceSplitsAtSection(double t, size_t runtime_branch_id)
 {
   // Same criterion as after radius events: isolated input branches within a kinetic component.
   // When that already holds at a section boundary, start the usual infinitesimal / SeparationEvent path.
+  // Only this section's components: other schedulers' components are at other times on other threads (evaluating
+  // them at t can hit ended branches, "zero profile axes", and splitting them races with their owner).
   const size_t component_count = kin_del.component_data.components.size();
   for (size_t component_id = 0; component_id < component_count; ++component_id)
   {
-    if (kin_del.component_data.components[component_id].empty())
+    if (kin_del.component_data.components[component_id].empty()
+      || !componentInRuntimeBranchScope(kin_del, kin_del.component_data.components[component_id], runtime_branch_id))
     {
       continue;
     }
@@ -11035,6 +11074,7 @@ void SegmentBuilder::init()
   boundary_mesh_.resetHalfEdgeSlots(half_edge_count);
   const size_t init_section = static_cast<size_t>(t);
   const auto& branches_at_section = kin_del.getStrandTree().getStrandBranchesByHeight(init_section);
+  std::vector<int> init_strand_to_mesh_vertex;
   for (size_t input_branch_id = 0; input_branch_id < branches_at_section.size(); ++input_branch_id)
   {
     if (!kin_del.isTrackedInputBranchAtSection(init_section, input_branch_id))
@@ -11100,8 +11140,37 @@ void SegmentBuilder::init()
           << " contains_strand_0=" << (contains_strand_0 ? "true" : "false");
       strandInitDiagnosticLogLine("init_boundary_branch_triangulate", 0, t, oss.str().c_str());
     }
-    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, false, -0.01);
+    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, false, -0.01, &init_strand_to_mesh_vertex);
   }
+
+  // After a mid-tree start one component can span several input branches. Its faces that mix branches are skipped
+  // by the per-branch pass above, so seed their outer boundary fronts here; otherwise later radius/flip events
+  // extend an unset front (vertex -1).
+  boundary_mesh_.withLock([&] {
+    const auto& init_graph = kin_del.getGraph();
+    const auto mesh_vertex_of = [&](int strand) -> int
+    {
+      return strand >= 0 && static_cast<size_t>(strand) < init_strand_to_mesh_vertex.size()
+        ? init_strand_to_mesh_vertex[static_cast<size_t>(strand)]
+        : -1;
+    };
+    for (size_t face_index : init_graph.liveFaces())
+    {
+      const auto& he_ids = init_graph.face(face_index).half_edges;
+      const auto vertices = init_graph.adjacentTriangleVertices(he_ids[0]);
+      for (size_t i = 0; i < 3; ++i)
+      {
+        const int left = mesh_vertex_of(vertices[i]);
+        const int right = mesh_vertex_of(vertices[(i + 1) % 3]);
+        if (left < 0 || right < 0 || !kin_del.isOnComponentBoundaryOutside(he_ids[i])
+          || boundary_mesh_.lastLeftAndRight(he_ids[i]).first != static_cast<size_t>(-1))
+        {
+          continue;
+        }
+        completeBoundaryMeshSection(he_ids[i], static_cast<size_t>(left), static_cast<size_t>(right), t);
+      }
+    }
+  });
 
   for (size_t input_branch_id : kin_del.inputBranchesFinishingAtSection(t))
   {
@@ -13840,12 +13909,11 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     double earliest_creation = std::numeric_limits<double>::quiet_NaN();
 
     std::vector<SegmentAssemblyContrib> contribs;
-    contribs.reserve(properties.neighbor_count + 4);
+    contribs.reserve(properties.mesh_pair_indices.size() + 4);
 
     // Regular meshlets referenced through segment_properties.
-    for (size_t neighbor_index = 0; neighbor_index < properties.neighbor_count; ++neighbor_index)
+    for (const size_t mesh_pair_index : properties.mesh_pair_indices)
     {
-      const size_t mesh_pair_index = properties.mesh_pair_indices[neighbor_index];
       SegmentAssemblyContrib contrib;
       contrib.mesh = meshes[mesh_pair_index];
       contrib.source_index = mesh_pair_index;
@@ -13987,7 +14055,7 @@ std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> kinDS::Segmen
     {
       std::ostringstream oss;
       oss << "segment_id=0 verts=" << segment_mesh.getVertexCount() << " tris=" << segment_mesh.getTriangleCount()
-          << " neighbor_count=" << properties.neighbor_count
+          << " neighbor_count=" << properties.mesh_pair_indices.size()
           << " segment_mesh_initialized=" << (segment_mesh_initialized ? "true" : "false")
           << " contribs=" << contribs.size();
       strandInitDiagnosticLogLine(

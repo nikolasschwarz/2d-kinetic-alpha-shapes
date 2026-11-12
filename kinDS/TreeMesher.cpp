@@ -805,6 +805,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   mesh_builder->mesh_cap_at_start = settings.mesh_cap_at_start;
   mesh_builder->mesh_cap_at_end = settings.mesh_cap_at_end;
   mesh_builder->export_incremental_meshes = settings.export_incremental_meshes;
+  mesh_builder->radius_complementary_debug_log_path = settings.radius_complementary_debug_log_path;
   if (settings.export_incremental_meshes)
   {
     if (!settings.incremental_meshes_output_dir.empty())

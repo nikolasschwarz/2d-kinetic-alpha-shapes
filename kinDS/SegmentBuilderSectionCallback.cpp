@@ -63,7 +63,7 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     /*fan_out_active_runtime_branches=*/explicit_branches == nullptr, section->eventId());
   segment_builder_.advanceBoundaryMeshes(t, section_runtime_branch);
 
-  segment_builder_.maybeInduceSplitsAtSection(t);
+  segment_builder_.maybeInduceSplitsAtSection(t, section_runtime_branch);
 
   const size_t live_edge_count = graph.liveDelaunayEdgeCount();
   segment_builder_.parallel_for(live_edge_count,
