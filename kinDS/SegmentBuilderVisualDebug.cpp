@@ -715,11 +715,6 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   {
     return;
   }
-  struct TmpdbgSvgScope // TMPDBG
-  {
-    TmpdbgSvgScope() { tmpdbg_in_visual_debug_svg = true; }
-    ~TmpdbgSvgScope() { tmpdbg_in_visual_debug_svg = false; }
-  } tmpdbg_svg_scope;
   try
   {
   const bool error_dump = !highlight.crossing_error_first_keys.empty()

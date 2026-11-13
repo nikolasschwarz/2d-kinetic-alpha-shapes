@@ -7028,9 +7028,6 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlan
 
   entry.active = true;
   entry.shared_ref_branch = shared_ref;
-  std::copy(&votes[0][0], &votes[0][0] + 4, &entry.tmpdbg_votes[0][0]); // TMPDBG
-  entry.tmpdbg_branch_a = branch_a; // TMPDBG
-  entry.tmpdbg_branch_b = branch_b; // TMPDBG
   entry.strand_to_majority_branch.reserve(strand_sides.size());
   for (const auto& [strand_id, side] : strand_sides)
   {
@@ -7078,56 +7075,6 @@ std::optional<size_t> SegmentBuilder::majorityPlaneBranchForStrand(size_t strand
   return it->second;
 }
 
-// TMPDBG begin
-namespace
-{
-std::mutex tmpdbg_placement_mutex;
-void tmpdbgPlacementRow(const KineticDelaunay& kd, size_t strand_id, double t, const char* path, size_t majority,
-  size_t shared_ref, const glm::dvec3& pos, const glm::dvec3& native)
-{
-  static const char* csv_path = std::getenv("KINDS_PLACEMENT_CSV");
-  static const double t0 = std::getenv("KINDS_PLACEMENT_T0") ? std::atof(std::getenv("KINDS_PLACEMENT_T0")) : 0.0;
-  static const double t1 = std::getenv("KINDS_PLACEMENT_T1") ? std::atof(std::getenv("KINDS_PLACEMENT_T1")) : 1e9;
-  if (csv_path == nullptr || t < t0 || t > t1)
-  {
-    return;
-  }
-  const auto& tree = kd.getStrandTree();
-  const size_t lo = static_cast<size_t>(std::floor(t));
-  const size_t hi = static_cast<size_t>(std::ceil(t));
-  const size_t b_lo = tree.getBranchIndex(strand_id, lo);
-  const size_t b_hi = tree.getBranchIndex(strand_id, hi);
-  const size_t section = kd.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
-  // Single-frame reference: strand point expressed in its upper-height branch frame, lifted with that branch only.
-  glm::dvec3 single(std::numeric_limits<double>::quiet_NaN());
-  try
-  {
-    const glm::dvec2 xy = kd.getPointAtWithReferenceBranch(strand_id, t, b_hi, true, false);
-    single = tree.transformToObjectSpaceForBranch(glm::dvec3(xy.x, xy.y, t), t, b_hi);
-  }
-  catch (...)
-  {
-  }
-  const size_t comp = strand_id < kd.component_data.component_map.size() ? kd.component_data.component_map[strand_id]
-                                                                          : static_cast<size_t>(-1);
-  const std::lock_guard<std::mutex> lock(tmpdbg_placement_mutex);
-  static std::ofstream out(csv_path);
-  static bool header = false;
-  if (!header)
-  {
-    out << "t,strand,path,component,branch_lo,branch_hi,branch_section,branch_at_section,majority,shared_ref,"
-           "x,y,z,native_x,native_y,native_z,single_x,single_y,single_z\n";
-    header = true;
-  }
-  out.precision(17);
-  out << t << ',' << strand_id << ',' << path << ',' << static_cast<long long>(comp) << ',' << b_lo << ',' << b_hi << ','
-      << section << ',' << tree.getBranchIndex(strand_id, section) << ',' << static_cast<long long>(majority) << ','
-      << static_cast<long long>(shared_ref) << ',' << pos.x << ',' << pos.y << ',' << pos.z << ',' << native.x << ','
-      << native.y << ',' << native.z << ',' << single.x << ',' << single.y << ',' << single.z << '\n';
-}
-} // namespace
-// TMPDBG end
-
 glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
 {
   const double query_t = t;
@@ -7166,24 +7113,16 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
         const auto it = entry.strand_to_majority_branch.find(strand_id);
         if (it != entry.strand_to_majority_branch.end())
         {
-          const glm::dvec3 tmpdbg_pos = liftToMajorityPlane(strand_id, t, entry.shared_ref_branch, it->second);
-          tmpdbgPlacementRow(kin_del, strand_id, t, "majority", it->second, entry.shared_ref_branch, tmpdbg_pos,
-            nativeMeshPosition(strand_id, t)); // TMPDBG
-          return tmpdbg_pos;
+          return liftToMajorityPlane(strand_id, t, entry.shared_ref_branch, it->second);
         }
       }
     }
 
     if (const std::optional<glm::dvec3> blended = splitPlacementBlendPosition(strand_id, t))
     {
-      tmpdbgPlacementRow(kin_del, strand_id, t, "blend", static_cast<size_t>(-1), static_cast<size_t>(-1),
-        blended.value(), nativeMeshPosition(strand_id, t)); // TMPDBG
       return blended.value();
     }
-    const glm::dvec3 tmpdbg_native = nativeMeshPosition(strand_id, t);
-    tmpdbgPlacementRow(kin_del, strand_id, t, "native", static_cast<size_t>(-1), static_cast<size_t>(-1),
-      tmpdbg_native, tmpdbg_native); // TMPDBG
-    return tmpdbg_native;
+    return nativeMeshPosition(strand_id, t);
   }
   catch (const std::exception& ex)
   {
@@ -7268,16 +7207,6 @@ void SegmentBuilder::registerSplitPlacementBlend(size_t component_id, double t)
   }
 
   const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
-  for (const auto& [key, group] : groups) // TMPDBG
-  {
-    KINDS_INFO("TMPDBG split votes: branch_a=" << entry.tmpdbg_branch_a << " branch_b=" << entry.tmpdbg_branch_b
-                                                << " side0=(" << entry.tmpdbg_votes[0][0] << "," << entry.tmpdbg_votes[0][1]
-                                                << ") side1=(" << entry.tmpdbg_votes[1][0] << "," << entry.tmpdbg_votes[1][1]
-                                                << ") active=" << entry.active);
-    KINDS_INFO("TMPDBG split blend group: component=" << component_id << " t=" << t << " shared=" << std::get<0>(key)
-                                                       << " majority=" << std::get<1>(key) << " own=" << std::get<2>(key)
-                                                       << " strands=" << group.strands.size());
-  }
   for (auto& [key, group] : groups)
   {
     std::sort(group.strands.begin(), group.strands.end());

@@ -565,8 +565,6 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// Shared kinetic reference branch (min of the two) used for 2D side tests and mesh XY.
     size_t shared_ref_branch = 0;
     std::unordered_map<size_t, size_t> strand_to_majority_branch;
-    size_t tmpdbg_votes[2][2] = { { 0, 0 }, { 0, 0 } }; // TMPDBG
-    size_t tmpdbg_branch_a = 0, tmpdbg_branch_b = 0; // TMPDBG
   };
   /// Pre-split: majority input-branch plane for @p strand_id's component at @p t, if rotation projection exists.
   std::optional<size_t> majorityPlaneBranchForStrand(size_t strand_id, double t) const;

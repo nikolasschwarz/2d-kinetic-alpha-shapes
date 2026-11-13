@@ -13,7 +13,6 @@
 #include <string>
 
 using namespace kinDS;
-thread_local bool kinDS::tmpdbg_in_visual_debug_svg = false; // TMPDBG
 
 namespace
 {
@@ -32,20 +31,12 @@ const glm::dmat4& requireProfileTransform(
   }
   if (branch_id >= transforms[height].size())
   {
-    if (std::getenv("KINDS_BREAK_ZERO_AXES") && !kinDS::tmpdbg_in_visual_debug_svg) // TMPDBG
-    {
-      __debugbreak();
-    }
     throw std::out_of_range("StrandTree: no profile transform at height " + std::to_string(height) + " branch "
       + std::to_string(branch_id) + " (count=" + std::to_string(transforms[height].size()) + ")");
   }
   const glm::dmat4& transform = transforms[height][branch_id];
   if (!profileAxesAreUsable(transform))
   {
-    if (std::getenv("KINDS_BREAK_ZERO_AXES") && !kinDS::tmpdbg_in_visual_debug_svg) // TMPDBG
-    {
-      __debugbreak();
-    }
     throw std::runtime_error("StrandTree: profile transform at height " + std::to_string(height) + " branch "
       + std::to_string(branch_id) + " has zero profile axes");
   }
@@ -294,13 +285,6 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
 
   // Kinetic (triangulation) frame: kept on the legacy mapping (reference/actual roles, mirrored hinge). The exact
   // unfold (actual -> reference, exact hinge) breaks meshing; mesh placement does its own exact unfold.
-  static const bool tmpdbg_exact = std::getenv("KINDS_EXACT_KINETIC") != nullptr; // TMPDBG
-  if (tmpdbg_exact) // TMPDBG
-  {
-    return PlaneProjector(getTransformByHeightAndBranch(index, actual_branch),
-      getTransformByHeightAndBranch(index, reference_branch))
-      .project(point);
-  }
   PlaneProjector plane_projector(getTransformByHeightAndBranch(index, reference_branch),
     getTransformByHeightAndBranch(index, actual_branch), /*legacy_mirrored_hinge=*/true);
 
