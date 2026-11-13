@@ -47,6 +47,6 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr,
   const std::vector<size_t>* explicit_runtime_branch_ids = nullptr,
   std::optional<EventTime> creation_time = std::nullopt, bool fan_out_active_runtime_branches = false,
-  std::optional<uint64_t> event_id = std::nullopt);
+  std::optional<uint64_t> event_id = std::nullopt, const HalfEdgeDelaunayGraphToSVG::DebugOverlay* overlay = nullptr);
 
 } // namespace kinDS

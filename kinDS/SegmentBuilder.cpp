@@ -6952,11 +6952,20 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlan
   const size_t other_branch = (shared_ref == branch_a) ? branch_b : branch_a;
 
   const auto& tree = kin_del.getStrandTree();
-  const size_t height = static_cast<size_t>(std::floor(std::max(0.0, t)));
   const size_t lookup_height = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
-  const PlaneProjector projector(
-    tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height),
-    tree.getResolvedTransformByHeightAndBranch(height, other_branch, lookup_height));
+  // Lookahead: between the last common section and the first separate one the lower planes coincide; take the
+  // hinge and sides from the upper section.
+  const auto projector_at = [&](size_t h)
+  {
+    return PlaneProjector(tree.getResolvedTransformByHeightAndBranch(h, shared_ref, lookup_height),
+      tree.getResolvedTransformByHeightAndBranch(h, other_branch, lookup_height));
+  };
+  PlaneProjector projector = projector_at(static_cast<size_t>(std::floor(std::max(0.0, t))));
+  const size_t upper_height = static_cast<size_t>(std::ceil(std::max(0.0, t)));
+  if (projector.isParallel() && upper_height < tree.getTransformsByHeightAndBranch().size())
+  {
+    projector = projector_at(upper_height);
+  }
   if (projector.isParallel())
   {
     return entry;
@@ -6980,8 +6989,7 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlan
 
   for (size_t strand_id : sites)
   {
-    const glm::dvec2 p = kin_del.getPointAtWithReferenceBranch(
-      strand_id, t, shared_ref, /*apply_reference_transform=*/true, /*include_virtual_offset=*/false);
+    const glm::dvec2 p = meshSharedXY(strand_id, t, shared_ref);
     const double cross = line_dir.x * (p.y - line_p.y) - line_dir.y * (p.x - line_p.x);
     const int side = (cross >= 0.0) ? 1 : 0;
     const size_t input_branch = tree.getBranchIndex(strand_id, branch_section);
@@ -7020,6 +7028,9 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlan
 
   entry.active = true;
   entry.shared_ref_branch = shared_ref;
+  std::copy(&votes[0][0], &votes[0][0] + 4, &entry.tmpdbg_votes[0][0]); // TMPDBG
+  entry.tmpdbg_branch_a = branch_a; // TMPDBG
+  entry.tmpdbg_branch_b = branch_b; // TMPDBG
   entry.strand_to_majority_branch.reserve(strand_sides.size());
   for (const auto& [strand_id, side] : strand_sides)
   {
@@ -7067,6 +7078,56 @@ std::optional<size_t> SegmentBuilder::majorityPlaneBranchForStrand(size_t strand
   return it->second;
 }
 
+// TMPDBG begin
+namespace
+{
+std::mutex tmpdbg_placement_mutex;
+void tmpdbgPlacementRow(const KineticDelaunay& kd, size_t strand_id, double t, const char* path, size_t majority,
+  size_t shared_ref, const glm::dvec3& pos, const glm::dvec3& native)
+{
+  static const char* csv_path = std::getenv("KINDS_PLACEMENT_CSV");
+  static const double t0 = std::getenv("KINDS_PLACEMENT_T0") ? std::atof(std::getenv("KINDS_PLACEMENT_T0")) : 0.0;
+  static const double t1 = std::getenv("KINDS_PLACEMENT_T1") ? std::atof(std::getenv("KINDS_PLACEMENT_T1")) : 1e9;
+  if (csv_path == nullptr || t < t0 || t > t1)
+  {
+    return;
+  }
+  const auto& tree = kd.getStrandTree();
+  const size_t lo = static_cast<size_t>(std::floor(t));
+  const size_t hi = static_cast<size_t>(std::ceil(t));
+  const size_t b_lo = tree.getBranchIndex(strand_id, lo);
+  const size_t b_hi = tree.getBranchIndex(strand_id, hi);
+  const size_t section = kd.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+  // Single-frame reference: strand point expressed in its upper-height branch frame, lifted with that branch only.
+  glm::dvec3 single(std::numeric_limits<double>::quiet_NaN());
+  try
+  {
+    const glm::dvec2 xy = kd.getPointAtWithReferenceBranch(strand_id, t, b_hi, true, false);
+    single = tree.transformToObjectSpaceForBranch(glm::dvec3(xy.x, xy.y, t), t, b_hi);
+  }
+  catch (...)
+  {
+  }
+  const size_t comp = strand_id < kd.component_data.component_map.size() ? kd.component_data.component_map[strand_id]
+                                                                          : static_cast<size_t>(-1);
+  const std::lock_guard<std::mutex> lock(tmpdbg_placement_mutex);
+  static std::ofstream out(csv_path);
+  static bool header = false;
+  if (!header)
+  {
+    out << "t,strand,path,component,branch_lo,branch_hi,branch_section,branch_at_section,majority,shared_ref,"
+           "x,y,z,native_x,native_y,native_z,single_x,single_y,single_z\n";
+    header = true;
+  }
+  out.precision(17);
+  out << t << ',' << strand_id << ',' << path << ',' << static_cast<long long>(comp) << ',' << b_lo << ',' << b_hi << ','
+      << section << ',' << tree.getBranchIndex(strand_id, section) << ',' << static_cast<long long>(majority) << ','
+      << static_cast<long long>(shared_ref) << ',' << pos.x << ',' << pos.y << ',' << pos.z << ',' << native.x << ','
+      << native.y << ',' << native.z << ',' << single.x << ',' << single.y << ',' << single.z << '\n';
+}
+} // namespace
+// TMPDBG end
+
 glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
 {
   const double query_t = t;
@@ -7105,38 +7166,185 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
         const auto it = entry.strand_to_majority_branch.find(strand_id);
         if (it != entry.strand_to_majority_branch.end())
         {
-          const size_t majority_branch = it->second;
-          const size_t shared_ref = entry.shared_ref_branch;
-          const glm::dvec2 shared_xy = kin_del.getPointAtWithReferenceBranch(
-            strand_id, t, shared_ref, /*apply_reference_transform=*/true, /*include_virtual_offset=*/false);
-
-          glm::dvec2 local_on_majority = shared_xy;
-          if (majority_branch != shared_ref)
-          {
-            const auto& tree = kin_del.getStrandTree();
-            const size_t height = static_cast<size_t>(std::floor(std::max(0.0, t)));
-            const size_t lookup_height
-              = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
-            const PlaneProjector shared_to_majority(
-              tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height),
-              tree.getResolvedTransformByHeightAndBranch(height, majority_branch, lookup_height));
-            local_on_majority = shared_to_majority.project(shared_xy);
-          }
-
-          return kin_del.getStrandTree().transformToObjectSpaceForBranch(
-            glm::dvec3(local_on_majority.x, local_on_majority.y, t), t, majority_branch);
+          const glm::dvec3 tmpdbg_pos = liftToMajorityPlane(strand_id, t, entry.shared_ref_branch, it->second);
+          tmpdbgPlacementRow(kin_del, strand_id, t, "majority", it->second, entry.shared_ref_branch, tmpdbg_pos,
+            nativeMeshPosition(strand_id, t)); // TMPDBG
+          return tmpdbg_pos;
         }
       }
     }
 
-    const glm::dvec2 local_xy = kin_del.getStrandTree().evaluate(strand_id, t);
-    return transformFromInputBranchToObjectSpace(glm::dvec3(local_xy.x, local_xy.y, t), strand_id, t);
+    if (const std::optional<glm::dvec3> blended = splitPlacementBlendPosition(strand_id, t))
+    {
+      tmpdbgPlacementRow(kin_del, strand_id, t, "blend", static_cast<size_t>(-1), static_cast<size_t>(-1),
+        blended.value(), nativeMeshPosition(strand_id, t)); // TMPDBG
+      return blended.value();
+    }
+    const glm::dvec3 tmpdbg_native = nativeMeshPosition(strand_id, t);
+    tmpdbgPlacementRow(kin_del, strand_id, t, "native", static_cast<size_t>(-1), static_cast<size_t>(-1),
+      tmpdbg_native, tmpdbg_native); // TMPDBG
+    return tmpdbg_native;
   }
   catch (const std::exception& ex)
   {
     KINDS_ERROR("getPointInMeshSpace: " << ex.what() << "; using placeholder");
     return placeholder();
   }
+}
+
+glm::dvec2 SegmentBuilder::meshSharedXY(size_t strand_id, double t, size_t shared_ref) const
+{
+  // Exact unfold of the strand's own-branch support points into the shared branch plane (exact hinge). The kinetic
+  // frame (getPointAtWithReferenceBranch) keeps the legacy mapping and must not be used for mesh placement.
+  const auto& tree = kin_del.getStrandTree();
+  const auto& support = tree.getSupportPoints(strand_id);
+  const size_t lookup_height = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+  const auto at = [&](size_t height)
+  {
+    height = std::min(height, support.size() - 1);
+    const glm::dmat4& own
+      = tree.getResolvedTransformByHeightAndBranch(height, tree.getBranchIndex(strand_id, height), lookup_height);
+    const glm::dmat4& shared = tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height);
+    return own == shared ? support[height] : PlaneProjector(own, shared).project(support[height]);
+  };
+  const double lower = std::floor(std::max(0.0, t));
+  if (t <= lower)
+  {
+    return at(static_cast<size_t>(lower));
+  }
+  return glm::mix(at(static_cast<size_t>(lower)), at(static_cast<size_t>(lower) + 1), t - lower);
+}
+
+glm::dvec3 SegmentBuilder::liftToMajorityPlane(
+  size_t strand_id, double t, size_t shared_ref, size_t majority_branch) const
+{
+  const glm::dvec2 shared_xy = meshSharedXY(strand_id, t, shared_ref);
+  const auto& tree = kin_del.getStrandTree();
+  const size_t lookup_height = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+  // Fold onto the majority plane at each bracketing section; a branch born at the upper section resolves to its
+  // parent's (shared) plane below, so the lift interpolates from the common plane to the side's plane.
+  const auto lifted_at = [&](size_t height)
+  {
+    const glm::dmat4& shared = tree.getResolvedTransformByHeightAndBranch(height, shared_ref, lookup_height);
+    const glm::dmat4& majority = tree.getResolvedTransformByHeightAndBranch(height, majority_branch, lookup_height);
+    const glm::dvec2 local = shared == majority ? shared_xy : PlaneProjector(shared, majority).project(shared_xy);
+    return glm::dvec3(majority * glm::dvec4(local.x, 0.0, local.y, 1.0));
+  };
+  const double lower = std::floor(std::max(0.0, t));
+  const glm::dvec3 lower_point = lifted_at(static_cast<size_t>(lower));
+  if (t <= lower)
+  {
+    return lower_point;
+  }
+  return glm::mix(lower_point, lifted_at(static_cast<size_t>(lower) + 1), t - lower);
+}
+
+glm::dvec3 SegmentBuilder::nativeMeshPosition(size_t strand_id, double t) const
+{
+  const glm::dvec2 local_xy = kin_del.getStrandTree().evaluate(strand_id, t);
+  return transformFromInputBranchToObjectSpace(glm::dvec3(local_xy.x, local_xy.y, t), strand_id, t);
+}
+
+void SegmentBuilder::registerSplitPlacementBlend(size_t component_id, double t)
+{
+  const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
+  if (!entry.active)
+  {
+    return;
+  }
+  const auto& tree = kin_del.getStrandTree();
+  const size_t branch_section = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+  std::map<std::tuple<size_t, size_t, size_t>, SplitPlacementBlendGroup> groups;
+  for (const auto& [strand_id, majority_branch] : entry.strand_to_majority_branch)
+  {
+    const size_t own_branch = tree.getBranchIndex(strand_id, branch_section);
+    auto& group = groups[{ entry.shared_ref_branch, majority_branch, own_branch }];
+    group.t_split = t;
+    group.t_end = std::floor(t) + 1.0;
+    group.shared_ref_branch = entry.shared_ref_branch;
+    group.majority_branch = majority_branch;
+    group.own_branch = own_branch;
+    group.strands.push_back(strand_id);
+  }
+
+  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  for (const auto& [key, group] : groups) // TMPDBG
+  {
+    KINDS_INFO("TMPDBG split votes: branch_a=" << entry.tmpdbg_branch_a << " branch_b=" << entry.tmpdbg_branch_b
+                                                << " side0=(" << entry.tmpdbg_votes[0][0] << "," << entry.tmpdbg_votes[0][1]
+                                                << ") side1=(" << entry.tmpdbg_votes[1][0] << "," << entry.tmpdbg_votes[1][1]
+                                                << ") active=" << entry.active);
+    KINDS_INFO("TMPDBG split blend group: component=" << component_id << " t=" << t << " shared=" << std::get<0>(key)
+                                                       << " majority=" << std::get<1>(key) << " own=" << std::get<2>(key)
+                                                       << " strands=" << group.strands.size());
+  }
+  for (auto& [key, group] : groups)
+  {
+    std::sort(group.strands.begin(), group.strands.end());
+    for (const size_t strand_id : group.strands)
+    {
+      split_placement_blend_group_of_strand_[strand_id] = split_placement_blend_groups_.size();
+    }
+    split_placement_blend_groups_.push_back(std::move(group));
+  }
+}
+
+std::optional<glm::dvec3> SegmentBuilder::splitPlacementBlendPosition(size_t strand_id, double t) const
+{
+  size_t group_id = 0;
+  SplitPlacementBlendGroup group;
+  {
+    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    const auto it = split_placement_blend_group_of_strand_.find(strand_id);
+    if (it == split_placement_blend_group_of_strand_.end())
+    {
+      return std::nullopt;
+    }
+    group_id = it->second;
+    group = split_placement_blend_groups_[group_id];
+  }
+  if (t < group.t_split || t >= group.t_end)
+  {
+    return std::nullopt;
+  }
+
+  const auto pre = [&](size_t s) { return liftToMajorityPlane(s, t, group.shared_ref_branch, group.majority_branch); };
+  const MajorityPlaneAssignmentKey key { group_id, meshVertexKineticTimeBits(t) };
+  std::optional<SimilarityFit> fit;
+  {
+    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    if (const auto it = split_placement_blend_fit_cache_.find(key); it != split_placement_blend_fit_cache_.end())
+    {
+      fit = it->second;
+    }
+  }
+  if (!fit.has_value())
+  {
+    std::vector<glm::dvec3> pre_points;
+    std::vector<glm::dvec3> post_points;
+    for (const size_t s : group.strands)
+    {
+      if (kin_del.strandHasProfileAt(s, t))
+      {
+        pre_points.push_back(pre(s));
+        post_points.push_back(nativeMeshPosition(s, t));
+      }
+    }
+    const auto& tree = kin_del.getStrandTree();
+    const size_t upper_height = static_cast<size_t>(std::ceil(t));
+    const size_t lookup_height = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+    const auto plane_normal = [&](size_t branch)
+    {
+      const glm::dmat4& m = tree.getResolvedTransformByHeightAndBranch(upper_height, branch, lookup_height);
+      return glm::cross(glm::dvec3(m[0]), glm::dvec3(m[2]));
+    };
+    fit = fitSimilarity(pre_points, post_points, plane_normal(group.majority_branch), plane_normal(group.own_branch));
+    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    split_placement_blend_fit_cache_.emplace(key, fit.value());
+  }
+
+  const double w = (t - group.t_split) / (group.t_end - group.t_split);
+  return blendSimilarity(fit.value(), pre(strand_id), nativeMeshPosition(strand_id, t), w);
 }
 
 glm::dvec3 SegmentBuilder::getCrossingCoordsInMeshSpace(
@@ -9350,6 +9558,87 @@ void kinDS::SegmentBuilder::closingMeshValidateOrderedSegmentGeometry(
   }
 }
 
+void kinDS::SegmentBuilder::closingMeshWriteWalkFailureSvg(size_t strand_id, double t, size_t seed_index,
+  const std::string& reason, const std::optional<ClosingMeshWalkDebug::WalkPoint>& stuck,
+  const std::vector<MeshingData*>& ordered_segments, const std::vector<bool>& segment_used,
+  const std::vector<size_t>& walk_segment_order, const std::vector<size_t>& polygon,
+  const std::vector<size_t>& walked_boundary_hes,
+  const std::function<std::optional<ClosingMeshWalkDebug::WalkPoint>(size_t)>& outline_point)
+{
+  if (!kin_del.shouldDumpErrorFiles() || !kin_del.getVisualDebugOutputRoot().has_value())
+  {
+    return;
+  }
+  using Anchor = ClosingMeshWalkDebug::Anchor;
+  const auto& graph = kin_del.getGraph();
+  ClosingMeshWalkDebug debug;
+  debug.strand_id = strand_id;
+  debug.t = t;
+  debug.seed_index = seed_index;
+  debug.reason = reason;
+  debug.walk_strip_order = walk_segment_order;
+  debug.stuck = stuck;
+
+  VisualDebugHighlight highlight;
+  highlight.delaunay_vertices.insert(strand_id);
+  const auto endpoint = [&](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing,
+                          size_t voronoi_half_edge) -> ClosingMeshWalkDebug::WalkPoint
+  {
+    if (crossing.has_value())
+    {
+      const auto& ref = crossing.value();
+      return { Anchor { Anchor::Kind::Crossing, ref->delaunay_edge_id, ref->voronoi_edge_id },
+        "X d" + std::to_string(ref->delaunay_edge_id) + "/v" + std::to_string(ref->voronoi_edge_id) };
+    }
+    const size_t vv = voronoi_half_edge < graph.halfEdgeSlotCount()
+      ? static_cast<size_t>(graph.halfEdge(voronoi_half_edge).face)
+      : static_cast<size_t>(-1);
+    return { Anchor { Anchor::Kind::VoronoiVertex, vv }, "VV " + std::to_string(vv) };
+  };
+  const std::unordered_set<size_t> walked(walk_segment_order.begin(), walk_segment_order.end());
+  for (size_t i = 0; i < ordered_segments.size(); ++i)
+  {
+    const MeshingData& seg = *ordered_segments[i];
+    const size_t ve = seg.closing_voronoi_edge_id;
+    const size_t none = static_cast<size_t>(-1);
+    const size_t he_strand = ve == none ? none : (seg.closing_strand_at_voronoi_even_he ? 2 * ve : 2 * ve + 1);
+    const auto start = endpoint(seg.start_crossing, he_strand);
+    const auto end = endpoint(seg.end_crossing, he_strand == none ? none : he_strand ^ 1);
+    const auto state = walked.count(i) ? ClosingMeshWalkDebug::StripState::Walked
+                                       : (segment_used[i] ? ClosingMeshWalkDebug::StripState::Closed
+                                                          : ClosingMeshWalkDebug::StripState::Unused);
+    debug.strips.push_back({ i, start.anchor, end.anchor, start.label, end.label,
+      ve == none ? "ve ?" : "ve " + std::to_string(ve), state });
+    if (ve != none)
+    {
+      highlight.voronoi_edges.insert(ve);
+    }
+  }
+  for (size_t vertex_id : polygon)
+  {
+    if (const auto point = outline_point(vertex_id); point.has_value())
+    {
+      debug.walk_points.push_back(*point);
+    }
+  }
+  for (size_t he : walked_boundary_hes)
+  {
+    const int a = graph.halfEdge(he).origin;
+    const int b = graph.destination(he);
+    if (a >= 0 && b >= 0)
+    {
+      debug.boundary_edges.push_back({ he, static_cast<size_t>(a), static_cast<size_t>(b) });
+    }
+  }
+
+  const HalfEdgeDelaunayGraphToSVG::DebugOverlay overlay = buildClosingMeshWalkOverlay(debug);
+  const size_t runtime_branch = kin_del.unsplitRuntimeBranchForStrand(strand_id);
+  writeSegmentBuilderVisualDebugSvg(true, kin_del, graph, EventTime(t), "error",
+    "closing_cap_walk_strand" + std::to_string(strand_id) + "_seed" + std::to_string(seed_index), highlight,
+    runtime_branch != KineticDelaunay::RuntimeBranchData::no_branch ? std::optional<size_t>(runtime_branch) : std::nullopt, nullptr,
+    nullptr, nullptr, std::nullopt, false, std::nullopt, &overlay);
+}
+
 SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMeshTraceCapPolygons(size_t strand_id,
   double t, size_t num_incident_edges, VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
   const glm::dvec2& centroid, std::vector<size_t> mesh_vertex_ids, const std::vector<MeshingData*>& ordered_segments,
@@ -9499,6 +9788,9 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
     bool exited_fail = false;
     bool exited_closed_loop = false;
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> walk_closure_crossing_ref;
+    std::vector<size_t> walked_boundary_hes;
+    std::string fail_reason;
+    std::optional<ClosingMeshWalkDebug::WalkPoint> fail_stuck;
 
     auto record_cap_handoff = [&](size_t from_idx, size_t to_idx)
     {
@@ -9587,6 +9879,10 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
           exited_closed_loop = true;
           break;
         }
+        fail_reason = "s" + std::to_string(current_segment_index) + " ends at Voronoi vertex " + std::to_string(joint_vv)
+          + " without a boundary end crossing; no unused strip starts at that vertex and it is not the seed's start.";
+        fail_stuck = ClosingMeshWalkDebug::WalkPoint {
+          { ClosingMeshWalkDebug::Anchor::Kind::VoronoiVertex, joint_vv }, "VV " + std::to_string(joint_vv) };
         KINDS_ERROR("Closing mesh: ordered_seg["
           << current_segment_index << "] ends at circumcenter Voronoi vertex id " << joint_vv
           << " with no boundary end_crossing, but no unused strip has that id as its strand-side Voronoi vertex (and "
@@ -9629,6 +9925,7 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
 
       while (boundary_guard++ < graph.halfEdgeSlotCount() * 2)
       {
+        walked_boundary_hes.push_back(boundary_he);
         const int he_origin = graph.halfEdge(boundary_he).origin;
         if (he_origin >= 0 && static_cast<size_t>(he_origin) == strand_id)
         {
@@ -9733,6 +10030,8 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
               KINDS_ERROR("Closing mesh: Delaunay handoff from ordered_seg["
                 << current_segment_index
                 << "] targets its own start_crossing (only the seed loop may close onto seed).");
+              fail_reason
+                = "Boundary handoff from s" + std::to_string(current_segment_index) + " targets its own start crossing.";
               exited_fail = true;
               exit_boundary_chain_to_voronoi = true;
               break;
@@ -9800,6 +10099,11 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
                 "Closing mesh: strand-incident Voronoi crossing on Delaunay boundary matches no ordered segment "
                 "start_crossing at boundary_he="
                 << boundary_he << ".");
+              fail_reason = "Strand-incident crossing " + candidate_log + " on boundary half-edge "
+                + std::to_string(boundary_he) + " matches no strip start crossing.";
+              fail_stuck = ClosingMeshWalkDebug::WalkPoint { { ClosingMeshWalkDebug::Anchor::Kind::Crossing,
+                                                               candidate_ref->delaunay_edge_id, candidate_ref->voronoi_edge_id },
+                "unmatched crossing" };
               KINDS_DEBUG("Skipping intersection " << candidate_log
                                                    << " during walk: strand-incident crossing has no matching segment "
                                                       "start_crossing.");
@@ -9837,6 +10141,12 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
             KINDS_ERROR("Closing mesh: Delaunay boundary walk (half-edge "
               << boundary_he << ") reached corner vertex " << corner_vertex_id << " (expected strand " << strand_id
               << ").");
+            fail_reason = "Boundary walk from the end of s" + std::to_string(current_segment_index) + " along half-edge "
+              + std::to_string(boundary_he) + " reached corner site " + std::to_string(corner_vertex_id)
+              + " (expected strand " + std::to_string(strand_id) + ") without meeting a strip start crossing.";
+            fail_stuck = ClosingMeshWalkDebug::WalkPoint {
+              { ClosingMeshWalkDebug::Anchor::Kind::Site, static_cast<size_t>(corner_vertex_id) },
+              "corner site " + std::to_string(corner_vertex_id) };
             exited_fail = true;
             const glm::dvec2 corner = kin_del.getPointAt(t, static_cast<size_t>(corner_vertex_id), false, false);
             const int cv = add_mesh_vertex(glm::dvec3(corner, t),
@@ -9870,6 +10180,8 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
         KINDS_ERROR("Closing mesh: Delaunay boundary walk from end of ordered_seg["
           << current_segment_index << "] did not reach any strip's start_crossing (nor close the loop to ordered_seg["
           << seed_index << "]).");
+        fail_reason = "Boundary walk from the end of s" + std::to_string(current_segment_index)
+          + " reached no strip start crossing and did not close the loop.";
         exited_fail = true;
         break;
       }
@@ -9905,6 +10217,32 @@ SegmentBuilder::ClosingMeshPolygonsTraceResult kinDS::SegmentBuilder::closingMes
            "circumcenter join matching dual Voronoi vertex ids to another strip's strand end or seed's strand-side "
            "vertex).");
       exited_fail = true;
+    }
+
+    if (exited_fail)
+    {
+      closingMeshWriteWalkFailureSvg(strand_id, t, seed_index,
+        fail_reason.empty() ? "Walk ended with inconsistent handoff counts (see log)." : fail_reason, fail_stuck,
+        ordered_segments, result.segment_used, walk_segment_order, polygon, walked_boundary_hes,
+        [&](size_t mesh_vertex_id) -> std::optional<ClosingMeshWalkDebug::WalkPoint>
+        {
+          using Kind = ClosingMeshWalkDebug::Anchor::Kind;
+          const auto it = outline_vertex_info.find(mesh_vertex_id);
+          if (it == outline_vertex_info.end())
+          {
+            return std::nullopt;
+          }
+          const CapOutlineVertexInfo& info = it->second;
+          const std::string source(info.source);
+          if (source == "intersection")
+          {
+            return ClosingMeshWalkDebug::WalkPoint { { Kind::Crossing, info.primary_id, info.secondary_id },
+              "X d" + std::to_string(info.primary_id) + "/v" + std::to_string(info.secondary_id) };
+          }
+          const bool vv = source == "Voronoi vertex";
+          return ClosingMeshWalkDebug::WalkPoint { { vv ? Kind::VoronoiVertex : Kind::Site, info.primary_id },
+            (vv ? "VV " : "site ") + std::to_string(info.primary_id) };
+        });
     }
 
     {
@@ -10649,6 +10987,7 @@ void kinDS::SegmentBuilder::splitComponent(
   }
 
   const std::vector<size_t> pre_split_parent_strands = kin_del.component_data.components[component_id];
+  registerSplitPlacementBlend(component_id, t);
 
   // Update component data
   std::vector<size_t> component_ids(new_components.size(), -1);

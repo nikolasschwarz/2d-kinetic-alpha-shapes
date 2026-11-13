@@ -62,6 +62,9 @@ struct PendingBranchSplit
   bool infinitesimal_active = false;
   /// Bumped on activate-replace and finalize so stale infinitesimal events skip.
   uint64_t infinitesimal_epoch = 0;
+  /// Separation direction per evaluation frame (apply_reference_transform, shared reference branch or none), computed
+  /// once at @ref infinitesimal_t_event and reused for the whole epoch. Cleared on activation.
+  mutable std::map<std::pair<bool, std::optional<size_t>>, glm::dvec2> epoch_direction_by_frame;
   /// When true, finalize checks (convex seams → graph cut, section
   /// boundary force-cut) are skipped: the pending pieces are no longer topologically distinct (e.g. after a
   /// radius outside→inside component consolidate). Reactivation clears this flag when the same input-branch
@@ -513,6 +516,20 @@ class KineticDelaunay
   /// When true, visual-debug SVGs use pending split-off child runtime branch folders (and own strand sets) as soon as
   /// a radius event notes the pending split — not only after the graph cut.
   bool visual_debug_separate_pending_splits_ = false;
+  /// Input-branch birth: the input branches at @c section + 1 that share one parent at @c section. Exports are
+  /// allowed on [section, close_time]; close_time drops to the runtime split time once all of them are separated.
+  /// With forked schedulers only schedulers owning one of @c representative_strands (one per input branch) export.
+  struct VisualDebugBranchPoint
+  {
+    size_t section = 0;
+    std::vector<size_t> input_branches;
+    std::vector<size_t> representative_strands;
+    double close_time = 0.0;
+    bool separated = false;
+  };
+  bool visual_debug_branch_points_only_ = false;
+  std::vector<VisualDebugBranchPoint> visual_debug_branch_points_;
+  mutable std::mutex visual_debug_branch_points_mutex_;
   std::optional<double> flip_polynomial_dump_target_time_;
   std::optional<size_t> flip_polynomial_dump_target_half_edge_;
   bool diagnostics_enabled_ = false;
@@ -863,6 +880,11 @@ class KineticDelaunay
   bool inputBranchInRuntimeScope(size_t section, size_t input_branch_id, size_t scope_runtime_branch) const;
   /// Unsplit runtime branch of @p strand_id (a pending split child maps to its parent); @c no_branch if unassigned.
   size_t unsplitRuntimeBranchForStrand(size_t strand_id) const;
+  /// True when @p strand_id belongs to the active scheduler's runtime branch (always true on the global queue).
+  bool strandInActiveRuntimeScope(size_t strand_id) const
+  {
+    return strandInRuntimeScope(strand_id, activeRuntimeBranchScope());
+  }
 
   void setVisualDebugOutputRoot(const std::filesystem::path& root);
   const std::optional<std::filesystem::path>& getVisualDebugOutputRoot() const;
@@ -883,6 +905,12 @@ class KineticDelaunay
   /// split is still pending. Default off; CLI @c --svg-separate-pending-splits.
   void setVisualDebugSeparatePendingSplits(bool enabled);
   bool visualDebugSeparatePendingSplits() const;
+  /// When true, @ref shouldExportVisualDebugAt only passes from the last common section of a new input branch and
+  /// its siblings until the runtime split that separates them (inclusive, so infinitesimal events at the split
+  /// time are kept). CLI @c --svg-branch-points-only.
+  void setVisualDebugBranchPointsOnly(bool enabled);
+  /// Close branch-point windows whose input branches now lie in pairwise distinct unsplit runtime branches.
+  void noteVisualDebugBranchPointSeparations(double t);
   /// Path to @c branches.txt under @ref getVisualDebugOutputRoot when visual debug is enabled.
   /// Truncated whenever @ref setVisualDebugOutputRoot is called so each run starts with a fresh log.
   std::optional<std::filesystem::path> getRuntimeBranchLogPath() const;
@@ -988,6 +1016,9 @@ class KineticDelaunay
   /// When @p shared_reference_branch is set, all sites are evaluated in that shared transformed frame;
   /// otherwise each site uses @p apply_reference_transform with its native reference branch (or local support).
   glm::dvec2 computeSeparationDirection(const PendingBranchSplit& split, double t, bool apply_reference_transform,
+    std::optional<size_t> shared_reference_branch = std::nullopt) const;
+  /// @ref computeSeparationDirection at the active epoch's @c infinitesimal_t_event, cached per frame for the epoch.
+  glm::dvec2 epochSeparationDirection(const PendingBranchSplit& split, bool apply_reference_transform,
     std::optional<size_t> shared_reference_branch = std::nullopt) const;
   /// After a pending split is noted: if seams are already convex, enqueue a same-t @ref SeparationEvent
   /// (@ref SeparationEvent::after_radius_dispatch_order) so the graph cut runs after radius meshing; otherwise

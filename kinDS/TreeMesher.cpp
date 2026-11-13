@@ -768,6 +768,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   kinetic_delaunay->setErrorFilesEnabled(settings.error_files || visual_debug);
   kinetic_delaunay->setVisualDebugSeparatePendingSplits(settings.visual_debug_separate_pending_splits);
   kinetic_delaunay->setVisualDebugTimeRange(settings.visual_debug_time_lower, settings.visual_debug_time_upper);
+  kinetic_delaunay->setVisualDebugBranchPointsOnly(settings.visual_debug_branch_points_only);
   if (settings.flip_polynomial_dump_target_time.has_value())
   {
     kinetic_delaunay->setFlipPolynomialDumpTargetTime(settings.flip_polynomial_dump_target_time);

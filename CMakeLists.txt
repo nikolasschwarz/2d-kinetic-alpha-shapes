@@ -62,6 +62,7 @@ set(KINDS_SOURCES
 	"kinDS/HalfEdgeDelaunayGraph.cpp"
     "kinDS/VisualDebugHighlight.cpp"
     "kinDS/SegmentBuilderVisualDebug.cpp"
+    "kinDS/ClosingMeshDebugSvg.cpp"
     "kinDS/KineticAlgorithm.cpp"
     "kinDS/Statistics.cpp"
     "kinDS/KineticDelaunay.cpp"
@@ -87,6 +88,7 @@ set(KINDS_SOURCES
 	"kinDS/Validator.cpp"
 	"kinDS/VoronoiMesh.cpp"
 	"kinDS/PlaneProjector.cpp"
+	"kinDS/SimilarityBlend.cpp"
 	"kinDS/MeshIntersection.cpp")
 
 # Create the library target

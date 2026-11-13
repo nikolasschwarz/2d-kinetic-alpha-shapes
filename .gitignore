@@ -52,7 +52,6 @@
 /logs/
 /raw_meshlets/
 /segment_meshlets/
-/tests/
 
 # Binaries if emitted outside build trees
 *.exe

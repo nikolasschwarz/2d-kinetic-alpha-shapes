@@ -323,8 +323,7 @@ void KineticDelaunay::logFlipEventTriggerRoots(size_t he_id, double t, double mi
     glm::dvec2 virtual_shift(0.0);
     if (separated)
     {
-      virtual_shift = computeSeparationDirection(
-        *child_split, t, use_shared_frame, shared_reference_branch);
+      virtual_shift = epochSeparationDirection(*child_split, use_shared_frame, shared_reference_branch);
     }
 
     size_t runtime_branch = RuntimeBranchData::no_branch;

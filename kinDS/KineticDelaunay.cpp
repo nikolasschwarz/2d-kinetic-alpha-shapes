@@ -27,6 +27,7 @@
 #include <iomanip>
 #include <glm/geometric.hpp>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <utility>
 #include <optional>
@@ -2334,7 +2335,15 @@ bool KineticDelaunay::shouldExportVisualDebugAt(double real_time) const
   {
     return false;
   }
-  return true;
+  const std::lock_guard<std::mutex> lock(visual_debug_branch_points_mutex_);
+  return !visual_debug_branch_points_only_
+    || std::any_of(visual_debug_branch_points_.begin(), visual_debug_branch_points_.end(),
+      [this, real_time](const VisualDebugBranchPoint& point)
+      {
+        return real_time >= point.section && real_time <= point.close_time
+          && std::any_of(point.representative_strands.begin(), point.representative_strands.end(),
+            [this](size_t strand_id) { return strandInActiveRuntimeScope(strand_id); });
+      });
 }
 
 void KineticDelaunay::setErrorFilesEnabled(bool enabled)
@@ -2360,6 +2369,92 @@ void KineticDelaunay::setVisualDebugSeparatePendingSplits(bool enabled)
 bool KineticDelaunay::visualDebugSeparatePendingSplits() const
 {
   return visual_debug_separate_pending_splits_;
+}
+
+void KineticDelaunay::setVisualDebugBranchPointsOnly(bool enabled)
+{
+  const std::lock_guard<std::mutex> lock(visual_debug_branch_points_mutex_);
+  visual_debug_branch_points_only_ = enabled;
+  visual_debug_branch_points_.clear();
+  if (!enabled)
+  {
+    return;
+  }
+  const auto& strands_by_height = branch_trajs.getStrandsByBranchId();
+  const auto last_section_of = [&](size_t from, size_t branch)
+  {
+    size_t last = from;
+    for (size_t h = from; h < strands_by_height.size(); ++h)
+    {
+      if (branch < strands_by_height[h].size() && !strands_by_height[h][branch].empty())
+      {
+        last = h;
+      }
+    }
+    return last;
+  };
+  for (size_t section = 0; section + 1 < strands_by_height.size(); ++section)
+  {
+    std::map<size_t, std::vector<size_t>> branches_by_parent;
+    for (size_t branch = 0; branch < strands_by_height[section + 1].size(); ++branch)
+    {
+      const std::vector<size_t>& strands = strands_by_height[section + 1][branch];
+      if (!strands.empty())
+      {
+        branches_by_parent[branch_trajs.getBranchIndex(strands.front(), section)].push_back(branch);
+      }
+    }
+    for (auto& [parent, branches] : branches_by_parent)
+    {
+      if (branches.size() < 2)
+      {
+        continue;
+      }
+      // Never separated: stop once the first of them ends.
+      size_t close_section = strands_by_height.size();
+      for (size_t branch : branches)
+      {
+        close_section = std::min(close_section, last_section_of(section + 1, branch));
+      }
+      std::vector<size_t> representative_strands;
+      for (size_t branch : branches)
+      {
+        representative_strands.push_back(strands_by_height[section + 1][branch].front());
+      }
+      visual_debug_branch_points_.push_back({ section, std::move(branches), std::move(representative_strands),
+        static_cast<double>(close_section), false });
+    }
+  }
+}
+
+void KineticDelaunay::noteVisualDebugBranchPointSeparations(double t)
+{
+  const std::lock_guard<std::mutex> lock(visual_debug_branch_points_mutex_);
+  for (VisualDebugBranchPoint& point : visual_debug_branch_points_)
+  {
+    if (point.separated || t < point.section || t > point.close_time)
+    {
+      continue;
+    }
+    const auto& strands_by_branch = branch_trajs.getStrandBranchesByHeight(point.section + 1);
+    std::unordered_map<size_t, size_t> input_branch_of_runtime;
+    bool separated = true;
+    for (size_t branch : point.input_branches)
+    {
+      for (size_t strand_id : strands_by_branch[branch])
+      {
+        const size_t runtime = unsplitRuntimeBranchForStrand(strand_id);
+        separated = separated
+          && (runtime == RuntimeBranchData::no_branch
+            || input_branch_of_runtime.emplace(runtime, branch).first->second == branch);
+      }
+    }
+    if (separated)
+    {
+      point.separated = true;
+      point.close_time = t;
+    }
+  }
 }
 
 std::optional<std::filesystem::path> KineticDelaunay::getRuntimeBranchLogPath() const
@@ -2996,6 +3091,19 @@ glm::dvec2 KineticDelaunay::computeSeparationDirection(const PendingBranchSplit&
   return new_centroid.value() - old_centroid.value();
 }
 
+glm::dvec2 KineticDelaunay::epochSeparationDirection(
+  const PendingBranchSplit& split, bool apply_reference_transform, std::optional<size_t> shared_reference_branch) const
+{
+  const auto [it, inserted]
+    = split.epoch_direction_by_frame.try_emplace({ apply_reference_transform, shared_reference_branch });
+  if (inserted)
+  {
+    it->second = computeSeparationDirection(
+      split, split.infinitesimal_t_event, apply_reference_transform, shared_reference_branch);
+  }
+  return it->second;
+}
+
 // After a pending split is noted: defer convex cuts via SeparationEvent (after radius), else start virtual separation.
 void KineticDelaunay::maybeScheduleSeparationOrApplyPendingSplit(
   size_t parent_component_id, double split_time)
@@ -3079,6 +3187,7 @@ void KineticDelaunay::activateInfinitesimalSeparationOrApplyCut(
   ++split->infinitesimal_epoch;
   split->infinitesimal_active = true;
   split->infinitesimal_t_event = t;
+  split->epoch_direction_by_frame.clear();
   split->cut_event_queued = false;
   KINDS_DEBUG("activateInfinitesimalSeparation: parent_component_id=" << parent_component_id << " t=" << t
                                                                       << " epoch=" << split->infinitesimal_epoch
@@ -3564,8 +3673,11 @@ void KineticDelaunay::applyPendingRuntimeBranchSplit(double t, size_t parent_run
     // Cut only this parent runtime branch's pending children. Other pending-split child ids are collapsed in the
     // cut map so untargeted branches are not severed.
     const std::vector<size_t> cut_map = buildRuntimeBranchCutMapForParent(parent_runtime_branch_id);
+    // Debug dump: only this scheduler's vertices; other forked schedulers' sites may not be valid at t.
+    const size_t scope = activeRuntimeBranchScope();
     const HalfEdgeDelaunayGraph::RuntimeBranchSplitResult split_result = graph.applyRuntimeBranchSplit(
-      cut_map, [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time);
+      cut_map, [this, t](size_t v) { return getPointAt(v, t); }, branch_split_debug_time,
+      [this, scope](size_t v) { return strandInRuntimeScope(v, scope); });
     onGraphCutApplied(
       t, prev_face_slots, prev_he_slots, false, &split_result, additional_flip_quads, refresh_flip_events);
   }
@@ -3672,6 +3784,7 @@ void KineticDelaunay::completePendingRuntimeBranchSplit(size_t parent_runtime_br
     line << finalized_children[i];
   }
   logRuntimeBranchEvent(t, line.str());
+  noteVisualDebugBranchPointSeparations(t);
 
   maybeForkBranchSchedulers(parent_runtime_branch_id, finalized_children, t);
 }
@@ -4664,10 +4777,9 @@ glm::dvec2 KineticDelaunay::separationOffsetAt(size_t strand_id, double t) const
   {
     return glm::dvec2(0.0, 0.0);
   }
+  (void)t;
   // Direction must live in the same ambient space as getPointAt(..., transform=true).
-  const glm::dvec2 dir
-    = computeSeparationDirection(*split, t, /*apply_reference_transform=*/true, /*shared_reference_branch=*/std::nullopt);
-  return current_infinitesimal_t_ * dir;
+  return current_infinitesimal_t_ * epochSeparationDirection(*split, /*apply_reference_transform=*/true);
 }
 
 Trajectory<2> KineticDelaunay::buildInfinitesimalSiteTrajectory(
@@ -4704,8 +4816,7 @@ Trajectory<2> KineticDelaunay::buildInfinitesimalSiteTrajectory(
   const PendingBranchSplit* child_split = activeSeparationForStrand(strand_id);
   if (child_split != nullptr)
   {
-    const glm::dvec2 dir = computeSeparationDirection(
-      *child_split, t_event, apply_reference_transform, shared_reference_branch);
+    const glm::dvec2 dir = epochSeparationDirection(*child_split, apply_reference_transform, shared_reference_branch);
     for (int dim = 0; dim < 2; ++dim)
     {
       result[dim] = POLYNOMIAL(p[dim] + dir[dim] * x);
@@ -5135,7 +5246,8 @@ void KineticDelaunay::maybeWarnPostSplitFrameBlendRotation(PostSplitFrameTransit
   std::unordered_set<size_t> native_branches;
   for (size_t strand_id : transition.strand_ids)
   {
-    if (isDummyBoundary(strand_id))
+    // Ended strands keep their last branch id, whose transform at native_height can be zero.
+    if (isDummyBoundary(strand_id) || !strandHasProfileAt(strand_id, static_cast<double>(native_height)))
     {
       continue;
     }
@@ -6517,9 +6629,15 @@ std::vector<HalfEdgeDelaunayGraphToSVG::IntersectionDebugInfo> KineticDelaunay::
 
   const ScopedCurrentInfinitesimalTime infinitesimal_shift(const_cast<KineticDelaunay&>(*this), occurrence_time);
   const double t = occurrence_time.real_time;
+  // Only this scheduler's edges; other forked schedulers' sites may not be valid at t.
+  const size_t scope = activeRuntimeBranchScope();
 
   for (size_t d_edge_id = 0; d_edge_id < crossing_data.delaunay_edge_intersections.size(); ++d_edge_id)
   {
+    if (scope != BranchScheduler::no_branch && !delaunayEvenHalfEdgeInRuntimeScope(2 * d_edge_id, scope))
+    {
+      continue;
+    }
     const auto& d_list = crossing_data.delaunay_edge_intersections[d_edge_id];
     size_t d_index = 0;
     for (auto d_it = d_list.begin(); d_it != d_list.end(); ++d_it, ++d_index)

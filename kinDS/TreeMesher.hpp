@@ -143,6 +143,9 @@ class TreeMesher
     /// When true with @ref visual_debug, SVG folders already split by pending child runtime branches (from the radius
     /// event that notes the split) instead of only after the graph cut. CLI @c --svg-separate-pending-splits.
     bool visual_debug_separate_pending_splits = false;
+    /// When true with @ref visual_debug, export only from the last common section of newly born input branches
+    /// until (and including) the runtime split that separates them. CLI @c --svg-branch-points-only.
+    bool visual_debug_branch_points_only = false;
     std::optional<std::filesystem::path> visual_debug_output_root;
     /// Inclusive real-time window for visual-debug SVG/TXT exports (CLI @c --debug-files … lower upper).
     std::optional<double> visual_debug_time_lower;

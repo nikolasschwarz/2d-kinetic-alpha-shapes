@@ -142,6 +142,12 @@ This project can be used as a Git submodule in other CMake projects:
 
 The library will automatically handle its dependencies (glm, CGAL, Eigen) when used as a submodule.
 
+## Input Requirements
+
+- Every input branch must contain **at least four strands**. Branches with exactly three strands are not supported: their single triangle can invert its winding order, which the kinetic event handling does not
+  support. Crossing (intersection) points then go missing and closing the branch's cap mesh fails (e.g.
+  `Closing mesh: ordered_seg[...] ends at circumcenter Voronoi vertex ...`).
+
 ## Notes
 
 - The project is structured as a library (`kinDS` target) with an optional demo executable (`kinDS-demo`)

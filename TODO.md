@@ -27,3 +27,17 @@
 - Trajectories: `KineticDelaunay::buildInfinitesimalSiteTrajectory`
 - Trim: `kinDS/Polynomial.hpp` (`trimNearZero`)
 - Math sketch: plan `infinitesimal_incircle_trim_150331d4` (`[?³] ? 0` identity)
+
+## Branches with only three strands
+
+**Status:** unsupported (documented in README "Input Requirements").
+
+**Why:** a branch with exactly three sites is a single triangle, and that triangle can invert its winding order. The
+kinetic event handling does not support this, so crossing (intersection) points go missing and the cap walk in
+`SegmentBuilder::closingMeshTraceCapPolygons` fails when the branch is closed. Seen with the outdated
+`test_oak.txt` (strands 3, 4, 5; error SVGs `!error_closing_cap_walk_strand<id>_seed<n>` under `--error-files`).
+
+**TODO later**
+
+- [ ] Handle a triangle inverting its winding order (or reject / pad three-strand branches with a clear error)
+- [ ] Update or replace `test_oak.txt` with valid input

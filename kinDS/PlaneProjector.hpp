@@ -12,7 +12,9 @@ class PlaneProjector
  public:
   // Construct from plane-local -> world transforms
   // Local coordinates are (u, 0, v)
-  PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4& planeBToWorld);
+  // @p legacy_mirrored_hinge: pivot about the hinge point mirrored through the world origin. Only for the kinetic
+  // StrandTree reference remap, which is tuned to that behaviour (meshing fails with the exact hinge).
+  PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4& planeBToWorld, bool legacy_mirrored_hinge = false);
 
   // Project local v on plane A to local return value on plane B
   glm::dvec2 project(const glm::dvec2& v) const;
@@ -20,8 +22,7 @@ class PlaneProjector
   /** True when the two profile planes are parallel (shift / normal projection; no rotation axis). */
   bool isParallel() const { return m_parallel; }
 
-  /** World-space point on the intersection line; valid only when @ref isParallel is false.
-   *  WARNING: see BUG comment in the constructor — this point may not lie on either plane. */
+  /** World-space point on the intersection line; valid only when @ref isParallel is false. */
   const glm::dvec3& intersectionPoint() const { return m_p0; }
   /** Unit direction of the intersection line; valid only when @ref isParallel is false. */
   const glm::dvec3& intersectionAxis() const { return m_axis; }

@@ -9,6 +9,10 @@
 
 namespace kinDS
 {
+extern thread_local bool tmpdbg_in_visual_debug_svg; // TMPDBG
+}
+namespace kinDS
+{
 
 /**
  * This class handles the trajectories of strands according to branches, allowing to easily get points in a different

@@ -89,6 +89,8 @@ class HalfEdgeDelaunayGraph
   struct CreateInfiniteFacesDebugContext
   {
     const std::function<glm::dvec2(size_t)>* vertex_at = nullptr;
+    /// Optional: only these vertices are evaluated and drawn (others may not be valid at this time).
+    const std::function<bool(size_t)>* include_vertex = nullptr;
     std::string output_prefix;
   };
 
@@ -187,7 +189,8 @@ class HalfEdgeDelaunayGraph
 
   RuntimeBranchSplitResult applyRuntimeBranchSplit(
     const std::vector<size_t>& runtime_branch_map,
-    const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<EventTime> debug_time = std::nullopt);
+    const std::function<glm::dvec2(size_t)>& vertex_at, std::optional<EventTime> debug_time = std::nullopt,
+    const std::function<bool(size_t)>& debug_include_vertex = {});
 
   /** Tombstone every face/edge incident to a vertex flagged in @p dead_vertex_mask. */
   void killVertices(const std::vector<bool>& dead_vertex_mask);

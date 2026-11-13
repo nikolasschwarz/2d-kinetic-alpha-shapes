@@ -47,6 +47,8 @@
       //   --svg-separate-pending-splits
       //                             With --debug-files: separate SVG folders for pending split-off child branches
       //                             as soon as a radius event notes the split (not only after the graph cut).
+      //   --svg-branch-points-only  With --debug-files: only export from the last common section of new input
+      //                             branches until the runtime split separating them (inclusive).
       //   --error-files [path]      Failure SVGs/TXTs + common highlighted kinetic SVG (off by default;
       //                             also enabled by --debug-files).
       "args": [

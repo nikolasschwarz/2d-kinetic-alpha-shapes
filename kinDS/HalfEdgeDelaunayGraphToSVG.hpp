@@ -9,6 +9,8 @@
 #include <cmath>
 #include <glm/glm.hpp>
 #include <limits>
+#include <map>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -302,6 +304,42 @@ class HalfEdgeDelaunayGraphToSVG
     glm::dvec2 end { 0.0, 0.0 };
   };
 
+  /// Graph element an overlay refers to; resolved with the same geometry the SVG draws (sites, circumcenters, and
+  /// Delaunay x Voronoi edge intersections), so overlays always line up with the drawn diagram.
+  struct OverlayAnchor
+  {
+    enum class Kind
+    {
+      Site,
+      VoronoiVertex,
+      Crossing, ///< @c id = Delaunay edge id, @c id2 = Voronoi edge id.
+    };
+    Kind kind = Kind::Site;
+    size_t id = 0;
+    size_t id2 = 0;
+  };
+  struct OverlayPath
+  {
+    std::vector<OverlayAnchor> anchors;
+    std::array<int, 3> rgb { 0, 0, 0 };
+    double width = 0.02;
+    std::string label; ///< Drawn at the middle of the path.
+    bool number_anchors = false; ///< Label anchor i with "i" (walk steps); repeated positions are fanned out.
+  };
+  struct OverlayMarker
+  {
+    OverlayAnchor anchor;
+    std::string label;
+    std::array<int, 3> rgb { 255, 0, 255 };
+  };
+  /// Labelled paths / markers drawn on top of the graph plus note lines in the top-left corner.
+  struct DebugOverlay
+  {
+    std::vector<OverlayPath> paths;
+    std::vector<OverlayMarker> markers;
+    std::vector<std::string> notes;
+  };
+
   using IntersectionMarker = std::pair<glm::dvec2, IntersectionDebugInfo>;
 
   static std::string formatIntersectionParam(double delaunay_edge_param)
@@ -468,6 +506,8 @@ class HalfEdgeDelaunayGraphToSVG
    *        geometry that needs an unpositioned strand is skipped instead of indexing outside the live set.
    * @param seam_outlines Optional: closed loops (world/profile positions) drawn as bright magenta polygons, used to
    *        visualize the extracted future-branch seam outlines that feed the pending-split convexity check.
+   * @param overlay Optional: labelled paths / markers anchored to graph elements plus notes (top-left). The view
+   *        grows to include nearby anchors and the notes; far anchors are clipped.
    */
   static void write(const std::vector<glm::dvec2> points, const HalfEdgeDelaunayGraph& graph,
     const std::string& filename, double margin = 0.0, const std::vector<bool>* face_inside = nullptr,
@@ -479,7 +519,7 @@ class HalfEdgeDelaunayGraphToSVG
     const std::unordered_map<size_t, glm::dvec3>* site_world_positions = nullptr,
     const std::unordered_map<size_t, glm::dvec3>* voronoi_vertex_world_positions = nullptr,
     const std::vector<SeparationOffsetSegment>* separation_offset_segments = nullptr,
-    const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr)
+    const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr, const DebugOverlay* overlay = nullptr)
   {
     auto in_component = [&](size_t strand_id) -> bool
     {
@@ -616,6 +656,92 @@ class HalfEdgeDelaunayGraphToSVG
           bb.max_y = std::max(bb.max_y, p.y);
         }
       }
+    }
+    const auto overlay_circumcenters
+      = overlay != nullptr ? graph.computeCircumcenters(points) : std::vector<std::pair<glm::dvec2, bool>> {};
+    const auto resolve_anchor = [&](const OverlayAnchor& anchor) -> std::optional<glm::dvec2>
+    {
+      switch (anchor.kind)
+      {
+      case OverlayAnchor::Kind::Site:
+      {
+        const glm::dvec2* p = try_point(anchor.id);
+        return p != nullptr ? std::optional<glm::dvec2>(*p) : std::nullopt;
+      }
+      case OverlayAnchor::Kind::VoronoiVertex:
+        if (anchor.id >= overlay_circumcenters.size())
+        {
+          return std::nullopt;
+        }
+        if (overlay_circumcenters[anchor.id].second)
+        {
+          // Infinite face: the entry is a direction; place it far out so it is shown as off-view.
+          const glm::dvec2 view_center((bb.min_x + bb.max_x) * 0.5, (bb.min_y + bb.max_y) * 0.5);
+          return view_center + 1e6 * overlay_circumcenters[anchor.id].first;
+        }
+        return overlay_circumcenters[anchor.id].first;
+      case OverlayAnchor::Kind::Crossing:
+      {
+        glm::dvec2 p0, p1, q0, q1, x;
+        if (getDelaunayEdgeEndpoints(points, graph, anchor.id, p0, p1, positioned_strands)
+          && getVoronoiEdgeEndpoints(graph, overlay_circumcenters, anchor.id2, q0, q1)
+          && lineIntersection(p0, p1, q0, q1, x))
+        {
+          return x;
+        }
+        return std::nullopt;
+      }
+      }
+      return std::nullopt;
+    };
+    constexpr double overlay_label_unit = 0.01 * label_scale;
+    if (overlay != nullptr)
+    {
+      // Include anchors near the cropped view (far circumcenters stay clipped), keep the view from being a thin
+      // sliver, and reserve the top-left block for the notes.
+      const glm::dvec2 center((bb.min_x + bb.max_x) * 0.5, (bb.min_y + bb.max_y) * 0.5);
+      const double reach = 3.0 * std::max({ bb.max_x - bb.min_x, bb.max_y - bb.min_y, overlay_label_unit });
+      const auto include = [&](const OverlayAnchor& anchor)
+      {
+        const auto p = resolve_anchor(anchor);
+        if (p.has_value() && glm::length(*p - center) <= reach)
+        {
+          bb.min_x = std::min(bb.min_x, p->x - overlay_label_unit);
+          bb.min_y = std::min(bb.min_y, p->y - overlay_label_unit);
+          bb.max_x = std::max(bb.max_x, p->x + overlay_label_unit);
+          bb.max_y = std::max(bb.max_y, p->y + overlay_label_unit);
+        }
+      };
+      for (const OverlayPath& path : overlay->paths)
+      {
+        for (const OverlayAnchor& anchor : path.anchors)
+        {
+          include(anchor);
+        }
+      }
+      for (const OverlayMarker& marker : overlay->markers)
+      {
+        include(marker.anchor);
+      }
+      const double w = bb.max_x - bb.min_x;
+      const double h = bb.max_y - bb.min_y;
+      if (h < 0.6 * w)
+      {
+        bb.min_y -= 0.5 * (0.6 * w - h);
+        bb.max_y += 0.5 * (0.6 * w - h);
+      }
+      else if (w < 0.6 * h)
+      {
+        bb.min_x -= 0.5 * (0.6 * h - w);
+        bb.max_x += 0.5 * (0.6 * h - w);
+      }
+      size_t longest_note = 0;
+      for (const std::string& note : overlay->notes)
+      {
+        longest_note = std::max(longest_note, note.size());
+      }
+      bb.min_y -= (static_cast<double>(overlay->notes.size()) + 1.0) * 1.4 * overlay_label_unit;
+      bb.max_x = std::max(bb.max_x, bb.min_x + (static_cast<double>(longest_note) * 0.62 + 2.0) * overlay_label_unit);
     }
     svg::Document doc = setupDocument(points, filename, bb);
 
@@ -1350,6 +1476,109 @@ class HalfEdgeDelaunayGraphToSVG
               svg::Stroke(0.0, seam_outline_color));
           }
         }
+      }
+    }
+
+    if (overlay != nullptr)
+    {
+      const double lu = overlay_label_unit;
+      const auto color_of = [](const std::array<int, 3>& rgb) { return svg::Color(rgb[0], rgb[1], rgb[2]); };
+      std::map<std::pair<long long, long long>, int> number_slots;
+      // Off-view anchors are projected onto the (inset) view border along the ray from the view center.
+      const glm::dvec2 view_center((bb.min_x + bb.max_x) * 0.5, (bb.min_y + bb.max_y) * 0.5);
+      const glm::dvec2 view_half(
+        0.5 * (bb.max_x - bb.min_x) - 1.5 * lu, 0.5 * (bb.max_y - bb.min_y) - 1.5 * lu);
+      const auto project_to_border = [&](const glm::dvec2& p)
+      {
+        const glm::dvec2 d = p - view_center;
+        const double f = std::min(std::abs(d.x) > 0.0 ? view_half.x / std::abs(d.x) : 1e300,
+          std::abs(d.y) > 0.0 ? view_half.y / std::abs(d.y) : 1e300);
+        return view_center + d * std::min(1.0, f);
+      };
+      std::map<std::pair<long long, long long>, int> off_view_slots;
+      const auto off_view_label = [&](const glm::dvec2& p, const std::string& text, const svg::Color& color)
+      {
+        const glm::dvec2 q = project_to_border(p);
+        const int slot = off_view_slots[{ std::llround(q.x / (6.0 * lu)), std::llround(q.y / (6.0 * lu)) }]++;
+        doc << svg::Circle(svg::Point(q.x, q.y), 0.6 * lu, svg::Fill(color), svg::Stroke(0.0, color));
+        labels.push_back(Label(q.x + 0.8 * lu, q.y - 0.8 * lu - 1.3 * lu * slot, text + " (off-view)", color, 1.1 * lu));
+      };
+      for (const OverlayPath& path : overlay->paths)
+      {
+        const svg::Color color = color_of(path.rgb);
+        std::vector<std::optional<glm::dvec2>> resolved;
+        for (const OverlayAnchor& anchor : path.anchors)
+        {
+          resolved.push_back(resolve_anchor(anchor));
+        }
+        std::optional<glm::dvec2> label_pos;
+        for (size_t i = 0; i + 1 < resolved.size(); ++i)
+        {
+          if (!resolved[i].has_value() || !resolved[i + 1].has_value())
+          {
+            continue;
+          }
+          glm::dvec2 a = *resolved[i], b = *resolved[i + 1];
+          if (!clipSegmentToBoundingBox(a, b, bb))
+          {
+            continue;
+          }
+          doc << svg::Line(svg::Point(a.x, a.y), svg::Point(b.x, b.y), svg::Stroke(path.width, color));
+          if (!label_pos.has_value() || i == (resolved.size() - 1) / 2)
+          {
+            label_pos = (a + b) * 0.5;
+          }
+        }
+        if (!path.label.empty() && label_pos.has_value())
+        {
+          labels.push_back(Label(label_pos->x + 0.4 * lu, label_pos->y - 0.4 * lu, path.label, color, 1.3 * lu));
+        }
+        for (size_t i = 0; i < resolved.size(); ++i)
+        {
+          if (resolved[i].has_value() && !isWithinBoundingBox(*resolved[i], bb))
+          {
+            const std::string what = path.number_anchors
+              ? "step " + std::to_string(i)
+              : path.label + (i == 0 ? " start" : (i + 1 == resolved.size() ? " end" : ""));
+            off_view_label(*resolved[i], what, color);
+          }
+        }
+        if (path.number_anchors)
+        {
+          for (size_t i = 0; i < resolved.size(); ++i)
+          {
+            if (!resolved[i].has_value() || !isWithinBoundingBox(*resolved[i], bb))
+            {
+              continue;
+            }
+            const glm::dvec2 p = *resolved[i];
+            const int slot = number_slots[{ std::llround(p.x / (0.5 * lu)), std::llround(p.y / (0.5 * lu)) }]++;
+            const glm::dvec2 q = p + glm::dvec2(0.6 * lu + 1.1 * lu * slot, 1.1 * lu);
+            doc << svg::Circle(svg::Point(p.x, p.y), 0.25 * lu, svg::Fill(color), svg::Stroke(0.0, color));
+            labels.push_back(Label(q.x, q.y, std::to_string(i), color, 1.1 * lu));
+          }
+        }
+      }
+      for (const OverlayMarker& marker : overlay->markers)
+      {
+        const auto p = resolve_anchor(marker.anchor);
+        if (!p.has_value())
+        {
+          continue;
+        }
+        const svg::Color color = color_of(marker.rgb);
+        if (!isWithinBoundingBox(*p, bb))
+        {
+          off_view_label(*p, marker.label, color);
+          continue;
+        }
+        doc << svg::Circle(svg::Point(p->x, p->y), 2.5 * lu, svg::Fill(), svg::Stroke(0.25 * lu, color));
+        labels.push_back(Label(p->x + 1.5 * lu, p->y - 1.5 * lu, marker.label, color, 1.4 * lu));
+      }
+      for (size_t i = 0; i < overlay->notes.size(); ++i)
+      {
+        labels.push_back(Label(bb.min_x + lu, bb.min_y + (static_cast<double>(i) + 1.2) * 1.4 * lu, overlay->notes[i],
+          svg::Color(40, 40, 40), lu));
       }
     }
 

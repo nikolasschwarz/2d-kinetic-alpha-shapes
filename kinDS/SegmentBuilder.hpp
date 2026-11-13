@@ -1,8 +1,10 @@
 #pragma once
 #include "BoundaryMesh.hpp"
+#include "ClosingMeshDebugSvg.hpp"
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "MeshStructure.hpp"
+#include "SimilarityBlend.hpp"
 #include "VoronoiMesh.hpp"
 #include <array>
 #include <filesystem>
@@ -563,11 +565,31 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     /// Shared kinetic reference branch (min of the two) used for 2D side tests and mesh XY.
     size_t shared_ref_branch = 0;
     std::unordered_map<size_t, size_t> strand_to_majority_branch;
+    size_t tmpdbg_votes[2][2] = { { 0, 0 }, { 0, 0 } }; // TMPDBG
+    size_t tmpdbg_branch_a = 0, tmpdbg_branch_b = 0; // TMPDBG
   };
   /// Pre-split: majority input-branch plane for @p strand_id's component at @p t, if rotation projection exists.
   std::optional<size_t> majorityPlaneBranchForStrand(size_t strand_id, double t) const;
   MajorityPlaneAssignmentEntry computeMajorityPlaneAssignmentForComponent(size_t component_id, double t) const;
   MajorityPlaneAssignmentEntry getOrComputeMajorityPlaneAssignment(size_t component_id, double t) const;
+  /// Strands of a split component that shared one (majority plane, own branch) pair before the split. Until the
+  /// next section they blend from the majority-plane lift to their own-branch placement, so the mesh does not jump.
+  struct SplitPlacementBlendGroup
+  {
+    double t_split = 0.0;
+    double t_end = 0.0;
+    size_t shared_ref_branch = 0;
+    size_t majority_branch = 0;
+    size_t own_branch = 0;
+    std::vector<size_t> strands;
+  };
+  /// Strand position in @p shared_ref's plane by exact unfold (mesh placement only; not the kinetic frame).
+  glm::dvec2 meshSharedXY(size_t strand_id, double t, size_t shared_ref) const;
+  glm::dvec3 liftToMajorityPlane(size_t strand_id, double t, size_t shared_ref, size_t majority_branch) const;
+  glm::dvec3 nativeMeshPosition(size_t strand_id, double t) const;
+  /// Call before a split changes membership of @p component_id.
+  void registerSplitPlacementBlend(size_t component_id, double t);
+  std::optional<glm::dvec3> splitPlacementBlendPosition(size_t strand_id, double t) const;
   /// First-wins mesh coords for the placement-determining Voronoi–Delaunay intersection at a kinetic time
   /// (@c position_intersection / metadata @c delaunay_edge_id+@c voronoi_edge_id — not conceptual pre-shift ids).
   struct BufferedIntersectionMeshKey
@@ -904,6 +926,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     buffered_bark_raw_uvs_by_position_crossing_;
   mutable std::unordered_map<MajorityPlaneAssignmentKey, MajorityPlaneAssignmentEntry, MajorityPlaneAssignmentKeyHash>
     majority_plane_assignment_cache_;
+  /// Guarded by @c buffered_mesh_vertex_positions_mutex_ (splits and placement run on branch worker threads).
+  std::vector<SplitPlacementBlendGroup> split_placement_blend_groups_;
+  std::unordered_map<size_t, size_t> split_placement_blend_group_of_strand_;
+  /// Key: (blend group index, kinetic time bits).
+  mutable std::unordered_map<MajorityPlaneAssignmentKey, SimilarityFit, MajorityPlaneAssignmentKeyHash>
+    split_placement_blend_fit_cache_;
 
   glm::dvec3 radiusTransitionProjectionPosition(
     const RadiusTransitionProjection& projection, double t, bool mesh_space) const;
@@ -1280,6 +1308,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   void closingMeshLogUnmatchedOrderedSegments(size_t strand_id, double t,
     const std::vector<MeshingData*>& ordered_segments, const std::vector<bool>& segment_used);
+
+  /// Error-files dump of a failed cap walk attempt: the kinetic debug SVG of the strand's runtime branch with
+  /// @ref buildClosingMeshWalkOverlay on top. @p outline_point maps a polygon mesh vertex id to its anchor and label.
+  void closingMeshWriteWalkFailureSvg(size_t strand_id, double t, size_t seed_index, const std::string& reason,
+    const std::optional<ClosingMeshWalkDebug::WalkPoint>& stuck, const std::vector<MeshingData*>& ordered_segments,
+    const std::vector<bool>& segment_used, const std::vector<size_t>& walk_segment_order,
+    const std::vector<size_t>& polygon, const std::vector<size_t>& walked_boundary_hes,
+    const std::function<std::optional<ClosingMeshWalkDebug::WalkPoint>(size_t)>& outline_point);
 
   /**
    * @brief Triangulates one simple polygon ring into @p mesh using ear clipping.

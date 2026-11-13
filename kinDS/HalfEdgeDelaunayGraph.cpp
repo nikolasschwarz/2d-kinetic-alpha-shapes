@@ -830,7 +830,8 @@ void HalfEdgeDelaunayGraph::maybeWriteCreateInfiniteFacesPhaseDebug(const Create
     {
       continue;
     }
-    if (he.origin >= 0 && static_cast<size_t>(he.origin) < vertex_count)
+    if (he.origin >= 0 && static_cast<size_t>(he.origin) < vertex_count
+      && (debug_context->include_vertex == nullptr || (*debug_context->include_vertex)(static_cast<size_t>(he.origin))))
     {
       live_vertices.insert(static_cast<size_t>(he.origin));
     }
@@ -1878,7 +1879,7 @@ void HalfEdgeDelaunayGraph::appendPart(
 
 HalfEdgeDelaunayGraph::RuntimeBranchSplitResult HalfEdgeDelaunayGraph::applyRuntimeBranchSplit(
   const std::vector<size_t>& runtime_branch_map, const std::function<glm::dvec2(size_t)>& vertex_at,
-  std::optional<EventTime> debug_time)
+  std::optional<EventTime> debug_time, const std::function<bool(size_t)>& debug_include_vertex)
 {
   // In-place runtime-branch split (no retriangulation). Given runtime_branch_map[v] = runtime
   // branch id for each site vertex, disconnect topology across branches while keeping each
@@ -2106,6 +2107,7 @@ HalfEdgeDelaunayGraph::RuntimeBranchSplitResult HalfEdgeDelaunayGraph::applyRunt
   if (dump_debug)
   {
     infinite_faces_debug.vertex_at = &vertex_at;
+    infinite_faces_debug.include_vertex = debug_include_vertex ? &debug_include_vertex : nullptr;
     infinite_faces_debug.output_prefix = "createInfiniteFacesFromBoundary_" + debug_tag;
   }
   createInfiniteFacesFromBoundary(outer_half_edges, vertex_at, dump_debug ? &infinite_faces_debug : nullptr);

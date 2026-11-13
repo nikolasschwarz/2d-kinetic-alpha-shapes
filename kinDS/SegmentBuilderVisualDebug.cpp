@@ -34,7 +34,8 @@ std::unordered_map<size_t, size_t> buildSiteInputBranchLabels(
 
   for (size_t strand_id = 0; strand_id < vertex_count; ++strand_id)
   {
-    if (kin_del.isDummyBoundary(strand_id) || !kin_del.strandHasProfileAt(strand_id, occurrence_time))
+    if (kin_del.isDummyBoundary(strand_id) || !kin_del.strandInActiveRuntimeScope(strand_id)
+      || !kin_del.strandHasProfileAt(strand_id, occurrence_time))
     {
       continue;
     }
@@ -379,12 +380,13 @@ std::string visualDebugSvgRelativePath(EventTime occurrence_time, const char* ph
   return (*output_root / relative).generic_string();
 }
 
-std::unordered_set<size_t> collectLiveStrandIds(const HalfEdgeDelaunayGraph& graph)
+/// Live graph vertices of the active scheduler; other forked schedulers' sites may not be valid at its time.
+std::unordered_set<size_t> collectLiveStrandIds(const HalfEdgeDelaunayGraph& graph, const KineticDelaunay& kin_del)
 {
   std::unordered_set<size_t> strand_ids;
   auto add_vertex = [&](int vertex)
   {
-    if (vertex >= 0)
+    if (vertex >= 0 && kin_del.strandInActiveRuntimeScope(static_cast<size_t>(vertex)))
     {
       strand_ids.insert(static_cast<size_t>(vertex));
     }
@@ -605,7 +607,7 @@ std::unordered_map<size_t, glm::dvec3> buildVoronoiVertexWorldPositions(
         break;
       }
     }
-    if (reference_strand_id == static_cast<size_t>(-1))
+    if (reference_strand_id == static_cast<size_t>(-1) || !kin_del.strandInActiveRuntimeScope(reference_strand_id))
     {
       continue;
     }
@@ -643,7 +645,8 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   const std::unordered_map<size_t, glm::dvec3>& site_world_positions,
   const std::unordered_map<size_t, glm::dvec3>& voronoi_vertex_world_positions,
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments = nullptr,
-  const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr)
+  const std::vector<std::vector<glm::dvec2>>* seam_outlines = nullptr,
+  const HalfEdgeDelaunayGraphToSVG::DebugOverlay* overlay = nullptr)
 {
   const std::filesystem::path filepath(relative_path);
   if (filepath.has_parent_path())
@@ -660,7 +663,7 @@ void writeVisualDebugSvgFile(const std::string& relative_path, const std::vector
   HalfEdgeDelaunayGraphToSVG::write(points, graph, relative_path, 0.1, &face_inside_flags, true,
     &containing_tri_copy, &intersection_debug_data, &highlight, highlighted_strands, &site_input_branch_labels,
     &positioned_strands, &site_world_positions, &voronoi_vertex_world_positions, separation_offset_segments,
-    seam_outlines);
+    seam_outlines, overlay);
 }
 
 void writeVisualDebugSvgPair(EventTime occurrence_time, const char* phase, const std::string& event_descriptor,
@@ -674,7 +677,7 @@ void writeVisualDebugSvgPair(EventTime occurrence_time, const char* phase, const
   const std::unordered_map<size_t, glm::dvec3>& site_world_positions,
   const std::unordered_map<size_t, glm::dvec3>& voronoi_vertex_world_positions,
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments,
-  const std::vector<std::vector<glm::dvec2>>* seam_outlines)
+  const std::vector<std::vector<glm::dvec2>>* seam_outlines, const HalfEdgeDelaunayGraphToSVG::DebugOverlay* overlay)
 {
   VisualDebugHighlight unmarked = highlight_with_errors;
   unmarked.crossing_error_first_keys.clear();
@@ -688,7 +691,7 @@ void writeVisualDebugSvgPair(EventTime occurrence_time, const char* phase, const
       occurrence_time, phase, event_descriptor, runtime_branch_id, output_root, creation_time, event_id, {});
     writeVisualDebugSvgFile(unmarked_path, points, graph, kin_del, containing_tri_ids, intersection_debug_data, unmarked,
       highlighted_strands, positioned_strands, site_input_branch_labels, site_world_positions,
-      voronoi_vertex_world_positions, separation_offset_segments, seam_outlines);
+      voronoi_vertex_world_positions, separation_offset_segments, seam_outlines, overlay);
     return;
   }
 
@@ -696,7 +699,7 @@ void writeVisualDebugSvgPair(EventTime occurrence_time, const char* phase, const
     occurrence_time, phase, event_descriptor, runtime_branch_id, output_root, creation_time, event_id, error_suffix);
   writeVisualDebugSvgFile(marked_path, points, graph, kin_del, containing_tri_ids, intersection_debug_data,
     highlight_with_errors, highlighted_strands, positioned_strands, site_input_branch_labels, site_world_positions,
-    voronoi_vertex_world_positions, separation_offset_segments, seam_outlines);
+    voronoi_vertex_world_positions, separation_offset_segments, seam_outlines, overlay);
 }
 } // namespace
 
@@ -705,19 +708,25 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   const VisualDebugHighlight& highlight, std::optional<size_t> event_runtime_branch_id,
   const std::vector<HalfEdgeDelaunayGraphToSVG::SeparationOffsetSegment>* separation_offset_segments,
   const std::vector<std::vector<glm::dvec2>>* seam_outlines, const std::vector<size_t>* explicit_runtime_branch_ids,
-  std::optional<EventTime> creation_time, bool fan_out_active_runtime_branches, std::optional<uint64_t> event_id)
+  std::optional<EventTime> creation_time, bool fan_out_active_runtime_branches, std::optional<uint64_t> event_id,
+  const HalfEdgeDelaunayGraphToSVG::DebugOverlay* overlay)
 {
   if (!visual_debug)
   {
     return;
   }
+  struct TmpdbgSvgScope // TMPDBG
+  {
+    TmpdbgSvgScope() { tmpdbg_in_visual_debug_svg = true; }
+    ~TmpdbgSvgScope() { tmpdbg_in_visual_debug_svg = false; }
+  } tmpdbg_svg_scope;
   try
   {
   const bool error_dump = !highlight.crossing_error_first_keys.empty()
     || !highlight.crossing_error_repeat_keys.empty();
   const bool force_failsafe = phase != nullptr && std::string(phase) == "failsafe";
-  // Time window applies only to full --debug-files runs. Intersection-check error dumps always write.
-  if (!error_dump && !force_failsafe && kin_del.isVisualDebugEnabled()
+  // Time window applies only to full --debug-files runs. Error dumps (intersection checks, overlays) always write.
+  if (!error_dump && !force_failsafe && overlay == nullptr && kin_del.isVisualDebugEnabled()
     && !kin_del.shouldExportVisualDebugAt(occurrence_time.real_time))
   {
     return;
@@ -742,7 +751,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
   VisualDebugHighlight svg_highlight = highlight;
   const std::unordered_map<size_t, size_t> site_input_branch_labels
     = buildSiteInputBranchLabels(kin_del, graph, occurrence_time);
-  const std::unordered_set<size_t> live_strand_ids = collectLiveStrandIds(graph);
+  const std::unordered_set<size_t> live_strand_ids = collectLiveStrandIds(graph, kin_del);
   std::unordered_set<size_t> omitted_strands;
   const std::unordered_map<size_t, glm::dvec3> live_site_world_positions
     = buildSiteWorldPositions(kin_del, occurrence_time, live_strand_ids, omitted_strands);
@@ -777,7 +786,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     writeVisualDebugSvgPair(occurrence_time, phase, event_descriptor, folder_branch_id, output_root, creation_time,
       event_id, points, graph, kin_del, containing_tri_ids, intersection_debug_data, svg_highlight, &branch_strands,
       positioned_strands, site_input_branch_labels, branch_site_world_positions, voronoi_vertex_world_positions,
-      separation_offset_segments, seam_outlines);
+      separation_offset_segments, seam_outlines, overlay);
     return true;
   };
 
@@ -833,7 +842,7 @@ void writeSegmentBuilderVisualDebugSvg(bool visual_debug, KineticDelaunay& kin_d
     writeVisualDebugSvgPair(occurrence_time, phase, event_descriptor, std::nullopt, output_root, creation_time, event_id,
       points, graph, kin_del, containing_tri_ids, intersection_debug_data, svg_highlight, nullptr, positioned_strands,
       site_input_branch_labels, live_site_world_positions, voronoi_vertex_world_positions, separation_offset_segments,
-      seam_outlines);
+      seam_outlines, overlay);
   };
 
   // Explicit branch list: write only those folders (used by separation: parent while pending; parent+child after cut,
