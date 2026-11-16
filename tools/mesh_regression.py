@@ -82,8 +82,9 @@ def digest(items):
 
 def same_mesh(old, new, level):
     """'strict': identical triangles. 'corners': identical corners and triangle count, area within 1e-9 relative.
-    'loose': triangle / vertex counts within 0.01 % and area within 1e-6 relative. Parallel scheduling already varies
-    the combined mesh between runs of the same build (order-dependent meshlet post-processing), so it is 'loose'."""
+    'loose': triangle / vertex counts within 0.01 % and area within 1e-5 relative. Parallel scheduling already varies
+    the combined mesh between runs of the same build (order-dependent meshlet post-processing; up to ~5e-6 relative
+    area on large trees), so it is 'loose'."""
     if old is None or new is None:
         return old == new
     if level == 'strict':
@@ -91,7 +92,7 @@ def same_mesh(old, new, level):
     rel_area = abs(old['area'] - new['area']) / max(abs(old['area']), 1e-30)
     if level == 'corners':
         return old['corners'] == new['corners'] and old['triangles'] == new['triangles'] and rel_area <= 1e-9
-    return all(abs(old[k] - new[k]) <= max(4, 1e-4 * old[k]) for k in ('triangles', 'vertices')) and rel_area <= 1e-6
+    return all(abs(old[k] - new[k]) <= max(4, 1e-4 * old[k]) for k in ('triangles', 'vertices')) and rel_area <= 1e-5
 
 
 def mesh_level(mode, part):
