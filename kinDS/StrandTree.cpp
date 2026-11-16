@@ -124,6 +124,31 @@ StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_point
     tree_height = std::max(tree_height, pts.size() - 1);
     computeNormalTransforms();
   }
+
+  size_t max_heights = 0;
+  for (const auto& per_strand : branch_indices)
+  {
+    max_heights = std::max(max_heights, per_strand.size());
+  }
+  branch_indices_by_height.assign(max_heights, std::vector<size_t>(branch_indices.size()));
+  for (size_t strand_id = 0; strand_id < branch_indices.size(); ++strand_id)
+  {
+    const std::vector<size_t>& per_strand = branch_indices[strand_id];
+    for (size_t height = 0; height < max_heights; ++height)
+    {
+      branch_indices_by_height[height][strand_id] = per_strand.empty()
+        ? std::numeric_limits<size_t>::max()
+        : per_strand[std::min(height, per_strand.size() - 1)];
+    }
+  }
+}
+
+const std::vector<size_t>& StrandTree::getBranchIndicesAtHeight(size_t height) const
+{
+  static const std::vector<size_t> empty;
+  return branch_indices_by_height.empty()
+    ? empty
+    : branch_indices_by_height[std::min(height, branch_indices_by_height.size() - 1)];
 }
 
 const std::vector<std::vector<glm::dvec2>>& StrandTree::getPoints() const { return support_points; }

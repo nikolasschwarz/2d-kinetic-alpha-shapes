@@ -211,7 +211,8 @@ class VoronoiMesh
   /// Assign a UV to one triangle corner without modifying UVs shared by other corners.
   void setUV(const glm::dvec3& uv, size_t triangle_vertex_index);
   /// Verify that the UV-index buffer has one entry per triangle corner and that every non-missing reference is valid.
-  void validateUVLayout(const std::string& context = {}) const;
+  /// Checks corners from first_corner on; operator+= passes the append offset so repeated combining stays linear.
+  void validateUVLayout(const std::string& context = {}, size_t first_corner = 0) const;
 
   NormalMode getNormalMode() const;
   void validateNormalCount(const std::string& context = {}) const;

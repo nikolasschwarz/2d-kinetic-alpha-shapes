@@ -696,6 +696,8 @@ class KineticDelaunay
   void logSplitTransformOrthonormalityDiagnostic(size_t parent_component_id, double t) const;
   /// Strand ids whose min input branch defines the motion frame for @p strand_id.
   void collectReferenceBranchStrandPool(size_t strand_id, std::vector<size_t>& pool) const;
+  /// Same pool without copying; nullptr when there is none.
+  const std::vector<size_t>* referenceBranchStrandPool(size_t strand_id) const;
   void updateRuntimeBranchMapFromInputBranches(double t);
   void updateRuntimeBranchMapFromLiveGraph(double t, const char* trigger);
   size_t allocateRuntimeBranch();

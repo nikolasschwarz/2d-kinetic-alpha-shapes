@@ -1962,17 +1962,14 @@ bool KineticDelaunay::isDummyBoundary(size_t v) const
   return false;
 }
 
-void KineticDelaunay::collectReferenceBranchStrandPool(size_t strand_id, std::vector<size_t>& pool) const
+const std::vector<size_t>* KineticDelaunay::referenceBranchStrandPool(size_t strand_id) const
 {
-  pool.clear();
-
   if (!isGraphRetriangulatedForComponents())
   {
     if (const std::vector<size_t>* frozen_strands = pending_branch_splits_.frozenStrandsForStrand(strand_id);
       frozen_strands != nullptr)
     {
-      pool = *frozen_strands;
-      return;
+      return frozen_strands;
     }
   }
 
@@ -1981,9 +1978,21 @@ void KineticDelaunay::collectReferenceBranchStrandPool(size_t strand_id, std::ve
     const size_t component_id = component_data.component_map[strand_id];
     if (component_id < component_data.components.size())
     {
-      pool = component_data.components[component_id];
+      return &component_data.components[component_id];
     }
   }
+  return nullptr;
+}
+
+void KineticDelaunay::collectReferenceBranchStrandPool(size_t strand_id, std::vector<size_t>& pool) const
+{
+  const std::vector<size_t>* source = referenceBranchStrandPool(strand_id);
+  if (source == nullptr)
+  {
+    pool.clear();
+    return;
+  }
+  pool = *source;
 }
 
 size_t KineticDelaunay::getSharedReferenceBranchForStrands(
@@ -2028,15 +2037,14 @@ size_t KineticDelaunay::getReferenceBranch(size_t strand_id, double t) const
     return transition->common_reference_branch;
   }
 
-  std::vector<size_t> pool;
-  collectReferenceBranchStrandPool(strand_id, pool);
+  const std::vector<size_t>* pool = referenceBranchStrandPool(strand_id);
   const size_t branch_lookup_height = branchLookupHeightForTime(branch_trajs, t);
-  if (pool.empty())
+  if (pool == nullptr || pool->empty())
   {
     return branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
   }
 
-  return minInputBranchForStrands(pool, branch_lookup_height);
+  return minInputBranchForStrands(*pool, branch_lookup_height);
 }
 
 size_t KineticDelaunay::inputBranchSectionIndexAtIntervalUpperBound(double event_interval_upper_bound) const
@@ -5312,6 +5320,7 @@ size_t KineticDelaunay::minInputBranchForComponent(size_t component_id, size_t b
 size_t KineticDelaunay::minInputBranchForStrands(
   const std::vector<size_t>& strand_ids, size_t branch_lookup_height) const
 {
+  const std::vector<size_t>& branch_at_height = branch_trajs.getBranchIndicesAtHeight(branch_lookup_height);
   size_t min_branch = std::numeric_limits<size_t>::max();
   for (size_t strand_id : strand_ids)
   {
@@ -5319,7 +5328,11 @@ size_t KineticDelaunay::minInputBranchForStrands(
     {
       continue;
     }
-    const size_t input_branch = branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
+    // Unknown strands / strands without ids go through getBranchIndex, which throws.
+    const size_t input_branch
+      = strand_id < branch_at_height.size() && branch_at_height[strand_id] != std::numeric_limits<size_t>::max()
+      ? branch_at_height[strand_id]
+      : branch_trajs.getBranchIndex(strand_id, branch_lookup_height);
     min_branch = std::min(min_branch, input_branch);
   }
 

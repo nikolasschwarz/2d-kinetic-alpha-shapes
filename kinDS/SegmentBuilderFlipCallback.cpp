@@ -217,7 +217,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
       {
         const size_t tris_before = mesh.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh, last_left, last_right, event_vertex_index, flip_face_metadata);
-        if (segment_builder_.diagnostics)
+        if (segment_builder_.debugDiagnostics())
         {
           std::ostringstream note;
           note << "extend_flip_before d_tris=" << (mesh.getTriangleCount() - tris_before);
@@ -422,7 +422,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index, flip_face_metadata);
-        if (segment_builder_.diagnostics)
+        if (segment_builder_.debugDiagnostics())
         {
           std::ostringstream note;
           note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);
@@ -439,7 +439,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index, flip_face_metadata);
-        if (segment_builder_.diagnostics)
+        if (segment_builder_.debugDiagnostics())
         {
           std::ostringstream note;
           note << "extend_flip_neighbor d_tris=" << (mesh_ref.getTriangleCount() - tris_before);

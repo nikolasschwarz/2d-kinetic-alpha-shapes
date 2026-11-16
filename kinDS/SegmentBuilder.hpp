@@ -210,6 +210,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool validate_mesh_vertex_sources = false;
   /// When false, skip meshlet diagnostic logging and related string assembly.
   bool diagnostics = false;
+  /// Debug-level diagnostic lines (meshlet / strand-init traces) are only built when they would be logged;
+  /// formatting them otherwise costs time and serializes worker threads on the iostream locale lock.
+  bool debugDiagnostics() const { return diagnostics && logger.isEnabled(LogLevel::Debug); }
   /// When true, finalize collapses degree-2 flexible vertices on intersection meshlets.
   bool collapse_degree_two_flexible_vertices_postprocess_enabled = true;
   /// When true, segment meshlet assembly aligns glue seams across contributing mesh copies
@@ -248,6 +251,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   // Maps strand IDs to their corresponding segment indices in correct order
   std::vector<std::vector<size_t>> strand_to_segment_indices;
+  /// Inverse of strand_to_segment_indices; max() for segments not allocated yet.
+  std::vector<size_t> segment_strand_;
   /// Precomputed dense meshing segment ids: [strand][ordinal] from subdivision / physics input.
   std::vector<std::vector<size_t>> stable_segment_ids_by_strand_;
   /// True once @ref allocateStableSegmentForStrand has claimed the slot.
@@ -569,7 +574,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Pre-split: majority input-branch plane for @p strand_id's component at @p t, if rotation projection exists.
   std::optional<size_t> majorityPlaneBranchForStrand(size_t strand_id, double t) const;
   MajorityPlaneAssignmentEntry computeMajorityPlaneAssignmentForComponent(size_t component_id, double t) const;
-  MajorityPlaneAssignmentEntry getOrComputeMajorityPlaneAssignment(size_t component_id, double t) const;
+  const MajorityPlaneAssignmentEntry& getOrComputeMajorityPlaneAssignment(size_t component_id, double t) const;
   /// Strands of a split component that shared one (majority plane, own branch) pair before the split. Until the
   /// next section they blend from the majority-plane lift to their own-branch placement, so the mesh does not jump.
   struct SplitPlacementBlendGroup
@@ -922,9 +927,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Conceptual / pre-shift ids are never used. Shared across all intersection meshlets under the same mutex.
   mutable std::unordered_map<BufferedIntersectionMeshKey, glm::dvec2, BufferedIntersectionMeshKeyHash>
     buffered_bark_raw_uvs_by_position_crossing_;
+  /// Guards the majority-plane and split-blend caches below (read on every mesh placement, written rarely).
+  mutable std::shared_mutex placement_cache_mutex_;
   mutable std::unordered_map<MajorityPlaneAssignmentKey, MajorityPlaneAssignmentEntry, MajorityPlaneAssignmentKeyHash>
     majority_plane_assignment_cache_;
-  /// Guarded by @c buffered_mesh_vertex_positions_mutex_ (splits and placement run on branch worker threads).
   std::vector<SplitPlacementBlendGroup> split_placement_blend_groups_;
   std::unordered_map<size_t, size_t> split_placement_blend_group_of_strand_;
   /// Key: (blend group index, kinetic time bits).

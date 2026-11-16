@@ -823,7 +823,7 @@ VoronoiMesh& VoronoiMesh::operator+=(const VoronoiMesh& other)
   }
 
   validateNormalCount("combined mesh after combine");
-  validateUVLayout("combined mesh after combine");
+  validateUVLayout("combined mesh after combine", old_uv_indices_size);
   return *this;
 }
 
@@ -1886,7 +1886,7 @@ void kinDS::VoronoiMesh::setUV(const glm::dvec3& uv, size_t triangle_vertex_inde
   uv_indices[triangle_vertex_index] = addUV(uv);
 }
 
-void kinDS::VoronoiMesh::validateUVLayout(const std::string& context) const
+void kinDS::VoronoiMesh::validateUVLayout(const std::string& context, size_t first_corner) const
 {
   const std::string prefix = context.empty() ? std::string {} : context + ": ";
   if (uv_indices.size() != triangles.size())
@@ -1894,7 +1894,7 @@ void kinDS::VoronoiMesh::validateUVLayout(const std::string& context) const
     throw std::runtime_error(prefix + "UV-index count " + std::to_string(uv_indices.size())
       + " does not match triangle-corner count " + std::to_string(triangles.size()) + ".");
   }
-  for (size_t corner = 0; corner < uv_indices.size(); ++corner)
+  for (size_t corner = first_corner; corner < uv_indices.size(); ++corner)
   {
     const size_t uv_index = uv_indices[corner];
     if (uv_index != std::numeric_limits<size_t>::max() && uv_index >= uvs.size())

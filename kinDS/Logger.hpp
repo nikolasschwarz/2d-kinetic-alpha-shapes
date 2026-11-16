@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
@@ -56,8 +57,9 @@ inline LogLevel operator~(LogLevel a) { return static_cast<LogLevel>(~static_cas
 class Logger
 {
  private:
-  // Default: everything except Debug
-  LogLevel log_level = LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical;
+  // Default: everything except Debug. Atomic so disabled levels are rejected without locking (see isEnabled).
+  std::atomic<unsigned> log_level { static_cast<unsigned>(
+    LogLevel::Info | LogLevel::Warning | LogLevel::Error | LogLevel::Critical) };
   ofstream log_file; // File stream for the log file (optional)
   bool console_enabled_ = true;
   std::function<void(LogLevel, const std::string&)> external_sink_;
@@ -128,27 +130,27 @@ class Logger
   // Explicitly set the full log level bitmask (overwrites existing mask).
   void setLogLevelMask(LogLevel mask)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    log_level = mask;
+    log_level.store(static_cast<unsigned>(mask));
   }
 
   void setLogLevel(LogLevel level, bool set = true)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (set)
     {
-      log_level |= level;
+      log_level.fetch_or(static_cast<unsigned>(level));
     }
     else
     {
-      log_level &= ~level;
+      log_level.fetch_and(~static_cast<unsigned>(level));
     }
   }
 
-  LogLevel getLogLevel() const
+  LogLevel getLogLevel() const { return static_cast<LogLevel>(log_level.load(std::memory_order_relaxed)); }
+
+  /// Lock-free check used by the KINDS_* macros to skip building messages for disabled levels.
+  bool isEnabled(LogLevel level) const
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return log_level;
+    return (log_level.load(std::memory_order_relaxed) & static_cast<unsigned>(level)) != 0;
   }
 
   // Logs a message with a given log level
@@ -156,11 +158,11 @@ class Logger
   {
     std::function<void(LogLevel, const std::string&)> sink;
     {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!static_cast<unsigned>(log_level & level))
+      if (!isEnabled(level))
       {
         return; // Log level not enabled
       }
+      std::lock_guard<std::mutex> lock(mutex_);
       // Get current timestamp (thread-safe)
       time_t now = time(nullptr);
       tm timeinfo{};
@@ -209,12 +211,9 @@ class Logger
 
   void log(LogLevel level, const char* fmt, ...)
   {
+    if (!isEnabled(level))
     {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!static_cast<unsigned>(log_level & level))
-      {
-        return; // Log level not enabled
-      }
+      return; // Log level not enabled
     }
 
     va_list args;
@@ -271,6 +270,7 @@ inline Logger logger;
 }  // namespace kinDS
 
 #define KINDS_DEBUG(msg)                                                                                               \
+  if (::kinDS::logger.isEnabled(::kinDS::LogLevel::Debug))                                                            \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
@@ -278,6 +278,7 @@ inline Logger logger;
   }
 
 #define KINDS_MONITOR(msg)                                                                                             \
+  if (::kinDS::logger.isEnabled(::kinDS::LogLevel::Monitor))                                                          \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
@@ -285,6 +286,7 @@ inline Logger logger;
   }
 
 #define KINDS_INFO(msg)                                                                                                \
+  if (::kinDS::logger.isEnabled(::kinDS::LogLevel::Info))                                                             \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
@@ -292,6 +294,7 @@ inline Logger logger;
   }
 
 #define KINDS_WARNING(msg)                                                                                             \
+  if (::kinDS::logger.isEnabled(::kinDS::LogLevel::Warning))                                                          \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \
@@ -299,6 +302,7 @@ inline Logger logger;
   }
 
 #define KINDS_ERROR(msg)                                                                                               \
+  if (::kinDS::logger.isEnabled(::kinDS::LogLevel::Error))                                                            \
   {                                                                                                                    \
     std::stringstream ss;                                                                                              \
     ss << msg << " (" << __FILE__ << ":" << __LINE__ << ")\n";                                                         \

@@ -7,6 +7,7 @@
 #include "kinDS/StrandTree.hpp"
 #include "kinDS/TreeMesher.hpp"
 #include "kinDS/Validator.hpp"
+#include <chrono>
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -924,9 +925,13 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
       std::cout << "Mesh caps: start=" << (mesh_cap_at_start ? "on" : "off")
                 << " end=" << (mesh_cap_at_end ? "on" : "off") << std::endl;
     }
+    const auto meshing_start = std::chrono::steady_clock::now();
     const auto& meshes = mesher.runMeshingAlgorithm(visual_debug);
+    const double meshing_seconds
+      = std::chrono::duration<double>(std::chrono::steady_clock::now() - meshing_start).count();
 
-    std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets." << std::endl;
+    std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets in " << meshing_seconds << " s."
+              << std::endl;
 
     const std::filesystem::path export_base = mesh_export_base_directory(export_path);
     const std::filesystem::path segment_export_dir = export_base / "segment_meshlets";

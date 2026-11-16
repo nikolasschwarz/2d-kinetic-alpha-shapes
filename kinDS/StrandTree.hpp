@@ -25,6 +25,8 @@ class StrandTree
   // normal transforms for each height and branch [height][branch_id]
   std::vector<std::vector<glm::dmat4>> normal_transforms_by_height_and_branch;
   std::vector<std::vector<size_t>> branch_indices; // branch indices for each strand [strand_id][height]
+  // Same ids height-major [height][strand_id], clamped like getBranchIndex; max() for strands without ids.
+  std::vector<std::vector<size_t>> branch_indices_by_height;
   // strands by branch id [height][branch_id][strand_no]
   std::vector<std::vector<std::vector<size_t>>> strands_by_branch_id;
 
@@ -94,6 +96,8 @@ class StrandTree
   const std::vector<size_t>& getBranchIndices(size_t strand_id) const { return branch_indices[strand_id]; }
   /** Input branch id at @p height; uses the last entry when the strand ended earlier. Throws if the strand is unknown. */
   size_t getBranchIndex(size_t strand_id, size_t height) const;
+  /** Branch id of every strand at @p height (contiguous; max() where a strand has no ids). */
+  const std::vector<size_t>& getBranchIndicesAtHeight(size_t height) const;
   const std::vector<std::vector<size_t>>& getStrandBranchesByHeight(size_t height) const
   {
     return strands_by_branch_id[height];

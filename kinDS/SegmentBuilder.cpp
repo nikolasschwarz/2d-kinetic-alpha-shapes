@@ -1979,7 +1979,7 @@ void kinDS::SegmentBuilder::logDiagnosticsMonitoredDelaunayEdgeState(
 void kinDS::SegmentBuilder::meshletDiagnosticLogLine(
   const char* tag, size_t half_edge_id, double t, const char* extra_note) const
 {
-  if (!diagnostics)
+  if (!debugDiagnostics())
   {
     return;
   }
@@ -2031,7 +2031,7 @@ void kinDS::SegmentBuilder::meshletDiagnosticLogLine(
 void kinDS::SegmentBuilder::strandInitDiagnosticLogLine(
   const char* tag, size_t strand_id, double t, const char* extra_note) const
 {
-  if (!diagnostics)
+  if (!debugDiagnostics())
   {
     return;
   }
@@ -2551,7 +2551,7 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
       assert(boundary_transition_shift != nullptr);
       if (!regularMeshStripCrossingTouchesVoronoiEdge(segment, voronoi_edge_id))
       {
-        if (diagnostics)
+        if (debugDiagnostics())
         {
           const size_t crossing_voronoi_edge_id_start = segment.start_crossing.has_value()
             ? segment.start_crossing.value()->voronoi_edge_id
@@ -2585,6 +2585,7 @@ std::vector<SegmentBuilder::MeshingData> kinDS::SegmentBuilder::finishMesh(size_
   {
     const size_t tris_after = mesh.getTriangleCount();
     const long long d_tris = static_cast<long long>(tris_after) - static_cast<long long>(tris_before);
+    if (debugDiagnostics())
     {
       std::ostringstream oss;
       oss << "tris_before=" << tris_before << " tris_after=" << tris_after << " d_tris=" << d_tris
@@ -3001,7 +3002,7 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
   // Canonical even/odd pair for the undirected dual edge: even = left Voronoi vertex, odd = right Voronoi vertex.
   size_t even_id = half_edge_id & ~1;
   size_t odd_id = even_id + 1;
-  if (diagnostics)
+  if (debugDiagnostics())
   {
     std::ostringstream oss;
     oss << "reuse_existing_pair=" << (reuse_existing_pair_and_mesh ? "true" : "false");
@@ -3108,7 +3109,7 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
       refreshMeshingDataCrossingRefs(crossing_probe, voronoi_edge_id);
       if (!regularMeshStripCrossingTouchesVoronoiEdge(crossing_probe, voronoi_edge_id))
       {
-        if (diagnostics)
+        if (debugDiagnostics())
         {
           const size_t crossing_voronoi_edge_id_start = crossing_probe.start_crossing.has_value()
             ? crossing_probe.start_crossing.value()->voronoi_edge_id
@@ -3160,7 +3161,7 @@ std::vector<SegmentBuilder::MeshingData> SegmentBuilder::startNewMesh(size_t hal
     registerMeshletWithSuffix(std::move(mesh_local), std::string("_voronoi") + std::to_string(voronoi_edge_id), t);
   }
 
-  if (diagnostics)
+  if (debugDiagnostics())
   {
     std::ostringstream oss;
     oss << "created_new_pair=" << (created_new_pair ? "true" : "false") << " pair_idx=" << segment_mesh_pair_index;
@@ -3289,28 +3290,28 @@ std::string SegmentBuilder::composeClosingMeshFaceMetadata(double kinetic_time, 
 
 void SegmentBuilder::configureMeshletStorage(VoronoiMesh& mesh) const { mesh.setStoreMetadata(store_mesh_metadata); }
 
+namespace
+{
+/// Index of @p mesh inside the contiguous @p meshes, if it is one of its elements (O(1) address arithmetic).
+std::optional<size_t> indexOfMeshIn(const std::vector<VoronoiMesh>& meshes, const VoronoiMesh& mesh)
+{
+  const std::less<const VoronoiMesh*> before;
+  if (meshes.empty() || before(&mesh, meshes.data()) || !before(&mesh, meshes.data() + meshes.size()))
+  {
+    return std::nullopt;
+  }
+  return static_cast<size_t>(&mesh - meshes.data());
+}
+} // namespace
+
 std::optional<size_t> SegmentBuilder::regularMeshletIndexForMesh(const VoronoiMesh& mesh) const
 {
-  for (size_t i = 0; i < meshes.size(); ++i)
-  {
-    if (&meshes[i] == &mesh)
-    {
-      return i;
-    }
-  }
-  return std::nullopt;
+  return indexOfMeshIn(meshes, mesh);
 }
 
 std::optional<size_t> SegmentBuilder::intersectionMeshletIndexForMesh(const VoronoiMesh& mesh) const
 {
-  for (size_t i = 0; i < intersection_meshes.size(); ++i)
-  {
-    if (&intersection_meshes[i] == &mesh)
-    {
-      return i;
-    }
-  }
-  return std::nullopt;
+  return indexOfMeshIn(intersection_meshes, mesh);
 }
 
 void SegmentBuilder::markInteriorMeshletCompleted(size_t meshlet_index)
@@ -7036,12 +7037,12 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::computeMajorityPlan
   return entry;
 }
 
-SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::getOrComputeMajorityPlaneAssignment(
+const SegmentBuilder::MajorityPlaneAssignmentEntry& SegmentBuilder::getOrComputeMajorityPlaneAssignment(
   size_t component_id, double t) const
 {
   const MajorityPlaneAssignmentKey key { component_id, meshVertexKineticTimeBits(t) };
   {
-    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    const std::shared_lock lock(placement_cache_mutex_);
     if (const auto it = majority_plane_assignment_cache_.find(key); it != majority_plane_assignment_cache_.end())
     {
       return it->second;
@@ -7049,10 +7050,9 @@ SegmentBuilder::MajorityPlaneAssignmentEntry SegmentBuilder::getOrComputeMajorit
   }
 
   MajorityPlaneAssignmentEntry computed = computeMajorityPlaneAssignmentForComponent(component_id, t);
-  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
-  const auto [it, inserted] = majority_plane_assignment_cache_.emplace(key, std::move(computed));
-  (void)inserted;
-  return it->second;
+  const std::unique_lock lock(placement_cache_mutex_);
+  // Entries are never erased, so the reference stays valid across later inserts.
+  return majority_plane_assignment_cache_.emplace(key, std::move(computed)).first->second;
 }
 
 std::optional<size_t> SegmentBuilder::majorityPlaneBranchForStrand(size_t strand_id, double t) const
@@ -7062,7 +7062,7 @@ std::optional<size_t> SegmentBuilder::majorityPlaneBranchForStrand(size_t strand
     return std::nullopt;
   }
   const size_t component_id = kin_del.component_data.component_map[strand_id];
-  const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
+  const MajorityPlaneAssignmentEntry& entry = getOrComputeMajorityPlaneAssignment(component_id, t);
   if (!entry.active)
   {
     return std::nullopt;
@@ -7107,7 +7107,7 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
     if (strand_id < kin_del.component_data.component_map.size())
     {
       const size_t component_id = kin_del.component_data.component_map[strand_id];
-      const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
+      const MajorityPlaneAssignmentEntry& entry = getOrComputeMajorityPlaneAssignment(component_id, t);
       if (entry.active)
       {
         const auto it = entry.strand_to_majority_branch.find(strand_id);
@@ -7186,7 +7186,7 @@ glm::dvec3 SegmentBuilder::nativeMeshPosition(size_t strand_id, double t) const
 
 void SegmentBuilder::registerSplitPlacementBlend(size_t component_id, double t)
 {
-  const MajorityPlaneAssignmentEntry entry = getOrComputeMajorityPlaneAssignment(component_id, t);
+  const MajorityPlaneAssignmentEntry& entry = getOrComputeMajorityPlaneAssignment(component_id, t);
   if (!entry.active)
   {
     return;
@@ -7206,7 +7206,7 @@ void SegmentBuilder::registerSplitPlacementBlend(size_t component_id, double t)
     group.strands.push_back(strand_id);
   }
 
-  const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+  const std::unique_lock lock(placement_cache_mutex_);
   for (auto& [key, group] : groups)
   {
     std::sort(group.strands.begin(), group.strands.end());
@@ -7223,7 +7223,7 @@ std::optional<glm::dvec3> SegmentBuilder::splitPlacementBlendPosition(size_t str
   size_t group_id = 0;
   SplitPlacementBlendGroup group;
   {
-    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    const std::shared_lock lock(placement_cache_mutex_);
     const auto it = split_placement_blend_group_of_strand_.find(strand_id);
     if (it == split_placement_blend_group_of_strand_.end())
     {
@@ -7241,7 +7241,7 @@ std::optional<glm::dvec3> SegmentBuilder::splitPlacementBlendPosition(size_t str
   const MajorityPlaneAssignmentKey key { group_id, meshVertexKineticTimeBits(t) };
   std::optional<SimilarityFit> fit;
   {
-    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    const std::shared_lock lock(placement_cache_mutex_);
     if (const auto it = split_placement_blend_fit_cache_.find(key); it != split_placement_blend_fit_cache_.end())
     {
       fit = it->second;
@@ -7268,7 +7268,7 @@ std::optional<glm::dvec3> SegmentBuilder::splitPlacementBlendPosition(size_t str
       return glm::cross(glm::dvec3(m[0]), glm::dvec3(m[2]));
     };
     fit = fitSimilarity(pre_points, post_points, plane_normal(group.majority_branch), plane_normal(group.own_branch));
-    const std::lock_guard<std::recursive_mutex> lock(buffered_mesh_vertex_positions_mutex_);
+    const std::unique_lock lock(placement_cache_mutex_);
     split_placement_blend_fit_cache_.emplace(key, fit.value());
   }
 
@@ -8590,7 +8590,7 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(double t, siz
     ++triangles_added;
   }
 
-  if (diagnostics)
+  if (debugDiagnostics())
   {
     const bool branch_contains_strand_0 = branch_strand_set.contains(0);
     std::ostringstream oss;
@@ -10769,7 +10769,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   const size_t num_incident_edges = closingMeshCountStrandIncidentEdges(strand_id);
   const size_t mesh_pair_index_before = segment_mesh_pairs.size();
 
-  if (diagnostics)
+  if (debugDiagnostics())
   {
     std::ostringstream oss;
     oss << "num_incident_edges=" << num_incident_edges << " boundary_polygon_size=" << boundary_polygon.size()
@@ -10857,7 +10857,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   const size_t cap_vertices_after_tri = mesh.getVertexCount();
   const size_t cap_triangles_after_tri = mesh.getTriangleCount();
 
-  if (diagnostics)
+  if (debugDiagnostics())
   {
     size_t polygon_vertex_sum = 0;
     for (const auto& polygon : trace.polygons)
@@ -10882,7 +10882,7 @@ size_t kinDS::SegmentBuilder::createClosingMesh(size_t strand_id, double t,
   segment_mesh_pair_last_left_and_right_vertex.emplace_back();
   segment_mesh_pair_last_left_and_right_vertex.back() = std::move(closing_segments);
 
-  if (diagnostics)
+  if (debugDiagnostics())
   {
     std::ostringstream oss;
     oss << "meshlet_index=" << index << " mesh_pair_index=" << mesh_pair_index_before
@@ -11052,6 +11052,7 @@ void SegmentBuilder::buildStableSegmentIdTable()
   segment_properties.assign(next_id, MeshStructure::SegmentProperties {});
   segment_runtime_branch_.assign(next_id, KineticDelaunay::RuntimeBranchData::no_branch);
   segment_slot_created_.assign(next_id, false);
+  segment_strand_.assign(next_id, std::numeric_limits<size_t>::max());
 }
 
 size_t SegmentBuilder::allocateStableSegmentForStrand(size_t strand_id)
@@ -11079,6 +11080,7 @@ size_t SegmentBuilder::allocateStableSegmentForStrand(size_t strand_id)
     throw std::runtime_error("allocateStableSegmentForStrand: segment id exceeds table");
   }
   strand_to_segment_indices[strand_id].push_back(segment_id);
+  segment_strand_[segment_id] = strand_id;
   return segment_id;
 }
 
@@ -11253,7 +11255,7 @@ void SegmentBuilder::init()
     const auto& boundary_polygon = kin_del.component_data.component_boundaries[component_index][0];
     const auto& centroid = kin_del.component_data.component_centroids[component_index];
 
-    if (diagnostics)
+    if (debugDiagnostics())
     {
       std::ostringstream oss;
       oss << "segment_id=" << new_segment_id << " component_id=" << component_index
@@ -11270,7 +11272,7 @@ void SegmentBuilder::init()
       segment_mesh_pair.segment_index0 = -1;
       segment_mesh_pair.segment_index1 = strand_to_segment_indices[strand_id].back();
 
-      if (diagnostics)
+      if (debugDiagnostics())
       {
         std::ostringstream oss;
         oss << "closing_meshlet_index=" << closing_mesh_index << " mesh_pair_slot=" << closing_mesh_index
@@ -11283,7 +11285,7 @@ void SegmentBuilder::init()
         strandInitDiagnosticLogLine("init_cap_end", strand_id, t, oss.str().c_str());
       }
     }
-    else if (diagnostics)
+    else if (debugDiagnostics())
     {
       strandInitDiagnosticLogLine("init_cap_skipped", strand_id, t, "mesh_cap_at_start=false");
     }
@@ -11351,7 +11353,7 @@ void SegmentBuilder::init()
     }
     if (branches_at_section[input_branch_id].empty())
     {
-      if (diagnostics)
+      if (debugDiagnostics())
       {
         std::ostringstream oss;
         oss << "input_branch_id=" << input_branch_id << " reason=empty_branch_at_section";
@@ -11380,7 +11382,7 @@ void SegmentBuilder::init()
     }
     if (!any_real_strand)
     {
-      if (diagnostics)
+      if (debugDiagnostics())
       {
         std::ostringstream oss;
         oss << "input_branch_id=" << input_branch_id << " reason=only_dummy_strands"
@@ -11391,7 +11393,7 @@ void SegmentBuilder::init()
     }
     if (!any_live_strand)
     {
-      if (diagnostics)
+      if (debugDiagnostics())
       {
         std::ostringstream oss;
         oss << "input_branch_id=" << input_branch_id << " reason=not_loaded_at_start"
@@ -11401,7 +11403,7 @@ void SegmentBuilder::init()
       continue;
     }
 
-    if (diagnostics)
+    if (debugDiagnostics())
     {
       std::ostringstream oss;
       oss << "input_branch_id=" << input_branch_id << " invert_orientation=false offset=-0.01"
@@ -11449,7 +11451,7 @@ void SegmentBuilder::init()
     }
     createClosingCapsForInputBranchFinishingAtSection(t, input_branch_id);
 
-    if (diagnostics)
+    if (debugDiagnostics())
     {
       std::ostringstream oss;
       oss << "input_branch_id=" << input_branch_id << " invert_orientation=true offset=0.01 reason=branch_finishing";
@@ -12243,7 +12245,7 @@ void buildBoundaryMultiMatches(std::vector<MeshBoundaryInfo>& boundaries, std::v
         }
         out.push_back(m);
       }
-      if (!out.empty())
+      if (!out.empty() && contribs[i].mesh.storeMetadata())
       {
         std::vector<std::string> labels;
         labels.reserve(out.size() + 1);
@@ -12996,8 +12998,9 @@ bool processConsecutiveMatchedPairsTowardPartner(size_t source_mesh, size_t part
 
   bool edited = false;
   const auto& sverts = contribs[source_mesh].mesh.getVertices();
-  const std::string contributors_ij
-    = formatContributorsJson({ contribs[source_mesh].contributorLabel(), contribs[partner_mesh].contributorLabel() });
+  const std::string contributors_ij = contribs[source_mesh].mesh.storeMetadata()
+    ? formatContributorsJson({ contribs[source_mesh].contributorLabel(), contribs[partner_mesh].contributorLabel() })
+    : std::string {};
 
   for (const auto& cycle : source_info.cycles)
   {
@@ -14445,15 +14448,9 @@ const std::vector<std::vector<size_t>>& kinDS::SegmentBuilder::getStrandToSegmen
 
 size_t kinDS::SegmentBuilder::strandIdForSegment(size_t segment_id) const
 {
-  for (size_t strand_id = 0; strand_id < strand_to_segment_indices.size(); ++strand_id)
+  if (segment_id < segment_strand_.size() && segment_strand_[segment_id] != std::numeric_limits<size_t>::max())
   {
-    for (size_t seg : strand_to_segment_indices[strand_id])
-    {
-      if (seg == segment_id)
-      {
-        return strand_id;
-      }
-    }
+    return segment_strand_[segment_id];
   }
   throw std::runtime_error("strandIdForSegment: unknown segment_id " + std::to_string(segment_id));
 }

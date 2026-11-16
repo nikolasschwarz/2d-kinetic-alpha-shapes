@@ -219,7 +219,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
         {
           const size_t tris_before = adjacent_mesh.getTriangleCount();
           segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index, adj_face_meta);
-          if (segment_builder_.diagnostics)
+          if (segment_builder_.debugDiagnostics())
           {
             std::ostringstream note;
             note << "extend_subdivision_adjacent d_tris=" << (adjacent_mesh.getTriangleCount() - tris_before);
@@ -235,7 +235,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
         {
           const size_t tris_before = adjacent_mesh.getTriangleCount();
           segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index, adj_face_meta);
-          if (segment_builder_.diagnostics)
+          if (segment_builder_.debugDiagnostics())
           {
             std::ostringstream note;
             note << "extend_subdivision_adjacent d_tris=" << (adjacent_mesh.getTriangleCount() - tris_before);
