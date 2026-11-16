@@ -12037,10 +12037,14 @@ void setVertexMatchedMetadata(
   setVertexMatchedAndContributors(mesh, vertex_index, matched ? "true" : "false", contributors_raw_json);
 }
 
-// Temporary debug filter: only emit glue-align warnings/info for this meshing segment id.
-constexpr size_t kGlueAlignDebugMeshletIndex = 1962;
+// Glue-align debug output (warnings, boundary-walk files) for one meshing segment id; -1 disables it, and the constant
+// false lets the compiler drop every guarded block.
+constexpr size_t kGlueAlignDebugMeshletIndex = static_cast<size_t>(-1);
 
-bool glueAlignLogEnabled(size_t meshlet_index) { return meshlet_index == kGlueAlignDebugMeshletIndex; }
+constexpr bool glueAlignLogEnabled(size_t meshlet_index)
+{
+  return kGlueAlignDebugMeshletIndex != static_cast<size_t>(-1) && meshlet_index == kGlueAlignDebugMeshletIndex;
+}
 
 /// Insert @p position on boundary edge (v0—v1), splitting the unique adjacent triangle. Marks flexible when requested.
 /// @p meshlet_index matches PerSegment OBJ / failed_meshlet index (meshing segment id).
