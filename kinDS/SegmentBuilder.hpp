@@ -1,4 +1,5 @@
 #pragma once
+#include <source_location> // TMPG
 #include "BoundaryMesh.hpp"
 #include "ClosingMeshDebugSvg.hpp"
 #include "KineticDelaunay.hpp"
@@ -668,7 +669,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const glm::dvec2& centroid, size_t even_half_edge_id, size_t voronoi_edge_id, double t, int strand_even_origin_i,
     int strand_odd_origin_i, BoundaryEventType event_type, BoundarySegmentAction segment_action,
     const RegularMeshStripIntervalEndpoints& interval,
-    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr);
+    const RadiusBoundaryTransitionShiftContext* boundary_transition_shift = nullptr,
+    const std::vector<size_t>& continued_fronts = {});
 
   static RegularMeshStripIntervalEndpoints regularMeshStripIntervalFromMeshingData(
     const MeshingData& segment, size_t even_half_edge_id, size_t odd_half_edge_id);
@@ -1046,7 +1048,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /// Per-corner bark UV for boundary-interval meshlets (same UV adjustment as @ref BoundaryMesh).
   size_t addBoundaryIntervalTriangle(
-    VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 1);
+    VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 1,
+    std::source_location tmpg_loc = std::source_location::current());
   std::vector<glm::dvec2>& boundaryIntervalRawUvs(VoronoiMesh& mesh);
   const std::vector<glm::dvec2>& boundaryIntervalRawUvs(const VoronoiMesh& mesh) const;
   std::optional<glm::dvec2> boundaryIntervalRawUvAtVertex(const VoronoiMesh& mesh, size_t vertex_index) const;
@@ -1076,7 +1079,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const std::optional<glm::dvec3>& explicit_mesh_position = std::nullopt);
 
   size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}",
-    int material_id = RegularMeshletMaterialId);
+    int material_id = RegularMeshletMaterialId, std::source_location tmpg_loc = std::source_location::current());
+  /// Adds the parked collapsed triangle with undirected edge (@p a, @p b) to @p mesh so the edge can be split.
+  bool materializeCollapsedTriangleOnEdge(VoronoiMesh& mesh, size_t a, size_t b, bool interior_strip);
 
   /**
    * Same as @ref addMeshletTriangle after orienting `(u,v,w)` from combinatorics only: @p inside_boundary_he_id is the
@@ -1084,18 +1089,21 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * Apex order relative to strip `(u,v)` is chosen from that outside half-edge index alone (no vertex cross products).
    */
   size_t addBoundaryIntervalTriangleOriented(VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id,
-    double t, const std::string& metadata = "{}", std::optional<size_t> boundary_meshlet_id = std::nullopt);
+    double t, const std::string& metadata = "{}", std::optional<size_t> boundary_meshlet_id = std::nullopt,
+    std::source_location tmpg_loc = std::source_location::current());
 
   /// @p strand_id Delaunay site id for transform frame lookup; may be a Voronoi vertex id when it matches
   /// @p meshlet_voronoi_vertex_for_alpha_check (resolved to an adjacent site automatically).
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
-    const std::optional<glm::dvec3>& debug_color = std::nullopt);
+    const std::optional<glm::dvec3>& debug_color = std::nullopt,
+    std::source_location tmpg_loc = std::source_location::current());
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check, const std::string& metadata,
-    const std::optional<glm::dvec3>& debug_color, const MeshletVertexRuntimeInfo& runtime_info);
+    const std::optional<glm::dvec3>& debug_color, const MeshletVertexRuntimeInfo& runtime_info,
+    std::source_location tmpg_loc = std::source_location::current());
 
   /// Effective strip corner for triangles: latest flexible on @p left_side, else fixed @c mesh_start / @c mesh_end.
   /// Used for boundary-interval and regular (Voronoi-edge) strips alike.

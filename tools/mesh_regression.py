@@ -101,7 +101,7 @@ def mesh_level(mode, part):
     return 'corners' if part == 'boundary' else 'loose'
 
 
-def run_case(exe, tree, mode, repeat, work, keep):
+def run_case(exe, tree, mode, repeat, work):
     name = os.path.splitext(os.path.basename(tree))[0] + '_' + mode
     out_dir = os.path.join(work, f'{name}_r{repeat}')
     shutil.rmtree(out_dir, ignore_errors=True)
@@ -120,9 +120,6 @@ def run_case(exe, tree, mode, repeat, work, keep):
     if os.path.exists(combined):
         result['combined'] = fingerprint(combined, os.path.join(out_dir, 'combined_mesh.json'))
         result['boundary'] = fingerprint(os.path.join(out_dir, 'boundary_mesh.obj'), '')
-    if not keep:
-        for sub in ('raw_meshlets', 'segment_meshlets'):
-            shutil.rmtree(os.path.join(out_dir, sub), ignore_errors=True)
     return name, result
 
 
@@ -155,14 +152,13 @@ def main():
     ap.add_argument('--baseline', help='compare against this results JSON')
     ap.add_argument('--jobs', type=int, default=1, help='concurrent runs (use 1 for timing)')
     ap.add_argument('--repeat', type=int, default=1, help='runs per case; keeps the fastest meshing time')
-    ap.add_argument('--keep', action='store_true', help='keep raw/segment meshlet exports')
     args = ap.parse_args()
 
     trees = sorted({p for pattern in args.trees for p in glob.glob(pattern)})
     cases = [(t, m, r) for t in trees for m in args.modes for r in range(args.repeat)]
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        for name, result in pool.map(lambda c: run_case(args.exe, *c, args.work, args.keep), cases):
+        for name, result in pool.map(lambda c: run_case(args.exe, *c, args.work), cases):
             prev = results.get(name)
             if prev is not None and not all(same_mesh(prev.get(k), result.get(k), mesh_level(result['mode'], k))
                                        for k in ('combined', 'boundary')):

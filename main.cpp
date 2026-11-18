@@ -524,7 +524,8 @@ static void print_usage(const char* program_name)
             << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
             << "  --log-file <path>         Also write logger output to this path (overrides the default\n"
             << "                            logs/console_YYYYMMDD_HHMMSS.log created at startup)\n"
-            << "  --export-mode <mode>      Also export combined mesh when set to combined (default: raw)\n"
+            << "  --export-mode <mode>      raw (default): segment_meshlets/ + raw_meshlets/; segments: segment_meshlets/\n"
+            << "                            only; combined: combined_mesh.obj only; all: everything; none: no OBJ files\n"
             << "  --export-path <path>      Base output directory; writes segment_meshlets/ and raw_meshlets/ beneath it\n"
             << "  --untransformed           Profile-space mesh (no object-space transform, no kinetic separation);\n"
             << "                            applies Y/Z swap for viewing alongside SVG (default: world space)\n"
@@ -717,24 +718,42 @@ static void report_unknown_cli_argument(const std::string& arg)
   }
 }
 
-static bool parse_meshlet_export_mode(const std::string& value, kinDS::MeshletExportMode& out)
+/// OBJ outputs written by `--mesh` (selected with `--export-mode`).
+struct MeshExports
 {
-  if (value == "combined")
-  {
-    out = kinDS::MeshletExportMode::Combined;
-    return true;
-  }
-  if (value == "segments" || value == "per_segment" || value == "per-segment")
-  {
-    out = kinDS::MeshletExportMode::PerSegment;
-    return true;
-  }
+  bool segments = true;
+  bool raw = true;
+  bool combined = false;
+  bool boundary = true;
+};
+
+static bool parse_meshlet_export_mode(const std::string& value, MeshExports& out)
+{
   if (value == "raw")
   {
-    out = kinDS::MeshletExportMode::Raw;
-    return true;
+    out = {};
   }
-  return false;
+  else if (value == "segments" || value == "per_segment" || value == "per-segment")
+  {
+    out = { true, false, false, true };
+  }
+  else if (value == "combined")
+  {
+    out = { false, false, true, true };
+  }
+  else if (value == "all")
+  {
+    out = { true, true, true, true };
+  }
+  else if (value == "none")
+  {
+    out = { false, false, false, false };
+  }
+  else
+  {
+    return false;
+  }
+  return true;
 }
 
 static std::filesystem::path mesh_export_base_directory(const std::optional<std::filesystem::path>& export_path)
@@ -756,7 +775,7 @@ static std::filesystem::path mesh_export_base_directory(const std::optional<std:
   return path;
 }
 
-static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode export_mode,
+static bool mesh_from_file(const std::string& filename, const MeshExports& exports,
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, bool store_mesh_metadata,
   bool export_gpu_attributes_json, const std::string& validate_log_path, bool alternate_section_shading,
@@ -933,6 +952,35 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets in " << meshing_seconds << " s."
               << std::endl;
+    { // TMPG: same T-junction passes as EcoSysLab PrepareSegmentMeshletsForGpu, on copies
+      std::vector<kinDS::VoronoiMesh> tmpg_meshes = meshes;
+      std::vector<std::vector<int>> tmpg_neighbors = mesher.getMeshingNeighborIndices();
+      kinDS::closeCrossMeshletTJunctions(tmpg_meshes, tmpg_neighbors);
+      kinDS::closeIntraMeshletTJunctions(tmpg_meshes, tmpg_neighbors);
+      size_t open_edges = 0, multi_edges = 0, tris = 0;
+      for (const auto& m : tmpg_meshes)
+      {
+        const auto& V = m.getVertices();
+        const auto& T = m.getTriangles();
+        tris += T.size() / 3;
+        std::map<std::array<double, 6>, int> uses;
+        for (size_t i = 0; i + 2 < T.size(); i += 3)
+          for (int k = 0; k < 3; ++k)
+          {
+            glm::dvec3 a = V[T[i + k]], b = V[T[i + (k + 1) % 3]];
+            if (std::tie(b.x, b.y, b.z) < std::tie(a.x, a.y, a.z))
+              std::swap(a, b);
+            uses[{ a.x, a.y, a.z, b.x, b.y, b.z }]++;
+          }
+        for (const auto& [e, n] : uses)
+        {
+          open_edges += n == 1;
+          multi_edges += n > 2;
+        }
+      }
+      std::cout << "TMPG final (after TJ passes): triangles " << tris << " open edges " << open_edges
+                << " edges used >2 " << multi_edges << std::endl;
+    }
 
     const std::filesystem::path export_base = mesh_export_base_directory(export_path);
     const std::filesystem::path segment_export_dir = export_base / "segment_meshlets";
@@ -946,15 +994,20 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
       ? "transformed at construction"
       : apply_export_transform ? "transformed at export" : "no export transform";
 
-    std::cout << "Exporting segment meshlets to: " << segment_export_dir.string() << " (" << space_label << ", "
-              << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
-    mesher.exportMeshlets(kinDS::MeshletExportMode::PerSegment, segment_export_dir, export_transform);
+    if (exports.segments)
+    {
+      std::cout << "Exporting segment meshlets to: " << segment_export_dir.string() << " (" << space_label << ", "
+                << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
+      mesher.exportMeshlets(kinDS::MeshletExportMode::PerSegment, segment_export_dir, export_transform);
+    }
+    if (exports.raw)
+    {
+      std::cout << "Exporting raw meshlets to: " << raw_export_dir.string() << " (" << space_label << ", "
+                << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
+      mesher.exportMeshlets(kinDS::MeshletExportMode::Raw, raw_export_dir, export_transform);
+    }
 
-    std::cout << "Exporting raw meshlets to: " << raw_export_dir.string() << " (" << space_label << ", "
-              << transform_label << (profile_space_export ? ", _untransformed suffix" : "") << ")" << std::endl;
-    mesher.exportMeshlets(kinDS::MeshletExportMode::Raw, raw_export_dir, export_transform);
-
-    if (export_mode == kinDS::MeshletExportMode::Combined)
+    if (exports.combined)
     {
       const std::filesystem::path combined_export_path = export_path.has_value() && export_path->has_extension()
         && export_path->extension() == ".obj"
@@ -972,16 +1025,18 @@ static bool mesh_from_file(const std::string& filename, kinDS::MeshletExportMode
                 << std::endl;
     }
 
-    // Export boundary mesh
-    kinDS::VoronoiMesh boundary_mesh = mesher.getBoundaryMesh();
-    if (apply_export_transform)
+    if (exports.boundary)
     {
-      mesher.transformBoundaryMesh(boundary_mesh);
+      kinDS::VoronoiMesh boundary_mesh = mesher.getBoundaryMesh();
+      if (apply_export_transform)
+      {
+        mesher.transformBoundaryMesh(boundary_mesh);
+      }
+      const std::filesystem::path boundary_export_path
+        = profile_space_export ? "boundary_mesh_untransformed.obj" : "boundary_mesh.obj";
+      kinDS::ObjExporter::writeMesh(boundary_mesh, boundary_export_path, 1.0, 1.0, {}, true);
+      std::cout << "Boundary mesh exported to: " << boundary_export_path.string() << std::endl;
     }
-    const std::filesystem::path boundary_export_path
-      = profile_space_export ? "boundary_mesh_untransformed.obj" : "boundary_mesh.obj";
-    kinDS::ObjExporter::writeMesh(boundary_mesh, boundary_export_path, 1.0, 1.0, {}, true);
-    std::cout << "Boundary mesh exported to: " << boundary_export_path.string() << std::endl;
 
     std::cout << "Meshing complete!" << std::endl;
 
@@ -1057,7 +1112,7 @@ int main(int argc, char* argv[])
   // First pass: parse all options, remember the command (order-independent)
   std::string command; // "demo", "mesh", "help"
   std::string mesh_file; // for --mesh
-  kinDS::MeshletExportMode mesh_export_mode = kinDS::MeshletExportMode::Raw;
+  MeshExports mesh_exports;
   std::optional<std::filesystem::path> mesh_export_path;
   bool mesh_export_profile_space = false;
   bool mesh_transform_at_construction = true;
@@ -1158,14 +1213,14 @@ int main(int argc, char* argv[])
     {
       if (arg_idx + 1 >= argc)
       {
-        std::cerr << "Error: --export-mode requires a value (combined, segments, raw)." << std::endl;
+        std::cerr << "Error: --export-mode requires a value (raw, segments, combined, all, none)." << std::endl;
         print_usage(argv[0]);
         return 1;
       }
-      if (!parse_meshlet_export_mode(argv[arg_idx + 1], mesh_export_mode))
+      if (!parse_meshlet_export_mode(argv[arg_idx + 1], mesh_exports))
       {
         std::cerr << "Error: Unknown export mode: " << argv[arg_idx + 1]
-                  << " (expected combined, segments, or raw)." << std::endl;
+                  << " (expected raw, segments, combined, all, or none)." << std::endl;
         print_usage(argv[0]);
         return 1;
       }
@@ -1602,7 +1657,7 @@ int main(int argc, char* argv[])
   else if (command == "mesh")
   {
     std::cout << "Running TreeMesher on file: " << mesh_file << std::endl;
-    if (!mesh_from_file(mesh_file, mesh_export_mode, mesh_export_path, mesh_export_profile_space,
+    if (!mesh_from_file(mesh_file, mesh_exports, mesh_export_path, mesh_export_profile_space,
           mesh_transform_at_construction, mesh_validate_vertex_sources, mesh_store_mesh_metadata,
           mesh_export_gpu_attributes_json, mesh_validate_log_path, mesh_alternate_section_shading,
           mesh_start_section, mesh_start_input_branches, mesh_end_section, mesh_cap_at_start, mesh_cap_at_end,

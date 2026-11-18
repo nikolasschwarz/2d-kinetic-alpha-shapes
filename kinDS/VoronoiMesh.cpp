@@ -522,6 +522,25 @@ std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t
     face_meta = face_metadata[tri];
   }
 
+  // An edge endpoint at the same position as the opposite corner would leave one half with zero area: then only that
+  // endpoint is replaced by F, and no second face is created. (Unresolved placeholders are NaN and never coincide.)
+  const auto coincides_with_c = [&](size_t v) { return vertices[v] == vertices[vc]; };
+  if (coincides_with_c(vb) || coincides_with_c(va))
+  {
+    const size_t corner = coincides_with_c(vb) ? corner_b : corner_a;
+    triangles[corner] = new_vid;
+    if (has_uvs)
+    {
+      uv_indices[corner] = uv_f_idx;
+    }
+    if (has_corner_normals)
+    {
+      normals[corner] = n_f;
+    }
+    tmpgSetTag(tri, 5);
+    return { new_vid, tri };
+  }
+
   // Original face (…, va, vb, vc, …) → (…, va, F, vc, …): replace vb with F, preserve winding.
   triangles[corner_b] = new_vid;
   if (has_uvs)
@@ -535,6 +554,12 @@ std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t
 
   // New face: F, vb, vc — same cyclic order as va → vb → vc on the original triangle.
   const size_t new_tri = addTriangle(new_vid, vb, vc, uv_f_idx, uv_b_idx, uv_c_idx, material_id, face_meta);
+  tmpgSetTag(tri, 4, { int(new_vid), isVertexFlexible(new_vid) ? 1 : 0 });
+  tmpgSetTag(new_tri, 3, { int(new_vid), isVertexFlexible(new_vid) ? 1 : 0 });
+  tmpg_split_coincide[tmpg_construction ? 0 : 1][vertices[new_vid] == vertices[va] ? 1
+      : vertices[new_vid] == vertices[vb]                                       ? 2
+      : vertices[new_vid] == vertices[vc]                                       ? 3
+                                                                                : 0]++;
   if (has_corner_normals)
   {
     normals.push_back(n_f);

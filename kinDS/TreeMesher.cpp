@@ -904,16 +904,6 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   {
     std::tie(segment_meshlets, meshing_neighbor_indices) = mesh_builder->extractSegmentMeshlets(true);
     segment_meshlet_export_suffixes = mesh_builder->extractSegmentMeshletExportSuffixes(true);
-    size_t flipped_meshlet_count = 0;
-    for (VoronoiMesh& meshlet : segment_meshlets)
-    {
-      if (meshlet.orientFacesAwayFromCentroid())
-      {
-        ++flipped_meshlet_count;
-      }
-    }
-    KINDS_INFO(flipped_meshlet_count << "/" << segment_meshlets.size()
-                                     << " meshlets flipped to orient faces away from centroid.");
   }
   catch (const std::exception& ex)
   {
