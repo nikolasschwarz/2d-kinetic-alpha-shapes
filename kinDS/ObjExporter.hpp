@@ -4,6 +4,7 @@
 #include "Logger.hpp"
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -13,6 +14,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <filesystem>
@@ -80,6 +83,70 @@ struct ObjWriteOptions
   /// When non-empty and sized to match the mesh material names, write these Kd colors into the MTL
   /// instead of the built-in bark/interior or debug material set.
   std::vector<glm::dvec3> material_kd_colors;
+};
+
+/// Buffered text sink for OBJ / JSON export. Numbers are formatted with std::to_chars (no locale, no sprintf) and give
+/// the same text as the iostream defaults they replace: doubles as %.6g, integers in decimal.
+class ObjTextWriter
+{
+ public:
+  explicit ObjTextWriter(std::ostream& out) : out_(out) { buffer_.reserve(kFlushSize + 512); }
+  ~ObjTextWriter() { flush(); }
+  ObjTextWriter(const ObjTextWriter&) = delete;
+  ObjTextWriter& operator=(const ObjTextWriter&) = delete;
+
+  ObjTextWriter& operator<<(std::string_view text)
+  {
+    buffer_.append(text);
+    return flushIfFull();
+  }
+  ObjTextWriter& operator<<(char c)
+  {
+    buffer_.push_back(c);
+    return flushIfFull();
+  }
+  ObjTextWriter& operator<<(double value) { return append(value, std::chars_format::general, 6); }
+  template <class Int, std::enable_if_t<std::is_integral_v<Int> && !std::is_same_v<Int, char> && !std::is_same_v<Int, bool>, int> = 0>
+  ObjTextWriter& operator<<(Int value)
+  {
+    char text[24];
+    buffer_.append(text, std::to_chars(text, text + sizeof(text), value).ptr);
+    return flushIfFull();
+  }
+
+  void flush()
+  {
+    out_.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
+    buffer_.clear();
+  }
+
+  /// Same text as std::to_string(double) (%f).
+  static std::string fixed6(double value)
+  {
+    char text[400];
+    return std::string(text, std::to_chars(text, text + sizeof(text), value, std::chars_format::fixed, 6).ptr);
+  }
+
+ private:
+  static constexpr size_t kFlushSize = size_t(1) << 20;
+
+  ObjTextWriter& append(double value, std::chars_format format, int precision)
+  {
+    char text[64];
+    buffer_.append(text, std::to_chars(text, text + sizeof(text), value, format, precision).ptr);
+    return flushIfFull();
+  }
+  ObjTextWriter& flushIfFull()
+  {
+    if (buffer_.size() >= kFlushSize)
+    {
+      flush();
+    }
+    return *this;
+  }
+
+  std::ostream& out_;
+  std::string buffer_;
 };
 
 class ObjExporter
@@ -362,7 +429,7 @@ class ObjExporter
     return base_material_name;
   }
 
-  static void writeFaces(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub, bool include_metadata,
+  static void writeFaces(ObjTextWriter& file, const VoronoiMesh& mesh, size_t lb, size_t ub, bool include_metadata,
     bool alternate_section_shading)
   {
     validateFaceWriteRange(mesh, lb, ub, "writeFaces");
@@ -426,11 +493,11 @@ class ObjExporter
         {
           // writeMesh emits one vt record per triangle corner, after applying material-specific scaling. Therefore
           // OBJ faces must reference that emitted corner stream, not the mesh's internal shared UV-pool index.
-          file << std::to_string(i + j + 1);
+          file << (i + j + 1);
         }
         if (has_normal)
         {
-          file << "/" << std::to_string(normal_index + 1);
+          file << "/" << (normal_index + 1);
         }
       }
       if (include_metadata)
@@ -442,7 +509,7 @@ class ObjExporter
     }
   }
 
-  static void writeFacesFrameworkCompatible(std::ofstream& file, const VoronoiMesh& mesh, size_t lb, size_t ub,
+  static void writeFacesFrameworkCompatible(ObjTextWriter& file, const VoronoiMesh& mesh, size_t lb, size_t ub,
     bool include_metadata = false)
   {
     validateFaceWriteRange(mesh, lb, ub, "writeFacesFrameworkCompatible");
@@ -647,18 +714,19 @@ class ObjExporter
 
   static std::string jsonVec2(const glm::dvec2& v)
   {
-    return "[" + std::to_string(v.x) + ", " + std::to_string(v.y) + "]";
+    return "[" + ObjTextWriter::fixed6(v.x) + ", " + ObjTextWriter::fixed6(v.y) + "]";
   }
 
   static std::string jsonVec3(const glm::dvec3& v)
   {
-    return "[" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " + std::to_string(v.z) + "]";
+    return "[" + ObjTextWriter::fixed6(v.x) + ", " + ObjTextWriter::fixed6(v.y) + ", " + ObjTextWriter::fixed6(v.z)
+      + "]";
   }
 
   static std::string jsonVec4(const glm::dvec4& v)
   {
-    return "[" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " + std::to_string(v.z) + ", "
-      + std::to_string(v.w) + "]";
+    return "[" + ObjTextWriter::fixed6(v.x) + ", " + ObjTextWriter::fixed6(v.y) + ", " + ObjTextWriter::fixed6(v.z)
+      + ", " + ObjTextWriter::fixed6(v.w) + "]";
   }
 
  public:
@@ -798,46 +866,47 @@ class ObjExporter
 
     add_field("color", attrs.color.size(), [&](size_t i) { return jsonVec4(attrs.color[i]); });
     add_field("boundary_distance", attrs.boundary_distance.size(),
-      [&](size_t i) { return std::to_string(attrs.boundary_distance[i]); });
+      [&](size_t i) { return ObjTextWriter::fixed6(attrs.boundary_distance[i]); });
     add_field("profile_position", attrs.profile_position.size(),
       [&](size_t i) { return jsonVec2(attrs.profile_position[i]); });
     add_field("profile_polar_coordinate", attrs.profile_polar_coordinate.size(),
       [&](size_t i) { return jsonVec2(attrs.profile_polar_coordinate[i]); });
-    add_field("HC", attrs.HC.size(), [&](size_t i) { return std::to_string(attrs.HC[i]); });
-    add_field("HL", attrs.HL.size(), [&](size_t i) { return std::to_string(attrs.HL[i]); });
-    add_field("RW", attrs.RW.size(), [&](size_t i) { return std::to_string(attrs.RW[i]); });
-    add_field("RB", attrs.RB.size(), [&](size_t i) { return std::to_string(attrs.RB[i]); });
-    add_field("moisture", attrs.moisture.size(), [&](size_t i) { return std::to_string(attrs.moisture[i]); });
+    add_field("HC", attrs.HC.size(), [&](size_t i) { return ObjTextWriter::fixed6(attrs.HC[i]); });
+    add_field("HL", attrs.HL.size(), [&](size_t i) { return ObjTextWriter::fixed6(attrs.HL[i]); });
+    add_field("RW", attrs.RW.size(), [&](size_t i) { return ObjTextWriter::fixed6(attrs.RW[i]); });
+    add_field("RB", attrs.RB.size(), [&](size_t i) { return ObjTextWriter::fixed6(attrs.RB[i]); });
+    add_field("moisture", attrs.moisture.size(), [&](size_t i) { return ObjTextWriter::fixed6(attrs.moisture[i]); });
     add_field("position0", attrs.position0.size(), [&](size_t i) { return jsonVec3(attrs.position0[i]); });
     add_field("direction0", attrs.direction0.size(), [&](size_t i) { return jsonVec3(attrs.direction0[i]); });
     add_field("root_distance", attrs.root_distance.size(),
-      [&](size_t i) { return std::to_string(attrs.root_distance[i]); });
-    add_field("uv_3", attrs.uv_3.size(), [&](size_t i) { return std::to_string(attrs.uv_3[i]); });
+      [&](size_t i) { return ObjTextWriter::fixed6(attrs.root_distance[i]); });
+    add_field("uv_3", attrs.uv_3.size(), [&](size_t i) { return ObjTextWriter::fixed6(attrs.uv_3[i]); });
     add_field("has_neighbor", attrs.has_neighbor.size(),
       [&](size_t i) { return attrs.has_neighbor[i] ? "true" : "false"; });
 
-    file << "{\n";
+    ObjTextWriter out(file);
+    out << "{\n";
     for (size_t field_index = 0; field_index < fields.size(); ++field_index)
     {
       const Field& field = fields[field_index];
-      file << "  \"" << field.key << "\": [\n";
+      out << "  \"" << field.key << "\": [\n";
       for (size_t i = 0; i < field.size; ++i)
       {
-        file << "    " << field.get_value(i);
+        out << "    " << field.get_value(i);
         if (i + 1 < field.size)
         {
-          file << ",";
+          out << ",";
         }
-        file << "\n";
+        out << "\n";
       }
-      file << "  ]";
+      out << "  ]";
       if (field_index + 1 < fields.size())
       {
-        file << ",";
+        out << ",";
       }
-      file << "\n";
+      out << "\n";
     }
-    file << "}\n";
+    out << "}\n";
   }
 
   static void writeMesh(const VoronoiMesh& mesh, const std::filesystem::path& obj_path, const ObjWriteOptions& options)
@@ -881,24 +950,25 @@ class ObjExporter
     file << "# Exported by kinDS ObjExporter\n";
     file << "mtllib " << mtl_path.filename() << "\n\n";
 
-    file << "# Vertices\n";
+    ObjTextWriter out(file);
+    out << "# Vertices\n";
     const auto& vertex_metadata = mesh.getVertexMetadata();
     const auto& vertex_colors = mesh.getVertexColors();
     for (size_t i = 0; i < mesh.getVertices().size(); ++i)
     {
       const auto& vertex = mesh.getVertices()[i];
-      file << "v " << vertex[0] << " " << vertex[1] << " " << vertex[2];
+      out << "v " << vertex[0] << " " << vertex[1] << " " << vertex[2];
       if (options.include_vertex_colors && i < vertex_colors.size())
       {
         const auto& c = vertex_colors[i];
-        file << " " << c[0] << " " << c[1] << " " << c[2];
+        out << " " << c[0] << " " << c[1] << " " << c[2];
       }
       if (options.include_metadata)
       {
         const std::string metadata = (i < vertex_metadata.size()) ? vertex_metadata[i] : "{}";
-        file << " # " << sanitizeInlineComment(metadata);
+        out << " # " << sanitizeInlineComment(metadata);
       }
-      file << "\n";
+      out << "\n";
     }
 
     if (options.framework_compatible)
@@ -917,7 +987,7 @@ class ObjExporter
             std::to_string(mesh.getNormals().size()) + " normals for " + std::to_string(mesh.getTriangles().size()) +
             " corners.");
       }
-      file << "# Texture coordinates and normals (per triangle corner)\n";
+      out << "# Texture coordinates and normals (per triangle corner)\n";
       for (size_t i = 0; i < mesh.getTriangleCount(); ++i)
       {
         int material = (i < mesh.getMaterialIDs().size()) ? mesh.getMaterialIDs()[i] : -1;
@@ -937,20 +1007,20 @@ class ObjExporter
 
           // Index normals by corner — do not use triangles[corner] (that is a vertex id).
           const glm::dvec3& normal = mesh.getNormals()[corner_index];
-          file << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
-          file << "vn " << normal[0] << " " << normal[1] << " " << normal[2] << "\n";
+          out << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
+          out << "vn " << normal[0] << " " << normal[1] << " " << normal[2] << "\n";
         }
       }
     }
     else
     {
-      file << "# Normals\n";
+      out << "# Normals\n";
       for (const auto& normal : mesh.getNormals())
       {
-        file << "vn " << normal[0] << " " << normal[1] << " " << normal[2] << "\n";
+        out << "vn " << normal[0] << " " << normal[1] << " " << normal[2] << "\n";
       }
 
-      file << "# UVs\n";
+      out << "# UVs\n";
       for (size_t i = 0; i < mesh.getTriangleCount(); i++)
       {
         int material = -1;
@@ -974,12 +1044,12 @@ class ObjExporter
               uv[2] *= options.uv_height_factor;
             }
           }
-          file << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
+          out << "vt " << uv[0] << " " << uv[1] << " " << uv[2] << "\n";
         }
       }
     }
 
-    file << "# Faces\n";
+    out << "# Faces\n";
     size_t group_count = mesh.getGroupOffsets().size();
     const std::string mesh_context = "writeMesh(" + obj_path.string() + ")";
 
@@ -987,11 +1057,11 @@ class ObjExporter
     {
       if (options.framework_compatible)
       {
-        writeFacesFrameworkCompatible(file, mesh, lb, ub, options.include_metadata);
+        writeFacesFrameworkCompatible(out, mesh, lb, ub, options.include_metadata);
       }
       else
       {
-        writeFaces(file, mesh, lb, ub, options.include_metadata, options.alternate_section_shading);
+        writeFaces(out, mesh, lb, ub, options.include_metadata, options.alternate_section_shading);
       }
     };
 
@@ -1005,7 +1075,7 @@ class ObjExporter
         const std::string group_name = (group_index < names.size() && !names[group_index].empty())
           ? names[group_index]
           : ("group_" + std::to_string(group_index));
-        file << "o " << group_name << "\n";
+        out << "o " << group_name << "\n";
         size_t lb = mesh.getGroupOffsets()[group_index];
         size_t ub = mesh.getGroupOffsets()[group_index + 1];
         validateFaceWriteRange(mesh, lb, ub, mesh_context + " group " + std::to_string(group_index));
@@ -1018,7 +1088,7 @@ class ObjExporter
         const std::string group_name = (last_index < names.size() && !names[last_index].empty())
           ? names[last_index]
           : ("group_" + std::to_string(last_index));
-        file << "o " << group_name << "\n";
+        out << "o " << group_name << "\n";
       }
       size_t lb = mesh.getGroupOffsets().back();
       size_t ub = mesh.getTriangles().size() / 3;
@@ -1032,6 +1102,7 @@ class ObjExporter
       write_face_range(0, ub);
     }
 
+    out.flush();
     file.close();
   }
 

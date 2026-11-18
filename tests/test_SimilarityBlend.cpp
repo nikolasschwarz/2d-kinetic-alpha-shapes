@@ -60,3 +60,25 @@ TEST_CASE("Similarity fit of a single point is a pure translation", "[Similarity
   CHECK(fit.scale == 1.0);
   checkNear(blendSimilarity(fit, { 1.0, 2.0, 3.0 }, { 3.0, 2.0, 1.0 }, 0.5), { 2.0, 2.0, 2.0 });
 }
+
+TEST_CASE("Similarity fit of two points stays finite", "[SimilarityBlend]")
+{
+  // Two-strand split group from a meshing run: rank-deficient covariance made the polar iteration diverge to NaN.
+  const std::vector<glm::dvec3> pre { { 0.39355623741794887, 0.02729327622459192, 0.35063514112889005 },
+    { 0.39377076983080961, 0.02543337250198251, 0.34990621710902364 } };
+  const std::vector<glm::dvec3> post { { 0.39354495405204099, 0.027304172081389008, 0.35064938050773975 },
+    { 0.39375958109237508, 0.025444367488616532, 0.34992009399066448 } };
+  // Branch plane normals are cross products of scaled profile axes, so they can be tiny.
+  for (const glm::dvec3 normal : { glm::dvec3(2.0163426205112579e-08, 3.9001789521209486e-07, -9.2058779977345704e-07),
+         glm::dvec3(0.0, 0.0, 1.0), glm::dvec3(0.0, 0.0, 0.0) })
+  {
+    const SimilarityFit fit = fitSimilarity(pre, post, normal, normal);
+    for (size_t i = 0; i < pre.size(); ++i)
+    {
+      checkNear(blendSimilarity(fit, pre[i], post[i], 0.0), pre[i]);
+      checkNear(blendSimilarity(fit, pre[i], post[i], 1.0), post[i]);
+      const glm::dvec3 mid = blendSimilarity(fit, pre[i], post[i], 0.5);
+      CHECK((std::isfinite(mid.x) && std::isfinite(mid.y) && std::isfinite(mid.z)));
+    }
+  }
+}

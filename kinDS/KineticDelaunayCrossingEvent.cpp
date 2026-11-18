@@ -1005,9 +1005,13 @@ void KineticDelaunay::CrossingEvent::handleEvent()
     event_handler->afterEvent(*this);
   }
 
-  // After callbacks (e.g. debug SVG export); intersection lists must be consistent.
-  kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", t);
-  kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", t);
+  // After callbacks (e.g. debug SVG export); intersection lists must be consistent. Full scans, so per event only
+  // when the Delaunay/Voronoi intersection check is enabled.
+  if (kd->delaunayVoronoiIntersectionCheckEnabled())
+  {
+    kd->validateVoronoiVertexIteratorInvariants("CrossingEvent:afterEvent", t);
+    kd->validateCrossingIntersectionInvariants("CrossingEvent:afterEvent", t);
+  }
 
   if (is_infinitesimal)
   {

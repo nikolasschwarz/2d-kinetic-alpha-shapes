@@ -159,6 +159,7 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, /*explicit_runtime_branch_ids=*/nullptr,
     flip->creation_time, /*fan_out_active_runtime_branches=*/false, flip->eventId());
   logFlipMonitoredEdgeDiagnostics(segment_builder_, segment_builder_.kin_del, graph, *flip, "before");
+  segment_builder_.updateBoundary(flip->occurrence_time, component_id);
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
 
@@ -311,9 +312,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
   segment_mesh_pair.segment_index0 = he.origin == -1 ? -1 : segment_builder_.strand_to_segment_indices[he.origin].back();
   segment_mesh_pair.segment_index1
     = twin_he.origin == -1 ? -1 : segment_builder_.strand_to_segment_indices[twin_he.origin].back();
-  segment_builder_.half_edge_index_to_segment_mesh_pair_index[pair_he] = segment_builder_.segment_mesh_pairs.size();
-  segment_builder_.half_edge_index_to_segment_mesh_pair_index[pair_he ^ 1] = segment_builder_.segment_mesh_pairs.size();
-
+  // The flipped edge's previous pair was finished in beforeEvent; binding retires it.
+  segment_builder_.bindEdgeToPair(pair_he & ~size_t { 1 }, segment_builder_.segment_mesh_pairs.size());
   segment_builder_.segment_mesh_pairs.push_back(segment_mesh_pair);
 
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
@@ -367,7 +367,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     flip->occurrence_time);
 
   auto quad_he_ids = graph.getQuadBoundaryHalfEdgeIndices(flip->half_edge_id / 2);
-  
+
   // Update the meshes of the neighboring segments to connect to the new vertex created at the flip position, if applicable
   for (size_t he_id : quad_he_ids)
   {
@@ -417,8 +417,8 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
 
     if (he_id % 2 == 0 && he_id_left == -1)
     {
-      size_t last_left = segments.front().mesh_start_vertex_id;
-      size_t last_right = segments.front().mesh_end_vertex_id;
+      size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(segments.front(), true);
+      size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(segments.front(), false);
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index, flip_face_metadata);
@@ -430,12 +430,12 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
             "extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
         }
       }
-      segments.front().mesh_start_vertex_id = static_cast<int>(new_vertex_index);
+      segment_builder_.sampleStripSide(mesh_ref, segments.front(), true, new_vertex_index);
     }
     else if (he_id % 2 != 0 && he_id_right == -1)
     {
-      size_t last_left = segments.back().mesh_start_vertex_id;
-      size_t last_right = segments.back().mesh_end_vertex_id;
+      size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(segments.back(), true);
+      size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(segments.back(), false);
       {
         const size_t tris_before = mesh_ref.getTriangleCount();
         segment_builder_.addMeshletTriangle(mesh_ref, last_left, last_right, new_vertex_index, flip_face_metadata);
@@ -447,7 +447,7 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
             "extend_mesh", he_id, flip->occurrence_time, note.str().c_str());
         }
       }
-      segments.back().mesh_end_vertex_id = static_cast<int>(new_vertex_index);
+      segment_builder_.sampleStripSide(mesh_ref, segments.back(), false, new_vertex_index);
     }
   }
 

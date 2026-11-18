@@ -197,7 +197,7 @@ class KineticDelaunay
 
     virtual void init() { }
     virtual void finalize(double t) { }
-    virtual void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
+    virtual void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots, bool branch_local) { (void)t; (void)prev_face_slots; (void)prev_he_slots; (void)branch_local; }
     virtual void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
     /// Invoked immediately before a targeted pending runtime-branch graph cut in @ref applyPendingRuntimeBranchSplit.
     virtual void onBeforeComponentGraphSplit(double t) { (void)t; }
@@ -241,7 +241,20 @@ class KineticDelaunay
     // the polygon
     std::vector<std::vector<std::vector<BoundaryPoint>>> component_boundaries;
     std::vector<glm::dvec2> component_centroids;
+    /// Real / infinitesimal time of the stored boundary positions.
     std::vector<double> component_last_updated;
+    std::vector<double> component_last_updated_infinitesimal;
+    /// Set when face_inside or membership changed the boundary since its last full extraction (flips cannot).
+    std::vector<char> component_boundary_topology_dirty;
+
+    void resizeSupport(size_t count)
+    {
+      component_boundaries.resize(count);
+      component_centroids.resize(count);
+      component_last_updated.resize(count, std::numeric_limits<double>::quiet_NaN());
+      component_last_updated_infinitesimal.resize(count, 0.0);
+      component_boundary_topology_dirty.resize(count, 1);
+    }
   };
 
   ComponentData component_data;
@@ -733,7 +746,9 @@ class KineticDelaunay
   std::vector<std::vector<size_t>> extractGraphConnectedComponents() const;
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
   size_t getRuntimeBranchIdForFace(size_t face_id) const;
-  void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots);
+  /// @p branch_local: only the active scheduler's part was rebuilt (appended past @p prev_he_slots); other branches'
+  /// crossings and strips stay untouched.
+  void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots, bool branch_local = false);
   /// Drop CrossingData for tombstoned faces/edges so retriangulation can re-register live duals.
   void clearDeadCrossingState();
   /// Post-cut bookkeeping. Does not clear pending splits or remap runtime branches — the caller finalizes the
@@ -1151,6 +1166,13 @@ class KineticDelaunay
 
   std::vector<std::vector<BoundaryPoint>> extractComponentBoundaries(const std::vector<size_t>& component, double t,
     std::vector<bool>& he_visited, bool apply_reference_transform = true, bool include_virtual_offset = true) const;
+
+  /// Brings the boundary and centroid of @p component_id to the current event time: re-walks the stored loops for
+  /// fresh positions, or fully re-extracts when the boundary topology changed since the last extraction (or
+  /// @p force_rebuild). Delaunay space (reference transform + virtual offset) throughout.
+  void refreshComponentBoundary(size_t component_id, double t, bool force_rebuild = false);
+  /// Marks the components containing @p vertices for full boundary re-extraction on their next refresh.
+  void markComponentBoundaryTopologyChanged(const std::array<int, 3>& vertices);
 
   std::vector<BoundaryPoint> extractComponentBoundary(const std::vector<size_t>& component, double t,
     bool apply_reference_transform = true, bool include_virtual_offset = true) const;

@@ -187,6 +187,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
     const glm::dvec3 event_pos = voronoi_vertex_position;
     const size_t component_id = segment_builder_.kin_del.component_data.component_map[graph.destination(crossing->half_edge_id)];
+    segment_builder_.updateBoundary(crossing->occurrence_time, component_id);
     std::vector<BoundaryPoint>& boundary_polygon
       = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
     const glm::dvec2 centroid_local = segment_builder_.kin_del.component_data.component_centroids[component_id];
@@ -271,18 +272,20 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
 
       if (use_uniform_pos)
       {
-        segment_builder_.applyIntersectionStripUniformClosureVertex(mesh, seg, new_vid);
+        segment_builder_.closeStrip(mesh, seg, new_vid);
       }
       else
       {
         segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, resolved_update_start_endpoint, new_vid,
           inside_boundary_he_id, new_crossing, boundary_polygon, centroid_local, graph.destination(crossing->half_edge_id),
-          crossing->occurrence_time, !clear_segment_after_update);
+          crossing->occurrence_time, !clear_segment_after_update, /*append_flexible_placeholder=*/true, metadata);
       }
 
       if (clear_segment_after_update)
       {
+        // Merged away: the interval is closed above and never continues.
         segs.clear();
+        segment_builder_.markBoundaryMeshletCompleted(pair_idx);
         return;
       }
     };
@@ -434,6 +437,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
   }
 
   size_t component_id = segment_builder_.kin_del.component_data.component_map[graph.destination(inside_he_id)];
+  segment_builder_.updateBoundary(crossing->occurrence_time, component_id);
   std::vector<BoundaryPoint>& boundary_polygon
     = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   const glm::dvec2 centroid = segment_builder_.kin_del.component_data.component_centroids[component_id];
@@ -513,13 +517,14 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
         size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
           voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
           vertex_meta);
-        int last_left = it->mesh_start_vertex_id;
-        int last_right = it->mesh_end_vertex_id;
+        const size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(*it, true);
+        const size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(*it, false);
         {
           const size_t tris_before = mesh.getTriangleCount();
           segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index, face_meta);
           logCrossingMeshExtend(segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "erase_strip", tris_before);
         }
+        segment_builder_.closeStrip(mesh, *it, new_vertex_index);
         segments.erase(it);
       }
       else
@@ -535,15 +540,15 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
             voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
             vertex_meta);
-          int last_left = it->mesh_start_vertex_id;
-          int last_right = it->mesh_end_vertex_id;
+          const size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(*it, true);
+          const size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(*it, false);
           {
             const size_t tris_before = mesh.getTriangleCount();
             segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index, face_meta);
             logCrossingMeshExtend(
               segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "enter_boundary_start", tris_before);
           }
-          it->mesh_start_vertex_id = static_cast<int>(new_vertex_index);
+          segment_builder_.sampleStripSide(mesh, *it, true, new_vertex_index);
         }
         else
         {
@@ -557,15 +562,15 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
             voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
             vertex_meta);
-          int last_left = it->mesh_start_vertex_id;
-          int last_right = it->mesh_end_vertex_id;
+          const size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(*it, true);
+          const size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(*it, false);
           {
             const size_t tris_before = mesh.getTriangleCount();
             segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index, face_meta);
             logCrossingMeshExtend(
               segment_builder_, voronoi_he_id, crossing->occurrence_time, mesh, "enter_boundary_end", tris_before);
           }
-          it->mesh_end_vertex_id = static_cast<int>(new_vertex_index);
+          segment_builder_.sampleStripSide(mesh, *it, false, new_vertex_index);
         }
       }
     }
@@ -601,8 +606,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
             voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
             vertex_meta);
-          int last_left = segments.back().mesh_start_vertex_id;
-          int last_right = segments.back().mesh_end_vertex_id;
+          const size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(segments.back(), true);
+          const size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(segments.back(), false);
           {
             const size_t tris_before = mesh.getTriangleCount();
             segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index, face_meta);
@@ -611,7 +616,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           }
           segments.back().end_half_edge_id = static_cast<int>(inside_he_id);
           segments.back().end_crossing = boundary_crossing;
-          segments.back().mesh_end_vertex_id = static_cast<int>(new_vertex_index);
+          segment_builder_.sampleStripSide(mesh, segments.back(), false, new_vertex_index);
         }
       }
       else
@@ -642,8 +647,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           size_t new_vertex_index = segment_builder_.addMeshletVertex(mesh, boundary_polygon, centroid,
             voronoi_vertex_position, strand_id_for_transform, crossing->occurrence_time, false, voronoi_vertex_for_alpha_check,
             vertex_meta);
-          int last_left = segments.front().mesh_start_vertex_id;
-          int last_right = segments.front().mesh_end_vertex_id;
+          const size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(segments.front(), true);
+          const size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(segments.front(), false);
           {
             const size_t tris_before = mesh.getTriangleCount();
             segment_builder_.addMeshletTriangle(mesh, last_left, last_right, new_vertex_index, face_meta);
@@ -652,7 +657,7 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
           }
           segments.front().start_half_edge_id = static_cast<int>(inside_he_id);
           segments.front().start_crossing = boundary_crossing;
-          segments.front().mesh_start_vertex_id = static_cast<int>(new_vertex_index);
+          segment_builder_.sampleStripSide(mesh, segments.front(), true, new_vertex_index);
         }
       }
     }

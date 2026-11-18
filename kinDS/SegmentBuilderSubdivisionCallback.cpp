@@ -60,9 +60,8 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
   KINDS_DEBUG("Inserting subdivision for strand " << strand_id << " at t = " << t);
   auto& graph = segment_builder_.kin_del.getGraph();
 
-  std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
   size_t component_id = segment_builder_.kin_del.component_data.component_map[strand_id];
-  segment_builder_.updateBoundary(t, he_visited, component_id);
+  segment_builder_.updateBoundary(t, component_id);
 
   auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
   auto centroid = polygonCentroid(boundary_polygon);
@@ -214,8 +213,8 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
 
       if (adjacent_he_id % 2 == 0 && he_id_left == -1)
       {
-        size_t last_left = segments.front().mesh_start_vertex_id;
-        size_t last_right = segments.front().mesh_end_vertex_id;
+        size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(segments.front(), true);
+        size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(segments.front(), false);
         {
           const size_t tris_before = adjacent_mesh.getTriangleCount();
           segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index, adj_face_meta);
@@ -226,12 +225,12 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
             segment_builder_.meshletDiagnosticLogLine("extend_mesh", adjacent_he_id, t, note.str().c_str());
           }
         }
-        segments.front().mesh_start_vertex_id = static_cast<int>(new_vertex_index);
+        segment_builder_.sampleStripSide(adjacent_mesh, segments.front(), true, new_vertex_index);
       }
       else if (adjacent_he_id % 2 != 0 && he_id_right == -1)
       {
-        size_t last_left = segments.back().mesh_start_vertex_id;
-        size_t last_right = segments.back().mesh_end_vertex_id;
+        size_t last_left = segment_builder_.intersectionStripEffectiveVertexIndex(segments.back(), true);
+        size_t last_right = segment_builder_.intersectionStripEffectiveVertexIndex(segments.back(), false);
         {
           const size_t tris_before = adjacent_mesh.getTriangleCount();
           segment_builder_.addMeshletTriangle(adjacent_mesh, last_left, last_right, new_vertex_index, adj_face_meta);
@@ -242,7 +241,7 @@ void SegmentBuilderSubdivisionCallback::beforeEvent(KineticDelaunay::Event& e)
             segment_builder_.meshletDiagnosticLogLine("extend_mesh", adjacent_he_id, t, note.str().c_str());
           }
         }
-        segments.back().mesh_end_vertex_id = static_cast<int>(new_vertex_index);
+        segment_builder_.sampleStripSide(adjacent_mesh, segments.back(), false, new_vertex_index);
       }
     }
   }

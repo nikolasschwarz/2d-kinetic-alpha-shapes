@@ -7,6 +7,7 @@
 #include "SimilarityBlend.hpp"
 #include "VoronoiMesh.hpp"
 #include <array>
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -22,7 +23,7 @@
 
 namespace kinDS
 {
-/// Source/target Delaunay edges for one radius 2↔1 boundary transition (passed into intersection meshing only).
+/// Source/target Delaunay edges for one radius 2â†”1 boundary transition (passed into intersection meshing only).
 struct RadiusBoundaryTransitionShiftContext
 {
   bool roles_valid = false;
@@ -33,7 +34,7 @@ struct RadiusBoundaryTransitionShiftContext
   std::optional<size_t> interior_voronoi_vertex_id {};
 };
 
-/// True when radius boundary-transition vertex shift should drive meshing (2↔1 roles valid, no interior VV).
+/// True when radius boundary-transition vertex shift should drive meshing (2â†”1 roles valid, no interior VV).
 inline bool radiusBoundaryTransitionShiftApplicable(
   bool shift_enabled, const RadiusBoundaryTransitionShiftContext& ctx)
 {
@@ -198,7 +199,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Index into @c intersection_meshes for a boundary-interval meshlet, if @p mesh is one of them.
   std::optional<size_t> intersectionMeshletIndexForMesh(const VoronoiMesh& mesh) const;
 
-  /// When true, radius 2↔1 transitions use boundary-transition vertex shift when a 2↔1 boundary-edge correspondence
+  /// When true, radius 2â†”1 transitions use boundary-transition vertex shift when a 2â†”1 boundary-edge correspondence
   /// exists and no interior Voronoi vertex lies in the triangle; otherwise traced Voronoi-cell meshlets are used.
   bool radius_boundary_transition_shift_enabled = true;
   /// When true, reject radius shifting and use the triangle-closing fallback if a pending split's triangle spans
@@ -210,11 +211,19 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   bool validate_mesh_vertex_sources = false;
   /// When false, skip meshlet diagnostic logging and related string assembly.
   bool diagnostics = false;
+  /// Unique per instance (addresses can be reused), e.g. to key thread-local caches.
+  const uint64_t instance_id_ = []
+  {
+    static std::atomic<uint64_t> next { 0 };
+    return ++next;
+  }();
   /// Debug-level diagnostic lines (meshlet / strand-init traces) are only built when they would be logged;
   /// formatting them otherwise costs time and serializes worker threads on the iostream locale lock.
   bool debugDiagnostics() const { return diagnostics && logger.isEnabled(LogLevel::Debug); }
-  /// When true, finalize collapses degree-2 flexible vertices on intersection meshlets.
-  bool collapse_degree_two_flexible_vertices_postprocess_enabled = true;
+  /// When true, finalize collapses degree-2 flexible vertices on intersection meshlets. Off: placeholders are shared
+  /// with the regular strip / neighbor interval at the same crossing, and collapsing them on one side only re-creates
+  /// T-junctions.
+  bool collapse_degree_two_flexible_vertices_postprocess_enabled = false;
   /// When true, segment meshlet assembly aligns glue seams across contributing mesh copies
   /// (multi-match boundary seams; propagate unmatched interiors onto partners before combine).
   bool align_flexible_glue_edges_postprocess_enabled = true;
@@ -229,7 +238,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::filesystem::path incremental_meshes_output_dir;
   /// See @ref TreeMesher::Settings::radius_complementary_debug_log_path; empty writes nothing.
   std::filesystem::path radius_complementary_debug_log_path;
-  /// Failure SVG/TXT dumps (ring-walk / triangulate FAIL, …) plus common highlighted kinetic SVG.
+  /// Failure SVG/TXT dumps (ring-walk / triangulate FAIL, â€¦) plus common highlighted kinetic SVG.
   /// CLI --error-files; also implied by visual debug.
   void setErrorFiles(bool enabled) { error_files = enabled; }
   bool errorFilesEnabled() const { return error_files; }
@@ -275,6 +284,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::optional<glm::dvec2> active_crossing_delaunay_xy_;
   SlotTable<size_t>
     half_edge_index_to_segment_mesh_pair_index; // Maps edge indices to their corresponding segment mesh pair indices
+  /// Inverse of half_edge_index_to_segment_mesh_pair_index: even Delaunay half-edge whose dual Voronoi edge a regular
+  /// pair follows (validated against the forward map on use).
+  std::vector<size_t> segment_mesh_pair_even_half_edge_;
+  /// Maps both half-edges of Delaunay edge @p even_id to regular pair @p pair (and records the edge for the pair). A
+  /// different pair previously bound to the edge can no longer be reached and is retired.
+  void bindEdgeToPair(size_t even_id, size_t pair);
   std::vector<VoronoiMesh> meshes; // List of all generated meshes
   std::vector<std::string> meshlet_export_suffixes; // Parallel to `meshes`, e.g. "_strandX" / "_voronoiX".
   /// Writers take a shared lock for the duration of a mesh-storage mutation; incremental dump takes unique.
@@ -295,7 +310,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     int start_half_edge_id;
     int end_half_edge_id;
     /// Iterator into `KineticDelaunay::CrossingData::edge_intersections` (via per-edge lists), when this endpoint is a
-    /// stored Voronoi–Delaunay crossing.
+    /// stored Voronoiâ€“Delaunay crossing.
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> start_crossing;
     std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_crossing;
     /// Cyclic index around the strand when this meshlet is a closing cap (see `createClosingMesh`).
@@ -457,7 +472,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// @ref KineticDelaunay::getPointAt for mesh vertices. Kinetic SVG / event geometry still uses
   /// @ref KineticDelaunay::getPointInDelaunaySpace (reference-branch frame + separation).
   glm::dvec3 getPointInMeshSpace(size_t strand_id, double t) const;
-  /// Site → stored mesh coordinate, matching @c addMeshletVertex for @c source @c site (@ref getPointInMeshSpace).
+  /// Site â†’ stored mesh coordinate, matching @c addMeshletVertex for @c source @c site (@ref getPointInMeshSpace).
   glm::dvec3 computeMeshSiteVertexPosition(glm::dvec3 profile_vertex, size_t strand_id, double t) const;
   /// Crossing position for meshing: never includes kinetic separation; refreshes stale @c delaunay_edge_param at @p t.
   glm::dvec3 getCrossingCoordsInMeshSpace(KineticDelaunay::CrossingData::EdgeIntersectionRef intersection,
@@ -565,7 +580,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   };
   struct MajorityPlaneAssignmentEntry
   {
-    /// False → fall back to per-strand native profile→object placement.
+    /// False â†’ fall back to per-strand native profileâ†’object placement.
     bool active = false;
     /// Shared kinetic reference branch (min of the two) used for 2D side tests and mesh XY.
     size_t shared_ref_branch = 0;
@@ -593,8 +608,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Call before a split changes membership of @p component_id.
   void registerSplitPlacementBlend(size_t component_id, double t);
   std::optional<glm::dvec3> splitPlacementBlendPosition(size_t strand_id, double t) const;
-  /// First-wins mesh coords for the placement-determining Voronoi–Delaunay intersection at a kinetic time
-  /// (@c position_intersection / metadata @c delaunay_edge_id+@c voronoi_edge_id — not conceptual pre-shift ids).
+  /// First-wins mesh coords for the placement-determining Voronoiâ€“Delaunay intersection at a kinetic time
+  /// (@c position_intersection / metadata @c delaunay_edge_id+@c voronoi_edge_id â€” not conceptual pre-shift ids).
   struct BufferedIntersectionMeshKey
   {
     size_t delaunay_edge_id = static_cast<size_t>(-1);
@@ -616,7 +631,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
       return h;
     }
   };
-  /// Per boundary-interval meshlet: map local vertex → placement-determining crossing key, and local-only
+  /// Per boundary-interval meshlet: map local vertex â†’ placement-determining crossing key, and local-only
   /// first-wins for non-intersection bark corners. The actual raw UV for a crossing is stored globally in
   /// @ref buffered_bark_raw_uvs_by_position_crossing_ (same identity scope as mesh-position buffering).
   struct BarkVertexUvBuffers
@@ -658,7 +673,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   static RegularMeshStripIntervalEndpoints regularMeshStripIntervalFromMeshingData(
     const MeshingData& segment, size_t even_half_edge_id, size_t odd_half_edge_id);
 
-  /// @return `{ new_start_vertex_index, new_end_vertex_index }` — use structured binding, e.g. `auto [left, right] =
+  /// @return `{ new_start_vertex_index, new_end_vertex_index }` â€” use structured binding, e.g. `auto [left, right] =
   /// ...`.
   std::tuple<size_t, size_t> finishRegularMeshStripInterval(VoronoiMesh& mesh,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t even_half_edge_id,
@@ -844,11 +859,11 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     std::optional<size_t> insert_voronoi_edge_id = std::nullopt);
 
   /**
-   * @brief Queue a complementary insert on a mid-interval strip that was just started (2→1 radius shift).
+   * @brief Queue a complementary insert on a mid-interval strip that was just started (2â†’1 radius shift).
    *
    * @details After reseeding @c target_delaunay_edge, @c startNewMeshFromIntersections creates a fresh boundary
    * meshlet for each mid-interval @c [crossing,crossing]. When that interval is the shift complementary mid
-   * (see @ref midIntervalMatchesRadiusShiftAnchors), this queues a split of its seed edge (mesh verts 0–1) that
+   * (see @ref midIntervalMatchesRadiusShiftAnchors), this queues a split of its seed edge (mesh verts 0â€“1) that
    * inserts the shifted shared-site corner. The strip usually has no triangles yet, so the split is deferred until
    * @ref flushPendingRadiusComplementarySplits / finalize.
    *
@@ -861,17 +876,17 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     double t, size_t site_vertex_id, const RadiusBoundaryTransitionShiftContext* boundary_transition_shift);
 
   /**
-   * @brief Split (or queue) the complementary mid-interval strip that already existed before a 1→2 radius shift.
+   * @brief Split (or queue) the complementary mid-interval strip that already existed before a 1â†’2 radius shift.
    *
-   * @details On 1→2, @c beforeEvent finished the mid-interval meshlet on the old single boundary edge
+   * @details On 1â†’2, @c beforeEvent finished the mid-interval meshlet on the old single boundary edge
    * (@c target_delaunay_edge). After the event that edge leaves the alpha boundary, so CrossingData
-   * @c prev/@c next links are cleared before this runs — do not rely on link lookup. Instead pass the
+   * @c prev/@c next links are cleared before this runs â€” do not rely on link lookup. Instead pass the
    * pair indices captured while finishing that edge (@p finished_one_edge_pair_indices); this picks the
    * complementary mid among them (both endpoints on @c target_d matching the remapped shift anchors),
    * then applies @ref applyPendingRadiusComplementarySplit immediately (@c split_last_triangle), or
    * queues it for finalize if the immediate apply fails.
    *
-   * Contrasts with @ref maybeQueueRadiusComplementarySplitForStartedMid (2→1 / newly started seed edge).
+   * Contrasts with @ref maybeQueueRadiusComplementarySplitForStartedMid (2â†’1 / newly started seed edge).
    *
    * @param site_vertex_id Shared Delaunay site of the two source boundary edges (shift junction).
    * @param finished_one_edge_pair_indices Meshlets finished on the pre-flip single boundary edge.
@@ -890,13 +905,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::optional<InteriorStripSplitTarget> findInteriorStripSplitTarget(size_t voronoi_edge_id,
     KineticDelaunay::CrossingData::EdgeIntersectionRef crossing) const;
   /// Non-shift: insert a crossing that left or joined the alpha boundary onto the interior strip of its Voronoi edge.
-  /// @p apply_immediately: II→IO after @c finishMesh (top triangle exists). Otherwise queue until @ref finalize
-  /// (IO→II seed edge; the first triangle exists only after later events).
+  /// @p apply_immediately: IIâ†’IO after @c finishMesh (top triangle exists). Otherwise queue until @ref finalize
+  /// (IOâ†’II seed edge; the first triangle exists only after later events).
   void maybeQueueOrApplyRadiusNonShiftInteriorCrossingSplit(
     KineticDelaunay::CrossingData::EdgeIntersectionRef crossing, double t, bool apply_immediately);
-  /// Non-shift IO↔II inserts, grouped by Voronoi-edge strip. Neighboring crossings that share one strip edge
+  /// Non-shift IOâ†”II inserts, grouped by Voronoi-edge strip. Neighboring crossings that share one strip edge
   /// (triangle between them flipped) are applied in order along that edge so the second split hits the correct
-  /// remaining sub-triangle. @p apply_immediately: II→IO after @c finishMesh; otherwise queue the seed-edge case
+  /// remaining sub-triangle. @p apply_immediately: IIâ†’IO after @c finishMesh; otherwise queue the seed-edge case
   /// until @ref finalize.
   void applyOrQueueRadiusNonShiftInteriorCrossingSplits(
     const std::vector<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossings, double t, bool apply_immediately);
@@ -918,6 +933,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Guarded: @c SectionCallback / other finish paths mutate these from @c parallel_for workers.
   /// Recursive: mesh placement helpers may nest find/note while holding the lock.
   mutable std::recursive_mutex buffered_mesh_vertex_positions_mutex_;
+  /// Guards only buffered_voronoi_vertex_mesh_positions_ (looked up for every meshlet Voronoi vertex).
+  mutable std::shared_mutex buffered_voronoi_vertex_mesh_mutex_;
   mutable std::unordered_map<BufferedVoronoiVertexMeshKey, BufferedVoronoiVertexMeshEntry,
     BufferedVoronoiVertexMeshKeyHash>
     buffered_voronoi_vertex_mesh_positions_;
@@ -1036,13 +1053,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void setBoundaryIntervalRawUv(VoronoiMesh& mesh, size_t vertex_index, const glm::dvec2& raw_uv);
   void refreshBoundaryIntervalTrianglesIncidentToVertex(VoronoiMesh& mesh, size_t vertex_index);
   /// First-wins bark raw UV for @p local_vertex on a boundary-interval meshlet. Intersection corners share
-  /// one entry via the placement-determining crossing (@c position_intersection) in the global buffer —
+  /// one entry via the placement-determining crossing (@c position_intersection) in the global buffer â€”
   /// never conceptual ids. Placeholder flex verts (flexible + raw circum 0) are not stored so later
   /// resolved UVs can establish the buffer. Wraparound/scaling must be applied after fetch (triangle-dependent).
   glm::dvec2 noteOrFetchBarkVertexRawUv(
     VoronoiMesh& mesh, size_t local_vertex, const glm::dvec2& computed_raw_uv, const std::vector<glm::dvec2>& raw_uvs);
   /// Register @p local_vertex as an intersection corner for bark-UV first-wins keyed by @p position_crossing
-  /// (@c position_intersection only — never conceptual).
+  /// (@c position_intersection only â€” never conceptual).
   void registerBarkVertexUvPositionCrossing(
     VoronoiMesh& mesh, size_t local_vertex, const BufferedIntersectionMeshKey& position_crossing);
 
@@ -1081,17 +1098,52 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const std::optional<glm::dvec3>& debug_color, const MeshletVertexRuntimeInfo& runtime_info);
 
   /// Effective strip corner for triangles: latest flexible on @p left_side, else fixed @c mesh_start / @c mesh_end.
+  /// Used for boundary-interval and regular (Voronoi-edge) strips alike.
   size_t intersectionStripEffectiveVertexIndex(const MeshingData& seg, bool left_side) const;
+  /// Real sample of the Voronoi vertex at one strip side (boundary-interval or regular strip): @p vertex (already in
+  /// @p mesh) becomes the side's real front, after the side's pending placeholders are interpolated (by time) between
+  /// the previous real front and @p vertex. Every new real front goes through here so no resolve can be skipped.
+  /// With @p share, the sample is handed to the other strips at the same Voronoi vertex (see shareStripSample);
+  /// the copies are sampled with @p share = false.
+  void sampleStripSide(VoronoiMesh& mesh, MeshingData& seg, bool left_side, size_t vertex, bool share = true);
+  /// Hands the sample at @p vertex to every other strip meeting at the same Voronoi vertex (crossing: both boundary
+  /// intervals and the regular strip; open circumcenter: the other regular strips; site: the cell's other interval).
+  void shareStripSample(const VoronoiMesh& mesh, MeshingData& seg, bool left_side, size_t vertex);
+  /// Seeds of newly started strips are real samples of their Voronoi vertices: shares each side whose front lies at
+  /// @p t (strips of one regular pair or one boundary interval).
+  void shareNewStripSeeds(VoronoiMesh& mesh, std::list<MeshingData>& strips, double t);
+  /// The cell's other live boundary interval meeting this one at the cell's site (exactly one side without a crossing),
+  /// if unique.
+  std::optional<size_t> siteIntervalPartner(size_t interval) const;
+  /// True on threads running the section event's parallel strip finishing. Cross-meshlet sharing is skipped there:
+  /// every strip is finished at that time anyway, and writing into a partner would race with the partner's own finish.
+  static thread_local bool in_parallel_section_finish;
+  /// Copies vertex @p vertex of @p from (position, time, profile position, metadata) into @p to. UVs are copied between
+  /// meshlets of the same kind; across kinds (boundary interval <-> regular strip) they are recomputed from
+  /// @p crossing like addMeshletVertex does.
+  size_t copySampleVertex(const VoronoiMesh& from, size_t vertex, VoronoiMesh& to,
+    const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& crossing = std::nullopt);
+  /// Strip ends at @p vertex where both sides meet (lid, circumcenter, collapsed interval): both sides sampled there.
+  void closeStrip(VoronoiMesh& mesh, MeshingData& seg, size_t vertex);
 
   /// When @ref intersection_strip_flexible_vertices_enabled: appends a placeholder (xy = @p centroid, z=@p t, metadata
   /// `pos` left/right) and a wedge triangle `(eff_left, eff_right, flex)` per @ref
   /// intersectionStripEffectiveVertexIndex (snapshot before the new flex is appended). Otherwise no-op.
   void addFlexibleVertexToIntersectionMesh(VoronoiMesh& mesh, MeshingData& seg, bool flexible_on_left_side,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
-    const std::string& metadata = "{}");
+    const std::string& metadata = "{}", bool mirror_to_neighbor = true);
+  /// A placeholder samples the crossing at one strip side. Every other meshlet adjacent to that crossing gets the
+  /// same-time placeholder: the boundary-interval strip across it (opposite side) and the regular strip of the
+  /// crossing's Voronoi edge (side ending at the crossing). Found via live CrossingData.
+  void mirrorFlexibleVertexToNeighborStrip(
+    const VoronoiMesh& mesh, const MeshingData& seg, bool flexible_on_left_side, double t, const std::string& metadata);
+  /// Appends a placeholder at time @p t on @p left_side of regular strip @p seg plus the wedge triangle from its
+  /// effective front, unless that side already holds a sample at @p t.
+  void addFlexibleVertexToRegularStrip(
+    VoronoiMesh& mesh, MeshingData& seg, bool left_side, size_t strand_id, double t, const std::string& metadata);
 
   /**
-   * @brief Wedge-extend a boundary-interval intersection mesh at a shared Voronoi–Delaunay crossing.
+   * @brief Wedge-extend a boundary-interval intersection mesh at a shared Voronoiâ€“Delaunay crossing.
    *
    * @details Uses @p neighbor_pair_idx from the crossing's @c prev_segment_mesh_pair_index (update strip start) or
    * @c next_segment_mesh_pair_index (update strip end). No-op when the pair index is invalid or @p skip_pair_idx
@@ -1113,13 +1165,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t new_fixed_vertex_index, int inside_half_edge_id,
     const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& new_crossing_for_updated_side,
     const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid, size_t strand_id, double t,
-    bool keep_strip_alive, bool append_flexible_placeholder = true, const std::string& flexible_base_metadata = "{}");
+    bool keep_strip_alive, bool append_flexible_placeholder, const std::string& flexible_base_metadata);
 
   /**
    * For a merge closure vertex (`pos` uniform): both flex chains lerp from their fixed corners to the same
    * @p closure_vertex_index, then lists are cleared. No endpoint reassignment and no new flex.
    */
-  void applyIntersectionStripUniformClosureVertex(VoronoiMesh& mesh, MeshingData& seg, size_t closure_vertex_index);
   void resolveRemainingFlexibleVertices(VoronoiMesh& mesh, MeshingData& seg, const char* context);
   bool interpolateFlexibleVerticesAlongEdge(VoronoiMesh& mesh, std::vector<int>& flex, size_t anchor_old_vertex,
     size_t anchor_new_vertex);
@@ -1151,7 +1202,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void advanceBoundaryMesh(double t, const std::vector<BoundaryPoint>& boundary_points, const glm::dvec2& centroid);
 
-  void updateBoundary(double t, std::vector<bool>& visited, size_t component_index, bool force = false);
+  /// Boundary + centroid of @p component_index at @p t (see KineticDelaunay::refreshComponentBoundary).
+  void updateBoundary(double t, size_t component_index, bool force = false);
 
   void updateBoundaries(double t, const std::vector<size_t>& component_indices, bool force = false);
 
@@ -1225,7 +1277,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void refreshCrossingRefsForAllIntersectionStrips();
 
   /**
-   * @brief 2D position of a Voronoi–Delaunay edge crossing at time @p t (lifted to z = t).
+   * @brief 2D position of a Voronoiâ€“Delaunay edge crossing at time @p t (lifted to z = t).
    * @param t Time.
    * @param voronoi_edge_id Undirected Voronoi (dual) edge id.
    * @param delaunay_edge_id Undirected Delaunay edge id.
@@ -1238,7 +1290,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * @brief Raw inside Voronoi polylines on one dual edge, oriented by @p reverse (no strand lookup).
    *
    * @details When @p reverse is false, the walk starts at the even Voronoi half-edge circumcenter and ends at the odd;
-   * when true, odd→even. @ref closingMeshExtractRawSegmentsForVoronoiEdge sets @p reverse from strand incidence.
+   * when true, oddâ†’even. @ref closingMeshExtractRawSegmentsForVoronoiEdge sets @p reverse from strand incidence.
    * Cap vertices are created only via @p track_vertex. Pass the Voronoi vertex id (dual circumcenter, `half_edge.face`)
    * as the second argument for strand/end circumcenters so alpha-shape warnings can be logged; use @c std::nullopt for
    * boundary crossing points.
@@ -1281,7 +1333,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /**
    * @brief Walks Voronoi inside legs and Delaunay component boundary to assemble closing polygons.
    *
-   * @details For each unused ordered segment as seed, walks along mesh_start→mesh_end on the Voronoi strip, then
+   * @details For each unused ordered segment as seed, walks along mesh_startâ†’mesh_end on the Voronoi strip, then
    * follows the Delaunay boundary consuming every crossing in list order (with direction adjusted per segment by
    * @ref MeshingData::closing_strand_at_voronoi_even_he), hands off at strand-incident crossings matching
    * @p start_crossing_to_segment, and closes loops back to the seed. Emits one vertex ring per closed walk.
@@ -1444,7 +1496,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void init() override;
 
-  void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots) override;
+  void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots, bool branch_local) override;
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) override;
   void onBeforeComponentGraphSplit(double t) override;
   void onInfinitesimalSeparationActivated(size_t parent_component_id, double t) override;
@@ -1489,7 +1541,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /// Max finite kinetic time among mesh vertices (metadata @c t / stored kinetic times).
   static std::optional<double> maxMeshKineticTime(const VoronoiMesh& mesh);
-  /// OBJ object-name suffix @c _end_t_…_input_branch_…_runtime_branch_… using @p runtime_branch
+  /// OBJ object-name suffix @c _end_t_â€¦_input_branch_â€¦_runtime_branch_â€¦ using @p runtime_branch
   /// (from @ref runtimeBranchForSegment) and input branch at @p end_t.
   std::string objObjectBranchSuffix(size_t strand_id, double end_t, size_t runtime_branch) const;
 

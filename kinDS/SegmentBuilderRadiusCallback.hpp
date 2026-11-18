@@ -33,5 +33,8 @@ class SegmentBuilderRadiusCallback final : public KineticDelaunay::EventCallback
   /// Boundary-interval pair indices finished in @c beforeEvent on the triangle's single pre-flip boundary edge
   /// (1→2 candidate pool for @ref SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid).
   std::vector<size_t> radius_pre_finished_one_edge_meshlet_ids_;
+  /// All boundary-interval pair indices finished in @c beforeEvent; retired at the end of @c afterEvent (afterEvent
+  /// starts new intervals on the triangle's boundary edges, like subdivision restarts).
+  std::vector<size_t> radius_pre_finished_meshlet_ids_;
 };
 } // namespace kinDS

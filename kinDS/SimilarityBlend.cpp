@@ -6,25 +6,29 @@ namespace kinDS
 {
 namespace
 {
-/// Rotation factor of the polar decomposition (Newton iteration); identity unless @p m is a proper rotation-scale.
+double squaredNorm(const glm::dmat3& m) { return glm::dot(m[0], m[0]) + glm::dot(m[1], m[1]) + glm::dot(m[2], m[2]); }
+
+/// Rotation factor of the polar decomposition (Newton iteration); identity unless @p m is a well-conditioned proper
+/// rotation-scale. Rank-deficient input (e.g. two points) has no unique rotation and makes the iteration diverge.
 glm::dmat3 polarRotation(glm::dmat3 m)
 {
   const double det = glm::determinant(m);
-  if (!(det > 1e-300) || !std::isfinite(det))
+  const double norm = std::sqrt(squaredNorm(m));
+  if (!(det > 1e-9 * norm * norm * norm) || !std::isfinite(det))
   {
     return glm::dmat3(1.0);
   }
   for (int i = 0; i < 64; ++i)
   {
     const glm::dmat3 next = 0.5 * (m + glm::transpose(glm::inverse(m)));
-    const glm::dmat3 diff = next - m;
+    const double change = squaredNorm(next - m);
     m = next;
-    if (glm::dot(diff[0], diff[0]) + glm::dot(diff[1], diff[1]) + glm::dot(diff[2], diff[2]) < 1e-28)
+    if (change < 1e-28)
     {
       break;
     }
   }
-  return m;
+  return std::isfinite(squaredNorm(m)) ? m : glm::dmat3(1.0);
 }
 } // namespace
 

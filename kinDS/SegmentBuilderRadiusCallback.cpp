@@ -603,6 +603,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
   }
   segment_builder_.clearRadiusShiftedSiteCache();
   radius_pre_finished_one_edge_meshlet_ids_.clear();
+  radius_pre_finished_meshlet_ids_.clear();
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
   auto& graph = segment_builder_.kin_del.getGraph();
   const auto radius_vertices = graph.adjacentTriangleVertices(radius->half_edge_id);
@@ -744,6 +745,10 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
         = segment_builder_.resolveIntersectionMeshPairIndex(cell, start, end, t);
       segment_builder_.finishMeshFromIntersections(cell, t, start, end, SegmentBuilder::BoundaryEventType::Radius,
         SegmentBuilder::BoundarySegmentAction::SegmentCompleted, radius_finish_shift_arg, mesh_id);
+      if (mesh_id != static_cast<size_t>(-1))
+      {
+        radius_pre_finished_meshlet_ids_.push_back(mesh_id);
+      }
       if (buffer_one_edge_finishes && mesh_id != static_cast<size_t>(-1))
       {
         radius_pre_finished_one_edge_meshlet_ids_.push_back(mesh_id);
@@ -890,6 +895,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       / 3.0;
 
     size_t component_id = segment_builder_.kin_del.component_data.component_map[v];
+    segment_builder_.updateBoundary(radius->occurrence_time, component_id);
     auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
     auto centroid = polygonCentroid(boundary_polygon);
 
@@ -967,6 +973,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       / 3.0;
 
     size_t component_id = segment_builder_.kin_del.component_data.component_map[v];
+    segment_builder_.updateBoundary(radius->occurrence_time, component_id);
     auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
     auto centroid = polygonCentroid(boundary_polygon);
 
@@ -1161,8 +1168,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       const int inside_boundary_he_id
         = boundary_even_he_is_outside ? static_cast<int>(he_odd_corner) : static_cast<int>(he_even_corner);
 
-      std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
-      segment_builder_.updateBoundary(t, he_visited, corner_component);
+      segment_builder_.updateBoundary(t, corner_component);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[corner_component][0];
       const auto centroid = polygonCentroid(boundary_polygon);
 
@@ -1206,7 +1212,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       segment_builder_.addBoundaryIntervalTriangleOriented(
         mesh, eff_l, eff_r, new_vid, inside_boundary_he_id, t, radius_corner_meta, pair_idx);
       segment_builder_.applyIntersectionStripOneSidedFixedVertex(mesh, seg, update_start_endpoint, new_vid,
-        inside_boundary_he_id, std::nullopt, boundary_polygon, centroid, corner_u, t, true, true);
+        inside_boundary_he_id, std::nullopt, boundary_polygon, centroid, corner_u, t, true, true, radius_corner_meta);
     }
   }
 }
@@ -1252,25 +1258,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     }
   }
 
-  std::vector<bool> visited(segment_builder_.kin_del.getGraph().halfEdgeSlotCount(), false);
   for (size_t refresh_component_id : components_to_refresh)
   {
-    if (refresh_component_id >= segment_builder_.kin_del.component_data.components.size()
-      || segment_builder_.kin_del.component_data.components[refresh_component_id].empty())
-    {
-      continue;
-    }
-    segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id]
-      = segment_builder_.kin_del.extractComponentBoundaries(
-        segment_builder_.kin_del.component_data.components[refresh_component_id], radius->occurrence_time, visited,
-        false);
-    if (!segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id].empty()
-      && !segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id][0].empty())
-    {
-      segment_builder_.kin_del.component_data.component_centroids[refresh_component_id] = polygonCentroid(
-        segment_builder_.kin_del.component_data.component_boundaries[refresh_component_id][0]);
-    }
-    segment_builder_.kin_del.component_data.component_last_updated[refresh_component_id] = radius->occurrence_time;
+    segment_builder_.updateBoundary(radius->occurrence_time, refresh_component_id);
   }
 
   // Keep the same sign-change direction tag as beforeEvent.
@@ -2246,6 +2236,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
                                                                                               << " owner_segment_id=" << owner_segment_id
                                                                                               << " delaunay_face=" << affected_face_id
                                                                                               << " t=" << t << " polygon_vertices=" << poly.size());
+      // Complete as built; never continued.
+      segment_builder_.markBoundaryMeshletCompleted(stored_index);
     };
 
     if (!success)
@@ -2320,8 +2312,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       const auto& twin_he = graph.halfEdge(he_even ^ 1);
       const size_t vertex = std::max(he.origin, twin_he.origin);
       const size_t component_id = segment_builder_.kin_del.component_data.component_map[vertex];
-      std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
-      segment_builder_.updateBoundary(t, he_visited, component_id);
+      segment_builder_.updateBoundary(t, component_id);
       auto& boundary_polygon = segment_builder_.kin_del.component_data.component_boundaries[component_id][0];
       std::vector<SegmentBuilder::MeshingData> finished_strips
         = segment_builder_.finishMesh(he_even, t, boundary_polygon, SegmentBuilder::BoundaryEventType::Radius,
@@ -2585,6 +2576,14 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
         SegmentBuilder::BoundarySegmentAction::NewSegment, false, radius_boundary_shift_arg);
     }
   }
+
+  // Intervals finished in beforeEvent are replaced by the ones started above (or their edge left the boundary).
+  for (const size_t mesh_id : radius_pre_finished_meshlet_ids_)
+  {
+    segment_builder_.flushPendingRadiusComplementarySplitsForPair(mesh_id);
+    segment_builder_.markBoundaryMeshletCompleted(mesh_id);
+  }
+  radius_pre_finished_meshlet_ids_.clear();
 }
 } // namespace kinDS
 

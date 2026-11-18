@@ -1573,18 +1573,19 @@ void KineticDelaunay::clearDeadCrossingState()
   crossing_data.removeIntersectionsOnDeadDelaunayEdges(graph);
 }
 
-void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots)
+void KineticDelaunay::onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots, bool branch_local)
 {
   growGraphSlotArrays();
   clearDeadCrossingState();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
   // Runtime branch ids for the targeted split are already assigned at notePendingBranchSplit; do not remap all
   // live-graph components (that would finalize / reassign unrelated pending splits).
-  crossing_data.computeEdgeIntersections(*this, t);
+  // A branch-local rebuild only appends its own component, whose Voronoi edges cannot cross other components.
+  crossing_data.computeEdgeIntersections(*this, t, branch_local ? prev_he_slots / 2 : 0);
   validateVoronoiVertexIteratorInvariants("onGraphRetriangulated", t);
   if (callback_manager_)
   {
-    callback_manager_->onGraphRetriangulated(t, prev_face_slots, prev_he_slots);
+    callback_manager_->onGraphRetriangulated(t, prev_face_slots, prev_he_slots, branch_local);
   }
 }
 
@@ -2155,6 +2156,15 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
 
   const size_t section = static_cast<size_t>(std::floor(query_t));
   const double frac = query_t - static_cast<double>(section);
+  // Linear piece between the transformed section ends; same arithmetic as evaluating getPiecePolynomial at frac
+  // (Horner: (P1 - P0) * frac + P0) without building polynomials.
+  const auto lerp_piece = [&](size_t start_reference_branch, size_t end_reference_branch)
+  {
+    const glm::dvec2 p0 = branch_trajs.getPointTransformedAtSection(v, section, start_reference_branch, section);
+    const glm::dvec2 p1
+      = branch_trajs.getPointTransformedAtSection(v, section + 1, end_reference_branch, section + 1);
+    return (p1 - p0) * frac + p0;
+  };
 
   glm::dvec2 position;
   if (!apply_reference_transform)
@@ -2175,9 +2185,7 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
       }
       else
       {
-        const Trajectory<2> piece
-          = branch_trajs.getPiecePolynomial(v, section, transition->common_reference_branch);
-        position = glm::dvec2(piece[0](frac), piece[1](frac));
+        position = lerp_piece(transition->common_reference_branch, transition->common_reference_branch);
       }
     }
     else if (transition_active && section == transition->blend_section)
@@ -2190,9 +2198,7 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
       }
       else
       {
-        const Trajectory<2> piece = branch_trajs.getPiecePolynomialBlendingReference(
-          v, section, transition->common_reference_branch, native_ref);
-        position = glm::dvec2(piece[0](frac), piece[1](frac));
+        position = lerp_piece(transition->common_reference_branch, native_ref);
       }
     }
     else if (frac < std::numeric_limits<double>::epsilon())
@@ -2201,8 +2207,7 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
     }
     else
     {
-      const Trajectory<2> piece = branch_trajs.getPiecePolynomial(v, section, reference_branch);
-      position = glm::dvec2(piece[0](frac), piece[1](frac));
+      position = lerp_piece(reference_branch, reference_branch);
     }
   }
 
@@ -2534,39 +2539,107 @@ void KineticDelaunay::computeComponentData(double t)
   component_data.components = extractConnectedComponents();
   // KINDS_DEBUG("Extracted " << component_data.components.size() << " components.");
   component_data.component_map = buildComponentMap(component_data.components, graph.getVertexCount());
-  component_data.component_boundaries.resize(component_data.components.size());
-
-  std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
-
+  component_data.component_boundary_topology_dirty.clear();
+  component_data.resizeSupport(component_data.components.size());
   for (size_t component_index = 0; component_index < component_data.components.size(); component_index++)
   {
-    component_data.component_boundaries[component_index]
-      = extractComponentBoundaries(component_data.components[component_index], t, he_visited);
+    refreshComponentBoundary(component_index, t, /*force_rebuild=*/true);
+  }
+}
+
+void KineticDelaunay::refreshComponentBoundary(size_t component_id, double t, bool force_rebuild)
+{
+  // Debug aid: compare every in-place refresh against a full extraction (catches topology changes that were not marked).
+  constexpr bool kVerifyBoundaryRewalk = false;
+
+  auto& boundaries = component_data.component_boundaries[component_id];
+  bool rebuild = force_rebuild || component_data.component_boundary_topology_dirty[component_id];
+  if (!rebuild && component_data.component_last_updated[component_id] == t
+    && component_data.component_last_updated_infinitesimal[component_id] == current_infinitesimal_t_)
+  {
+    return;
+  }
+  for (const auto& loop : boundaries)
+  {
+    rebuild = rebuild
+      || (!loop.empty()
+        && (!graph.isLiveHalfEdge(loop.front().he_id) || !isOnComponentBoundaryOutside(loop.front().he_id)));
   }
 
-  component_data.component_centroids.resize(component_data.components.size());
-  for (size_t component_index = 0; component_index < component_data.components.size(); component_index++)
+  if (rebuild)
   {
-    if (!component_data.component_boundaries[component_index].empty())
+    std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
+    boundaries = extractComponentBoundaries(component_data.components[component_id], t, he_visited);
+    component_data.component_boundary_topology_dirty[component_id] = 0;
+  }
+  else
+  {
+    // Topology unchanged since the last extraction: the stored vertex / half-edge sequence is still the boundary.
+    for (auto& loop : boundaries)
     {
-      component_data.component_centroids[component_index]
-        = polygonCentroid(component_data.component_boundaries[component_index][0]);
-    }
-    else
-    {
-      // compute centroid from points in the component
-      glm::dvec2 centroid { 0.0, 0.0 };
-      for (auto& v : component_data.components[component_index])
+      for (BoundaryPoint& point : loop)
       {
-        glm::dvec2 p = getPointAt(t, v);
-        centroid += p;
+        point.p = getPointInDelaunaySpace(point.vertex_id, t);
       }
-      component_data.component_centroids[component_index]
-        = centroid / double(component_data.components[component_index].size());
+    }
+    if constexpr (kVerifyBoundaryRewalk)
+    {
+      std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
+      const auto extracted = extractComponentBoundaries(component_data.components[component_id], t, he_visited);
+      const auto same_point = [](const BoundaryPoint& a, const BoundaryPoint& b)
+      { return a.he_id == b.he_id && a.vertex_id == b.vertex_id && a.p == b.p; };
+      bool same = extracted.size() == boundaries.size();
+      for (size_t i = 0; same && i < boundaries.size(); ++i)
+      {
+        same = std::equal(
+          boundaries[i].begin(), boundaries[i].end(), extracted[i].begin(), extracted[i].end(), same_point);
+      }
+      if (!same)
+      {
+        KINDS_ERROR("Boundary refresh differs from full extraction: component " << component_id << " t=" << t);
+      }
     }
   }
 
-  component_data.component_last_updated.resize(component_data.components.size(), t);
+  if (!boundaries.empty() && !boundaries[0].empty())
+  {
+    component_data.component_centroids[component_id] = polygonCentroid(boundaries[0]);
+  }
+  else if (rebuild)
+  {
+    glm::dvec2 centroid { 0.0, 0.0 };
+    double weight = 0.0;
+    for (size_t strand_id : component_data.components[component_id])
+    {
+      if (!isDummyBoundary(strand_id))
+      {
+        centroid += getPointInDelaunaySpace(strand_id, t);
+        weight += 1.0;
+      }
+    }
+    if (weight > 0.0)
+    {
+      component_data.component_centroids[component_id] = centroid / weight;
+    }
+  }
+  component_data.component_last_updated[component_id] = t;
+  component_data.component_last_updated_infinitesimal[component_id] = current_infinitesimal_t_;
+}
+
+void KineticDelaunay::markComponentBoundaryTopologyChanged(const std::array<int, 3>& vertices)
+{
+  for (const int v : vertices)
+  {
+    if (v < 0 || static_cast<size_t>(v) >= component_data.component_map.size())
+    {
+      continue;
+    }
+    const size_t component_id = component_data.component_map[static_cast<size_t>(v)];
+    if (component_id < component_data.component_boundary_topology_dirty.size())
+    {
+      component_data.component_boundary_topology_dirty[component_id] = 1;
+    }
+  }
 }
 
 void KineticDelaunay::clearComponentSupportData(size_t component_id)
@@ -2588,6 +2661,10 @@ void KineticDelaunay::clearComponentSupportData(size_t component_id)
   if (component_id < component_data.component_last_updated.size())
   {
     component_data.component_last_updated[component_id] = std::numeric_limits<double>::quiet_NaN();
+  }
+  if (component_id < component_data.component_boundary_topology_dirty.size())
+  {
+    component_data.component_boundary_topology_dirty[component_id] = 1;
   }
 }
 
@@ -2655,30 +2732,8 @@ void KineticDelaunay::consolidateComponentsAtTriangle(const std::array<int, 3>& 
     clearComponentSupportData(absorbed_id);
   }
 
-  component_data.component_boundaries.resize(component_data.components.size());
-  component_data.component_centroids.resize(component_data.components.size());
-  component_data.component_last_updated.resize(component_data.components.size());
-
-  std::vector<bool> he_visited(graph.halfEdgeSlotCount(), false);
-  component_data.component_boundaries[survivor]
-    = extractComponentBoundaries(component_data.components[survivor], t, he_visited, false);
-  if (!component_data.component_boundaries[survivor].empty()
-    && !component_data.component_boundaries[survivor][0].empty())
-  {
-    component_data.component_centroids[survivor]
-      = polygonCentroid(component_data.component_boundaries[survivor][0]);
-  }
-  else
-  {
-    glm::dvec2 centroid { 0.0, 0.0 };
-    for (size_t strand_id : component_data.components[survivor])
-    {
-      centroid += getPointAt(t, strand_id);
-    }
-    const double n = static_cast<double>(component_data.components[survivor].size());
-    component_data.component_centroids[survivor] = n > 0.0 ? centroid / n : glm::dvec2(0.0, 0.0);
-  }
-  component_data.component_last_updated[survivor] = t;
+  component_data.resizeSupport(component_data.components.size());
+  refreshComponentBoundary(survivor, t, /*force_rebuild=*/true);
 
   KINDS_DEBUG("Component consolidate at t=" << t << " survivor=" << survivor << " absorbed_count="
                                            << (triangle_component_ids.size() - 1));
@@ -4463,7 +4518,7 @@ void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler
     legalizeInitialFlipCertificates(t, &branch_edges);
   }
 
-  onGraphRetriangulated(t, prev_face_slots, prev_he_slots);
+  onGraphRetriangulated(t, prev_face_slots, prev_he_slots, /*branch_local=*/true);
 }
 
 void KineticDelaunay::rescheduleSchedulerFromSection(BranchScheduler& scheduler, size_t from_section)
@@ -6319,6 +6374,8 @@ KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingDataMutable() 
 
 const KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingData() const { return crossing_data; }
 
+
+
 void KineticDelaunay::validateCrossingIntersectionInvariants(const char* context, double t) const
 {
   if (!delaunay_voronoi_intersection_check_enabled_)
@@ -8011,13 +8068,19 @@ void KineticDelaunay::registerEventCallbacks(EventCallback* section_callback, Ev
   registerCrossingEventCallback(crossing_callback);
 }
 
-void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaunay& kd, double t)
+void KineticDelaunay::CrossingData::computeEdgeIntersections(
+  const KineticDelaunay& kd, double t, size_t first_voronoi_edge)
 {
-  // Clear any previous intersections. The Delaunay lists hold iterators into edge_intersections too; keeping them
-  // left dangling refs that the sort below read and the delaunay_ref loop wrote (use-after-free after failsafe).
-  voronoi_edge_intersections.clearAllLists();
-  delaunay_edge_intersections.clearAllLists();
-  edge_intersections.clear();
+  if (first_voronoi_edge == 0)
+  {
+    // Clear any previous intersections. The Delaunay lists hold iterators into edge_intersections too; keeping them
+    // left dangling refs that the sort below read and the delaunay_ref loop wrote (use-after-free after failsafe).
+    voronoi_edge_intersections.clearAllLists();
+    delaunay_edge_intersections.clearAllLists();
+    edge_intersections.clear();
+  }
+  // Intersections appended below start after the current last element.
+  const auto last_old = edge_intersections.empty() ? edge_intersections.end() : std::prev(edge_intersections.end());
 
   size_t num_edges = kd.getGraph().halfEdgeSlotCount() / 2;
   voronoi_edge_intersections.resize(num_edges);
@@ -8026,7 +8089,7 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
   const auto& graph = kd.getGraph();
 
   // Fill intersections for each Voronoi edge (dual to a Delaunay edge)
-  for (size_t voronoi_edge_id = 0; voronoi_edge_id < num_edges; ++voronoi_edge_id)
+  for (size_t voronoi_edge_id = first_voronoi_edge; voronoi_edge_id < num_edges; ++voronoi_edge_id)
   {
     size_t he_id0 = voronoi_edge_id * 2;
     size_t he_id1 = he_id0 + 1;
@@ -8078,8 +8141,10 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
     }
   }
 
-  // Populate delaunay_edge_intersections and sort by parameter along the Delaunay edge.
-  for (auto edge_itr = edge_intersections.begin(); edge_itr != edge_intersections.end(); ++edge_itr)
+  // Populate delaunay_edge_intersections with the new intersections and sort each touched list by parameter.
+  std::set<size_t> touched_delaunay_edges;
+  for (auto edge_itr = last_old == edge_intersections.end() ? edge_intersections.begin() : std::next(last_old);
+    edge_itr != edge_intersections.end(); ++edge_itr)
   {
     size_t delaunay_edge_id = edge_itr->delaunay_edge_id;
     if (delaunay_edge_id >= delaunay_edge_intersections.size())
@@ -8089,9 +8154,10 @@ void KineticDelaunay::CrossingData::computeEdgeIntersections(const KineticDelaun
       continue;
     }
     delaunay_edge_intersections[delaunay_edge_id].push_back(edge_itr);
+    touched_delaunay_edges.insert(delaunay_edge_id);
   }
 
-  for (size_t delaunay_edge_id = 0; delaunay_edge_id < delaunay_edge_intersections.size(); ++delaunay_edge_id)
+  for (size_t delaunay_edge_id : touched_delaunay_edges)
   {
     auto& edge_list = delaunay_edge_intersections[delaunay_edge_id];
     edge_list.sort([&](const EdgeIntersectionRef& a, const EdgeIntersectionRef& b)
@@ -9929,6 +9995,10 @@ void KineticDelaunay::setFaceInside(size_t face_index, bool value, double t)
         throw std::runtime_error("Cannot set face " + std::to_string(face_index) + " to inside!");
       }
     }
+  }
+  if (static_cast<bool>(face_inside[face_index]) != value)
+  {
+    markComponentBoundaryTopologyChanged(graph.adjacentTriangleVertices(graph.face(face_index).half_edges[0]));
   }
   face_inside[face_index] = value;
 }

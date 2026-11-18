@@ -4,6 +4,8 @@
 #include "SegmentBuilder.hpp"
 #include "SegmentBuilderVisualDebug.hpp"
 
+#include <exception>
+#include <mutex>
 #include <vector>
 
 namespace kinDS
@@ -56,8 +58,7 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     return o_branch == section_runtime_branch || d_branch == section_runtime_branch;
   };
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "before",
-    "section_" + std::to_string(index),
-    VisualDebugHighlight::forSectionBoundary(graph, section_boundary_edge),
+    "section_" + std::to_string(index), VisualDebugHighlight::forSectionBoundary(graph, section_boundary_edge),
     section_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, explicit_branches,
     section->creation_time,
     /*fan_out_active_runtime_branches=*/explicit_branches == nullptr, section->eventId());
@@ -66,9 +67,13 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
   segment_builder_.maybeInduceSplitsAtSection(t, section_runtime_branch);
 
   const size_t live_edge_count = graph.liveDelaunayEdgeCount();
-  segment_builder_.parallel_for(live_edge_count,
-    [&](size_t live_index)
+  const auto finish_edge = [&](size_t live_index)
   {
+    struct SectionFinishScope
+    {
+      SectionFinishScope() { SegmentBuilder::in_parallel_section_finish = true; }
+      ~SectionFinishScope() { SegmentBuilder::in_parallel_section_finish = false; }
+    } section_finish_scope;
     const size_t i = graph.liveDelaunayEdgeId(live_index);
     if (section_runtime_branch != BranchScheduler::no_branch)
     {
@@ -135,9 +140,8 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     {
       const size_t first_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, std::nullopt, refs.front());
-      segment_builder_.finishMeshFromIntersections(
-        first_cell, t, std::nullopt, refs.front(), SegmentBuilder::BoundaryEventType::Section,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+      segment_builder_.finishMeshFromIntersections(first_cell, t, std::nullopt, refs.front(),
+        SegmentBuilder::BoundaryEventType::Section, SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
     for (size_t k = 0; k + 1 < refs.size(); ++k)
     {
@@ -147,18 +151,39 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
       {
         continue;
       }
-      segment_builder_.finishMeshFromIntersections(
-        mid_cell, t, refs[k], refs[k + 1], SegmentBuilder::BoundaryEventType::Section,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+      segment_builder_.finishMeshFromIntersections(mid_cell, t, refs[k], refs[k + 1],
+        SegmentBuilder::BoundaryEventType::Section, SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
     {
       const size_t last_cell
         = segment_builder_.determineVoronoiCellForBoundaryIntersectionInterval(d_edge_id, refs.back(), std::nullopt);
-      segment_builder_.finishMeshFromIntersections(
-        last_cell, t, refs.back(), std::nullopt, SegmentBuilder::BoundaryEventType::Section,
-        SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
+      segment_builder_.finishMeshFromIntersections(last_cell, t, refs.back(), std::nullopt,
+        SegmentBuilder::BoundaryEventType::Section, SegmentBuilder::BoundarySegmentAction::SegmentCompleted);
     }
-  });
+  };
+  // An exception escaping a parallel worker terminates the process; rethrow it here so the event failsafe handles it.
+  std::exception_ptr worker_error;
+  std::mutex worker_error_mutex;
+  segment_builder_.parallel_for(live_edge_count,
+    [&](size_t live_index)
+    {
+      try
+      {
+        finish_edge(live_index);
+      }
+      catch (...)
+      {
+        std::lock_guard<std::mutex> lock(worker_error_mutex);
+        if (!worker_error)
+        {
+          worker_error = std::current_exception();
+        }
+      }
+    });
+  if (worker_error)
+  {
+    std::rethrow_exception(worker_error);
+  }
 
   for (size_t input_branch_id : segment_builder_.kin_del.inputBranchesFinishingAtSection(t))
   {
@@ -225,12 +250,10 @@ void SegmentBuilderSectionCallback::afterEvent(KineticDelaunay::Event& e)
     return o_branch == section_runtime_branch || d_branch == section_runtime_branch;
   };
   writeSegmentBuilderVisualDebugSvg(segment_builder_.visual_debug, segment_builder_.kin_del, graph, t, "after",
-    "section_" + std::to_string(index),
-    VisualDebugHighlight::forSectionBoundary(graph, section_boundary_edge),
+    "section_" + std::to_string(index), VisualDebugHighlight::forSectionBoundary(graph, section_boundary_edge),
     section_branch, /*separation_offset_segments=*/nullptr, /*seam_outlines=*/nullptr, explicit_branches,
     section->creation_time,
     /*fan_out_active_runtime_branches=*/explicit_branches == nullptr, section->eventId());
   segment_builder_.exportIncrementalMeshes(index, section->runtime_branch_id);
 }
 } // namespace kinDS
-

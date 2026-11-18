@@ -122,8 +122,8 @@ StrandTree::StrandTree(const std::vector<std::vector<glm::dvec2>>& support_point
   {
     // always one less than size because the parameter is in range from smallest to largest index
     tree_height = std::max(tree_height, pts.size() - 1);
-    computeNormalTransforms();
   }
+  computeNormalTransforms();
 
   size_t max_heights = 0;
   for (const auto& per_strand : branch_indices)

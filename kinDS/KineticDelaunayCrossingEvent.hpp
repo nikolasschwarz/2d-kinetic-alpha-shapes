@@ -327,7 +327,9 @@ struct KineticDelaunay::CrossingData
   void validateVoronoiVertexIteratorInvariants(
     const char* context, const HalfEdgeDelaunayGraph& graph, const KineticDelaunay* kd = nullptr, double t = 0.0) const;
 
-  void computeEdgeIntersections(const KineticDelaunay& kd, double t);
+  /// Rebuild all intersections, or with @p first_voronoi_edge > 0 only add those of Voronoi edges from that id on
+  /// (edges appended by a branch-local retriangulation), leaving all other intersections and their links intact.
+  void computeEdgeIntersections(const KineticDelaunay& kd, double t, size_t first_voronoi_edge = 0);
 
   // Update Voronoi–Delaunay edge intersections after a single crossing event.
   void updateAfterCrossingEvent(const KineticDelaunay& kd, const KineticDelaunay::CrossingEvent& e);
