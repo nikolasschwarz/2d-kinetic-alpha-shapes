@@ -73,6 +73,7 @@ set(KINDS_SOURCES
     "kinDS/KineticDelaunaySectionEvent.cpp"
     "kinDS/KineticDelaunaySubdivisionEvent.cpp"
     "kinDS/KineticDelaunaySeparationEvent.cpp"
+    "kinDS/OutlineDifference.cpp"
     "kinDS/Polygon2D.cpp"
 	"kinDS/Polynomial.cpp"
 	"kinDS/SegmentBuilder.cpp"

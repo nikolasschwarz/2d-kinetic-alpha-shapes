@@ -12,8 +12,8 @@ class PlaneProjector
  public:
   // Construct from plane-local -> world transforms
   // Local coordinates are (u, 0, v)
-  // @p legacy_mirrored_hinge: pivot about the hinge point mirrored through the world origin. Only for the kinetic
-  // StrandTree reference remap, which is tuned to that behaviour (meshing fails with the exact hinge).
+  // @p legacy_mirrored_hinge: pivot about the hinge point mirrored through the world origin. Only for the optional
+  // legacy kinetic StrandTree remap (@ref StrandTree::setLegacyMirroredHinge).
   PlaneProjector(const glm::dmat4& planeAToWorld, const glm::dmat4& planeBToWorld, bool legacy_mirrored_hinge = false);
 
   // Project local v on plane A to local return value on plane B

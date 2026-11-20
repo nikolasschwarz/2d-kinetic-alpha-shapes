@@ -308,13 +308,17 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
     return point;
   }
 
-  // Kinetic (triangulation) frame: kept on the legacy mapping (reference/actual roles, mirrored hinge). The exact
-  // unfold (actual -> reference, exact hinge) breaks meshing; mesh placement does its own exact unfold.
-  PlaneProjector plane_projector(getTransformByHeightAndBranch(index, reference_branch),
-    getTransformByHeightAndBranch(index, actual_branch), /*legacy_mirrored_hinge=*/true);
-
-  glm::dvec2 result = plane_projector.project(glm::dvec2(point[0], point[1]));
-  return glm::dvec2 { result.x, result.y };
+  // Kinetic (triangulation) frame: exact unfold actual -> reference. The legacy mapping swaps the roles and mirrors
+  // the hinge point through the world origin.
+  if (legacy_mirrored_hinge)
+  {
+    return PlaneProjector(getTransformByHeightAndBranch(index, reference_branch),
+      getTransformByHeightAndBranch(index, actual_branch), /*legacy_mirrored_hinge=*/true)
+      .project(point);
+  }
+  return PlaneProjector(
+    getTransformByHeightAndBranch(index, actual_branch), getTransformByHeightAndBranch(index, reference_branch))
+    .project(point);
 }
 
 glm::dvec2 StrandTree::evaluateTransformed(size_t strand_id, double t, size_t reference_branch) const

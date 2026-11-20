@@ -53,7 +53,7 @@
       //                             also enabled by --debug-files).
       "args": [
         "--mesh",
-        "input_examples/test_oak_2.txt",
+        "input_examples/outdated_test_oaks/test_oak_2.txt",
         "--export-mode",
         "combined",
         "--validate",
@@ -84,7 +84,7 @@
       // Same CLI as Debug; binary comes from CMake preset vcpkg-x64 (CMAKE_BUILD_TYPE=Release → build/).
       "args": [
         "--mesh",
-        "input_examples/test_oak_2.txt",
+        "input_examples/outdated_test_oaks/test_oak_2.txt",
         "--export-mode",
         "combined",
         "--validate",
@@ -115,7 +115,7 @@
       // Optimized Release build with PDB debug symbols (CMAKE_BUILD_TYPE=RelWithDebInfo → build-relwithdebinfo/).
       "args": [
         "--mesh",
-        "input_examples/test_oak_10.txt",
+        "input_examples/outdated_test_oaks/test_oak_10.txt",
         "--export-mode",
         "combined",
         "--export-gpu-attributes",

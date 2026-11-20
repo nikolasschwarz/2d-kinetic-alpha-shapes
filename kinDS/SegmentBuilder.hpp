@@ -1,10 +1,10 @@
 #pragma once
-#include <source_location> // TMPG
 #include "BoundaryMesh.hpp"
 #include "ClosingMeshDebugSvg.hpp"
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
 #include "MeshStructure.hpp"
+#include "OutlineDifference.hpp"
 #include "SimilarityBlend.hpp"
 #include "VoronoiMesh.hpp"
 #include <array>
@@ -404,6 +404,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   struct ClosingMeshPolygonsTraceResult
   {
     std::vector<std::vector<size_t>> polygons; ///< One simple polygon per closed walk (mesh vertex indices).
+    std::vector<std::vector<OutlineKey>> polygon_keys; ///< Parallel to @c polygons: site-based topological vertex ids.
     std::vector<bool> segment_used; ///< Parallel to ordered_segments: true if that segment was visited.
     std::vector<size_t> mesh_vertex_ids; ///< Extended cap vertex id trail including boundary intersection verts.
     std::vector<BoundaryIntersectionInterval>
@@ -560,51 +561,54 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     glm::dvec3 mesh_position {};
     std::optional<glm::dvec2> delaunay_xy {};
   };
-  /// Cache key for pre-split majority-plane branch assignment per kinetic component and time.
-  struct MajorityPlaneAssignmentKey
+  /// Cache key for pre-split side-plane branch assignment per kinetic component and time.
+  struct SidePlaneAssignmentKey
   {
     size_t component_id = static_cast<size_t>(-1);
     uint64_t kinetic_time_bits = 0;
-    bool operator==(const MajorityPlaneAssignmentKey& other) const noexcept
+    bool operator==(const SidePlaneAssignmentKey& other) const noexcept
     {
       return component_id == other.component_id && kinetic_time_bits == other.kinetic_time_bits;
     }
   };
-  struct MajorityPlaneAssignmentKeyHash
+  struct SidePlaneAssignmentKeyHash
   {
-    size_t operator()(const MajorityPlaneAssignmentKey& key) const noexcept
+    size_t operator()(const SidePlaneAssignmentKey& key) const noexcept
     {
       size_t h = std::hash<size_t> {}(key.component_id);
       h ^= std::hash<uint64_t> {}(key.kinetic_time_bits) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
       return h;
     }
   };
-  struct MajorityPlaneAssignmentEntry
+  struct SidePlaneAssignmentEntry
   {
     /// False â†’ fall back to per-strand native profileâ†’object placement.
     bool active = false;
     /// Shared kinetic reference branch (min of the two) used for 2D side tests and mesh XY.
     size_t shared_ref_branch = 0;
-    std::unordered_map<size_t, size_t> strand_to_majority_branch;
+    /// Profile plane (input branch) per strand, by the strand's side of the hinge: centroids of the two input
+    /// branches on different sides each claim their side; on the same side, the farther centroid's branch claims it
+    /// and the closer one takes the empty side.
+    std::unordered_map<size_t, size_t> strand_to_side_branch;
   };
-  /// Pre-split: majority input-branch plane for @p strand_id's component at @p t, if rotation projection exists.
-  std::optional<size_t> majorityPlaneBranchForStrand(size_t strand_id, double t) const;
-  MajorityPlaneAssignmentEntry computeMajorityPlaneAssignmentForComponent(size_t component_id, double t) const;
-  const MajorityPlaneAssignmentEntry& getOrComputeMajorityPlaneAssignment(size_t component_id, double t) const;
-  /// Strands of a split component that shared one (majority plane, own branch) pair before the split. Until the
-  /// next section they blend from the majority-plane lift to their own-branch placement, so the mesh does not jump.
+  /// Pre-split: profile-plane input branch for @p strand_id's component at @p t, if rotation projection exists.
+  std::optional<size_t> sidePlaneBranchForStrand(size_t strand_id, double t) const;
+  SidePlaneAssignmentEntry computeSidePlaneAssignmentForComponent(size_t component_id, double t) const;
+  const SidePlaneAssignmentEntry& getOrComputeSidePlaneAssignment(size_t component_id, double t) const;
+  /// Strands of a split component that shared one (side plane, own branch) pair before the split. Until the
+  /// next section they blend from the side-plane lift to their own-branch placement, so the mesh does not jump.
   struct SplitPlacementBlendGroup
   {
     double t_split = 0.0;
     double t_end = 0.0;
     size_t shared_ref_branch = 0;
-    size_t majority_branch = 0;
+    size_t side_branch = 0;
     size_t own_branch = 0;
     std::vector<size_t> strands;
   };
   /// Strand position in @p shared_ref's plane by exact unfold (mesh placement only; not the kinetic frame).
   glm::dvec2 meshSharedXY(size_t strand_id, double t, size_t shared_ref) const;
-  glm::dvec3 liftToMajorityPlane(size_t strand_id, double t, size_t shared_ref, size_t majority_branch) const;
+  glm::dvec3 liftToSidePlane(size_t strand_id, double t, size_t shared_ref, size_t side_branch) const;
   glm::dvec3 nativeMeshPosition(size_t strand_id, double t) const;
   /// Call before a split changes membership of @p component_id.
   void registerSplitPlacementBlend(size_t component_id, double t);
@@ -895,7 +899,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    */
   void maybeQueueRadiusComplementarySplitForExistingMid(double t, size_t site_vertex_id,
     const RadiusBoundaryTransitionShiftContext* boundary_transition_shift,
-    const std::vector<size_t>& finished_one_edge_pair_indices);
+    const std::vector<MeshStructure::FinishedRadiusInterval>& finished_one_edge_intervals);
 
   /// Interior Voronoi-edge strip whose current seed/top edge contains @p crossing as an interior point.
   struct InteriorStripSplitTarget
@@ -946,14 +950,14 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Conceptual / pre-shift ids are never used. Shared across all intersection meshlets under the same mutex.
   mutable std::unordered_map<BufferedIntersectionMeshKey, glm::dvec2, BufferedIntersectionMeshKeyHash>
     buffered_bark_raw_uvs_by_position_crossing_;
-  /// Guards the majority-plane and split-blend caches below (read on every mesh placement, written rarely).
+  /// Guards the side-plane and split-blend caches below (read on every mesh placement, written rarely).
   mutable std::shared_mutex placement_cache_mutex_;
-  mutable std::unordered_map<MajorityPlaneAssignmentKey, MajorityPlaneAssignmentEntry, MajorityPlaneAssignmentKeyHash>
-    majority_plane_assignment_cache_;
+  mutable std::unordered_map<SidePlaneAssignmentKey, SidePlaneAssignmentEntry, SidePlaneAssignmentKeyHash>
+    side_plane_assignment_cache_;
   std::vector<SplitPlacementBlendGroup> split_placement_blend_groups_;
   std::unordered_map<size_t, size_t> split_placement_blend_group_of_strand_;
   /// Key: (blend group index, kinetic time bits).
-  mutable std::unordered_map<MajorityPlaneAssignmentKey, SimilarityFit, MajorityPlaneAssignmentKeyHash>
+  mutable std::unordered_map<SidePlaneAssignmentKey, SimilarityFit, SidePlaneAssignmentKeyHash>
     split_placement_blend_fit_cache_;
 
   glm::dvec3 radiusTransitionProjectionPosition(
@@ -1048,8 +1052,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   /// Per-corner bark UV for boundary-interval meshlets (same UV adjustment as @ref BoundaryMesh).
   size_t addBoundaryIntervalTriangle(
-    VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 1,
-    std::source_location tmpg_loc = std::source_location::current());
+    VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 1);
   std::vector<glm::dvec2>& boundaryIntervalRawUvs(VoronoiMesh& mesh);
   const std::vector<glm::dvec2>& boundaryIntervalRawUvs(const VoronoiMesh& mesh) const;
   std::optional<glm::dvec2> boundaryIntervalRawUvAtVertex(const VoronoiMesh& mesh, size_t vertex_index) const;
@@ -1079,7 +1082,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     const std::optional<glm::dvec3>& explicit_mesh_position = std::nullopt);
 
   size_t addMeshletTriangle(VoronoiMesh& mesh, size_t u, size_t v, size_t w, const std::string& metadata = "{}",
-    int material_id = RegularMeshletMaterialId, std::source_location tmpg_loc = std::source_location::current());
+    int material_id = RegularMeshletMaterialId);
   /// Adds the parked collapsed triangle with undirected edge (@p a, @p b) to @p mesh so the edge can be split.
   bool materializeCollapsedTriangleOnEdge(VoronoiMesh& mesh, size_t a, size_t b, bool interior_strip);
 
@@ -1089,21 +1092,18 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
    * Apex order relative to strip `(u,v)` is chosen from that outside half-edge index alone (no vertex cross products).
    */
   size_t addBoundaryIntervalTriangleOriented(VoronoiMesh& mesh, size_t u, size_t v, size_t w, int inside_boundary_he_id,
-    double t, const std::string& metadata = "{}", std::optional<size_t> boundary_meshlet_id = std::nullopt,
-    std::source_location tmpg_loc = std::source_location::current());
+    double t, const std::string& metadata = "{}", std::optional<size_t> boundary_meshlet_id = std::nullopt);
 
   /// @p strand_id Delaunay site id for transform frame lookup; may be a Voronoi vertex id when it matches
   /// @p meshlet_voronoi_vertex_for_alpha_check (resolved to an adjacent site automatically).
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check = std::nullopt, const std::string& metadata = "{}",
-    const std::optional<glm::dvec3>& debug_color = std::nullopt,
-    std::source_location tmpg_loc = std::source_location::current());
+    const std::optional<glm::dvec3>& debug_color = std::nullopt);
   size_t addMeshletVertex(VoronoiMesh& mesh, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, glm::dvec3 vertex, size_t strand_id, double t, bool includes_virtual_shift,
     std::optional<size_t> meshlet_voronoi_vertex_for_alpha_check, const std::string& metadata,
-    const std::optional<glm::dvec3>& debug_color, const MeshletVertexRuntimeInfo& runtime_info,
-    std::source_location tmpg_loc = std::source_location::current());
+    const std::optional<glm::dvec3>& debug_color, const MeshletVertexRuntimeInfo& runtime_info);
 
   /// Effective strip corner for triangles: latest flexible on @p left_side, else fixed @c mesh_start / @c mesh_end.
   /// Used for boundary-interval and regular (Voronoi-edge) strips alike.
@@ -1417,6 +1417,16 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   size_t createClosingMesh(size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon,
     const glm::dvec2& centroid, std::vector<BoundaryIntersectionInterval>* traced_boundary_intervals = nullptr);
 
+  /// Outline of a strand's Voronoi cell clipped to the boundary at @p t (the closing-cap trace), in its own mesh.
+  struct CellOutlineTrace
+  {
+    VoronoiMesh mesh;
+    std::list<MeshingData> segments;
+    ClosingMeshPolygonsTraceResult trace;
+  };
+  CellOutlineTrace traceCellOutline(
+    size_t strand_id, double t, const std::vector<BoundaryPoint>& boundary_polygon, const glm::dvec2& centroid);
+
   /// Top closing cap for one live strand at @p t; wires the new mesh pair to the strand's latest segment.
   void createClosingCapForStrand(size_t strand_id, double t);
 
@@ -1506,6 +1516,38 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
 
   void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots, bool branch_local) override;
   void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) override;
+  void onBeforeFinishedBranchRetriangulation(double t, const std::vector<size_t>& neighbours) override;
+  void onAfterFinishedBranchRetriangulation(double t, const std::vector<size_t>& neighbours) override;
+  /// Cell outline of @p strand_id at @p t, or nullopt when the strand has no live cell / boundary.
+  std::optional<CellOutlineTrace> traceCellOutlineForStrand(size_t strand_id, double t);
+  /// Strip edge on a cell outline: the front (or seed) edge of a regular strip (@c interior) or boundary interval,
+  /// with the site-based keys of its two ends.
+  struct OutlineStripEdge
+  {
+    bool interior = true;
+    size_t pair = 0;
+    size_t vertex_a = 0;
+    size_t vertex_b = 0;
+    OutlineKey key_a;
+    OutlineKey key_b;
+  };
+  /// Front edges of the live strips and boundary intervals of @p strand_id's cell.
+  std::vector<OutlineStripEdge> collectCellStripEdges(size_t strand_id) const;
+  OutlineKey crossingOutlineKey(KineticDelaunay::CrossingData::EdgeIntersectionRef ref) const;
+  /// Stitch meshlet closing the gap between a cell's outline before (@p old_outline) and after (@p new_outline) a
+  /// retriangulation at @p t: old \ new faces up (top of the piece below), new \ old faces down. Points one outline
+  /// gets inserted on an edge are queued as splits of that edge on the strip that ends (old) or starts (new) there.
+  void createStitchMeshForStrand(size_t strand_id, double t, const CellOutlineTrace& old_outline,
+    const CellOutlineTrace& new_outline, const std::vector<OutlineStripEdge>& old_strips,
+    const std::vector<OutlineStripEdge>& new_strips, const std::map<OutlineKey, glm::dvec3>& strip_positions);
+  /// Strands of the components containing @p strands (live or not).
+  std::vector<size_t> componentStrandsOf(const std::vector<size_t>& strands) const;
+  /// Mesh position of a strip edge end (@p first: @c vertex_a, else @c vertex_b).
+  glm::dvec3& stripEdgeVertexPosition(const OutlineStripEdge& edge, bool first);
+  /// Neighbour cell outlines and strip fronts before a finished-branch retriangulation (shared topology lock).
+  std::map<size_t, std::pair<CellOutlineTrace, std::vector<OutlineStripEdge>>> outlines_before_retriangulation_;
+  /// Strip front positions of the retriangulated components by outline key, before the retriangulation.
+  std::map<OutlineKey, glm::dvec3> strip_positions_before_retriangulation_;
   void onBeforeComponentGraphSplit(double t) override;
   void onInfinitesimalSeparationActivated(size_t parent_component_id, double t) override;
   void failsafeAdvanceSubdivision(size_t strand_id, double t) override;
@@ -1519,8 +1561,12 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// section from different runtime branches are expected.
   void exportIncrementalMeshes(size_t section_id, size_t runtime_branch_id);
 
+  /// @p close_cross_tjunctions false: segment meshlets as assembled, before the cross-meshlet T-junction pass.
   std::pair<std::vector<VoronoiMesh>, std::vector<std::vector<int>>> extractSegmentMeshlets(
-    bool merge_by_segment = true) const;
+    bool merge_by_segment = true, bool close_cross_tjunctions = true) const;
+  /// Owning segment of raw meshlet @p label (@c i<n>: Voronoi-edge strip, first valid segment; @c b<n>: boundary
+  /// interval owner), if any.
+  std::optional<size_t> segmentForMeshletLabel(const std::string& label) const;
 
   std::vector<std::string> extractSegmentMeshletExportSuffixes(bool merge_by_segment = true) const;
   std::vector<VoronoiMesh> extractBoundaryIntervalMeshlets() const;

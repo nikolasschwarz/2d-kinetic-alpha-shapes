@@ -74,6 +74,20 @@ struct RadiusRingWalkDebugVertex
   std::string note {};
 };
 
+HalfEdgeDelaunayGraphToSVG::OverlayAnchor radiusRingWalkAnchor(const RadiusRingWalkDebugVertex& vert)
+{
+  using Anchor = HalfEdgeDelaunayGraphToSVG::OverlayAnchor;
+  if (vert.voronoi_vertex_id.has_value())
+  {
+    return { Anchor::Kind::VoronoiVertex, vert.voronoi_vertex_id.value() };
+  }
+  if (vert.delaunay_edge_id.has_value() && vert.voronoi_edge_id.has_value())
+  {
+    return { Anchor::Kind::Crossing, vert.delaunay_edge_id.value(), vert.voronoi_edge_id.value() };
+  }
+  return { Anchor::Kind::Site, vert.strand_id.value_or(0) };
+}
+
 std::filesystem::path makeRadiusRingWalkFailDebugPath(const KineticDelaunay& kin_del, EventTime occurrence_time,
   std::optional<size_t> runtime_branch_id, size_t delaunay_face_id, size_t strand_cell_id, size_t debug_counter,
   const char* extension)
@@ -201,12 +215,21 @@ void writeRadiusRingWalkFailDebugTxt(const std::filesystem::path& filepath, Even
 }
 
 /// Debug dump for radius cell ring-walk failure (before any ear-clip). Filename encodes ring_walk_FAIL.
-/// Also writes the common event-style kinetic SVG with the affected face/sites/edges/VVs highlighted.
+/// Also writes the common event-style kinetic SVG with the affected face/sites/edges/VVs highlighted, the traced ring
+/// as a numbered overlay path and @p fail_vertices (elements the last trace step stopped at) as markers.
 void writeRadiusRingWalkFailDebug(KineticDelaunay& kin_del, EventTime occurrence_time,
   std::optional<size_t> runtime_branch_id, size_t delaunay_face_id, size_t strand_cell_id,
   const std::string& fail_reason, std::vector<RadiusRingWalkDebugVertex> ring,
-  std::vector<std::string> incorrect_vertices, std::vector<std::string> unmatched_vertices)
+  std::vector<std::string> incorrect_vertices, std::vector<std::string> unmatched_vertices,
+  const std::vector<RadiusRingWalkDebugVertex>& fail_vertices)
 {
+  for (const RadiusRingWalkDebugVertex& vert : fail_vertices)
+  {
+    std::ostringstream entry;
+    entry << "stopped at";
+    appendRadiusRingWalkVertexSourceFields(entry, vert);
+    unmatched_vertices.push_back(entry.str());
+  }
   // Annotate walked sites / Voronoi verts that clearly do not belong to this cell/face.
   const auto& crossing_data = kin_del.getCrossingData();
   for (RadiusRingWalkDebugVertex& vert : ring)
@@ -289,7 +312,9 @@ void writeRadiusRingWalkFailDebug(KineticDelaunay& kin_del, EventTime occurrence
       highlight.addDelaunayTriangle(graph, delaunay_face_id);
     }
     highlight.delaunay_vertices.insert(strand_cell_id);
-    for (const RadiusRingWalkDebugVertex& vert : ring)
+    std::vector<RadiusRingWalkDebugVertex> highlighted = ring;
+    highlighted.insert(highlighted.end(), fail_vertices.begin(), fail_vertices.end());
+    for (const RadiusRingWalkDebugVertex& vert : highlighted)
     {
       if (vert.strand_id.has_value())
       {
@@ -317,10 +342,36 @@ void writeRadiusRingWalkFailDebug(KineticDelaunay& kin_del, EventTime occurrence
           (static_cast<uint64_t>(vert.delaunay_edge_id.value()) << 32) | vert.voronoi_edge_id.value());
       }
     }
+    HalfEdgeDelaunayGraphToSVG::DebugOverlay overlay;
+    std::vector<HalfEdgeDelaunayGraphToSVG::OverlayAnchor> walk;
+    for (const RadiusRingWalkDebugVertex& vert : ring)
+    {
+      walk.push_back(radiusRingWalkAnchor(vert));
+    }
+    overlay.paths.push_back({ walk, { 44, 160, 44 }, 0.012, "", true });
+    for (const RadiusRingWalkDebugVertex& vert : fail_vertices)
+    {
+      if (!walk.empty())
+      {
+        overlay.paths.push_back({ { walk.back(), radiusRingWalkAnchor(vert) }, { 214, 39, 40 }, 0.012, "", false });
+      }
+      overlay.markers.push_back({ radiusRingWalkAnchor(vert), "STOP: " + vert.note, { 220, 0, 160 } });
+    }
+    overlay.notes.push_back("Radius trace FAILED: face " + std::to_string(delaunay_face_id) + " cell "
+      + std::to_string(strand_cell_id) + " t=" + std::to_string(occurrence_time.real_time));
+    overlay.notes.push_back("  " + fail_reason);
+    overlay.notes.push_back("trace (green, numbered from the seed crossing; red/magenta = where the last step stopped):");
+    for (size_t i = 0; i < ring.size(); ++i)
+    {
+      std::ostringstream line;
+      line << "  " << i;
+      appendRadiusRingWalkVertexSourceFields(line, ring[i]);
+      overlay.notes.push_back(line.str());
+    }
     const std::string event_descriptor = "radius_ring_walk_FAIL_face" + std::to_string(delaunay_face_id) + "_strand"
       + std::to_string(strand_cell_id);
-    writeSegmentBuilderVisualDebugSvg(
-      true, kin_del, graph, occurrence_time, "error", event_descriptor, highlight, runtime_branch_id);
+    writeSegmentBuilderVisualDebugSvg(true, kin_del, graph, occurrence_time, "error", event_descriptor, highlight,
+      runtime_branch_id, nullptr, nullptr, nullptr, std::nullopt, false, std::nullopt, &overlay);
   }
 
   const std::filesystem::path filepath = makeRadiusRingWalkFailDebugPath(
@@ -602,7 +653,7 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     return;
   }
   segment_builder_.clearRadiusShiftedSiteCache();
-  radius_pre_finished_one_edge_meshlet_ids_.clear();
+  radius_pre_finished_one_edge_intervals_.clear();
   radius_pre_finished_meshlet_ids_.clear();
   SegmentBuilder::ScopedMetadataCallbackPhase callback_phase(segment_builder_, "before");
   auto& graph = segment_builder_.kin_del.getGraph();
@@ -751,7 +802,16 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
       }
       if (buffer_one_edge_finishes && mesh_id != static_cast<size_t>(-1))
       {
-        radius_pre_finished_one_edge_meshlet_ids_.push_back(mesh_id);
+        const auto crossing_id = [](const std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef>& ref)
+          -> std::optional<std::pair<size_t, size_t>>
+        {
+          if (!ref.has_value())
+          {
+            return std::nullopt;
+          }
+          return std::make_pair(ref.value()->delaunay_edge_id, ref.value()->voronoi_edge_id);
+        };
+        radius_pre_finished_one_edge_intervals_.push_back({ mesh_id, crossing_id(start), crossing_id(end) });
       }
     };
 
@@ -1379,6 +1439,28 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
   {
     return RadiusTraceVertex { pos, std::nullopt, std::nullopt, site_id };
   };
+  auto to_debug_vertex = [](const RadiusTraceVertex& vert, size_t cell_id) -> RadiusRingWalkDebugVertex
+  {
+    RadiusRingWalkDebugVertex debug_vert;
+    debug_vert.xy = glm::dvec2(vert.position.x, vert.position.y);
+    if (vert.voronoi_vertex_id.has_value())
+    {
+      debug_vert.source = "Voronoi vertex";
+      debug_vert.voronoi_vertex_id = vert.voronoi_vertex_id;
+    }
+    else if (vert.intersection.has_value())
+    {
+      debug_vert.source = "intersection";
+      debug_vert.delaunay_edge_id = vert.intersection.value()->delaunay_edge_id;
+      debug_vert.voronoi_edge_id = vert.intersection.value()->voronoi_edge_id;
+    }
+    else
+    {
+      debug_vert.source = "site";
+      debug_vert.strand_id = vert.site_strand_id.value_or(cell_id);
+    }
+    return debug_vert;
+  };
 
   auto dual_triangle_edges = [&](size_t voronoi_vertex_id) -> std::array<size_t, 3>
   {
@@ -1726,6 +1808,17 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     std::unordered_set<size_t> encountered_voronoi_edges;
     encountered_voronoi_edges.insert(seed_ref->voronoi_edge_id);
     std::vector<RadiusTraceVertex> polygon;
+    // Elements the current trace step stopped at (error-file overlay only).
+    std::vector<RadiusRingWalkDebugVertex> fail_vertices;
+    auto note_failure = [&](const RadiusTraceVertex& vert, const std::string& reason)
+    {
+      RadiusRingWalkDebugVertex debug_vert = to_debug_vertex(vert, cell_id);
+      debug_vert.incorrect = true;
+      debug_vert.note = reason;
+      fail_vertices.push_back(std::move(debug_vert));
+    };
+    auto voronoi_trace_vertex = [&](size_t vv)
+    { return make_voronoi_trace_vertex(vv, segment_builder_.computeVoronoiVertex(graph.face(vv).half_edges[0], t)); };
     bool success = false;
     const size_t max_steps = 128;
     std::string terminal_fail_reason;
@@ -1755,6 +1848,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     while (!closed_to_seed && !wrong_direction && step_count < max_steps)
     {
       ++step_count;
+      fail_vertices.clear();
 
       // Phase 1: try both directions independently.
       std::optional<KineticDelaunay::CrossingData::EdgeIntersectionRef> end_ref = std::nullopt;
@@ -1798,6 +1892,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
             {
               phase1_fail_local = "phase1: no inward Voronoi vertex and no paired triangle intersection on dual edge "
                 + std::to_string(current_d_edge);
+              note_failure(make_intersection_trace_vertex(current_ref), (phase1_reverse ? "reverse: " : "forward: ") + phase1_fail_local);
             }
             break;
           }
@@ -1811,6 +1906,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
             phase1_wrong_direction_local = true;
             phase1_fail_local = "phase1: Voronoi vertex " + std::to_string(vv) + " not in affected triangle "
               + std::to_string(affected_face_id) + " (wrong direction)";
+            note_failure(voronoi_trace_vertex(vv), (phase1_reverse ? "reverse: " : "forward: ") + phase1_fail_local);
             break;
           }
 
@@ -1842,6 +1938,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
             phase1_wrong_direction_local = true;
             phase1_fail_local = "phase1: no incident dual edge from Voronoi vertex " + std::to_string(vv) + " for cell "
               + std::to_string(cell_id) + " (wrong direction)";
+            note_failure(voronoi_trace_vertex(vv), (phase1_reverse ? "reverse: " : "forward: ") + phase1_fail_local);
             break;
           }
           const size_t next_d = phase1_reverse ? candidates.back() : candidates.front();
@@ -1872,6 +1969,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
             phase1_fail_local = "phase1: no triangle-edge intersection on dual edge " + std::to_string(next_d)
               + " from Voronoi vertex " + std::to_string(vv) + " and other VV " + std::to_string(other_vv)
               + " not in affected triangle";
+            note_failure(voronoi_trace_vertex(vv), (phase1_reverse ? "reverse: " : "forward: ") + phase1_fail_local);
             break;
           }
 
@@ -1985,6 +2083,8 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
               local_wrong_direction = true;
               local_fail_reason = "phase2: boundary intersection uses voronoi_edge " + std::to_string(boundary_ref->voronoi_edge_id)
                 + " that does not touch cell " + std::to_string(cell_id) + " (wrong direction)";
+              note_failure(make_intersection_trace_vertex(boundary_ref),
+                (phase2_reverse ? "reverse: " : "forward: ") + local_fail_reason);
               break;
             }
 
@@ -2036,6 +2136,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
               local_wrong_direction = true;
               local_fail_reason = "phase2: triangle corner vertex " + std::to_string(tri_vertex_id) + " != cell "
                 + std::to_string(cell_id) + " (wrong direction)";
+              const glm::dvec2 corner = segment_builder_.kin_del.getPointInDelaunaySpace(tri_vertex_id, t);
+              note_failure(make_site_trace_vertex(tri_vertex_id, glm::dvec3 { corner.x, corner.y, t }),
+                (phase2_reverse ? "reverse: " : "forward: ") + local_fail_reason);
               break;
             }
             const glm::dvec2 p2 = segment_builder_.kin_del.getPointInDelaunaySpace(tri_vertex_id, t);
@@ -2249,25 +2352,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       std::vector<std::string> unmatched_vertices;
       for (const RadiusTraceVertex& vert : polygon)
       {
-        RadiusRingWalkDebugVertex debug_vert;
-        debug_vert.xy = glm::dvec2(vert.position.x, vert.position.y);
-        if (vert.voronoi_vertex_id.has_value())
-        {
-          debug_vert.source = "Voronoi vertex";
-          debug_vert.voronoi_vertex_id = vert.voronoi_vertex_id;
-        }
-        else if (vert.intersection.has_value())
-        {
-          debug_vert.source = "intersection";
-          debug_vert.delaunay_edge_id = vert.intersection.value()->delaunay_edge_id;
-          debug_vert.voronoi_edge_id = vert.intersection.value()->voronoi_edge_id;
-        }
-        else
-        {
-          debug_vert.source = "site";
-          debug_vert.strand_id = vert.site_strand_id.value_or(cell_id);
-        }
-        debug_ring.push_back(std::move(debug_vert));
+        debug_ring.push_back(to_debug_vertex(vert, cell_id));
       }
 
       const std::string reason = terminal_fail_reason.empty() ? fail_reason : terminal_fail_reason;
@@ -2279,7 +2364,7 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
       if (segment_builder_.shouldDumpErrorFiles())
       {
         writeRadiusRingWalkFailDebug(segment_builder_.kin_del, occurrence, runtime_branch_id, affected_face_id, cell_id, reason,
-          std::move(debug_ring), std::move(incorrect_vertices), std::move(unmatched_vertices));
+          std::move(debug_ring), std::move(incorrect_vertices), std::move(unmatched_vertices), fail_vertices);
       }
       encountered_voronoi_edges_all.insert(encountered_voronoi_edges.begin(), encountered_voronoi_edges.end());
       continue;
@@ -2499,9 +2584,9 @@ void SegmentBuilderRadiusCallback::afterEvent(KineticDelaunay::Event& e)
     // triangle now using the shifted corner site. Pair ids were buffered then — afterEvent clears
     // CrossingData links on the edge that left the alpha boundary, so do not re-resolve via prev/next.
     segment_builder_.maybeQueueRadiusComplementarySplitForExistingMid(
-      t, radius_shift_shared_site.value(), radius_boundary_shift_arg, radius_pre_finished_one_edge_meshlet_ids_);
+      t, radius_shift_shared_site.value(), radius_boundary_shift_arg, radius_pre_finished_one_edge_intervals_);
   }
-  radius_pre_finished_one_edge_meshlet_ids_.clear();
+  radius_pre_finished_one_edge_intervals_.clear();
 
   std::unordered_set<size_t> started_boundary_he_even;
   for (size_t he_id : affected_face_he)

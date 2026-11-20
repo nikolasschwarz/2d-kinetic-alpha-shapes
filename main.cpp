@@ -2,15 +2,16 @@
 #include "kinDS/KineticDelaunay.hpp"
 #include "kinDS/Logger.hpp"
 #include "kinDS/ObjExporter.hpp"
+#include "kinDS/PlaneProjector.hpp"
 #include "kinDS/Polynomial.hpp"
 #include "kinDS/SegmentBuilder.hpp"
 #include "kinDS/StrandTree.hpp"
 #include "kinDS/TreeMesher.hpp"
 #include "kinDS/Validator.hpp"
-#include <chrono>
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <ctime>
 #include <filesystem>
@@ -515,104 +516,111 @@ static void set_log_level(const std::string& levels_str)
 
 static void print_usage(const char* program_name)
 {
-  std::cout << "Usage: " << program_name << " [OPTIONS] COMMAND\n"
-            << "\n"
-            << "Options:\n"
-            << "  --log-level <levels>      Set log levels (comma-separated: debug,monitor,info,warning,error,critical)\n"
-            << "                            Replaces current levels. Default: info,warning,error,critical (no debug/monitor)\n"
-            << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
-            << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
-            << "  --log-file <path>         Also write logger output to this path (overrides the default\n"
-            << "                            logs/console_YYYYMMDD_HHMMSS.log created at startup)\n"
-            << "  --export-mode <mode>      raw (default): segment_meshlets/ + raw_meshlets/; segments: segment_meshlets/\n"
-            << "                            only; combined: combined_mesh.obj only; all: everything; none: no OBJ files\n"
-            << "  --export-path <path>      Base output directory; writes segment_meshlets/ and raw_meshlets/ beneath it\n"
-            << "  --untransformed           Profile-space mesh (no object-space transform, no kinetic separation);\n"
-            << "                            applies Y/Z swap for viewing alongside SVG (default: world space)\n"
-            << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
-            << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
-            << "  --validate                After meshing, check that vertices with the same metadata source agree in world space\n"
-            << "                            (implies mesh metadata storage)\n"
-            << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
-            << "  --store-mesh-metadata     Store JSON vertex/face metadata on meshlets\n"
-            << "  --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)\n"
-            << "  --export-gpu-attributes   With --export-mode combined: also write EcoSysLab-style .json sidecar\n"
-            << "                            (distances/profile/root; fungus fields defaulted)\n"
-            << "  --section-shading         Cycle brown boundary materials through 5 non-green section colors\n"
-            << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
-            << "  --start-branches <ids>    Comma-separated input branch ids to load at --start\n"
-            << "                            (default: all branches present at that height).\n"
-            << "                            Only those strands and their descendant input branches are\n"
-            << "                            meshed / finished afterward; other ids at --start are ignored with a warning.\n"
-            << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
-            << "                            Section events run on [start, end); events with t >= end are skipped.\n"
-            << "  --mesh-cap-at-start       Emit closing-cap meshlets at --start (default: off).\n"
-            << "                            Caps for branches that finish during the run are always produced.\n"
-            << "  --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off).\n"
-            << "                            Natural branch endings and tree-top caps are always produced.\n"
-            << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 10)\n"
-            << "  --branch-cutoff <value>   Cross-branch radius cutoff; disabled when equal to --cutoff\n"
-            << "                            (default: same as --cutoff)\n"
-            << "  --look-ahead <n>          Extra sections above floor(t)+1 for branch-alpha same-branch checks (default: 0)\n"
-            << "  --parallelize-branches    After a physical runtime-branch cut, continue each child on its own\n"
-            << "                            event queue and branch-local section schedule (may run concurrently).\n"
-            << "                            Default: off (global serial kinetic scheduling).\n"
-            << "  --debug-files [path] [lower] [upper]\n"
-            << "                            Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
-            << "                            and error dumps). Optional output directory (default: cwd).\n"
-            << "                            Optional inclusive real-time bounds limit which events are exported:\n"
-            << "                            <lower> <upper>, <path> <lower>, <path> <lower> <upper>, or omit for all times.\n"
-            << "                            A leading numeric token is treated as a bound (not a path).\n"
-            << "                            Off by default.\n"
-            << "  --svg-separate-pending-splits\n"
-            << "                            With --debug-files: write pending split-off child branches into their own\n"
-            << "                            SVG folders (own strand subsets) as soon as a radius event notes the split,\n"
-            << "                            not only after the graph cut. Off by default.\n"
-            << "  --svg-branch-points-only  With --debug-files: export only around input-branch births, from the\n"
-            << "                            last common section (more branches in the next section) until the\n"
-            << "                            runtime split that separates them, including events at the split time.\n"
-            << "                            Combines with the debug time window. Off by default.\n"
-            << "  --error-files [path]      Write failure SVGs/TXTs (ring-walk / triangulate FAIL, etc.) plus the\n"
-            << "                            common event-style kinetic SVG with affected sites/edges/VVs highlighted,\n"
-            << "                            without full visual debug. Optional output directory (default: cwd).\n"
-            << "                            Failed closing-mesh cap walks write error_closing_cap_walk SVGs.\n"
-            << "                            Off by default; also enabled by --debug-files.\n"
-            << "  --check-sites-in-hull     After every kinetic event, warn if any live site lies outside its\n"
-            << "                            component's graph convex hull (same topology as SVG blue hull edges).\n"
-            << "                            May indicate an incorrect CCW flip. Off by default.\n"
-            << "  --check-intersections     Immediately after every kinetic event's graph update (before afterEvent),\n"
-            << "                            recompute every Delaunay–Voronoi edge intersection at that occurrence\n"
-            << "                            time and warn if either parameter lies outside its line segment.\n"
-            << "                            Each unique (Delaunay, Voronoi) edge pair is logged and written once to\n"
-            << "                            intersection_errors.csv (under --debug-files/--error-files root if set).\n"
-            << "                            First failures also write an error SVG at that same event time.\n"
-            << "                            Also runs the crossing-list / Voronoi-vertex iterator consistency\n"
-            << "                            checks after every flip and crossing event. Off by default.\n"
-            << "  --incremental-meshes [path]\n"
-            << "                            After each kinetic section, write a Combined OBJ of the live meshlets\n"
-            << "                            so a crash still leaves inspectable geometry. Optional output directory\n"
-            << "                            (default: incremental_meshes under --export-path, else cwd).\n"
-            << "                            Duplicate dumps for the same section from different runtime branches\n"
-            << "                            are expected (filenames include section and branch id).\n"
-            << "                            Off by default.\n"
-            << "\n"
-            << "Commands:\n"
-            << "  --demo                    Run the kinetic Delaunay example\n"
-            << "  --mesh <file>             Load StrandTree from file and run TreeMesher\n"
-            << "  --help, -h                Show this help message\n"
-            << "\n"
-            << "Examples:\n"
-            << "  " << program_name << " --demo\n"
-            << "  " << program_name << " --mesh strandtree.txt\n"
-            << "  " << program_name << " --validate --mesh strandtree.txt\n"
-            << "  " << program_name << " --log-file output.log --demo\n"
-            << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
-            << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
-            << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
-            << "  " << program_name << " --parallelize-branches --mesh strandtree.txt\n"
-            << "  " << program_name << " --check-intersections --mesh strandtree.txt\n"
-            << "  " << program_name << " --incremental-meshes --mesh strandtree.txt\n"
-            << "  " << program_name << " --export-mode combined --export-gpu-attributes --mesh strandtree.txt combined.obj\n";
+  std::cout
+    << "Usage: " << program_name << " [OPTIONS] COMMAND\n"
+    << "\n"
+    << "Options:\n"
+    << "  --log-level <levels>      Set log levels (comma-separated: debug,monitor,info,warning,error,critical)\n"
+    << "                            Replaces current levels. Default: info,warning,error,critical (no debug/monitor)\n"
+    << "  --log-add <levels>        Enable additional log levels (relative to current)\n"
+    << "  --log-remove <levels>     Disable specific log levels (relative to current)\n"
+    << "  --log-file <path>         Also write logger output to this path (overrides the default\n"
+    << "                            logs/console_YYYYMMDD_HHMMSS.log created at startup)\n"
+    << "  --export-mode <mode>      raw (default): segment_meshlets/ + raw_meshlets/; segments: segment_meshlets/\n"
+    << "                            only; combined: combined_mesh.obj only; all: everything; none: no OBJ files\n"
+    << "  --export-path <path>      Base output directory; writes segment_meshlets/ and raw_meshlets/ beneath it\n"
+    << "  --export-raw-meshlets <labels>  Also write raw meshlets i<n> (Voronoi-edge strip) / b<n> (boundary\n"
+    << "                            interval), comma separated, to selected_meshlets/ (one OBJ each + combined.obj)\n"
+    << "  --export-profile-planes <obj>  Also write the profile planes (one quad per height and input branch)\n"
+    << "                            and the exact parent/child hinges at input-branch births to this OBJ\n"
+    << "  --untransformed           Profile-space mesh (no object-space transform, no kinetic separation);\n"
+    << "                            applies Y/Z swap for viewing alongside SVG (default: world space)\n"
+    << "  --transform-at-construction  Store vertices in object space at add time (default)\n"
+    << "  --transform-at-export        Keep vertices in profile space until OBJ export\n"
+    << "  --validate                After meshing, check that vertices with the same metadata source agree in world "
+       "space\n"
+    << "                            (implies mesh metadata storage)\n"
+    << "  --validate-log <path>     Validation report file (default: mesh_vertex_validation.log)\n"
+    << "  --store-mesh-metadata     Store JSON vertex/face metadata on meshlets\n"
+    << "  --no-store-mesh-metadata  Skip JSON vertex/face metadata (default; faster)\n"
+    << "  --export-gpu-attributes   With --export-mode combined: also write EcoSysLab-style .json sidecar\n"
+    << "                            (distances/profile/root; fungus fields defaulted)\n"
+    << "  --section-shading         Cycle brown boundary materials through 5 non-green section colors\n"
+    << "  --start <section>         Start kinetic meshing at this section index (default: 0)\n"
+    << "  --start-branches <ids>    Comma-separated input branch ids to load at --start\n"
+    << "                            (default: all branches present at that height).\n"
+    << "                            Only those strands and their descendant input branches are\n"
+    << "                            meshed / finished afterward; other ids at --start are ignored with a warning.\n"
+    << "  --end <section>           Exclusive stop/finalize time (default: tree height).\n"
+    << "                            Section events run on [start, end); events with t >= end are skipped.\n"
+    << "  --mesh-cap-at-start       Emit closing-cap meshlets at --start (default: off).\n"
+    << "                            Caps for branches that finish during the run are always produced.\n"
+    << "  --mesh-cap-at-end         Also seal strands truncated by premature --end (default: off).\n"
+    << "                            Natural branch endings and tree-top caps are always produced.\n"
+    << "  --cutoff <value>          Alpha / radius-event circumradius cutoff (default: 5)\n"
+    << "  --legacy-hinge            Kinetic remap with the legacy mirrored hinge (default: exact hinge)\n"
+    << "  --branch-cutoff <value>   Cross-branch radius cutoff; disabled when equal to --cutoff\n"
+    << "                            (default: same as --cutoff)\n"
+    << "  --look-ahead <n>          Extra sections above floor(t)+1 for branch-alpha same-branch checks (default: 0)\n"
+    << "  --parallelize-branches    After a physical runtime-branch cut, continue each child on its own\n"
+    << "                            event queue and branch-local section schedule (may run concurrently).\n"
+    << "                            Default: off (global serial kinetic scheduling).\n"
+    << "  --debug-files [path] [lower] [upper]\n"
+    << "                            Write full debug SVGs/TXTs (segmentbuilder snapshots, branch-split dumps,\n"
+    << "                            and error dumps). Optional output directory (default: cwd).\n"
+    << "                            Optional inclusive real-time bounds limit which events are exported:\n"
+    << "                            <lower> <upper>, <path> <lower>, <path> <lower> <upper>, or omit for all times.\n"
+    << "                            A leading numeric token is treated as a bound (not a path).\n"
+    << "                            Off by default.\n"
+    << "  --svg-separate-pending-splits\n"
+    << "                            With --debug-files: write pending split-off child branches into their own\n"
+    << "                            SVG folders (own strand subsets) as soon as a radius event notes the split,\n"
+    << "                            not only after the graph cut. Off by default.\n"
+    << "  --svg-branch-points-only  With --debug-files: export only around input-branch births, from the\n"
+    << "                            last common section (more branches in the next section) until the\n"
+    << "                            runtime split that separates them, including events at the split time.\n"
+    << "                            Combines with the debug time window. Off by default.\n"
+    << "  --error-files [path]      Write failure SVGs/TXTs (ring-walk / triangulate FAIL, etc.) plus the\n"
+    << "                            common event-style kinetic SVG with affected sites/edges/VVs highlighted,\n"
+    << "                            without full visual debug. Optional output directory (default: cwd).\n"
+    << "                            Failed closing-mesh cap walks write error_closing_cap_walk SVGs.\n"
+    << "                            Off by default; also enabled by --debug-files.\n"
+    << "  --check-sites-in-hull     After every kinetic event, warn if any live site lies outside its\n"
+    << "                            component's graph convex hull (same topology as SVG blue hull edges).\n"
+    << "                            May indicate an incorrect CCW flip. Off by default.\n"
+    << "  --check-intersections     Immediately after every kinetic event's graph update (before afterEvent),\n"
+    << "                            recompute every Delaunay–Voronoi edge intersection at that occurrence\n"
+    << "                            time and warn if either parameter lies outside its line segment.\n"
+    << "                            Each unique (Delaunay, Voronoi) edge pair is logged and written once to\n"
+    << "                            intersection_errors.csv (under --debug-files/--error-files root if set).\n"
+    << "                            First failures also write an error SVG at that same event time.\n"
+    << "                            Also runs the crossing-list / Voronoi-vertex iterator consistency\n"
+    << "                            checks after every flip and crossing event. Off by default.\n"
+    << "  --incremental-meshes [path]\n"
+    << "                            After each kinetic section, write a Combined OBJ of the live meshlets\n"
+    << "                            so a crash still leaves inspectable geometry. Optional output directory\n"
+    << "                            (default: incremental_meshes under --export-path, else cwd).\n"
+    << "                            Duplicate dumps for the same section from different runtime branches\n"
+    << "                            are expected (filenames include section and branch id).\n"
+    << "                            Off by default.\n"
+    << "\n"
+    << "Commands:\n"
+    << "  --demo                    Run the kinetic Delaunay example\n"
+    << "  --mesh <file>             Load StrandTree from file and run TreeMesher\n"
+    << "  --help, -h                Show this help message\n"
+    << "\n"
+    << "Examples:\n"
+    << "  " << program_name << " --demo\n"
+    << "  " << program_name << " --mesh strandtree.txt\n"
+    << "  " << program_name << " --validate --mesh strandtree.txt\n"
+    << "  " << program_name << " --log-file output.log --demo\n"
+    << "  " << program_name << " --log-level debug,info --log-file debug.log --demo\n"
+    << "  " << program_name << " --log-add debug --log-file mesh.log --mesh strandtree.txt\n"
+    << "  " << program_name << " --debug-files ./dbg 10 11 --mesh strandtree.txt\n"
+    << "  " << program_name << " --parallelize-branches --mesh strandtree.txt\n"
+    << "  " << program_name << " --check-intersections --mesh strandtree.txt\n"
+    << "  " << program_name << " --incremental-meshes --mesh strandtree.txt\n"
+    << "  " << program_name << " --export-mode combined --export-gpu-attributes --mesh strandtree.txt combined.obj\n";
 }
 
 static const std::vector<std::string>& known_cli_flags()
@@ -632,6 +640,10 @@ static const std::vector<std::string>& known_cli_flags()
     "--store-mesh-metadata",
     "--no-store-mesh-metadata",
     "--export-gpu-attributes",
+    "--export-raw-meshlets",
+    "--export-scope-time",
+    "--export-profile-planes",
+    "--legacy-hinge",
     "--section-shading",
     "--start",
     "--start-branches",
@@ -775,6 +787,120 @@ static std::filesystem::path mesh_export_base_directory(const std::optional<std:
   return path;
 }
 
+/// Raw meshlet labels for --export-raw-meshlets.
+static std::vector<std::string> g_export_raw_meshlet_labels;
+/// --export-scope-time: also export the in-scope segment meshlets of those labels at this kinetic time.
+static std::optional<double> g_export_scope_time;
+/// --export-profile-planes: OBJ path for the profile-plane / hinge visualization.
+static std::optional<std::filesystem::path> g_export_profile_planes;
+/// --legacy-hinge: kinetic remap with the legacy mirrored hinge.
+static bool g_legacy_hinge = false;
+
+/// --export-profile-planes: one quad per height and input branch covering its strand sites (in object space), and at
+/// each input-branch birth the exact parent/child hinge (plane intersection) at the birth height and the next two.
+static void export_profile_planes_and_hinges(
+  const kinDS::StrandTree& strand_tree, const std::filesystem::path& planes_obj)
+{
+  kinDS::VoronoiMesh planes({}, kinDS::PerTriangleCorner);
+  planes.setStoreMetadata(true);
+  const auto& support = strand_tree.getSupportPoints();
+  const auto& transforms = strand_tree.getTransformsByHeightAndBranch();
+  const auto& by_branch = strand_tree.getStrandsByBranchId();
+  std::map<std::pair<size_t, size_t>, std::pair<glm::dvec3, double>> quad_center_size;
+  for (size_t h = 0; h < transforms.size() && h < by_branch.size(); ++h)
+  {
+    for (size_t b = 0; b < transforms[h].size() && b < by_branch[h].size(); ++b)
+    {
+      double u0 = 1e300, u1 = -1e300, v0 = 1e300, v1 = -1e300;
+      size_t n = 0;
+      for (const size_t s : by_branch[h][b])
+      {
+        if (s < support.size() && h < support[s].size())
+        {
+          u0 = std::min(u0, support[s][h].x);
+          u1 = std::max(u1, support[s][h].x);
+          v0 = std::min(v0, support[s][h].y);
+          v1 = std::max(v1, support[s][h].y);
+          ++n;
+        }
+      }
+      if (n == 0)
+      {
+        continue;
+      }
+      planes.startNewGroup("plane_h" + std::to_string(h) + "_b" + std::to_string(b) + "_n" + std::to_string(n));
+      const int material = planes.ensureMaterialName("branch_" + std::to_string(b));
+      const auto to_object
+        = [&](double u, double v) { return glm::dvec3(transforms[h][b] * glm::dvec4(u, 0.0, v, 1.0)); };
+      const size_t a = planes.addVertex(to_object(u0, v0)), c = planes.addVertex(to_object(u1, v0));
+      const size_t d = planes.addVertex(to_object(u1, v1)), e = planes.addVertex(to_object(u0, v1));
+      planes.addTriangle(a, c, d, material, "{}");
+      planes.addTriangle(a, d, e, material, "{}");
+      quad_center_size[{ h, b }]
+        = { to_object(0.5 * (u0 + u1), 0.5 * (v0 + v1)), glm::length(to_object(u1, v1) - to_object(u0, v0)) };
+    }
+  }
+  const int m_hinge = planes.ensureMaterialName("hinge_exact");
+  size_t hinge_count = 0;
+  for (size_t h = 1; h < by_branch.size(); ++h)
+  {
+    for (size_t child = 0; child < by_branch[h].size(); ++child)
+    {
+      // Birth: the child's strands belonged to another branch one height below.
+      std::optional<size_t> parent;
+      for (const size_t s : by_branch[h][child])
+      {
+        if (s < support.size() && support[s].size() > h)
+        {
+          const size_t below = strand_tree.getBranchIndex(s, h - 1);
+          if (below != child)
+          {
+            parent = below;
+            break;
+          }
+        }
+      }
+      if (!parent.has_value())
+      {
+        continue;
+      }
+      for (size_t k = h; k < h + 3 && k < transforms.size(); ++k)
+      {
+        const auto pc = quad_center_size.find({ k, *parent });
+        const auto cc = quad_center_size.find({ k, child });
+        if (pc == quad_center_size.end() || cc == quad_center_size.end() || *parent >= transforms[k].size()
+          || child >= transforms[k].size())
+        {
+          continue;
+        }
+        const kinDS::PlaneProjector projector(transforms[k][*parent], transforms[k][child]);
+        if (projector.isParallel())
+        {
+          continue;
+        }
+        const glm::dvec3 axis = projector.intersectionAxis();
+        const glm::dvec3 mid = 0.5 * (pc->second.first + cc->second.first);
+        const glm::dvec3 p = projector.intersectionPoint() + glm::dot(mid - projector.intersectionPoint(), axis) * axis;
+        const double len = std::max(pc->second.second, cc->second.second);
+        const glm::dvec3 nP
+          = glm::normalize(glm::cross(glm::dvec3(transforms[k][*parent][0]), glm::dvec3(transforms[k][*parent][2])));
+        const glm::dvec3 side = 0.005 * len * glm::normalize(glm::cross(axis, nP));
+        planes.startNewGroup("hinge_h" + std::to_string(k) + "_parent" + std::to_string(*parent) + "_child"
+          + std::to_string(child) + "_deg" + std::to_string(static_cast<int>(glm::degrees(projector.hingeAngle()))));
+        const glm::dvec3 a = p - 0.75 * len * axis, b = p + 0.75 * len * axis;
+        const size_t i0 = planes.addVertex(a - side), i1 = planes.addVertex(b - side);
+        const size_t i2 = planes.addVertex(b + side), i3 = planes.addVertex(a + side);
+        planes.addTriangle(i0, i1, i2, m_hinge, "{}");
+        planes.addTriangle(i0, i2, i3, m_hinge, "{}");
+        ++hinge_count;
+      }
+    }
+  }
+  planes.computeNormals(kinDS::PerTriangleCorner);
+  kinDS::ObjExporter::writeMesh(planes, planes_obj, 1.0, 1.0, {}, true);
+  std::cout << "Profile planes and " << hinge_count << " hinges exported to: " << planes_obj.string() << std::endl;
+}
+
 static bool mesh_from_file(const std::string& filename, const MeshExports& exports,
   const std::optional<std::filesystem::path>& export_path, bool profile_space_export,
   bool transform_mesh_at_construction, bool validate_mesh_vertex_sources, bool store_mesh_metadata,
@@ -793,6 +919,10 @@ static bool mesh_from_file(const std::string& filename, const MeshExports& expor
   try
   {
     kinDS::StrandTree strand_tree = kinDS::StrandTree::loadFromFile(filename);
+    if (g_export_profile_planes.has_value())
+    {
+      export_profile_planes_and_hinges(strand_tree, *g_export_profile_planes);
+    }
     std::cout << "StrandTree loaded successfully. Height: " << strand_tree.getHeight()
               << ", Number of strands: " << strand_tree.getPoints().size();
 
@@ -832,6 +962,7 @@ static bool mesh_from_file(const std::string& filename, const MeshExports& expor
     mesher.getSettings().mesh_cap_at_start = mesh_cap_at_start;
     mesher.getSettings().mesh_cap_at_end = mesh_cap_at_end;
     mesher.getSettings().alpha_cutoff = alpha_cutoff;
+    mesher.getSettings().legacy_mirrored_hinge = g_legacy_hinge;
     mesher.getSettings().branch_alpha_cutoff = branch_alpha_cutoff;
     mesher.getSettings().look_ahead = look_ahead;
     mesher.getSettings().parallelize_independent_runtime_branches = parallelize_independent_runtime_branches;
@@ -952,36 +1083,18 @@ static bool mesh_from_file(const std::string& filename, const MeshExports& expor
 
     std::cout << "Meshing completed. Generated " << meshes.size() << " meshlets in " << meshing_seconds << " s."
               << std::endl;
-    { // TMPG: same T-junction passes as EcoSysLab PrepareSegmentMeshletsForGpu, on copies
-      std::vector<kinDS::VoronoiMesh> tmpg_meshes = meshes;
-      std::vector<std::vector<int>> tmpg_neighbors = mesher.getMeshingNeighborIndices();
-      kinDS::closeCrossMeshletTJunctions(tmpg_meshes, tmpg_neighbors);
-      kinDS::closeIntraMeshletTJunctions(tmpg_meshes, tmpg_neighbors);
-      size_t open_edges = 0, multi_edges = 0, tris = 0;
-      for (const auto& m : tmpg_meshes)
+    if (!g_export_raw_meshlet_labels.empty())
+    {
+      const std::filesystem::path selected_dir = mesh_export_base_directory(export_path) / "selected_meshlets";
+      mesher.exportRawMeshletsByLabel(g_export_raw_meshlet_labels, selected_dir);
+      std::cout << "Selected raw meshlets exported to: " << selected_dir.string() << std::endl;
+      if (g_export_scope_time.has_value())
       {
-        const auto& V = m.getVertices();
-        const auto& T = m.getTriangles();
-        tris += T.size() / 3;
-        std::map<std::array<double, 6>, int> uses;
-        for (size_t i = 0; i + 2 < T.size(); i += 3)
-          for (int k = 0; k < 3; ++k)
-          {
-            glm::dvec3 a = V[T[i + k]], b = V[T[i + (k + 1) % 3]];
-            if (std::tie(b.x, b.y, b.z) < std::tie(a.x, a.y, a.z))
-              std::swap(a, b);
-            uses[{ a.x, a.y, a.z, b.x, b.y, b.z }]++;
-          }
-        for (const auto& [e, n] : uses)
-        {
-          open_edges += n == 1;
-          multi_edges += n > 2;
-        }
+        const std::filesystem::path scope_dir = mesh_export_base_directory(export_path) / "segment_meshlets_in_scope";
+        mesher.exportSegmentMeshletsInScope(g_export_raw_meshlet_labels, *g_export_scope_time, scope_dir);
+        std::cout << "In-scope segment meshlets exported to: " << scope_dir.string() << std::endl;
       }
-      std::cout << "TMPG final (after TJ passes): triangles " << tris << " open edges " << open_edges
-                << " edges used >2 " << multi_edges << std::endl;
     }
-
     const std::filesystem::path export_base = mesh_export_base_directory(export_path);
     const std::filesystem::path segment_export_dir = export_base / "segment_meshlets";
     const std::filesystem::path raw_export_dir = export_base / "raw_meshlets";
@@ -1272,6 +1385,45 @@ int main(int argc, char* argv[])
     {
       mesh_export_gpu_attributes_json = true;
       ++arg_idx;
+    }
+    else if (arg == "--export-profile-planes")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --export-profile-planes requires an OBJ path." << std::endl;
+        return 1;
+      }
+      g_export_profile_planes = std::filesystem::path(argv[arg_idx + 1]);
+      arg_idx += 2;
+    }
+    else if (arg == "--legacy-hinge")
+    {
+      g_legacy_hinge = true;
+      arg_idx += 1;
+    }
+    else if (arg == "--export-scope-time")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --export-scope-time requires a kinetic time." << std::endl;
+        return 1;
+      }
+      g_export_scope_time = std::stod(argv[arg_idx + 1]);
+      arg_idx += 2;
+    }
+    else if (arg == "--export-raw-meshlets")
+    {
+      if (arg_idx + 1 >= argc)
+      {
+        std::cerr << "Error: --export-raw-meshlets requires a comma-separated label list (e.g. i12,b3)." << std::endl;
+        return 1;
+      }
+      std::stringstream labels(argv[arg_idx + 1]);
+      for (std::string label; std::getline(labels, label, ',');)
+      {
+        g_export_raw_meshlet_labels.push_back(label);
+      }
+      arg_idx += 2;
     }
     else if (arg == "--validate-log")
     {

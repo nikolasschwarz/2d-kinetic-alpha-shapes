@@ -45,14 +45,16 @@ class TreeMesher
  public:
   struct Settings
   {
-    double alpha_cutoff = 10.0; // default value, can be adjusted as needed
+    double alpha_cutoff = 5.0; // default value, can be adjusted as needed
     /// Radius cutoff for triangles whose three strands do not share one input branch at t+1.
     /// When equal to @ref alpha_cutoff the branch-specific path is disabled.
     /// CLI @c --branch-cutoff defaults to @ref alpha_cutoff when omitted.
-    double branch_alpha_cutoff = 10.0;
+    double branch_alpha_cutoff = 5.0;
     /// Extra sections above the interval upper bound (floor(t)+1) when classifying same-branch membership
     /// for @ref branch_alpha_cutoff. 0 = current behavior. Out-of-range heights clamp to the last valid index.
     size_t look_ahead = 0;
+    /// Kinetic remap with the legacy mirrored hinge (@ref StrandTree::setLegacyMirroredHinge) instead of the exact one.
+    bool legacy_mirrored_hinge = false;
     bool fix_missing_meshes = false; // whether to attempt to fix missing meshes by copying from neighbors
     /// When true, a failed meshlet intersection keeps the uncut meshlet; when false, replaces it with an empty mesh.
     bool keep_original_on_intersection_failure = true;
@@ -232,6 +234,16 @@ class TreeMesher
   void exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
     std::optional<bool> transformed = std::nullopt, std::optional<size_t> max_exports = std::nullopt) const;
   bool meshletsTransformedAtConstruction() const { return settings.transform_mesh_at_construction; }
+  /// Writes the raw (pre segment assembly) meshlets named by @p labels to @p dir: one OBJ per label and
+  /// @c combined.obj with one group per label. Labels are the segment-assembly contributor labels: @c i<n> for the
+  /// Voronoi-edge strip meshlet @c n, @c b<n> for the boundary-interval meshlet @c n.
+  void exportRawMeshletsByLabel(const std::vector<std::string>& labels, const std::filesystem::path& dir) const;
+  /// Writes the segment meshlets (as assembled, before T-junction fixing) whose kinetic time span contains @p t and
+  /// that belong to the runtime branch of the raw meshlets @p labels or lie near them (bounding box within twice the
+  /// labelled meshlets' extent, any runtime branch) to @p dir: one OBJ per segment and @c combined.obj, named
+  /// @c segment<n>_rb<runtime branch>, with @c _issue for segments owning a labelled meshlet.
+  void exportSegmentMeshletsInScope(
+    const std::vector<std::string>& labels, double t, const std::filesystem::path& dir) const;
 
   /// Result of @ref truncateToBoundary: outside/intersecting meshlet indices plus classification counts.
   struct BoundaryTruncateResult

@@ -2,6 +2,7 @@
 
 #include "KineticDelaunay.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
+#include "MeshStructure.hpp"
 
 #include <array>
 #include <cstddef>
@@ -32,7 +33,7 @@ class SegmentBuilderRadiusCallback final : public KineticDelaunay::EventCallback
   std::array<bool, 3> radius_pre_is_boundary_edge_ {};
   /// Boundary-interval pair indices finished in @c beforeEvent on the triangle's single pre-flip boundary edge
   /// (1→2 candidate pool for @ref SegmentBuilder::maybeQueueRadiusComplementarySplitForExistingMid).
-  std::vector<size_t> radius_pre_finished_one_edge_meshlet_ids_;
+  std::vector<MeshStructure::FinishedRadiusInterval> radius_pre_finished_one_edge_intervals_;
   /// All boundary-interval pair indices finished in @c beforeEvent; retired at the end of @c afterEvent (afterEvent
   /// starts new intervals on the triangle's boundary edges, like subdivision restarts).
   std::vector<size_t> radius_pre_finished_meshlet_ids_;

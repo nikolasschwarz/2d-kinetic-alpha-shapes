@@ -1595,6 +1595,7 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
 {
   growGraphSlotArrays();
   initializeNewFacesAfterGraphUpdate(t, prev_face_slots);
+  std::vector<size_t> moved_voronoi_vertices;
   for (size_t face_id = 0; face_id < prev_face_slots; ++face_id)
   {
     if (face_id >= graph.faceSlotCount() || graph.isLiveFace(face_id))
@@ -1615,6 +1616,7 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
         continue;
       }
       crossing_data.moveVertex(voronoi_vertex_id, target_tri_id, t);
+      moved_voronoi_vertices.push_back(voronoi_vertex_id);
     }
   }
 
@@ -1623,6 +1625,12 @@ void KineticDelaunay::onGraphCutApplied(double t, size_t prev_face_slots, size_t
   if (refresh_flip_events && split_result != nullptr)
   {
     refreshEventsAfterGraphCut(t, *split_result, additional_flip_quads);
+    // Relocated Voronoi vertices keep crossing events computed against their tombstoned triangle.
+    for (size_t voronoi_vertex_id : moved_voronoi_vertices)
+    {
+      crossing_event_manager_->computeEvents(t, voronoi_vertex_id);
+      crossing_data.last_crossing[voronoi_vertex_id] = EventTime(t);
+    }
   }
 
   if (update_runtime_branch_map)
@@ -1643,7 +1651,9 @@ void KineticDelaunay::refreshEventsAfterGraphCut(
 {
   // Flip schedules are keyed by undirected edge id (half_edge / 2).
   // 1) Infinite edges that bordered one live + one tombstoned face: recompute that edge's own quad.
-  // 2) Finite capped outer edges (interior→hull): recompute those quads separately.
+  // 2) Finite capped outer edges (interior→hull): recompute those quads separately, plus the two infinite edges of
+  //    each new cap face (endpoint to the infinite vertex): their ccw certificate detects a new hull vertex moving
+  //    inside the hull.
   // 3) Optional extras (e.g. separation mixed-shift seam quads) merged so each quad is scheduled once.
   std::unordered_set<size_t> flip_quads;
   std::vector<size_t> infinite_edge_ids = split_result.infinite_half_edges_bordering_tombstone;
@@ -1662,6 +1672,15 @@ void KineticDelaunay::refreshEventsAfterGraphCut(
     if (graph.halfEdge(he_id).origin >= 0 && graph.destination(he_id) >= 0)
     {
       flip_quads.insert(he_id / 2);
+    }
+    // The twin borders the new infinite cap face; its other two edges join the endpoints to the infinite vertex.
+    const size_t cap_he = he_id ^ 1;
+    const int spoke_out = graph.isLiveHalfEdge(cap_he) ? graph.halfEdge(cap_he).next : -1;
+    const int spoke_in = spoke_out >= 0 ? graph.halfEdge(static_cast<size_t>(spoke_out)).next : -1;
+    if (spoke_out >= 0 && spoke_in >= 0)
+    {
+      flip_quads.insert(static_cast<size_t>(spoke_out) / 2);
+      flip_quads.insert(static_cast<size_t>(spoke_in) / 2);
     }
   }
 
@@ -2112,8 +2131,9 @@ Trajectory<2> KineticDelaunay::getSitePiecePolynomialForEventStrands(size_t stra
 
   if (transition_active && section < transition->hold_end_height)
   {
-    // Hold: both piece endpoints in the shared pre-split frame.
-    base = branch_trajs.getPiecePolynomial(strand_id, section, transition->common_reference_branch);
+    // Hold: piece end in the shared pre-split frame (start in the handover frame, see holdPieceStartReference).
+    base = branch_trajs.getPiecePolynomialBlendingReference(strand_id, section,
+      holdPieceStartReference(*transition, strand_id, section), transition->common_reference_branch);
   }
   else if (transition_active && section == transition->blend_section)
   {
@@ -2179,13 +2199,14 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
 
     if (transition_active && section < transition->hold_end_height)
     {
+      const size_t start_reference = holdPieceStartReference(*transition, v, section);
       if (frac < std::numeric_limits<double>::epsilon())
       {
-        position = branch_trajs.getPointTransformed(v, section, transition->common_reference_branch);
+        position = branch_trajs.getPointTransformed(v, section, start_reference);
       }
       else
       {
-        position = lerp_piece(transition->common_reference_branch, transition->common_reference_branch);
+        position = lerp_piece(start_reference, transition->common_reference_branch);
       }
     }
     else if (transition_active && section == transition->blend_section)
@@ -2258,7 +2279,8 @@ Trajectory<2> KineticDelaunay::getSitePiecePolynomial(size_t strand_id, size_t s
   Trajectory<2> base;
   if (transition_active && section < transition->hold_end_height)
   {
-    base = branch_trajs.getPiecePolynomial(strand_id, section, transition->common_reference_branch);
+    base = branch_trajs.getPiecePolynomialBlendingReference(strand_id, section,
+      holdPieceStartReference(*transition, strand_id, section), transition->common_reference_branch);
   }
   else if (transition_active && section == transition->blend_section)
   {
@@ -4418,9 +4440,14 @@ bool KineticDelaunay::schedulerHasProfileAtSection(const BranchScheduler& schedu
   return !failsafeStrandsForScheduler(scheduler, section).empty();
 }
 
-void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler, size_t section)
+void KineticDelaunay::retriangulateSchedulerAtSection(
+  BranchScheduler& scheduler, size_t section, const std::vector<bool>* retired, const std::vector<size_t>* only_strands)
 {
-  const std::vector<size_t> strands = failsafeStrandsForScheduler(scheduler, section);
+  const auto is_retired
+    = [&](size_t strand_id) { return retired != nullptr && strand_id < retired->size() && (*retired)[strand_id]; };
+  std::vector<size_t> strands
+    = only_strands != nullptr ? *only_strands : failsafeStrandsForScheduler(scheduler, section);
+  strands.erase(std::remove_if(strands.begin(), strands.end(), is_retired), strands.end());
   if (strands.size() < 3)
   {
     throw std::runtime_error("failsafe retriangulation needs at least 3 profiled strands at section "
@@ -4462,6 +4489,13 @@ void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler
   {
     mark_dead(strand_id);
   }
+  for (size_t strand_id = 0; retired != nullptr && strand_id < retired->size(); ++strand_id)
+  {
+    if ((*retired)[strand_id])
+    {
+      mark_dead(strand_id);
+    }
+  }
   graph.killVertices(dead_vertex_mask);
 
   std::vector<glm::dvec2> sites;
@@ -4494,7 +4528,11 @@ void KineticDelaunay::retriangulateSchedulerAtSection(BranchScheduler& scheduler
   graph.appendPart(part, strands);
   rebuildSchedulerTopologyOwnership(scheduler);
 
-  std::unordered_set<size_t> branch_edges = scheduler.owned_even_half_edges;
+  std::unordered_set<size_t> branch_edges;
+  if (only_strands == nullptr)
+  {
+    branch_edges = scheduler.owned_even_half_edges;
+  }
   if (branch_edges.empty())
   {
     std::unordered_set<size_t> strand_set(strands.begin(), strands.end());
@@ -5184,7 +5222,8 @@ void KineticDelaunay::registerUpcomingPostSplitFrameTransitions(size_t section_i
     live_strands.reserve(component_data.components[component_id].size());
     for (size_t strand_id : component_data.components[component_id])
     {
-      if (!isDummyBoundary(strand_id))
+      // Strands ending before hold_end_height (finished input branches) take no part in the transition.
+      if (!isDummyBoundary(strand_id) && strandHasProfileAt(strand_id, static_cast<double>(hold_end_height)))
       {
         live_strands.push_back(strand_id);
       }
@@ -5234,6 +5273,23 @@ void KineticDelaunay::registerUpcomingPostSplitFrameTransitions(size_t section_i
     transition.common_reference_branch = common_reference_branch;
     transition.hold_end_height = hold_end_height;
     transition.blend_section = hold_end_height;
+    // A strand still under an earlier transition ended its previous piece in that transition's frame; start this
+    // piece there (blending to the new common frame) so the section state does not jump.
+    for (size_t strand_id : live_strands)
+    {
+      const PostSplitFrameTransition* previous = postSplitFrameTransitionForStrand(strand_id);
+      if (previous == nullptr || section_index == 0 || section_index > previous->hold_end_height + 1)
+      {
+        continue;
+      }
+      const size_t end_frame = section_index - 1 < previous->hold_end_height
+        ? previous->common_reference_branch
+        : branch_trajs.getBranchIndex(strand_id, section_index);
+      if (end_frame != common_reference_branch)
+      {
+        transition.start_reference_branches.emplace(strand_id, end_frame);
+      }
+    }
     transition.strand_ids = std::move(live_strands);
     PostSplitFrameTransition& stored = post_split_frame_transitions_.add(std::move(transition));
     maybeWarnPostSplitFrameBlendRotation(stored);
@@ -5676,7 +5732,7 @@ void KineticDelaunay::updateRuntimeBranchMapFromLiveGraph(double t, const char* 
   runtime_branch_data_.rebuildBranchStrandLists();
 }
 
-void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const
+bool KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const
 {
   const auto& branch_strands = branch_trajs.getStrandsByBranch(section, input_branch_id);
 
@@ -5711,7 +5767,7 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
 
   if (!runtime_branch_id.has_value() || runtime_branch_id.value() == RuntimeBranchData::no_branch)
   {
-    return;
+    return false;
   }
 
   for (size_t face_id : graph.liveFaces())
@@ -5860,7 +5916,8 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
           }
         }
         detail << "]";
-        throw std::runtime_error(detail.str());
+        KINDS_INFO(detail.str() << "; removing its sites by retriangulation");
+        return true;
       }
     }
   }
@@ -5889,6 +5946,7 @@ void KineticDelaunay::validateFinishedInputBranchMatchesRuntime(size_t section, 
         + std::to_string(section));
     }
   }
+  return false;
 }
 
 bool KineticDelaunay::inputBranchInRuntimeScope(
@@ -6313,6 +6371,7 @@ void KineticDelaunay::retireFinishedInputBranches(double t, size_t scope_runtime
 
   std::vector<bool> dead_vertex_mask(graph.getVertexCount(), false);
   bool has_finished_branch = false;
+  bool shares_live_triangles = false;
   std::vector<std::pair<size_t, size_t>> finished_runtimes;
   std::set<size_t> seen_runtime_ids;
 
@@ -6323,7 +6382,7 @@ void KineticDelaunay::retireFinishedInputBranches(double t, size_t scope_runtime
       continue;
     }
 
-    validateFinishedInputBranchMatchesRuntime(section, input_branch_id);
+    shares_live_triangles |= validateFinishedInputBranchMatchesRuntime(section, input_branch_id);
     has_finished_branch = true;
 
     const auto& branch_strands = branch_trajs.getStrandsByBranch(section, input_branch_id);
@@ -6364,10 +6423,111 @@ void KineticDelaunay::retireFinishedInputBranches(double t, size_t scope_runtime
     }
   }
 
+  // Remaining strands next to the finished ones: only their cells change when the finished sites are removed.
+  // Finished branches sharing triangles only with each other leave none; they are removed as usual below.
+  std::vector<size_t> neighbour_list;
+  if (shares_live_triangles)
+  {
+    std::set<size_t> neighbours;
+    for (size_t strand_id = 0; strand_id < dead_vertex_mask.size(); ++strand_id)
+    {
+      if (!dead_vertex_mask[strand_id] || !isStrandLiveInGraph(strand_id))
+      {
+        continue;
+      }
+      for (auto it = graph.incidentEdgesBegin(strand_id), end = graph.incidentEdgesEnd(strand_id); it != end; ++it)
+      {
+        const int other = graph.destination(*it);
+        if (other >= 0 && !dead_vertex_mask[static_cast<size_t>(other)] && !isDummyBoundary(static_cast<size_t>(other)))
+        {
+          neighbours.insert(static_cast<size_t>(other));
+        }
+      }
+    }
+    neighbour_list.assign(neighbours.begin(), neighbours.end());
+  }
+  if (!neighbour_list.empty())
+  {
+    BranchScheduler* scheduler = activeBranchScheduler();
+    if (scheduler == nullptr)
+    {
+      throw std::runtime_error("Finished input branch shares live triangles at section " + std::to_string(section)
+        + " but no branch scheduler is active");
+    }
+    // Removing the finished strands changes the components' reference input branch. Hold the current frame at this
+    // section and blend to the strands' own branch frame over the next section, so the cell outlines before and after
+    // the retriangulation are in one frame (shared Voronoi edges stay collinear).
+    std::set<size_t> component_ids;
+    for (size_t strand_id : neighbour_list)
+    {
+      if (strand_id < component_data.component_map.size())
+      {
+        component_ids.insert(component_data.component_map[strand_id]);
+      }
+    }
+    for (size_t component_id : component_ids)
+    {
+      PostSplitFrameTransition transition;
+      for (size_t strand_id : component_data.components.at(component_id))
+      {
+        if (!isDummyBoundary(strand_id) && !(strand_id < dead_vertex_mask.size() && dead_vertex_mask[strand_id]))
+        {
+          transition.strand_ids.push_back(strand_id);
+        }
+      }
+      const PostSplitFrameTransition* existing
+        = transition.strand_ids.empty() ? nullptr : postSplitFrameTransitionForStrand(transition.strand_ids.front());
+      if (transition.strand_ids.empty() || (existing != nullptr && section <= existing->hold_end_height))
+      {
+        continue;
+      }
+      transition.parent_component_id = component_id;
+      transition.common_reference_branch = getReferenceBranch(transition.strand_ids.front(), t);
+      transition.hold_end_height = section;
+      transition.blend_section = section;
+      post_split_frame_transitions_.add(std::move(transition));
+    }
+    if (callback_manager_)
+    {
+      callback_manager_->onBeforeFinishedBranchRetriangulation(t, neighbour_list);
+    }
+    removeStrandsFromComponents(dead_vertex_mask);
+    // Only the neighbours' components are rebuilt; the scheduler may own other, separate components.
+    std::vector<size_t> rebuilt_strands;
+    for (size_t component_id : component_ids)
+    {
+      for (size_t strand_id : component_data.components.at(component_id))
+      {
+        if (!isDummyBoundary(strand_id) && isStrandLiveInGraph(strand_id) && strandHasProfileAt(strand_id, t))
+        {
+          rebuilt_strands.push_back(strand_id);
+        }
+      }
+    }
+    retriangulateSchedulerAtSection(*scheduler, section, &dead_vertex_mask, &rebuilt_strands);
+    if (callback_manager_)
+    {
+      callback_manager_->onAfterFinishedBranchRetriangulation(t, neighbour_list);
+    }
+    return;
+  }
+
+  removeStrandsFromComponents(dead_vertex_mask);
   const size_t prev_face_slots = graph.faceSlotCount();
   const size_t prev_he_slots = graph.halfEdgeSlotCount();
   graph.killVertices(dead_vertex_mask);
   onGraphCutApplied(t, prev_face_slots, prev_he_slots, false);
+}
+
+void KineticDelaunay::removeStrandsFromComponents(const std::vector<bool>& strand_mask)
+{
+  // A component picks its reference input branch from its strands; finished strands must not take part.
+  for (std::vector<size_t>& component : component_data.components)
+  {
+    component.erase(std::remove_if(component.begin(), component.end(),
+                      [&](size_t strand_id) { return strand_id < strand_mask.size() && strand_mask[strand_id]; }),
+      component.end());
+  }
 }
 
 KineticDelaunay::CrossingData& kinDS::KineticDelaunay::getCrossingDataMutable() { return crossing_data; }

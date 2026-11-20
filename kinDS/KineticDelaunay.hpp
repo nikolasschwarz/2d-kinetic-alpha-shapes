@@ -105,8 +105,26 @@ struct PostSplitFrameTransition
   /// Section whose piece lerps common(@c hold_end_height) → native(@c hold_end_height + 1).
   size_t blend_section = 0;
   std::vector<size_t> strand_ids;
+  /// Strand → frame its previous piece ended in at @c hold_end_height - 1 when that differs from the common frame
+  /// (a transition registered while another one hands over). The piece [hold_end_height - 1, hold_end_height]
+  /// then blends that frame → common, so the section state is the same before and after the section event.
+  std::unordered_map<size_t, size_t> start_reference_branches;
   bool rotation_warning_emitted = false;
 };
+
+/// Frame a hold piece of @p section starts in: the handover frame for the last hold piece, else the common frame.
+inline size_t holdPieceStartReference(const PostSplitFrameTransition& transition, size_t strand_id, size_t section)
+{
+  if (section + 1 == transition.hold_end_height)
+  {
+    if (const auto it = transition.start_reference_branches.find(strand_id);
+      it != transition.start_reference_branches.end())
+    {
+      return it->second;
+    }
+  }
+  return transition.common_reference_branch;
+}
 
 inline constexpr double kPostSplitFrameBlendRotationWarnDegrees = 20.0;
 
@@ -199,6 +217,18 @@ class KineticDelaunay
     virtual void finalize(double t) { }
     virtual void onGraphRetriangulated(double t, size_t prev_face_slots, size_t prev_he_slots, bool branch_local) { (void)t; (void)prev_face_slots; (void)prev_he_slots; (void)branch_local; }
     virtual void onGraphCutApplied(double t, size_t prev_face_slots, size_t prev_he_slots) { (void)t; (void)prev_face_slots; (void)prev_he_slots; }
+    /// Section event: a finished input branch still shares triangles with the remaining strands @p neighbours. The
+    /// runtime branch is retriangulated without the finished strands between these two calls.
+    virtual void onBeforeFinishedBranchRetriangulation(double t, const std::vector<size_t>& neighbours)
+    {
+      (void)t;
+      (void)neighbours;
+    }
+    virtual void onAfterFinishedBranchRetriangulation(double t, const std::vector<size_t>& neighbours)
+    {
+      (void)t;
+      (void)neighbours;
+    }
     /// Invoked immediately before a targeted pending runtime-branch graph cut in @ref applyPendingRuntimeBranchSplit.
     virtual void onBeforeComponentGraphSplit(double t) { (void)t; }
     /// Invoked when frozen-site infinitesimal separation becomes active (before virtual event recompute).
@@ -637,7 +667,10 @@ class KineticDelaunay
   /// subdivisions, drop stale kinetic/section events.
   std::vector<std::shared_ptr<EventScheduler::Event>> failsafeConsumeQueue(
     BranchScheduler& scheduler, double until_t);
-  void retriangulateSchedulerAtSection(BranchScheduler& scheduler, size_t section);
+  /// Rebuilds the scheduler's triangulation from its profiled strands at @p section (or only @p strands when given);
+  /// strands flagged in @p retired are removed instead of being re-inserted.
+  void retriangulateSchedulerAtSection(BranchScheduler& scheduler, size_t section,
+    const std::vector<bool>* retired = nullptr, const std::vector<size_t>* strands = nullptr);
   void rescheduleSchedulerFromSection(BranchScheduler& scheduler, size_t from_section);
   EventScheduler& schedulerQueue(BranchScheduler& scheduler);
   /// Schedule branch-local section events on @p scheduler for [@p from_section, exclusive end).
@@ -722,6 +755,8 @@ class KineticDelaunay
   /// Retire input branches whose last section is @p t. @p scope_runtime_branch limits this to one
   /// scheduler's unsplit branch; @c BranchScheduler::no_branch retires every finished input branch.
   void retireFinishedInputBranches(double t, size_t scope_runtime_branch);
+  /// Drops the strands flagged in @p strand_mask from all component strand lists.
+  void removeStrandsFromComponents(const std::vector<bool>& strand_mask);
   /// Runtime branch of the active scheduler, or @c BranchScheduler::no_branch for the global queue.
   size_t activeRuntimeBranchScope() const;
   /// True when @p face_id belongs to @p scope_runtime_branch (pending split children count as their parent).
@@ -742,7 +777,9 @@ class KineticDelaunay
   void exportEventDiagnosticSvg(const Event& event, const char* phase);
   /// True when this scheduler still has a profiled strand at @p section (same skip as SectionEvent).
   bool schedulerHasProfileAtSection(const BranchScheduler& scheduler, size_t section);
-  void validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const;
+  /// Validates that a finished input branch maps to one runtime branch. Returns true when it still shares live
+  /// triangles with other input branches of that runtime branch (its sites must then be removed by retriangulation).
+  bool validateFinishedInputBranchMatchesRuntime(size_t section, size_t input_branch_id) const;
   std::vector<std::vector<size_t>> extractGraphConnectedComponents() const;
   std::vector<size_t> extractGraphConnectedComponent(size_t u, std::vector<bool>& visited) const;
   size_t getRuntimeBranchIdForFace(size_t face_id) const;

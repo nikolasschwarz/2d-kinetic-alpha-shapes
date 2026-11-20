@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Extract input branches 1 and 2 at global sections 15-16 from test_oak_2.txt."""
+"""Extract input branches over a global section range from a StrandTree file into a small test fixture.
+
+Kept strands are re-indexed from 0 and heights shifted so --section-start becomes local height 0. Subdivisions inside
+the range are shifted along, and each strand keeps the physics segment ids of the segments overlapping the range, so
+meshing and physics segment counts still match.
+
+Example:
+  python scripts/extract_branch_slice.py --input input_examples/test_oak_10.txt     --output tests/fixtures/test_oak_10_branch_241_sections_126_134.txt --section-start 126 --section-end 134     --branches 241
+"""
 
 from __future__ import annotations
 
@@ -41,19 +49,11 @@ def find_section(lines: list[str], name: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=Path("input_examples/test_oak_2.txt"),
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("tests/fixtures/test_oak_2_branches_1_2_sections_15_16.txt"),
-    )
-    parser.add_argument("--section-start", type=int, default=15)
-    parser.add_argument("--section-end", type=int, default=16)
-    parser.add_argument("--branches", type=str, default="1,2")
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--section-start", type=int, required=True)
+    parser.add_argument("--section-end", type=int, required=True)
+    parser.add_argument("--branches", type=str, required=True, help="comma-separated input branch ids")
     args = parser.parse_args()
 
     section_indices = list(range(args.section_start, args.section_end + 1))
@@ -84,6 +84,18 @@ def main() -> None:
             cursor += 1
         support_points.append(points)
 
+    subdivisions: list[list[float]] = []
+    cursor = subdiv_start
+    for _ in range(strand_count):
+        subdivisions.append([float(x) for x in lines[cursor].split()[1:]])
+        cursor += 1
+
+    physics_segments: list[list[int]] = []
+    cursor = physics_start
+    for _ in range(strand_count):
+        physics_segments.append(parse_ints(lines[cursor])[1:])
+        cursor += 1
+
     branch_indices: list[list[int]] = []
     cursor = branch_indices_start
     for _ in range(strand_count):
@@ -104,6 +116,19 @@ def main() -> None:
     sliced_support = [
         [support_at(support_points[old], height) for height in section_indices] for old in selected_old_strands
     ]
+
+    # Segment k of a strand spans [subdivision k-1, subdivision k]; keep the segments overlapping the range.
+    start, end = args.section_start, args.section_end
+    sliced_subdivisions = [
+        [value - start for value in subdivisions[old] if start < value < end] for old in selected_old_strands
+    ]
+    sliced_physics = []
+    for old in selected_old_strands:
+        first = sum(value <= start for value in subdivisions[old])
+        last = sum(value < end for value in subdivisions[old])
+        if physics_segments[old] and len(physics_segments[old]) != len(subdivisions[old]) + 1:
+            raise ValueError(f"strand {old}: physics segment count does not match its subdivisions")
+        sliced_physics.append(physics_segments[old][first : last + 1])
 
     sliced_branch_indices = [
         [branch_at(branch_indices[old], height) for height in section_indices] for old in selected_old_strands
@@ -183,12 +208,12 @@ def main() -> None:
             out_lines.append(f"{x} {y}")
 
     out_lines.append("[Section] subdivisions_by_strand")
-    for _ in selected_old_strands:
-        out_lines.append("0")
+    for values in sliced_subdivisions:
+        out_lines.append(" ".join([str(len(values))] + [f"{value:.17g}" for value in values]))
 
     out_lines.append("[Section] physics_strand_to_segment_indices")
-    for _ in selected_old_strands:
-        out_lines.append("0")
+    for ids in sliced_physics:
+        out_lines.append(" ".join(map(str, [len(ids), *ids])))
 
     out_lines.append("[Section] transforms_by_height_and_branch")
     out_lines.append(str(len(sliced_transforms)))

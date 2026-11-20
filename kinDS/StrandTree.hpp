@@ -17,6 +17,9 @@ namespace kinDS
 class StrandTree
 {
  private:
+  /// Kinetic remap (@ref getPointTransformedAtSection) with the legacy mapping: reference/actual roles swapped and
+  /// the hinge point mirrored through the world origin. Off by default (exact unfold actual -> reference).
+  bool legacy_mirrored_hinge = false;
   std::vector<std::vector<glm::dvec2>> support_points;
   std::vector<std::vector<double>> subdivisions_by_strand; // subdivisions for each strand [strand_id][subdivisions]
   std::vector<std::vector<int>> physics_strand_to_segment_indices; // physics strand to segment indices [strand_id]
@@ -33,6 +36,7 @@ class StrandTree
   size_t tree_height = 0;
 
  public:
+  void setLegacyMirroredHinge(bool legacy) { legacy_mirrored_hinge = legacy; }
   StrandTree(const std::vector<std::vector<glm::dvec2>>& support_points,
     const std::vector<std::vector<double>>& subdivisions_by_strand,
     const std::vector<std::vector<int>>& physics_strand_to_segment_indices,

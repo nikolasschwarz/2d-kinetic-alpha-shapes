@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -90,6 +91,145 @@ TreeMesher::TreeMesher(StrandTree& strand_tree, std::function<void(size_t, std::
   , parallel_for(std::move(parallel_for))
   , async_run(std::move(async_run))
 {
+}
+
+void TreeMesher::exportRawMeshletsByLabel(
+  const std::vector<std::string>& labels, const std::filesystem::path& dir) const
+{
+  if (!mesh_builder)
+  {
+    throw std::runtime_error("exportRawMeshletsByLabel: requires a live meshing run.");
+  }
+  const std::vector<VoronoiMesh> regular = mesh_builder->extractMeshes();
+  const std::vector<VoronoiMesh> intervals = mesh_builder->extractBoundaryIntervalMeshlets();
+  std::filesystem::create_directories(dir);
+  ObjWriteOptions options;
+  options.include_metadata = mesh_builder->store_mesh_metadata;
+  std::optional<VoronoiMesh> combined;
+  for (const std::string& label : labels)
+  {
+    const std::vector<VoronoiMesh>& source = label.starts_with('b') ? intervals : regular;
+    const bool valid = label.size() >= 2 && (label[0] == 'i' || label[0] == 'b')
+      && label.find_first_not_of("0123456789", 1) == std::string::npos;
+    if (!valid || std::stoul(label.substr(1)) >= source.size())
+    {
+      KINDS_WARNING("exportRawMeshletsByLabel: no meshlet for label " << label);
+      continue;
+    }
+    VoronoiMesh mesh = source[std::stoul(label.substr(1))];
+    mesh.setGroupOffsets({ 0 });
+    mesh.setGroupNames({ label });
+    ObjExporter::writeMesh(mesh, dir / (label + ".obj"), options);
+    if (!combined.has_value())
+    {
+      combined.emplace(mesh.getMaterialNames(), mesh.getNormalMode());
+      combined->setStoreMetadata(mesh_builder->store_mesh_metadata);
+    }
+    *combined += mesh;
+  }
+  if (combined.has_value())
+  {
+    ObjExporter::writeMesh(*combined, dir / "combined.obj", options);
+  }
+}
+
+void TreeMesher::exportSegmentMeshletsInScope(
+  const std::vector<std::string>& labels, double t, const std::filesystem::path& dir) const
+{
+  if (!mesh_builder)
+  {
+    throw std::runtime_error("exportSegmentMeshletsInScope: requires a live meshing run.");
+  }
+  std::set<size_t> issue_segments;
+  std::set<size_t> branches;
+  for (const std::string& label : labels)
+  {
+    if (const std::optional<size_t> segment = mesh_builder->segmentForMeshletLabel(label); segment.has_value())
+    {
+      issue_segments.insert(*segment);
+      branches.insert(mesh_builder->runtimeBranchForSegment(*segment));
+    }
+  }
+  // Neighbourhood of the labelled raw meshlets: their bounding box grown by twice its extent.
+  glm::dvec3 issue_lo(std::numeric_limits<double>::infinity());
+  glm::dvec3 issue_hi(-std::numeric_limits<double>::infinity());
+  {
+    const std::vector<VoronoiMesh> regular = mesh_builder->extractMeshes();
+    const std::vector<VoronoiMesh> intervals = mesh_builder->extractBoundaryIntervalMeshlets();
+    for (const std::string& label : labels)
+    {
+      const std::vector<VoronoiMesh>& source = label.starts_with('b') ? intervals : regular;
+      if (label.size() < 2 || label.find_first_not_of("0123456789", 1) != std::string::npos
+        || std::stoul(label.substr(1)) >= source.size())
+      {
+        continue;
+      }
+      for (const glm::dvec3& v : source[std::stoul(label.substr(1))].getVertices())
+      {
+        issue_lo = glm::min(issue_lo, v);
+        issue_hi = glm::max(issue_hi, v);
+      }
+    }
+    const glm::dvec3 grow = 2.0 * (issue_hi - issue_lo);
+    issue_lo -= grow;
+    issue_hi += grow;
+  }
+  const auto near_issue = [&](const VoronoiMesh& mesh)
+  {
+    glm::dvec3 lo(std::numeric_limits<double>::infinity());
+    glm::dvec3 hi(-std::numeric_limits<double>::infinity());
+    for (const glm::dvec3& v : mesh.getVertices())
+    {
+      lo = glm::min(lo, v);
+      hi = glm::max(hi, v);
+    }
+    return glm::all(glm::lessThanEqual(lo, issue_hi)) && glm::all(glm::lessThanEqual(issue_lo, hi));
+  };
+  const std::vector<VoronoiMesh> segments = mesh_builder->extractSegmentMeshlets(true, false).first;
+  std::filesystem::create_directories(dir);
+  ObjWriteOptions options;
+  options.include_metadata = mesh_builder->store_mesh_metadata;
+  std::optional<VoronoiMesh> combined;
+  for (size_t segment_id = 0; segment_id < segments.size(); ++segment_id)
+  {
+    const VoronoiMesh& source = segments[segment_id];
+    const size_t runtime_branch = mesh_builder->runtimeBranchForSegment(segment_id);
+    if (source.getTriangleCount() == 0 || (!branches.contains(runtime_branch) && !near_issue(source)))
+    {
+      continue;
+    }
+    double t_min = std::numeric_limits<double>::infinity();
+    double t_max = -std::numeric_limits<double>::infinity();
+    for (size_t v = 0; v < source.getVertexCount(); ++v)
+    {
+      const double vt = source.vertexKineticTime(v);
+      if (std::isfinite(vt))
+      {
+        t_min = std::min(t_min, vt);
+        t_max = std::max(t_max, vt);
+      }
+    }
+    if (!(t_min <= t && t <= t_max))
+    {
+      continue;
+    }
+    const std::string name = "segment" + std::to_string(segment_id) + "_rb" + std::to_string(runtime_branch)
+      + (issue_segments.contains(segment_id) ? "_issue" : "");
+    VoronoiMesh mesh = source;
+    mesh.setGroupOffsets({ 0 });
+    mesh.setGroupNames({ name });
+    ObjExporter::writeMesh(mesh, dir / (name + ".obj"), options);
+    if (!combined.has_value())
+    {
+      combined.emplace(mesh.getMaterialNames(), mesh.getNormalMode());
+      combined->setStoreMetadata(mesh_builder->store_mesh_metadata);
+    }
+    *combined += mesh;
+  }
+  if (combined.has_value())
+  {
+    ObjExporter::writeMesh(*combined, dir / "combined.obj", options);
+  }
 }
 
 void TreeMesher::exportMeshlets(MeshletExportMode export_mode, const std::filesystem::path& export_path,
@@ -751,6 +891,7 @@ void TreeMesher::runKineticDelaunay(bool visual_debug)
   // sort subdivisions into a single array
   std::vector<std::pair<size_t, double>> subdivisions = MergeSortedVectors(strand_tree.getSubdivisionsByStrand());
 
+  strand_tree.setLegacyMirroredHinge(settings.legacy_mirrored_hinge);
   kinetic_delaunay = std::make_shared<KineticDelaunay>(
     strand_tree, settings.alpha_cutoff, false, settings.branch_alpha_cutoff);
   kinetic_delaunay->setBranchAlphaLookAhead(settings.look_ahead);

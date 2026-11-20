@@ -64,6 +64,9 @@ cmake --build build --target kinDS kinDS-tests
 ```
 
 The demo executable will be built to `build/bin/kinDS-demo.exe` (or `build/bin/kinDS-demo` on Unix).
+Mesh an example tree with `kinDS-demo --mesh input_examples/test_oak_2.txt` (`--help` lists all options). The
+`test_oak*.txt` inputs are TreeBatchApp oaks (see `input_examples/test_oaks_provenance.md`); older inputs are kept in
+`input_examples/outdated_test_oaks/`.
 
 **Or manually (Ninja):**
 

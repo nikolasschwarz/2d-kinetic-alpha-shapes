@@ -1,4 +1,8 @@
+#pragma once
 #include "VoronoiMesh.hpp"
+
+#include <optional>
+#include <utility>
 
 namespace kinDS
 {
@@ -20,6 +24,15 @@ struct MeshStructure
     size_t owner_segment_id = static_cast<size_t>(-1);
     size_t start_delaunay_edge_id = static_cast<size_t>(-1);
     size_t end_delaunay_edge_id = static_cast<size_t>(-1);
+  };
+
+  /// Boundary interval finished in a radius @c beforeEvent, with the crossing ids of its ends (Delaunay edge, Voronoi
+  /// edge) captured at finish time: the event rebuilds the crossing lists, which invalidates the strips' iterators.
+  struct FinishedRadiusInterval
+  {
+    size_t pair_index = static_cast<size_t>(-1);
+    std::optional<std::pair<size_t, size_t>> start_crossing;
+    std::optional<std::pair<size_t, size_t>> end_crossing;
   };
 
   struct SegmentProperties

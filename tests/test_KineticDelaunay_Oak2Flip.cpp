@@ -298,7 +298,7 @@ TEST_CASE("test_oak_2 writes the flip polynomial dump for a flip that occurs", "
 {
   enable_all_log_levels_for_test();
 
-  const std::filesystem::path tree_path = fixturePath("input_examples/test_oak_2.txt");
+  const std::filesystem::path tree_path = fixturePath("input_examples/outdated_test_oaks/test_oak_2.txt");
   constexpr double cutoff = 10.0;
   std::optional<std::pair<double, size_t>> target;
   {
@@ -333,7 +333,7 @@ TEST_CASE("full test_oak_2 meshing has no bad flip near t=15.012518", "[KineticD
   enable_all_log_levels_for_test();
 
   const std::filesystem::path output_root = oak2TestOutputRoot("oak2_integration");
-  StrandTree tree = StrandTree::loadFromFile(fixturePath("input_examples/test_oak_2.txt"));
+  StrandTree tree = StrandTree::loadFromFile(fixturePath("input_examples/outdated_test_oaks/test_oak_2.txt"));
   TreeMesher mesher(tree);
   mesher.setSettings(makeOak2DebugSettings(output_root, kKnownBadFlipGlobalTime));
 

@@ -537,7 +537,6 @@ std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t
     {
       normals[corner] = n_f;
     }
-    tmpgSetTag(tri, 5);
     return { new_vid, tri };
   }
 
@@ -554,12 +553,6 @@ std::pair<size_t, size_t> VoronoiMesh::splitTriangle(size_t tri_vert_id0, size_t
 
   // New face: F, vb, vc — same cyclic order as va → vb → vc on the original triangle.
   const size_t new_tri = addTriangle(new_vid, vb, vc, uv_f_idx, uv_b_idx, uv_c_idx, material_id, face_meta);
-  tmpgSetTag(tri, 4, { int(new_vid), isVertexFlexible(new_vid) ? 1 : 0 });
-  tmpgSetTag(new_tri, 3, { int(new_vid), isVertexFlexible(new_vid) ? 1 : 0 });
-  tmpg_split_coincide[tmpg_construction ? 0 : 1][vertices[new_vid] == vertices[va] ? 1
-      : vertices[new_vid] == vertices[vb]                                       ? 2
-      : vertices[new_vid] == vertices[vc]                                       ? 3
-                                                                                : 0]++;
   if (has_corner_normals)
   {
     normals.push_back(n_f);

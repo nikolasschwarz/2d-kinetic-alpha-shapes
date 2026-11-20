@@ -7,7 +7,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <map> // TMPG
 #include <vector>
 
 namespace kinDS
@@ -253,24 +252,6 @@ class VoronoiMesh
     std::string metadata;
   };
   std::vector<CollapsedTriangle> collapsed_triangles;
-  // TMPG: per-triangle origin tag (1 sink clean, 2 sink flex-excused, 3 split new, 4 split rewritten original),
-  // flexible / other coinciding vertex for tag 2, and split coincidence stats (none, va, vb, vc).
-  std::vector<uint8_t> tmpg_tag;
-  std::vector<std::pair<int, int>> tmpg_flex_pair;
-  std::map<size_t, int> tmpg_resolve;
-  std::map<size_t, int> tmpg_vertex_line; // TMPG creating source line per vertex // flexible vertex -> 1 onto new sample, 2 onto previous front, 3 between, 4 snapped
-  void tmpgSetTag(size_t tri, uint8_t tag, std::pair<int, int> flex = { -1, -1 })
-  {
-    if (tmpg_tag.size() <= tri)
-    {
-      tmpg_tag.resize(tri + 1, 0);
-      tmpg_flex_pair.resize(tri + 1, { -1, -1 });
-    }
-    tmpg_tag[tri] = tag;
-    tmpg_flex_pair[tri] = flex;
-  }
-  static inline size_t tmpg_split_coincide[2][4] = {}; // [during construction?][none, va, vb, vc]
-  static inline bool tmpg_construction = true;
 
   /// Empty string if unset; otherwise a stable fragment for filenames, e.g. `_t0.000000` or `_t3.500000`.
   std::string creationKineticTimeFilenameSuffix() const;
