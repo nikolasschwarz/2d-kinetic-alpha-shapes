@@ -47,11 +47,15 @@
 *.mtl
 *.svg
 *.log
-*.txt
 
+# Only ignore txt files in the root of the repo, not in subdirectories
+/*.txt
+
+/debug_output/
 /logs/
 /raw_meshlets/
 /segment_meshlets/
+/tests/output/
 /tools/__pycache__/
 
 # Binaries if emitted outside build trees
