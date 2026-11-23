@@ -1,5 +1,6 @@
 #include "SimilarityBlend.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace kinDS
@@ -85,5 +86,41 @@ glm::dvec3 blendSimilarity(const SimilarityFit& fit, const glm::dvec3& pre, cons
   const glm::dquat rotation = glm::slerp(glm::dquat(1.0, 0.0, 0.0, 0.0), fit.rotation, w);
   return fit.pre_centroid + w * (fit.post_centroid - fit.pre_centroid)
     + (1.0 + w * (fit.scale - 1.0)) * (rotation * offset) + w * residual;
+}
+namespace
+{
+glm::dvec2 multiply(std::complex<double> z, const glm::dvec2& v)
+{
+  return { z.real() * v.x - z.imag() * v.y, z.imag() * v.x + z.real() * v.y };
+}
+} // namespace
+
+glm::dvec2 similarityBlendMidpoint(
+  const glm::dvec2& p0, const glm::dvec2& p1_in_start_frame, const glm::dvec2& p1, std::complex<double> similarity)
+{
+  // Half similarity on the start-frame motion; the remaining (translation / non-similar) part is blended linearly.
+  return multiply(std::sqrt(similarity), 0.5 * (p0 + p1_in_start_frame))
+    + 0.5 * (p1 - multiply(similarity, p1_in_start_frame));
+}
+
+std::array<glm::dvec2, 3> quadraticThroughMidpoint(const glm::dvec2& p0, const glm::dvec2& mid, const glm::dvec2& p1)
+{
+  return { p0, -3.0 * p0 + 4.0 * mid - p1, 2.0 * p0 - 4.0 * mid + 2.0 * p1 };
+}
+
+double quadraticSimilarityBlendDistanceError(std::complex<double> similarity)
+{
+  // A start-frame difference vector d becomes q(w) * d with q through 1, sqrt(z), z; exactly it scales by |z|^w.
+  const std::complex<double> half = std::sqrt(similarity);
+  const std::complex<double> c1 = -3.0 + 4.0 * half - similarity;
+  const std::complex<double> c2 = 2.0 - 4.0 * half + 2.0 * similarity;
+  double max_error = 0.0;
+  for (int i = 1; i < 100; ++i)
+  {
+    const double w = i / 100.0;
+    const double exact = std::pow(std::abs(similarity), w);
+    max_error = std::max(max_error, std::abs(std::abs(1.0 + w * c1 + w * w * c2) / exact - 1.0));
+  }
+  return max_error;
 }
 } // namespace kinDS

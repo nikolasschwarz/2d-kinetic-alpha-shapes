@@ -837,7 +837,14 @@ void KineticDelaunay::FlipEvent::handleEvent()
       half_edge_id ^ 1, t, shared_reference_branch);
     const double voronoi_vertex_distance
       = glm::distance(glm::dvec2(left_voronoi_vertex), glm::dvec2(right_voronoi_vertex));
-    const bool transformed_coincident = voronoi_vertex_distance <= flip_voronoi_vertex_distance_eps;
+    // Circumcenter round-off and root-time error grow with the circumradius (far circumcenters of slivers move fast).
+    const int edge_origin = graph.halfEdge(half_edge_id).origin;
+    const double circumradius = edge_origin < 0
+      ? 0.0
+      : glm::distance(glm::dvec2(left_voronoi_vertex),
+          kd->getPointAtWithReferenceBranch(static_cast<size_t>(edge_origin), t, shared_reference_branch));
+    const double coincidence_eps = flip_voronoi_vertex_distance_eps * std::max(1.0, circumradius);
+    const bool transformed_coincident = voronoi_vertex_distance <= coincidence_eps;
 
     if (!transformed_coincident)
     {
@@ -852,24 +859,21 @@ void KineticDelaunay::FlipEvent::handleEvent()
       const double raw_circumcenter_distance = glm::distance(raw_left_cc, raw_right_cc);
       const double shared_frame_circumcenter_distance
         = glm::distance(transformed_left_cc, transformed_right_cc);
-      const bool untransformed_coincident = raw_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
-      const bool shared_frame_coincident
-        = shared_frame_circumcenter_distance <= flip_voronoi_vertex_distance_eps;
+      const bool untransformed_coincident = raw_circumcenter_distance <= coincidence_eps;
+      const bool shared_frame_coincident = shared_frame_circumcenter_distance <= coincidence_eps;
 
       KINDS_WARNING("Flip sanity FAIL Voronoi coincidence (he_id="
         << half_edge_id << ", occurrence_t=" << std::setprecision(17) << occurrence_time
         << ", creation_t=" << creation_time << ", faces " << face_id << " and " << twin_face_id
-        << ", transformed_voronoi_distance=" << voronoi_vertex_distance
-        << ", untransformed_circumcenter_distance=" << raw_circumcenter_distance
-        << ", shared_frame_circumcenter_distance=" << shared_frame_circumcenter_distance << ", eps="
-        << flip_voronoi_vertex_distance_eps << ", shared_reference_branch=" << shared_reference_branch
-        << ", left=" << glm::to_string(left_voronoi_vertex)
-        << ", right=" << glm::to_string(right_voronoi_vertex) << ", raw_left_cc="
-        << glm::to_string(raw_left_cc) << ", raw_right_cc=" << glm::to_string(raw_right_cc)
+        << ", transformed_voronoi_distance=" << voronoi_vertex_distance << ", untransformed_circumcenter_distance="
+        << raw_circumcenter_distance << ", shared_frame_circumcenter_distance=" << shared_frame_circumcenter_distance
+        << ", eps=" << coincidence_eps << ", shared_reference_branch=" << shared_reference_branch
+        << ", left=" << glm::to_string(left_voronoi_vertex) << ", right=" << glm::to_string(right_voronoi_vertex)
+        << ", raw_left_cc=" << glm::to_string(raw_left_cc) << ", raw_right_cc=" << glm::to_string(raw_right_cc)
         << flipUntransformedFrameMismatchNote(transformed_coincident, untransformed_coincident)
         << (shared_frame_coincident && !transformed_coincident
-              ? " [shared-frame circumcenters coincide; per-vertex getPointAt frame mismatch]"
-              : "")
+               ? " [shared-frame circumcenters coincide; per-vertex getPointAt frame mismatch]"
+               : "")
         << ")");
     }
     else if (log_flip_diag)

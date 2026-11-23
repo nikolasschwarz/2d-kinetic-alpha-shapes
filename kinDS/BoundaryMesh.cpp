@@ -76,18 +76,19 @@ void BoundaryMesh::clearHalfEdge(size_t he_id)
   }
 }
 
-size_t BoundaryMesh::addVertex(
-  const glm::dvec3& position, size_t strand_id, const glm::dvec2& raw_uv, const std::string& metadata)
+size_t BoundaryMesh::addVertex(const glm::dvec3& position, size_t strand_id, double kinetic_time,
+  const glm::dvec2& raw_uv, const std::string& metadata)
 {
   std::lock_guard<std::recursive_mutex> guard(mutex_);
-  return addVertexUnlocked(position, strand_id, raw_uv, metadata);
+  return addVertexUnlocked(position, strand_id, kinetic_time, raw_uv, metadata);
 }
 
-size_t BoundaryMesh::addVertexUnlocked(
-  const glm::dvec3& position, size_t strand_id, const glm::dvec2& raw_uv, const std::string& metadata)
+size_t BoundaryMesh::addVertexUnlocked(const glm::dvec3& position, size_t strand_id, double kinetic_time,
+  const glm::dvec2& raw_uv, const std::string& metadata)
 {
   const size_t index = mesh_.addVertex(position, metadata);
   vertex_to_strand_id_.push_back(strand_id);
+  vertex_kinetic_time_.push_back(kinetic_time);
   raw_uvs_.resize(index + 1, glm::dvec2 {});
   raw_uvs_[index] = raw_uv;
   return index;
@@ -188,15 +189,18 @@ size_t BoundaryMesh::finalize()
   mesh_.validateUVLayout("finalized boundary mesh");
 
   std::vector<size_t> remapped_strand_ids(mesh_.getVertices().size());
+  std::vector<double> remapped_kinetic_times(mesh_.getVertices().size());
   for (size_t old_index = 0; old_index < vertex_to_strand_id_.size(); ++old_index)
   {
     const size_t new_index = remap_isolated[remap_merged[old_index]];
     if (new_index != npos)
     {
       remapped_strand_ids[new_index] = vertex_to_strand_id_[old_index];
+      remapped_kinetic_times[new_index] = vertex_kinetic_time_[old_index];
     }
   }
   vertex_to_strand_id_.swap(remapped_strand_ids);
+  vertex_kinetic_time_.swap(remapped_kinetic_times);
   return degenerate_triangles_removed;
 }
 
@@ -214,5 +218,7 @@ const std::vector<size_t>& BoundaryMesh::vertexToStrandId() const
 {
   return vertex_to_strand_id_;
 }
+
+const std::vector<double>& BoundaryMesh::vertexKineticTime() const { return vertex_kinetic_time_; }
 
 } // namespace kinDS

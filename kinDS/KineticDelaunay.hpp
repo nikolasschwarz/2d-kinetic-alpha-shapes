@@ -126,7 +126,9 @@ inline size_t holdPieceStartReference(const PostSplitFrameTransition& transition
   return transition.common_reference_branch;
 }
 
-inline constexpr double kPostSplitFrameBlendRotationWarnDegrees = 20.0;
+/// Relative distance error of the post-split frame blend that triggers a warning: the shrink a linear blend had at
+/// a 20 degree frame rotation (1 - cos(10 deg)).
+inline constexpr double kPostSplitFrameBlendDistanceErrorWarn = 0.0151922469877919;
 
 struct PostSplitFrameTransitionState
 {

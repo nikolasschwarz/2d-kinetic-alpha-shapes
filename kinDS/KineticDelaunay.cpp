@@ -1,20 +1,20 @@
 #include "KineticDelaunay.hpp"
+#include "DebugExportFormatting.hpp"
 #include "HalfEdgeDelaunayGraphToSVG.hpp"
 #include "KineticDelaunayCrossingEvent.hpp"
+#include "KineticDelaunayEventPredicates.hpp"
 #include "KineticDelaunayFlipEvent.hpp"
+#include "KineticDelaunayFlipEventTriggerDump.hpp"
 #include "KineticDelaunayHelpers.hpp"
 #include "KineticDelaunayRadiusEvent.hpp"
 #include "KineticDelaunaySectionEvent.hpp"
-#include "KineticDelaunaySubdivisionEvent.hpp"
 #include "KineticDelaunaySeparationEvent.hpp"
-#include "KineticDelaunayFlipEvent.hpp"
-#include "KineticDelaunayFlipEventTriggerDump.hpp"
-#include "KineticDelaunayEventPredicates.hpp"
-#include "Polygon2D.hpp"
-#include "DebugExportFormatting.hpp"
-#include "VisualDebugHighlight.hpp"
-#include "SegmentBuilderVisualDebug.hpp"
+#include "KineticDelaunaySubdivisionEvent.hpp"
 #include "PlaneProjector.hpp"
+#include "Polygon2D.hpp"
+#include "SegmentBuilderVisualDebug.hpp"
+#include "SimilarityBlend.hpp"
+#include "VisualDebugHighlight.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -24,12 +24,11 @@
 #include <exception>
 #include <fstream>
 #include <functional>
-#include <iomanip>
 #include <glm/geometric.hpp>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <mutex>
-#include <utility>
 #include <optional>
 #include <queue>
 #include <set>
@@ -39,6 +38,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 using namespace kinDS;
@@ -540,22 +540,7 @@ std::vector<double> KineticDelaunay::findEvents(
   }
 
   event_trigger.trim();
-  auto zeros = event_trigger.realRoots();
-  std::vector<double> filtered_sorted_zeros;
-
-  for (const auto& root : zeros)
-  {
-    if (isnan(root))
-    {
-      continue; // Skip NaN roots
-    }
-
-    if (root > min_fraction && root <= kEventIntervalFractionUpperBound)
-    {
-      double event_time = root;
-      filtered_sorted_zeros.emplace_back(event_time);
-    }
-  }
+  std::vector<double> filtered_sorted_zeros = event_trigger.realRootsIn(min_fraction, kEventIntervalFractionUpperBound);
 
   if (filtered_sorted_zeros.empty())
   {
@@ -1816,7 +1801,7 @@ void KineticDelaunay::precomputeStepForRuntimeBranch(double t, size_t runtime_br
 void KineticDelaunay::rescheduleAllFlipRadiusCrossingEvents(double t)
 {
   growGraphSlotArrays();
-  const EventTime stamp(t);
+  const EventTime stamp = eventTimeAt(t);
   for (EventTime& last : quadrilateral_last_updated)
   {
     last = stamp;
@@ -1834,7 +1819,7 @@ void KineticDelaunay::rescheduleAllFlipRadiusCrossingEvents(double t)
                                                                 << graph.liveDelaunayEdgeCount()
                                                                 << " live_faces=" << graph.liveFaceCount());
 
-  // Stamp first so queued events with creation < EventTime(t) are skipped; new schedules use creation == stamp.
+  // Stamp first so queued events created before the stamp are skipped; new schedules use creation == stamp.
   precomputeStep(t);
 }
 
@@ -2176,15 +2161,9 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
 
   const size_t section = static_cast<size_t>(std::floor(query_t));
   const double frac = query_t - static_cast<double>(section);
-  // Linear piece between the transformed section ends; same arithmetic as evaluating getPiecePolynomial at frac
-  // (Horner: (P1 - P0) * frac + P0) without building polynomials.
-  const auto lerp_piece = [&](size_t start_reference_branch, size_t end_reference_branch)
-  {
-    const glm::dvec2 p0 = branch_trajs.getPointTransformedAtSection(v, section, start_reference_branch, section);
-    const glm::dvec2 p1
-      = branch_trajs.getPointTransformedAtSection(v, section + 1, end_reference_branch, section + 1);
-    return (p1 - p0) * frac + p0;
-  };
+  // Same curve as the event trajectories (getPiecePolynomialBlendingReference) without building polynomials.
+  const auto piece_at = [&](size_t start_reference_branch, size_t end_reference_branch)
+  { return branch_trajs.evaluateBlendingReference(v, section, start_reference_branch, end_reference_branch, frac); };
 
   glm::dvec2 position;
   if (!apply_reference_transform)
@@ -2206,7 +2185,7 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
       }
       else
       {
-        position = lerp_piece(start_reference, transition->common_reference_branch);
+        position = piece_at(start_reference, transition->common_reference_branch);
       }
     }
     else if (transition_active && section == transition->blend_section)
@@ -2219,8 +2198,16 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
       }
       else
       {
-        position = lerp_piece(transition->common_reference_branch, native_ref);
+        position = piece_at(transition->common_reference_branch, native_ref);
       }
+    }
+    else if (transition != nullptr && section == transition->blend_section + 1
+      && frac < std::numeric_limits<double>::epsilon())
+    {
+      // Blend end: where the blend piece left the strand (native frame). The section event here normally cuts the
+      // pending split so the reference pool agrees; at the end of the tree that event never runs.
+      position
+        = branch_trajs.getPointTransformedAtSection(v, section, branch_trajs.getBranchIndex(v, section), section);
     }
     else if (frac < std::numeric_limits<double>::epsilon())
     {
@@ -2228,7 +2215,7 @@ glm::dvec2 KineticDelaunay::getPointAtWithReferenceBranch(size_t v, double t, si
     }
     else
     {
-      position = lerp_piece(reference_branch, reference_branch);
+      position = piece_at(reference_branch, reference_branch);
     }
   }
 
@@ -3318,14 +3305,15 @@ bool KineticDelaunay::maybeFinalizeInfinitesimalSeparation(size_t parent_compone
   // Cut without localized flip refresh; full primary reschedule covers every live primitive.
   applyPendingRuntimeBranchSplit(t, split.parent_runtime_branch, nullptr, /*refresh_flip_events=*/false);
 
-  // Ensure primary creation stamps are EventTime(t) (not leftover infinitesimal from the handler).
-  current_infinitesimal_t_ = 0.0;
-  // Parallel forks already precompute each piece onto its own queue at t. A global reschedule here
-  // would stamp every last_updated and enqueue onto the forking scheduler instead.
+  // Keep the finalizing handler's infinitesimal time: the reschedule stamp must be later than primary events created
+  // before the cut at this real time (e.g. the section precompute at (t, 0)), or they survive and fire on the new
+  // graph. Parallel forks already precompute each piece onto its own queue at t. A global reschedule here would stamp
+  // every last_updated and enqueue onto the forking scheduler instead.
   if (!parallelize_independent_runtime_branches_)
   {
     rescheduleAllFlipRadiusCrossingEvents(t);
   }
+  current_infinitesimal_t_ = 0.0;
   return true;
 }
 
@@ -5209,7 +5197,8 @@ void KineticDelaunay::registerUpcomingPostSplitFrameTransitions(size_t section_i
 {
   const size_t tree_height = branch_trajs.getHeight();
   const size_t hold_end_height = section_index + 1;
-  if (tree_height == 0 || hold_end_height >= tree_height)
+  // tree_height is the last height index; a hold may end there (no blend follows, see blend_end_strands).
+  if (tree_height == 0 || hold_end_height > tree_height)
   {
     return;
   }
@@ -5265,8 +5254,19 @@ void KineticDelaunay::registerUpcomingPostSplitFrameTransitions(size_t section_i
       continue;
     }
 
-    // Parent/common frame at the section start; endpoints at hold_end_height map into this frame.
-    const size_t common_reference_branch = minInputBranchForStrands(live_strands, section_index);
+    // Parent/common frame at the section start; endpoints at hold_end_height map into this frame. Only strands that
+    // reach the blend end choose it: a branch ending at hold_end_height has no frame to blend from there.
+    std::vector<size_t> blend_end_strands;
+    for (size_t strand_id : live_strands)
+    {
+      if (strandHasProfileAt(strand_id, static_cast<double>(hold_end_height + 1)))
+      {
+        blend_end_strands.push_back(strand_id);
+      }
+    }
+    // When every branch ends at hold_end_height there is no blend; keep holding the common frame to the end.
+    const size_t common_reference_branch
+      = minInputBranchForStrands(blend_end_strands.empty() ? live_strands : blend_end_strands, section_index);
 
     PostSplitFrameTransition transition;
     transition.parent_component_id = component_id;
@@ -5323,8 +5323,21 @@ void KineticDelaunay::registerPostSplitFrameTransition(size_t parent_component_i
     }
   }
 
+  // Only strands that reach the blend end choose the common frame (see registerUpcomingPostSplitFrameTransitions).
+  std::vector<size_t> blend_end_strands;
+  for (size_t strand_id : affected_strands)
+  {
+    if (!isDummyBoundary(strand_id) && strandHasProfileAt(strand_id, static_cast<double>(hold_end_height + 1)))
+    {
+      blend_end_strands.push_back(strand_id);
+    }
+  }
+  if (blend_end_strands.empty())
+  {
+    return;
+  }
   const size_t common_reference_branch
-    = minInputBranchForStrands(affected_strands, branchLookupHeightForTime(branch_trajs, split_time));
+    = minInputBranchForStrands(blend_end_strands, branchLookupHeightForTime(branch_trajs, split_time));
 
   PostSplitFrameTransition transition;
   transition.parent_component_id = parent_component_id;
@@ -5347,22 +5360,17 @@ void KineticDelaunay::maybeWarnPostSplitFrameBlendRotation(PostSplitFrameTransit
   {
     return;
   }
+  transition.rotation_warning_emitted = true;
 
-  const size_t seam_height = transition.hold_end_height;
-  const size_t native_height = transition.hold_end_height + 1;
-  if (seam_height >= branch_trajs.getHeight() || native_height > branch_trajs.getHeight())
+  // The blend section ends at native_height, where its pieces switch from the common to the native frame.
+  const size_t native_height = transition.blend_section + 1;
+  if (native_height > branch_trajs.getHeight())
   {
     return;
   }
-  if (transition.common_reference_branch >= branch_trajs.getBranchCount(seam_height))
-  {
-    return;
-  }
 
-  const glm::dmat4& common_transform
-    = branch_trajs.getTransformByHeightAndBranch(seam_height, transition.common_reference_branch);
-
-  std::unordered_set<size_t> native_branches;
+  // One strand per native branch: the frame change depends only on the strand's profile plane.
+  std::unordered_map<size_t, size_t> strand_by_native_branch;
   for (size_t strand_id : transition.strand_ids)
   {
     // Ended strands keep their last branch id, whose transform at native_height can be zero.
@@ -5370,48 +5378,35 @@ void KineticDelaunay::maybeWarnPostSplitFrameBlendRotation(PostSplitFrameTransit
     {
       continue;
     }
-    native_branches.insert(branch_trajs.getBranchIndex(strand_id, native_height));
+    strand_by_native_branch.emplace(branch_trajs.getBranchIndex(strand_id, native_height), strand_id);
   }
 
-  double max_abs_degrees = 0.0;
+  double max_error = 0.0;
+  std::complex<double> max_similarity = 1.0;
   size_t max_native_branch = transition.common_reference_branch;
-  for (size_t native_branch : native_branches)
+  for (const auto& [native_branch, strand_id] : strand_by_native_branch)
   {
     if (native_branch == transition.common_reference_branch)
     {
       continue;
     }
-    if (native_branch >= branch_trajs.getBranchCount(native_height))
+    const std::complex<double> similarity = branch_trajs.frameChangeSimilarity(
+      strand_id, transition.blend_section, transition.common_reference_branch, native_branch);
+    const double error = quadraticSimilarityBlendDistanceError(similarity);
+    if (error > max_error)
     {
-      continue;
-    }
-
-    // Relative in-plane rotation: how the common-frame +x axis maps into the native frame at the blend end height.
-    const glm::dmat4& native_transform
-      = branch_trajs.getTransformByHeightAndBranch(native_height, native_branch);
-    const PlaneProjector projector(common_transform, native_transform);
-    const glm::dvec2 origin_native = projector.project(glm::dvec2(0.0, 0.0));
-    const glm::dvec2 x_axis_native = projector.project(glm::dvec2(1.0, 0.0)) - origin_native;
-    const double len2 = glm::dot(x_axis_native, x_axis_native);
-    if (len2 <= 1e-24)
-    {
-      continue;
-    }
-    const double angle_rad = std::atan2(x_axis_native.y, x_axis_native.x);
-    const double angle_deg = angle_rad * (180.0 / 3.14159265358979323846);
-    if (std::abs(angle_deg) > std::abs(max_abs_degrees))
-    {
-      max_abs_degrees = angle_deg;
+      max_error = error;
+      max_similarity = similarity;
       max_native_branch = native_branch;
     }
   }
 
-  transition.rotation_warning_emitted = true;
-  if (std::abs(max_abs_degrees) > kPostSplitFrameBlendRotationWarnDegrees)
+  if (max_error > kPostSplitFrameBlendDistanceErrorWarn)
   {
-    KINDS_WARNING("Post-split frame blend rotation "
-      << max_abs_degrees << " deg exceeds threshold " << kPostSplitFrameBlendRotationWarnDegrees
-      << " deg (common_branch=" << transition.common_reference_branch << ", native_branch=" << max_native_branch
+    KINDS_WARNING("Post-split frame blend distance error "
+      << max_error << " exceeds threshold " << kPostSplitFrameBlendDistanceErrorWarn << " (rotation "
+      << std::arg(max_similarity) * (180.0 / 3.14159265358979323846) << " deg, scale " << std::abs(max_similarity)
+      << ", common_branch=" << transition.common_reference_branch << ", native_branch=" << max_native_branch
       << ", hold_end_height=" << transition.hold_end_height << ", blend_section=" << transition.blend_section
       << ", parent_component=" << transition.parent_component_id << ")");
   }
@@ -7168,7 +7163,6 @@ void KineticDelaunay::validateDelaunayVoronoiIntersections(const char* context, 
   {
     return;
   }
-
   const ScopedCurrentInfinitesimalTime infinitesimal_shift(*this, occurrence_time);
 
   constexpr double param_range_eps = 1e-9;
@@ -9082,6 +9076,14 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
     pending.push_back(pending_insert);
   }
 
+  // Voronoi-vertex sectors are each below 180 degrees, so a crossing only turns 1 <-> 2 edge crossings.
+  if (pending.size() == 0 || pending.size() == 3)
+  {
+    KINDS_ERROR("updateAfterCrossingEvent: inconsistent crossing data on de="
+      << crossed_delaunay_edge_id << " vv=" << voronoi_vertex_id << " t=" << t << " removed=" << 3 - pending.size()
+      << " inserted=" << pending.size() << " (expected 1 <-> 2; likely a missed event)");
+  }
+
   if (pending.size() == 2)
   {
     const glm::dvec2 crossing_xy(e.position);
@@ -9129,7 +9131,7 @@ void KineticDelaunay::CrossingData::updateAfterCrossingEvent(
     std::sort(pending.begin(), pending.end(),
       [](const PendingCrossingInsert& a, const PendingCrossingInsert& b) { return a.order_key < b.order_key; });
 
-    // Both crossings coincide on the Delaunay edge at the event; force identical dParams so a later
+    // All crossings coincide on the Delaunay edge at the event; force identical dParams so a later
     // param refresh + sort cannot reorder them due to tiny numeric differences.
     const double averaged_dparam
       = 0.5 * (pending[0].intersection.delaunay_edge_param + pending[1].intersection.delaunay_edge_param);

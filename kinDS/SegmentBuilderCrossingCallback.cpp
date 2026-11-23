@@ -419,7 +419,8 @@ void SegmentBuilderCrossingCallback::afterEvent(KineticDelaunay::Event& e)
     }
     else
     {
-      KINDS_WARNING("Boundary crossing case not handled yet on de=" << crossed_d_edge << " removed=" << removed.size()
+      // Only 1 <-> 2 is possible; anything else means the crossing data was already inconsistent.
+      KINDS_ERROR("Boundary crossing: inconsistent crossing data on de=" << crossed_d_edge << " removed=" << removed.size()
                                                                     << " inserted=" << inserted.size() << " t="
                                                                     << crossing->occurrence_time);
     }

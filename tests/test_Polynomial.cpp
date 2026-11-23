@@ -154,3 +154,21 @@ TEST_CASE("Polynomial trimNearZero preserves real high-degree content", "[Polyno
   REQUIRE(p.degree() == 3);
   REQUIRE(p.getCoefficients()[3] == Approx(1.0));
 }
+
+TEST_CASE("Polynomial realRootsIn finds every root in the interval, including close ones", "[Polynomial]")
+{
+  // Degree 12 with a close pair; the companion-matrix solver turns close real roots into complex pairs.
+  const std::vector<double> expected { 0.05, 0.2, 0.31, 0.31001, 0.45, 0.5, 0.62, 0.7, 0.81, 0.9, 0.95, 0.99 };
+  Polynomial p(1.0);
+  for (double r : expected)
+  {
+    p = p * Polynomial(Eigen::Vector2d(-r, 1.0));
+  }
+  const std::vector<double> roots = p.realRootsIn(0.0, 1.0);
+  REQUIRE(roots.size() == expected.size());
+  for (size_t i = 0; i < roots.size(); ++i)
+  {
+    REQUIRE(roots[i] == Approx(expected[i]).margin(1e-9));
+  }
+  REQUIRE(p.realRootsIn(0.1, 0.4).size() == 3);
+}

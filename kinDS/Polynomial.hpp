@@ -191,6 +191,64 @@ class Polynomial
     return real_roots;
   }
 
+  /// Real roots in (@p lo, @p hi], ascending: roots of the derivative split the interval into monotone pieces and
+  /// each sign change is bisected. Unlike the companion-matrix roots this keeps close and high-degree roots.
+  std::vector<double> realRootsIn(double lo, double hi) const
+  {
+    const int deg = degree();
+    if (deg < 1)
+    {
+      return {};
+    }
+    std::vector<double> bounds { lo };
+    for (double x : derivative().realRootsIn(lo, hi))
+    {
+      bounds.push_back(x);
+    }
+    bounds.push_back(hi);
+    std::vector<double> result;
+    for (size_t i = 0; i + 1 < bounds.size(); ++i)
+    {
+      double a = bounds[i];
+      double b = bounds[i + 1];
+      double fa = (*this)(a);
+      const double fb = (*this)(b);
+      if (fb == 0.0)
+      {
+        if (b > lo && (result.empty() || result.back() != b))
+        {
+          result.push_back(b);
+        }
+        continue;
+      }
+      if (fa == 0.0 || (fa < 0.0) == (fb < 0.0))
+      {
+        continue;
+      }
+      while (b - a > 1e-15 * std::max(1.0, std::abs(a)))
+      {
+        const double m = 0.5 * (a + b);
+        const double fm = (*this)(m);
+        if (m <= a || m >= b || fm == 0.0)
+        {
+          a = b = m;
+          break;
+        }
+        if ((fm < 0.0) == (fa < 0.0))
+        {
+          a = m;
+          fa = fm;
+        }
+        else
+        {
+          b = m;
+        }
+      }
+      result.push_back(0.5 * (a + b));
+    }
+    return result;
+  }
+
   Polynomial derivative(size_t order = 1) const
   {
     if (degree() - int(order) < 0)

@@ -3,6 +3,7 @@
 #include "Trajectory.hpp"
 
 #include <array>
+#include <complex>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -73,11 +74,21 @@ class StrandTree
   Trajectory<2> getPiecePolynomial(size_t strand_id, size_t index, size_t reference_branch) const;
 
   /**
-   * Linear motion on [@p index, @p index + 1] with asymmetric frames: start height uses @p start_reference_branch,
-   * end height uses @p end_reference_branch (post-split common→native blend).
+   * Motion on [@p index, @p index + 1] with asymmetric frames: start height uses @p start_reference_branch, end height
+   * uses @p end_reference_branch (post-split common→native blend). Linear when the frames agree; otherwise quadratic
+   * through the similarity midpoint (@ref similarityBlendMidpoint) so a frame rotation does not shrink distances
+   * halfway.
    */
   Trajectory<2> getPiecePolynomialBlendingReference(size_t strand_id, size_t index, size_t start_reference_branch,
     size_t end_reference_branch) const;
+  /// Same curve as @ref getPiecePolynomialBlendingReference evaluated at @p frac.
+  glm::dvec2 evaluateBlendingReference(
+    size_t strand_id, size_t index, size_t start_reference_branch, size_t end_reference_branch, double frac) const;
+  /// Closest similarity (scale * e^(i * angle)) of the frame change of the piece [@p index, @p index + 1]: this
+  /// strand's profile plane maps into @p start_reference_branch at @p index and into @p end_reference_branch at @p
+  /// index + 1.
+  std::complex<double> frameChangeSimilarity(
+    size_t strand_id, size_t index, size_t start_reference_branch, size_t end_reference_branch) const;
 
   /// Linear motion on [@p index, @p index + 1] in the strand's native profile support coordinates (no frame transform).
   Trajectory<2> getLocalPiecePolynomial(size_t strand_id, size_t index) const;
@@ -85,6 +96,9 @@ class StrandTree
   /// Transform support at @p index into @p reference_branch's frame at @p branch_lookup_height.
   glm::dvec2 getPointTransformedAtSection(
     size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const;
+  /// Transform @p point of the strand's profile plane at @p index into @p reference_branch's frame.
+  glm::dvec2 transformProfilePoint(const glm::dvec2& point, size_t strand_id, size_t index, size_t reference_branch,
+    size_t branch_lookup_height) const;
 
   // getters with named indices
   const std::vector<glm::dvec2>& getSupportPoints(size_t strand_id) const { return support_points[strand_id]; }
@@ -141,6 +155,9 @@ class StrandTree
   static StrandTree loadFromFile(const std::filesystem::path& path);
 
  private:
+  /// Coefficients {c0, c1, c2} of the blending piece c0 + c1 * frac + c2 * frac^2 (c2 = 0 when the frames agree).
+  std::array<glm::dvec2, 3> blendingReferencePieceCoefficients(
+    size_t strand_id, size_t index, size_t start_reference_branch, size_t end_reference_branch) const;
   void computeNormalTransforms();
 
   /**

@@ -204,6 +204,8 @@ class TreeMesher
     has_meshing_strand_to_segment_indices_ = true;
   }
   const std::vector<size_t>& getBoundaryVertexToStrandId() const;
+  /// Section time of each boundary mesh vertex (not its z coordinate when meshes are transformed at construction).
+  const std::vector<double>& getBoundaryVertexKineticTimes() const;
   void transformBoundaryMesh(kinDS::VoronoiMesh& boundary_mesh, const glm::dmat4& root_transform = glm::dmat4(1));
   void transformToWorldSpace(
     VoronoiMesh& mesh, size_t strand_id, const glm::dmat4& root_transform = glm::dmat4(1)) const;

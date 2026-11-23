@@ -797,7 +797,7 @@ static std::optional<std::filesystem::path> g_export_profile_planes;
 static bool g_legacy_hinge = false;
 
 /// --export-profile-planes: one quad per height and input branch covering its strand sites (in object space), and at
-/// each input-branch birth the exact parent/child hinge (plane intersection) at the birth height and the next two.
+/// each input-branch birth the exact parent/child hinge (plane intersection) at every height where both planes exist.
 static void export_profile_planes_and_hinges(
   const kinDS::StrandTree& strand_tree, const std::filesystem::path& planes_obj)
 {
@@ -864,7 +864,7 @@ static void export_profile_planes_and_hinges(
       {
         continue;
       }
-      for (size_t k = h; k < h + 3 && k < transforms.size(); ++k)
+      for (size_t k = h; k < transforms.size(); ++k)
       {
         const auto pc = quad_center_size.find({ k, *parent });
         const auto cc = quad_center_size.find({ k, child });

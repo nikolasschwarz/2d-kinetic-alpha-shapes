@@ -63,7 +63,9 @@ class BoundaryMesh
   void setLastLeftAndRight(size_t he_id, size_t left, size_t right);
   void setHalfEdgeBoundaryVertex(size_t he_id, size_t vertex_index);
 
-  size_t addVertex(const glm::dvec3& position, size_t strand_id, const glm::dvec2& raw_uv, const std::string& metadata);
+  /// @p kinetic_time is the vertex's section time; with meshes transformed at construction it is not the z coordinate.
+  size_t addVertex(const glm::dvec3& position, size_t strand_id, double kinetic_time, const glm::dvec2& raw_uv,
+    const std::string& metadata);
 
   size_t addTriangle(size_t u, size_t v, size_t w, const std::string& metadata, int material_id,
     double uv_circum_factor, double uv_height_factor);
@@ -78,12 +80,14 @@ class BoundaryMesh
   void applyTransform(const glm::dmat4& transform);
 
   /// Merge duplicate and isolated vertices, drop degenerate faces, then normals and UV layout.
-  /// Remaps @ref vertexToStrandId through the same vertex map. Returns how many degenerate triangles were removed.
+  /// Remaps @ref vertexToStrandId and @ref vertexKineticTime through the same vertex map. Returns how many degenerate
+  /// triangles were removed.
   size_t finalize();
 
   VoronoiMesh& mesh();
   const VoronoiMesh& mesh() const;
   const std::vector<size_t>& vertexToStrandId() const;
+  const std::vector<double>& vertexKineticTime() const;
 
   /// Hold @ref mutex_ for the whole functor. Nested @ref BoundaryMesh calls from @p fn lock again on this thread.
   template <typename Fn>
@@ -96,8 +100,8 @@ class BoundaryMesh
  private:
   static constexpr size_t npos = static_cast<size_t>(-1);
 
-  size_t addVertexUnlocked(
-    const glm::dvec3& position, size_t strand_id, const glm::dvec2& raw_uv, const std::string& metadata);
+  size_t addVertexUnlocked(const glm::dvec3& position, size_t strand_id, double kinetic_time, const glm::dvec2& raw_uv,
+    const std::string& metadata);
   size_t addTriangleUnlocked(size_t u, size_t v, size_t w, const std::string& metadata, int material_id,
     double uv_circum_factor, double uv_height_factor);
   void completeSectionUnlocked(size_t he_id, size_t new_left, size_t new_right, const std::string& face_metadata,
@@ -107,6 +111,7 @@ class BoundaryMesh
   VoronoiMesh mesh_;
   std::vector<std::pair<size_t, size_t>> last_left_and_right_;
   std::vector<size_t> vertex_to_strand_id_;
+  std::vector<double> vertex_kinetic_time_;
   std::vector<glm::dvec2> raw_uvs_;
   /// Vertex created when a flip turned this half-edge into a boundary edge; -1 when the previous ring is still valid.
   std::vector<int> half_edge_to_boundary_vertex_index_;

@@ -3776,21 +3776,8 @@ glm::dvec3 SegmentBuilder::radiusTransitionProjectionPosition(
         return getCrossingCoordsInMeshSpace(ref, t);
       }
 
-      kinDS::ensureCrossingIntersectionParamUpToDate(const_cast<KineticDelaunay&>(kin_del), ref, t);
-      const auto& graph = kin_del.getGraph();
-      const size_t he_even = 2 * ref->delaunay_edge_id;
-      if (he_even + 1 < graph.halfEdgeSlotCount())
-      {
-        const int a = graph.halfEdge(he_even).origin;
-        const int b = graph.halfEdge(he_even + 1).origin;
-        if (a >= 0 && b >= 0 && std::isfinite(ref->delaunay_edge_param))
-        {
-          const glm::dvec2 pa = kin_del.getPointAt(t, static_cast<size_t>(a), false, false);
-          const glm::dvec2 pb = kin_del.getPointAt(t, static_cast<size_t>(b), false, false);
-          const glm::dvec2 p = pa * (1.0 - ref->delaunay_edge_param) + pb * ref->delaunay_edge_param;
-          return glm::dvec3(p, t);
-        }
-      }
+      // Delaunay (shared kinetic) frame: raw profile coordinates of different input branches do not share a frame.
+      return getCrossingCoordsInDelaunaySpace(const_cast<KineticDelaunay&>(kin_del), ref, t);
     }
     else if (endpoint.site_vertex_id.has_value())
     {
@@ -3798,8 +3785,7 @@ glm::dvec3 SegmentBuilder::radiusTransitionProjectionPosition(
       {
         return getPointInMeshSpace(endpoint.site_vertex_id.value(), t);
       }
-      const glm::dvec2 p = kin_del.getPointAt(t, endpoint.site_vertex_id.value(), false, false);
-      return glm::dvec3(p, t);
+      return glm::dvec3(kin_del.getPointInDelaunaySpace(endpoint.site_vertex_id.value(), t), t);
     }
     else if (endpoint.voronoi_vertex_id.has_value())
     {
@@ -3906,9 +3892,8 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
     if (auto v_opp = oppositeFiniteDelaunayVertexOnUndirectedEdge(graph, delaunay_edge_id, site_vertex_id);
       v_opp.has_value())
     {
-      const glm::dvec2 xy = kin_del.getPointAt(t, v_opp.value(), false, false);
       ProjectionAnchor out;
-      out.old_profile_position = glm::dvec3(xy, t);
+      out.old_profile_position = glm::dvec3(kin_del.getPointInDelaunaySpace(v_opp.value(), t), t);
       out.shifted_endpoint.site_vertex_id = v_opp.value();
       return out;
     }
@@ -3924,7 +3909,7 @@ std::optional<SegmentBuilder::RadiusTransitionSitePlacement> SegmentBuilder::rad
 
   const glm::dvec3 p0_old = a0->old_profile_position;
   const glm::dvec3 p1_old = a1->old_profile_position;
-  const glm::dvec2 site_xy = kin_del.getPointAt(t, site_vertex_id, false, false);
+  const glm::dvec2 site_xy = kin_del.getPointInDelaunaySpace(site_vertex_id, t);
   const glm::dvec2 projection_axis = glm::dvec2(p1_old) - glm::dvec2(p0_old);
   const double projection_axis_len2 = glm::dot(projection_axis, projection_axis);
   if (!(projection_axis_len2 > 1e-30))
@@ -6843,7 +6828,10 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(
   if (explicit_mesh_position.has_value())
   {
     vertex = explicit_mesh_position.value();
-    vertex.z = mesh_z;
+    if (!create_transformed_mesh)
+    {
+      vertex.z = mesh_z; // profile space keeps the kinetic time as z for the export transform
+    }
     profile_xy = glm::dvec2(vertex.x, vertex.y);
     includes_virtual_shift = false;
   }
@@ -6857,7 +6845,6 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(
   else
   {
     vertex = getPointInMeshSpace(strand_id, t);
-    vertex.z = mesh_z;
     includes_virtual_shift = false;
   }
   const glm::dvec2 raw_uv = boundaryRawUv(delaunay_xy, centroid, t);
@@ -6877,7 +6864,7 @@ size_t kinDS::SegmentBuilder::addBoundaryVertex(
       .build();
   }()
                                                    : std::string {};
-  return boundary_mesh_.addVertex(vertex, strand_id, raw_uv, metadata);
+  return boundary_mesh_.addVertex(vertex, strand_id, mesh_z, raw_uv, metadata);
 }
 
 size_t kinDS::SegmentBuilder::addMeshletTriangle(
@@ -7250,9 +7237,13 @@ SegmentBuilder::SidePlaneAssignmentEntry SegmentBuilder::computeSidePlaneAssignm
 const SegmentBuilder::SidePlaneAssignmentEntry& SegmentBuilder::getOrComputeSidePlaneAssignment(
   size_t component_id, double t) const
 {
-  const SidePlaneAssignmentKey key { component_id, meshVertexKineticTimeBits(t) };
+  SidePlaneAssignmentKey key { component_id, 0, meshVertexKineticTimeBits(t) };
   {
     const std::shared_lock lock(placement_cache_mutex_);
+    if (const auto it = component_placement_generation_.find(component_id); it != component_placement_generation_.end())
+    {
+      key.generation = it->second;
+    }
     if (const auto it = side_plane_assignment_cache_.find(key); it != side_plane_assignment_cache_.end())
     {
       return it->second;
@@ -7316,15 +7307,10 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
     // (Native evaluate + own branch is a no-op when sides are pure, so it never produced two planes.)
     if (strand_id < kin_del.component_data.component_map.size())
     {
-      const size_t component_id = kin_del.component_data.component_map[strand_id];
-      const SidePlaneAssignmentEntry& entry = getOrComputeSidePlaneAssignment(component_id, t);
-      if (entry.active)
+      if (const std::optional<glm::dvec3> hinged
+        = hingeMeshPosition(kin_del.component_data.component_map[strand_id], strand_id, t))
       {
-        const auto it = entry.strand_to_side_branch.find(strand_id);
-        if (it != entry.strand_to_side_branch.end())
-        {
-          return liftToSidePlane(strand_id, t, entry.shared_ref_branch, it->second);
-        }
+        return hinged.value();
       }
     }
 
@@ -7339,6 +7325,30 @@ glm::dvec3 SegmentBuilder::getPointInMeshSpace(size_t strand_id, double t) const
     KINDS_ERROR("getPointInMeshSpace: " << ex.what() << "; using placeholder");
     return placeholder();
   }
+}
+
+std::optional<glm::dvec3> SegmentBuilder::hingeMeshPosition(size_t component_id, size_t strand_id, double t) const
+{
+  const SidePlaneAssignmentEntry& entry = getOrComputeSidePlaneAssignment(component_id, t);
+  const auto it = entry.active ? entry.strand_to_side_branch.find(strand_id) : entry.strand_to_side_branch.end();
+  if (it == entry.strand_to_side_branch.end())
+  {
+    return std::nullopt;
+  }
+  // The side of the hinge is only consistent with the fold at a section height (each height has its own hinge).
+  // Between sections, interpolate the section placements so a strand near the hinge cannot flip planes.
+  const auto at_section = [&](size_t height)
+  {
+    const SidePlaneAssignmentEntry& at = getOrComputeSidePlaneAssignment(component_id, static_cast<double>(height));
+    const auto side = at.active ? at.strand_to_side_branch.find(strand_id) : at.strand_to_side_branch.end();
+    return side != at.strand_to_side_branch.end()
+      ? liftToSidePlane(strand_id, static_cast<double>(height), at.shared_ref_branch, side->second)
+      : liftToSidePlane(strand_id, static_cast<double>(height), entry.shared_ref_branch, it->second);
+  };
+  const double lower = std::floor(t);
+  return t > lower
+    ? glm::mix(at_section(static_cast<size_t>(lower)), at_section(static_cast<size_t>(lower) + 1), t - lower)
+    : at_section(static_cast<size_t>(lower));
 }
 
 glm::dvec2 SegmentBuilder::meshSharedXY(size_t strand_id, double t, size_t shared_ref) const
@@ -7396,93 +7406,70 @@ glm::dvec3 SegmentBuilder::nativeMeshPosition(size_t strand_id, double t) const
 void SegmentBuilder::registerSplitPlacementBlend(size_t component_id, double t)
 {
   const SidePlaneAssignmentEntry& entry = getOrComputeSidePlaneAssignment(component_id, t);
-  if (!entry.active)
+  if (entry.active)
   {
-    return;
-  }
-  const auto& tree = kin_del.getStrandTree();
-  const size_t branch_section = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
-  std::map<std::tuple<size_t, size_t, size_t>, SplitPlacementBlendGroup> groups;
-  for (const auto& [strand_id, side_branch] : entry.strand_to_side_branch)
-  {
-    const size_t own_branch = tree.getBranchIndex(strand_id, branch_section);
-    auto& group = groups[{ entry.shared_ref_branch, side_branch, own_branch }];
-    group.t_split = t;
-    group.t_end = std::floor(t) + 1.0;
-    group.shared_ref_branch = entry.shared_ref_branch;
-    group.side_branch = side_branch;
-    group.own_branch = own_branch;
-    group.strands.push_back(strand_id);
-  }
-
-  const std::unique_lock lock(placement_cache_mutex_);
-  for (auto& [key, group] : groups)
-  {
-    std::sort(group.strands.begin(), group.strands.end());
-    for (const size_t strand_id : group.strands)
+    const auto& tree = kin_del.getStrandTree();
+    const double t_end = std::floor(t) + 1.0;
+    const size_t end_height = static_cast<size_t>(t_end);
+    const size_t branch_section = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
+    const size_t lookup_height = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t_end));
+    const auto plane_normal = [&](size_t branch)
     {
-      split_placement_blend_group_of_strand_[strand_id] = split_placement_blend_groups_.size();
+      const glm::dmat4& m = tree.getResolvedTransformByHeightAndBranch(end_height, branch, lookup_height);
+      return glm::cross(glm::dvec3(m[0]), glm::dvec3(m[2]));
+    };
+    // Start: the hinge placement at the split. End: own-branch placement at the next section.
+    std::map<std::pair<size_t, size_t>, std::pair<SplitPlacementBlendGroup, std::vector<size_t>>> groups;
+    for (const auto& [strand_id, side_branch] : entry.strand_to_side_branch)
+    {
+      const std::optional<glm::dvec3> start = hingeMeshPosition(component_id, strand_id, t);
+      if (!start.has_value() || !kin_del.strandHasProfileAt(strand_id, t_end))
+      {
+        continue;
+      }
+      auto& [group, strands] = groups[{ side_branch, tree.getBranchIndex(strand_id, branch_section) }];
+      group.t_split = t;
+      group.t_end = t_end;
+      group.start.push_back(start.value());
+      group.end.push_back(nativeMeshPosition(strand_id, t_end));
+      strands.push_back(strand_id);
     }
-    split_placement_blend_groups_.push_back(std::move(group));
+    for (auto& [branches, group_and_strands] : groups)
+    {
+      auto& group = group_and_strands.first;
+      group.fit = fitSimilarity(group.start, group.end, plane_normal(branches.first), plane_normal(branches.second));
+    }
+
+    const std::unique_lock lock(placement_cache_mutex_);
+    for (auto& [branches, group_and_strands] : groups)
+    {
+      for (size_t i = 0; i < group_and_strands.second.size(); ++i)
+      {
+        split_placement_blend_group_of_strand_[group_and_strands.second[i]] = { split_placement_blend_groups_.size(), i };
+      }
+      split_placement_blend_groups_.push_back(std::move(group_and_strands.first));
+    }
   }
+  const std::unique_lock lock(placement_cache_mutex_);
+  ++component_placement_generation_[component_id];
 }
 
 std::optional<glm::dvec3> SegmentBuilder::splitPlacementBlendPosition(size_t strand_id, double t) const
 {
-  size_t group_id = 0;
-  SplitPlacementBlendGroup group;
+  const std::shared_lock lock(placement_cache_mutex_);
+  const auto it = split_placement_blend_group_of_strand_.find(strand_id);
+  if (it == split_placement_blend_group_of_strand_.end())
   {
-    const std::shared_lock lock(placement_cache_mutex_);
-    const auto it = split_placement_blend_group_of_strand_.find(strand_id);
-    if (it == split_placement_blend_group_of_strand_.end())
-    {
-      return std::nullopt;
-    }
-    group_id = it->second;
-    group = split_placement_blend_groups_[group_id];
+    return std::nullopt;
   }
+  const SplitPlacementBlendGroup& group = split_placement_blend_groups_[it->second.first];
   if (t < group.t_split || t >= group.t_end)
   {
     return std::nullopt;
   }
-
-  const auto pre = [&](size_t s) { return liftToSidePlane(s, t, group.shared_ref_branch, group.side_branch); };
-  const SidePlaneAssignmentKey key { group_id, meshVertexKineticTimeBits(t) };
-  std::optional<SimilarityFit> fit;
-  {
-    const std::shared_lock lock(placement_cache_mutex_);
-    if (const auto it = split_placement_blend_fit_cache_.find(key); it != split_placement_blend_fit_cache_.end())
-    {
-      fit = it->second;
-    }
-  }
-  if (!fit.has_value())
-  {
-    std::vector<glm::dvec3> pre_points;
-    std::vector<glm::dvec3> post_points;
-    for (const size_t s : group.strands)
-    {
-      if (kin_del.strandHasProfileAt(s, t))
-      {
-        pre_points.push_back(pre(s));
-        post_points.push_back(nativeMeshPosition(s, t));
-      }
-    }
-    const auto& tree = kin_del.getStrandTree();
-    const size_t upper_height = static_cast<size_t>(std::ceil(t));
-    const size_t lookup_height = kin_del.inputBranchSectionIndexAtIntervalUpperBound(eventIntervalUpperBound(t));
-    const auto plane_normal = [&](size_t branch)
-    {
-      const glm::dmat4& m = tree.getResolvedTransformByHeightAndBranch(upper_height, branch, lookup_height);
-      return glm::cross(glm::dvec3(m[0]), glm::dvec3(m[2]));
-    };
-    fit = fitSimilarity(pre_points, post_points, plane_normal(group.side_branch), plane_normal(group.own_branch));
-    const std::unique_lock lock(placement_cache_mutex_);
-    split_placement_blend_fit_cache_.emplace(key, fit.value());
-  }
-
-  const double w = (t - group.t_split) / (group.t_end - group.t_split);
-  return blendSimilarity(fit.value(), pre(strand_id), nativeMeshPosition(strand_id, t), w);
+  const size_t i = it->second.second;
+  return blendSimilarity(
+    group.fit, group.start[i], group.end[i], (t - group.t_split) / (group.t_end - group.t_split));
 }
 
 glm::dvec3 SegmentBuilder::getCrossingCoordsInMeshSpace(
@@ -15784,6 +15771,11 @@ const VoronoiMesh& kinDS::SegmentBuilder::getBoundaryMesh() const { return bound
 const std::vector<size_t>& kinDS::SegmentBuilder::getBoundaryVertexToStrandId() const
 {
   return boundary_mesh_.vertexToStrandId();
+}
+
+const std::vector<double>& kinDS::SegmentBuilder::getBoundaryVertexKineticTimes() const
+{
+  return boundary_mesh_.vertexKineticTime();
 }
 
 const std::vector<std::vector<size_t>>& kinDS::SegmentBuilder::getStrandToSegmentIndices() const

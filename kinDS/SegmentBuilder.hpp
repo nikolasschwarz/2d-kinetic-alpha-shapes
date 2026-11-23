@@ -565,10 +565,13 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   struct SidePlaneAssignmentKey
   {
     size_t component_id = static_cast<size_t>(-1);
+    /// Splits keep the component id for one part; the generation keeps pre-split entries from being reused.
+    size_t generation = 0;
     uint64_t kinetic_time_bits = 0;
     bool operator==(const SidePlaneAssignmentKey& other) const noexcept
     {
-      return component_id == other.component_id && kinetic_time_bits == other.kinetic_time_bits;
+      return component_id == other.component_id && generation == other.generation
+        && kinetic_time_bits == other.kinetic_time_bits;
     }
   };
   struct SidePlaneAssignmentKeyHash
@@ -576,6 +579,7 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
     size_t operator()(const SidePlaneAssignmentKey& key) const noexcept
     {
       size_t h = std::hash<size_t> {}(key.component_id);
+      h ^= std::hash<size_t> {}(key.generation) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
       h ^= std::hash<uint64_t> {}(key.kinetic_time_bits) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
       return h;
     }
@@ -595,20 +599,21 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   std::optional<size_t> sidePlaneBranchForStrand(size_t strand_id, double t) const;
   SidePlaneAssignmentEntry computeSidePlaneAssignmentForComponent(size_t component_id, double t) const;
   const SidePlaneAssignmentEntry& getOrComputeSidePlaneAssignment(size_t component_id, double t) const;
-  /// Strands of a split component that shared one (side plane, own branch) pair before the split. Until the
-  /// next section they blend from the side-plane lift to their own-branch placement, so the mesh does not jump.
+  /// Strands of a split component that shared one (side plane, own branch) pair before the split. From the hinge
+  /// placement at the split they blend to their own-branch placement at the next section, so the mesh does not jump.
   struct SplitPlacementBlendGroup
   {
     double t_split = 0.0;
     double t_end = 0.0;
-    size_t shared_ref_branch = 0;
-    size_t side_branch = 0;
-    size_t own_branch = 0;
-    std::vector<size_t> strands;
+    std::vector<glm::dvec3> start;
+    std::vector<glm::dvec3> end;
+    SimilarityFit fit;
   };
   /// Strand position in @p shared_ref's plane by exact unfold (mesh placement only; not the kinetic frame).
   glm::dvec2 meshSharedXY(size_t strand_id, double t, size_t shared_ref) const;
   glm::dvec3 liftToSidePlane(size_t strand_id, double t, size_t shared_ref, size_t side_branch) const;
+  /// Pre-split hinge placement: section placements (each height with its own hinge and sides) interpolated in t.
+  std::optional<glm::dvec3> hingeMeshPosition(size_t component_id, size_t strand_id, double t) const;
   glm::dvec3 nativeMeshPosition(size_t strand_id, double t) const;
   /// Call before a split changes membership of @p component_id.
   void registerSplitPlacementBlend(size_t component_id, double t);
@@ -955,10 +960,9 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   mutable std::unordered_map<SidePlaneAssignmentKey, SidePlaneAssignmentEntry, SidePlaneAssignmentKeyHash>
     side_plane_assignment_cache_;
   std::vector<SplitPlacementBlendGroup> split_placement_blend_groups_;
-  std::unordered_map<size_t, size_t> split_placement_blend_group_of_strand_;
-  /// Key: (blend group index, kinetic time bits).
-  mutable std::unordered_map<SidePlaneAssignmentKey, SimilarityFit, SidePlaneAssignmentKeyHash>
-    split_placement_blend_fit_cache_;
+  /// Strand → (blend group, index into its start / end).
+  std::unordered_map<size_t, std::pair<size_t, size_t>> split_placement_blend_group_of_strand_;
+  std::unordered_map<size_t, size_t> component_placement_generation_;
 
   glm::dvec3 radiusTransitionProjectionPosition(
     const RadiusTransitionProjection& projection, double t, bool mesh_space) const;
@@ -1575,6 +1579,8 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   const VoronoiMesh& getBoundaryMesh() const;
 
   const std::vector<size_t>& getBoundaryVertexToStrandId() const;
+  /// Section time of each boundary mesh vertex (not its z coordinate when meshes are transformed at construction).
+  const std::vector<double>& getBoundaryVertexKineticTimes() const;
 
   const std::vector<std::vector<size_t>>& getStrandToSegmentIndices() const;
 

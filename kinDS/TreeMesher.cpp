@@ -1185,6 +1185,11 @@ const std::vector<size_t>& TreeMesher::getBoundaryVertexToStrandId() const
   return mesh_builder->getBoundaryVertexToStrandId();
 }
 
+const std::vector<double>& TreeMesher::getBoundaryVertexKineticTimes() const
+{
+  return mesh_builder->getBoundaryVertexKineticTimes();
+}
+
 static glm::dvec3 ProfileToModelCoordinates(const std::vector<std::vector<glm::dmat4>>& profile_to_model_transforms,
   glm::dvec3 point, double t, const std::vector<size_t>& branch_indices, double w = 1.0f)
 {

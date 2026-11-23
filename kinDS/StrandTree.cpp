@@ -1,6 +1,7 @@
 #include "StrandTree.hpp"
 
 #include "Logger.hpp"
+#include "SimilarityBlend.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -288,6 +289,13 @@ glm::dvec2 StrandTree::getPointTransformed(size_t strand_id, size_t index, size_
 glm::dvec2 StrandTree::getPointTransformedAtSection(
   size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const
 {
+  return transformProfilePoint(
+    support_points[strand_id][index], strand_id, index, reference_branch, branch_lookup_height);
+}
+
+glm::dvec2 StrandTree::transformProfilePoint(
+  const glm::dvec2& point, size_t strand_id, size_t index, size_t reference_branch, size_t branch_lookup_height) const
+{
   size_t actual_branch;
   // dummy strands might not be mapped to a branch:
   if (strand_id >= branch_indices.size())
@@ -302,7 +310,6 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
   actual_branch = resolveBranchAtHeight(index, actual_branch, branch_lookup_height);
   reference_branch = resolveBranchAtHeight(index, reference_branch, branch_lookup_height);
 
-  glm::dvec2 point = support_points[strand_id][index];
   if (actual_branch == reference_branch)
   {
     return point;
@@ -319,6 +326,28 @@ glm::dvec2 StrandTree::getPointTransformedAtSection(
   return PlaneProjector(
     getTransformByHeightAndBranch(index, actual_branch), getTransformByHeightAndBranch(index, reference_branch))
     .project(point);
+}
+
+std::complex<double> StrandTree::frameChangeSimilarity(
+  size_t strand_id, size_t index, size_t start_reference_branch, size_t end_reference_branch) const
+{
+  // Linear part of the piece's frame change: profile coordinates map into the start frame at index and into the end
+  // frame at index + 1 (consecutive profile planes are continuous, as for a regular piece). Reduced to the closest
+  // similarity.
+  const auto linear_part = [&](size_t height, size_t reference_branch)
+  {
+    const auto map
+      = [&](const glm::dvec2& p) { return transformProfilePoint(p, strand_id, height, reference_branch, height); };
+    const glm::dvec2 origin = map(glm::dvec2(0.0));
+    return glm::dmat2(map(glm::dvec2(1.0, 0.0)) - origin, map(glm::dvec2(0.0, 1.0)) - origin);
+  };
+  const glm::dmat2 start = linear_part(index, start_reference_branch);
+  if (std::abs(glm::determinant(start)) < 1e-12)
+  {
+    return 1.0;
+  }
+  const glm::dmat2 change = linear_part(index + 1, end_reference_branch) * glm::inverse(start);
+  return { 0.5 * (change[0][0] + change[1][1]), 0.5 * (change[0][1] - change[1][0]) };
 }
 
 glm::dvec2 StrandTree::evaluateTransformed(size_t strand_id, double t, size_t reference_branch) const
@@ -419,8 +448,8 @@ Trajectory<2> StrandTree::getPiecePolynomial(size_t strand_id, size_t index, siz
   return result;
 }
 
-Trajectory<2> StrandTree::getPiecePolynomialBlendingReference(size_t strand_id, size_t index,
-  size_t start_reference_branch, size_t end_reference_branch) const
+std::array<glm::dvec2, 3> StrandTree::blendingReferencePieceCoefficients(
+  size_t strand_id, size_t index, size_t start_reference_branch, size_t end_reference_branch) const
 {
   if (strand_id >= support_points.size())
   {
@@ -432,18 +461,39 @@ Trajectory<2> StrandTree::getPiecePolynomialBlendingReference(size_t strand_id, 
     throw std::out_of_range("Index " + std::to_string(index) + " out of range for piece polynomial.");
   }
 
-  const glm::dvec2 P0
-    = getPointTransformedAtSection(strand_id, index, start_reference_branch, index);
-  const glm::dvec2 P1
-    = getPointTransformedAtSection(strand_id, index + 1, end_reference_branch, index + 1);
+  const glm::dvec2 p0 = getPointTransformedAtSection(strand_id, index, start_reference_branch, index);
+  const glm::dvec2 p1 = getPointTransformedAtSection(strand_id, index + 1, end_reference_branch, index + 1);
+  const std::complex<double> similarity = start_reference_branch == end_reference_branch
+    ? 1.0
+    : frameChangeSimilarity(strand_id, index, start_reference_branch, end_reference_branch);
+  if (std::abs(similarity - 1.0) < 1e-12)
+  {
+    return { p0, p1 - p0, glm::dvec2(0.0) };
+  }
+  // A linear blend across a frame rotation shrinks distances halfway; carry the rotation (and scale) as a similarity.
+  const glm::dvec2 p1_in_start_frame
+    = transformProfilePoint(support_points[strand_id][index + 1], strand_id, index, start_reference_branch, index);
+  return quadraticThroughMidpoint(p0, similarityBlendMidpoint(p0, p1_in_start_frame, p1, similarity), p1);
+}
 
+Trajectory<2> StrandTree::getPiecePolynomialBlendingReference(
+  size_t strand_id, size_t index, size_t start_reference_branch, size_t end_reference_branch) const
+{
+  const auto c = blendingReferencePieceCoefficients(strand_id, index, start_reference_branch, end_reference_branch);
   Trajectory<2> result;
   for (int i = 0; i < 2; ++i)
   {
-    result[i] = POLYNOMIAL(P0[i] + (P1[i] - P0[i]) * x);
+    result[i] = c[2][i] == 0.0 ? Polynomial(Eigen::Vector2d(c[0][i], c[1][i]))
+                               : Polynomial(Eigen::Vector3d(c[0][i], c[1][i], c[2][i]));
   }
-
   return result;
+}
+
+glm::dvec2 StrandTree::evaluateBlendingReference(
+  size_t strand_id, size_t index, size_t start_reference_branch, size_t end_reference_branch, double frac) const
+{
+  const auto c = blendingReferencePieceCoefficients(strand_id, index, start_reference_branch, end_reference_branch);
+  return c[0] + frac * (c[1] + frac * c[2]);
 }
 
 Trajectory<2> StrandTree::getLocalPiecePolynomial(size_t strand_id, size_t index) const

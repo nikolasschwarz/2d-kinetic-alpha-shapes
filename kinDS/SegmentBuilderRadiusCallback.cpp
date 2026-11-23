@@ -1110,7 +1110,9 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
 
       for (size_t i = 0; i < 3; ++i)
       {
-        const auto last_vertices = segment_builder_.boundary_mesh_.lastLeftAndRight(face_half_edges[i]);
+        // A closing hole (outside -> inside) keeps its boundary state on the twins, as in case 2.
+        const auto last_vertices
+          = segment_builder_.boundary_mesh_.lastLeftAndRight(is_inside ? face_half_edges[i] ^ 1 : face_half_edges[i]);
         segment_builder_.addBoundaryTriangle(last_vertices.first, last_vertices.second, new_vertex_index);
       }
     });

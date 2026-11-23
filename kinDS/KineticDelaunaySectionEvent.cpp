@@ -192,6 +192,11 @@ void KineticDelaunay::SectionEvent::handleEvent()
         {
           return;
         }
+        // Induced at this boundary (beforeEvent) with non-convex seams: let its separation run instead of cutting.
+        if (split.infinitesimal_active && split.infinitesimal_t_event == static_cast<double>(section_index))
+        {
+          return;
+        }
         if (runtime_branch_id != BranchScheduler::no_branch
           && split.parent_runtime_branch != runtime_branch_id)
         {

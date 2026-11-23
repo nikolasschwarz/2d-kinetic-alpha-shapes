@@ -82,3 +82,57 @@ TEST_CASE("Similarity fit of two points stays finite", "[SimilarityBlend]")
     }
   }
 }
+
+namespace
+{
+glm::dvec2 rotate(double angle, const glm::dvec2& v)
+{
+  return { std::cos(angle) * v.x - std::sin(angle) * v.y, std::sin(angle) * v.x + std::cos(angle) * v.y };
+}
+
+glm::dvec2 evaluateQuadratic(const std::array<glm::dvec2, 3>& c, double w) { return c[0] + w * (c[1] + w * c[2]); }
+
+// Distance between two static points under the polynomial blend of a frame change by `angle` about `center`.
+double blendedDistance(double angle, double w)
+{
+  const glm::dvec2 a(1.0, 2.0);
+  const glm::dvec2 b(3.0, 1.5);
+  const glm::dvec2 center(-4.0, 7.0);
+  const std::complex<double> similarity = std::polar(1.0, angle);
+  const auto blended = [&](const glm::dvec2& p)
+  {
+    const glm::dvec2 p1 = center + rotate(angle, p - center);
+    return evaluateQuadratic(quadraticThroughMidpoint(p, similarityBlendMidpoint(p, p, p1, similarity), p1), w);
+  };
+  return glm::length(blended(a) - blended(b));
+}
+} // namespace
+
+TEST_CASE("Polynomial frame blend keeps distances under a frame rotation", "[SimilarityBlend]")
+{
+  const double d = glm::length(glm::dvec2(1.0, 2.0) - glm::dvec2(3.0, 1.5));
+  const double angle = 26.0 * 3.14159265358979323846 / 180.0;
+  CHECK(blendedDistance(angle, 0.0) == Approx(d).epsilon(1e-12));
+  CHECK(blendedDistance(angle, 0.5) == Approx(d).epsilon(1e-12));
+  CHECK(blendedDistance(angle, 1.0) == Approx(d).epsilon(1e-12));
+  CHECK(blendedDistance(angle, 0.25) == Approx(d).epsilon(1e-3));
+  CHECK(quadraticSimilarityBlendDistanceError(std::polar(1.0, angle)) < 1e-3);
+
+  // A linear blend mirrors every point through one spot halfway at 180 degrees; the polynomial blend stays close.
+  for (const double w : { 0.1, 0.25, 0.5, 0.75, 0.9 })
+  {
+    CHECK(blendedDistance(3.14159265358979323846, w) > 0.85 * d);
+  }
+}
+
+TEST_CASE("Polynomial frame blend is the linear blend without rotation or scale", "[SimilarityBlend]")
+{
+  const glm::dvec2 p0(1.0, 2.0);
+  const glm::dvec2 p1_start(2.0, -1.0);
+  const glm::dvec2 p1(5.0, 0.5); // translated end frame
+  const auto c = quadraticThroughMidpoint(p0, similarityBlendMidpoint(p0, p1_start, p1, 1.0), p1);
+  CHECK(glm::length(c[2]) == Approx(0.0).margin(1e-12));
+  CHECK(glm::length(evaluateQuadratic(c, 0.3) - (p0 + 0.3 * (p1 - p0))) == Approx(0.0).margin(1e-12));
+  CHECK(quadraticSimilarityBlendDistanceError(1.0) == Approx(0.0).margin(1e-12));
+  CHECK(quadraticSimilarityBlendDistanceError(2.0) < 1e-2); // pure scale: |q(w)| vs 2^w
+}
