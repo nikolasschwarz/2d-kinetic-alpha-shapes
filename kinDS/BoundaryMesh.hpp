@@ -5,7 +5,9 @@
 #include <cmath>
 #include <glm/glm.hpp>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -60,8 +62,21 @@ class BoundaryMesh
   void clearHalfEdge(size_t he_id);
 
   std::pair<size_t, size_t> lastLeftAndRight(size_t he_id) const;
+  /// Also drops a pending boundary vertex of @p he_id; call @ref setHalfEdgeBoundaryVertex afterwards.
   void setLastLeftAndRight(size_t he_id, size_t left, size_t right);
   void setHalfEdgeBoundaryVertex(size_t he_id, size_t vertex_index);
+  /// Fan @p he_id's front (through its pending boundary vertex, if any) to @p apex and drop the pending vertex.
+  /// Returns the front's corners.
+  std::pair<size_t, size_t> closeFront(
+    size_t he_id, size_t apex, const std::string& metadata, double uv_circum_factor, double uv_height_factor);
+  /// The strand's latest vertex if it was created at exactly @p kinetic_time.
+  std::optional<size_t> vertexOfStrandAt(size_t strand_id, double kinetic_time) const;
+  /// Triangle (@p from, @p to, @p apex) between two corners of one site; remembers that they are linked.
+  void bridgeCorners(
+    size_t from, size_t to, size_t apex, const std::string& metadata, double uv_circum_factor, double uv_height_factor);
+  /// Close the gap between two corners of one site with @p apex, fanning through corners bridged in between.
+  void closeCornerGap(
+    size_t from, size_t to, size_t apex, const std::string& metadata, double uv_circum_factor, double uv_height_factor);
 
   /// @p kinetic_time is the vertex's section time; with meshes transformed at construction it is not the z coordinate.
   size_t addVertex(const glm::dvec3& position, size_t strand_id, double kinetic_time, const glm::dvec2& raw_uv,
@@ -79,7 +94,7 @@ class BoundaryMesh
 
   void applyTransform(const glm::dmat4& transform);
 
-  /// Merge duplicate and isolated vertices, drop degenerate faces, then normals and UV layout.
+  /// Drop degenerate faces and isolated vertices, then normals and UV layout.
   /// Remaps @ref vertexToStrandId and @ref vertexKineticTime through the same vertex map. Returns how many degenerate
   /// triangles were removed.
   size_t finalize();
@@ -115,6 +130,9 @@ class BoundaryMesh
   std::vector<glm::dvec2> raw_uvs_;
   /// Vertex created when a flip turned this half-edge into a boundary edge; -1 when the previous ring is still valid.
   std::vector<int> half_edge_to_boundary_vertex_index_;
+  /// Corners joined by @ref bridgeCorners (both directions).
+  std::unordered_map<size_t, std::vector<size_t>> corner_links_;
+  std::unordered_map<size_t, size_t> latest_vertex_of_strand_;
 };
 
 } // namespace kinDS

@@ -185,6 +185,7 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
     std::rethrow_exception(worker_error);
   }
 
+  std::vector<size_t> finishing_in_scope;
   for (size_t input_branch_id : segment_builder_.kin_del.inputBranchesFinishingAtSection(t))
   {
     if (!segment_builder_.kin_del.inputBranchInRuntimeScope(
@@ -193,8 +194,9 @@ void SegmentBuilderSectionCallback::beforeEvent(KineticDelaunay::Event& e)
       continue;
     }
     segment_builder_.createClosingCapsForInputBranchFinishingAtSection(t, input_branch_id);
-    segment_builder_.addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
+    finishing_in_scope.push_back(input_branch_id);
   }
+  segment_builder_.addDelaunayTriangulationToBoundaryMesh(t, finishing_in_scope, true, 0.01);
 
   // Snapshot runtime branch while the map still has live assignments (retire runs after beforeEvent).
   segment_builder_.recordRuntimeBranchesForActiveSegments();

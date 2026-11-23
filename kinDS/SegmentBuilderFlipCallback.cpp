@@ -259,13 +259,10 @@ void SegmentBuilderFlipCallback::beforeEvent(KineticDelaunay::Event& e)
     size_t he2_id = graph.halfEdge(he1_id).next;
 
     segment_builder_.boundary_mesh_.withLock([&] {
-      const auto boundary_last_vertices = segment_builder_.boundary_mesh_.lastLeftAndRight(outer_he_id);
       const size_t new_boundary_vertex_index = segment_builder_.addBoundaryVertex(
         glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], flip->occurrence_time }, centroid,
         opposite_vertex, flip->occurrence_time, false);
-
-      segment_builder_.addBoundaryTriangle(
-        boundary_last_vertices.first, boundary_last_vertices.second, new_boundary_vertex_index);
+      const auto boundary_last_vertices = segment_builder_.closeBoundaryFront(outer_he_id, new_boundary_vertex_index);
 
       segment_builder_.boundary_mesh_.setLastLeftAndRight(
         he1_id, boundary_last_vertices.first, new_boundary_vertex_index);
@@ -473,36 +470,21 @@ void SegmentBuilderFlipCallback::afterEvent(KineticDelaunay::Event& e)
     size_t he2_id = graph.halfEdge(he1_id).next;
 
     segment_builder_.boundary_mesh_.withLock([&] {
-      const auto he1_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he1_id);
-      const auto he1_twin_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he1_id ^ 1);
-      const auto he2_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he2_id);
-      const auto he2_twin_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he2_id ^ 1);
       const size_t old_boundary_vertex_index = segment_builder_.addBoundaryVertex(
         glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], flip->occurrence_time }, centroid,
         opposite_vertex, flip->occurrence_time, false);
-
-      const size_t tri_index
-        = segment_builder_.addBoundaryTriangle(he1_last.first, he1_last.second, old_boundary_vertex_index);
-      if (tri_index == static_cast<size_t>(-1))
+      const auto he1_last = segment_builder_.closeBoundaryFront(he1_id, old_boundary_vertex_index);
+      const auto he2_last = segment_builder_.closeBoundaryFront(he2_id, old_boundary_vertex_index);
+      // Both old fronts end at the opposite vertex; close the wedge if they reached it with different corners.
+      if (he1_last.second != he2_last.first)
       {
-        KINDS_DEBUG("\he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1) << "\nlast_vertices: " << he1_last.first << ", "
-                                << he1_last.second << "\ntwin last vertices: " << he1_twin_last.first << ", "
-                                << he1_twin_last.second << "\nopposite: " << opposite_vertex);
+        segment_builder_.bridgeBoundaryCorners(he1_last.second, he2_last.first, old_boundary_vertex_index);
       }
 
-      const size_t tri_index2
-        = segment_builder_.addBoundaryTriangle(he2_last.first, he2_last.second, old_boundary_vertex_index);
-      if (tri_index2 == static_cast<size_t>(-1))
-      {
-        KINDS_DEBUG("\he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1) << "\nlast_vertices: " << he2_last.first << ", "
-                                << he2_last.second << "\ntwin last vertices: " << he2_twin_last.first << ", "
-                                << he2_twin_last.second << "\nopposite: " << opposite_vertex);
-      }
-
-      segment_builder_.boundary_mesh_.setHalfEdgeBoundaryVertex(outer_he_id, old_boundary_vertex_index);
-      segment_builder_.boundary_mesh_.setLastLeftAndRight(outer_he_id, he1_last.first, he2_last.second);
       segment_builder_.boundary_mesh_.setLastLeftAndRight(he1_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
       segment_builder_.boundary_mesh_.setLastLeftAndRight(he2_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(outer_he_id, he1_last.first, he2_last.second);
+      segment_builder_.boundary_mesh_.setHalfEdgeBoundaryVertex(outer_he_id, old_boundary_vertex_index);
     });
   }
 

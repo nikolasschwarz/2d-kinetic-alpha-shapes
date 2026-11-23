@@ -975,30 +975,22 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     }
 
     segment_builder_.boundary_mesh_.withLock([&] {
-      const auto boundary_last_vertices = segment_builder_.boundary_mesh_.lastLeftAndRight(boundary_he_id);
-      const auto inner_last = segment_builder_.boundary_mesh_.lastLeftAndRight(inner_he_id);
       const size_t new_boundary_vertex_index = segment_builder_.addBoundaryVertex(
         glm::dvec3 { new_boundary_vertex[0], new_boundary_vertex[1], radius->occurrence_time }, centroid,
         opposite_vertex, radius->occurrence_time, false, mesh_point);
+      const auto boundary_last_vertices
+        = segment_builder_.closeBoundaryFront(boundary_he_id, new_boundary_vertex_index);
 
-      const size_t index = segment_builder_.addBoundaryTriangle(
-        boundary_last_vertices.first, boundary_last_vertices.second, new_boundary_vertex_index);
-
-      if (index == static_cast<size_t>(-1))
-      {
-        KINDS_DEBUG("\ninner_he_id: " << inner_he_id << "\nouter_he_id: " << outer_he_id
-                                      << "\nlast_vertices: " << boundary_last_vertices.first << ", "
-                                      << boundary_last_vertices.second << "\ninner last vertices: " << inner_last.first
-                                      << ", " << inner_last.second << "\nu: " << u << ", v: " << v
-                                      << ", opposite: " << opposite_vertex);
-      }
-
-      segment_builder_.boundary_mesh_.setLastLeftAndRight(
-        he1_id, boundary_last_vertices.first, new_boundary_vertex_index);
-      segment_builder_.boundary_mesh_.setLastLeftAndRight(
-        he2_id, new_boundary_vertex_index, boundary_last_vertices.second);
+      // Old front (u -> v corners). Leaving triangle: he1 = v -> w, he2 = w -> u. Joining: he1 / he2 are the twins
+      // w -> v and u -> w, so the corners swap sides.
       segment_builder_.boundary_mesh_.setLastLeftAndRight(
         boundary_he_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(he1_id,
+        is_inside ? boundary_last_vertices.first : new_boundary_vertex_index,
+        is_inside ? new_boundary_vertex_index : boundary_last_vertices.second);
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(he2_id,
+        is_inside ? new_boundary_vertex_index : boundary_last_vertices.first,
+        is_inside ? boundary_last_vertices.second : new_boundary_vertex_index);
     });
 
     break;
@@ -1046,44 +1038,29 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
     }
 
     segment_builder_.boundary_mesh_.withLock([&] {
-      const auto he1_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he1_id);
-      const auto he1_twin_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he1_id ^ 1);
-      const auto he2_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he2_id);
-      const auto he2_twin_last = segment_builder_.boundary_mesh_.lastLeftAndRight(he2_id ^ 1);
       const size_t old_boundary_vertex_index = segment_builder_.addBoundaryVertex(
         glm::dvec3 { old_boundary_vertex[0], old_boundary_vertex[1], radius->occurrence_time }, centroid,
         opposite_vertex, radius->occurrence_time, false, mesh_point);
+      const auto he1_last = segment_builder_.closeBoundaryFront(he1_id, old_boundary_vertex_index);
+      const auto he2_last = segment_builder_.closeBoundaryFront(he2_id, old_boundary_vertex_index);
 
-      size_t index
-        = segment_builder_.addBoundaryTriangle(he1_last.first, he1_last.second, old_boundary_vertex_index);
-      if (index == static_cast<size_t>(-1))
+      // Both old rings end at the opposite vertex; if an earlier event gave one of them a newer corner there, close
+      // the wedge between the two corners and the new vertex.
+      const size_t w1 = is_inside ? he1_last.first : he1_last.second;
+      const size_t w2 = is_inside ? he2_last.second : he2_last.first;
+      if (w1 != w2)
       {
-        KINDS_DEBUG("he1_id: " << he1_id << "\ntwin: " << (he1_id ^ 1) << "\nlast_vertices: " << he1_last.first << ", "
-                               << he1_last.second << "\ntwin last vertices: " << he1_twin_last.first << ", "
-                               << he1_twin_last.second << "\nopposite: " << opposite_vertex);
+        segment_builder_.bridgeBoundaryCorners(is_inside ? w2 : w1, is_inside ? w1 : w2, old_boundary_vertex_index);
       }
 
-      index = segment_builder_.addBoundaryTriangle(he2_last.first, he2_last.second, old_boundary_vertex_index);
-      if (index == static_cast<size_t>(-1))
-      {
-        KINDS_DEBUG("he2_id: " << he2_id << "\ntwin: " << (he2_id ^ 1) << "\nlast_vertices: " << he2_last.first << ", "
-                               << he2_last.second << "\ntwin last vertices: " << he2_twin_last.first << ", "
-                               << he2_twin_last.second << "\nopposite: " << opposite_vertex);
-      }
-
-      segment_builder_.boundary_mesh_.setHalfEdgeBoundaryVertex(outer_he_id, old_boundary_vertex_index);
-
-      if (!is_inside)
-      {
-        segment_builder_.boundary_mesh_.setLastLeftAndRight(outer_he_id, he1_last.first, he2_last.second);
-      }
-      else
-      {
-        segment_builder_.boundary_mesh_.setLastLeftAndRight(inner_he_id, he2_last.second, he1_last.first);
-      }
-
+      // The new boundary half-edge faces outside: the twin when the triangle joins, the triangle's own edge when it
+      // leaves. Its corners are the far corners of the two old rings (he1 / he2 are the twins when it leaves).
+      const size_t new_boundary_he_id = is_inside ? inner_he_id : outer_he_id;
       segment_builder_.boundary_mesh_.setLastLeftAndRight(he1_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
       segment_builder_.boundary_mesh_.setLastLeftAndRight(he2_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
+      segment_builder_.boundary_mesh_.setLastLeftAndRight(
+        new_boundary_he_id, is_inside ? he2_last.first : he1_last.first, is_inside ? he1_last.second : he2_last.second);
+      segment_builder_.boundary_mesh_.setHalfEdgeBoundaryVertex(new_boundary_he_id, old_boundary_vertex_index);
     });
     break;
   }
@@ -1108,12 +1085,24 @@ void SegmentBuilderRadiusCallback::beforeEvent(KineticDelaunay::Event& e)
         glm::dvec3 { new_point[0], new_point[1], radius->occurrence_time }, glm::dvec2 { 0.0, 0.0 }, vertices[0],
         radius->occurrence_time, false, mesh_point);
 
+      std::pair<size_t, size_t> fronts[3];
       for (size_t i = 0; i < 3; ++i)
       {
-        // A closing hole (outside -> inside) keeps its boundary state on the twins, as in case 2.
-        const auto last_vertices
-          = segment_builder_.boundary_mesh_.lastLeftAndRight(is_inside ? face_half_edges[i] ^ 1 : face_half_edges[i]);
-        segment_builder_.addBoundaryTriangle(last_vertices.first, last_vertices.second, new_vertex_index);
+        // Fronts live on the outside-facing half-edges: the twins when the triangle leaves (as in case 2).
+        const size_t front_he_id = is_inside ? face_half_edges[i] ^ 1 : face_half_edges[i];
+        fronts[i] = segment_builder_.closeBoundaryFront(front_he_id, new_vertex_index);
+        segment_builder_.boundary_mesh_.setLastLeftAndRight(
+          front_he_id, static_cast<size_t>(-1), static_cast<size_t>(-1));
+      }
+      // Consecutive fronts meet at a triangle corner; bridge them if they reached it with different corners. The
+      // twins run against the face order, so the front before i is i + 1 when the triangle leaves, else i - 1.
+      for (size_t i = 0; i < 3; ++i)
+      {
+        const size_t previous_corner = fronts[(i + (is_inside ? 1 : 2)) % 3].second;
+        if (previous_corner != fronts[i].first)
+        {
+          segment_builder_.bridgeBoundaryCorners(previous_corner, fronts[i].first, new_vertex_index);
+        }
       }
     });
 

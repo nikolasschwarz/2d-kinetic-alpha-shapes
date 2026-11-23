@@ -6546,6 +6546,16 @@ size_t kinDS::SegmentBuilder::addBoundaryTriangle(
   return boundary_mesh_.addTriangle(u, v, w, metadata, material_id, uv_circum_factor, uv_height_factor);
 }
 
+std::pair<size_t, size_t> kinDS::SegmentBuilder::closeBoundaryFront(size_t he_id, size_t apex)
+{
+  return boundary_mesh_.closeFront(he_id, apex, "{}", uv_circum_factor, uv_height_factor);
+}
+
+void kinDS::SegmentBuilder::bridgeBoundaryCorners(size_t from, size_t to, size_t apex)
+{
+  boundary_mesh_.bridgeCorners(from, to, apex, "{}", uv_circum_factor, uv_height_factor);
+}
+
 namespace
 {
 thread_local bool emit_collapsed_triangles = false;
@@ -9184,14 +9194,26 @@ void SegmentBuilder::collapseDegreeTwoFlexibleVerticesOnIntersectionMeshes()
   }
 }
 
-void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(double t, size_t input_branch_id,
-  bool invert_orientation, double offset, std::vector<int>* strand_to_mesh_vertex_out)
+void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(double t,
+  const std::vector<size_t>& input_branch_ids, bool invert_orientation, double offset,
+  std::vector<int>* strand_to_mesh_vertex_out)
 {
+  if (input_branch_ids.empty())
+  {
+    return;
+  }
   boundary_mesh_.withLock([&] {
   auto& graph = kin_del.getGraph();
   const size_t section = static_cast<size_t>(t);
-  const auto& branch_strands = kin_del.getStrandTree().getStrandsByBranch(section, input_branch_id);
+  // Branches finishing together can still share faces; capping them in one pass keeps those faces.
+  std::vector<size_t> branch_strands;
+  for (const size_t branch_id : input_branch_ids)
+  {
+    const auto& strands = kin_del.getStrandTree().getStrandsByBranch(section, branch_id);
+    branch_strands.insert(branch_strands.end(), strands.begin(), strands.end());
+  }
   const std::unordered_set<size_t> branch_strand_set(branch_strands.begin(), branch_strands.end());
+  const size_t input_branch_id = input_branch_ids.front(); // diagnostics only
 
   size_t skip_dummy = 0;
   size_t strands_vertex_added = 0;
@@ -9222,8 +9244,12 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(double t, siz
     auto component_index = kin_del.component_data.component_map[strand_id];
     auto& centroid = kin_del.component_data.component_centroids[component_index];
 
-    const size_t mesh_vertex_index
-      = addBoundaryVertex(glm::dvec3 { vertex[0], vertex[1], t + offset }, centroid, strand_id, t, false);
+    // At a finishing section the ring already placed the strand; transformed meshes ignore the offset, so reuse it.
+    const std::optional<size_t> ring_vertex
+      = create_transformed_mesh ? boundary_mesh_.vertexOfStrandAt(strand_id, t) : std::nullopt;
+    const size_t mesh_vertex_index = ring_vertex.has_value()
+      ? ring_vertex.value()
+      : addBoundaryVertex(glm::dvec3 { vertex[0], vertex[1], t + offset }, centroid, strand_id, t, false);
 
     strand_to_mesh_vertex[strand_id] = static_cast<int>(mesh_vertex_index);
     if (strand_to_mesh_vertex_out != nullptr)
@@ -9289,10 +9315,13 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(double t, siz
         continue;
       }
 
-      if (kin_del.isOnComponentBoundaryOutside(he_ids[i]))
+      // Fronts live on the outside-facing twin. Its own face is often skipped (infinite or another branch's vertex),
+      // so complete it from this inside face, with the corners in the twin's direction.
+      const size_t outer_he_id = he_ids[i] ^ 1;
+      if (kin_del.getFaceInside(face_index) && kin_del.isOnComponentBoundaryOutside(outer_he_id))
       {
         completeBoundaryMeshSection(
-          he_ids[i], static_cast<size_t>(left_mesh_vertex), static_cast<size_t>(right_mesh_vertex), t);
+          outer_he_id, static_cast<size_t>(right_mesh_vertex), static_cast<size_t>(left_mesh_vertex), t);
       }
     }
 
@@ -9319,8 +9348,8 @@ void kinDS::SegmentBuilder::addDelaunayTriangulationToBoundaryMesh(double t, siz
     const size_t tri_v0 = static_cast<size_t>(strand_to_mesh_vertex[vertices[0]]);
     const size_t tri_v1 = static_cast<size_t>(strand_to_mesh_vertex[vertices[1]]);
     const size_t tri_v2 = static_cast<size_t>(strand_to_mesh_vertex[vertices[2]]);
-    const std::string face_metadata
-      = composeBoundaryMeshFaceMetadata(t, "boundary_delaunay", static_cast<size_t>(-1), face_index, input_branch_id);
+    const std::string face_metadata = composeBoundaryMeshFaceMetadata(t, "boundary_delaunay", static_cast<size_t>(-1),
+      face_index, kin_del.getStrandTree().getBranchIndex(static_cast<size_t>(vertices[0]), section));
     addBoundaryTriangle(tri_v0, tri_v1, tri_v2, face_metadata, 1);
     ++triangles_added;
   }
@@ -9376,21 +9405,60 @@ void kinDS::SegmentBuilder::advanceBoundaryMesh(
       return;
     }
   }
-  boundary_mesh_.withLock([&] {
-    std::vector<size_t> new_vertex_indices;
-    new_vertex_indices.reserve(boundary_points.size());
-    for (size_t i = 0; i < boundary_points.size(); i++)
+  boundary_mesh_.withLock(
+    [&]
     {
-      const glm::dvec2 boundary_point = boundary_points[i].p;
-      new_vertex_indices.push_back(addBoundaryVertex(
-        glm::dvec3 { boundary_point[0], boundary_point[1], t }, centroid, boundary_points[i].vertex_id, t, false));
-    }
-    for (size_t i = 0; i < boundary_points.size(); i++)
-    {
-      completeBoundaryMeshSection(boundary_points[i].he_id, new_vertex_indices[i],
-        new_vertex_indices[(i + 1) % boundary_points.size()], t);
-    }
-  });
+      // Consecutive boundary half-edges meet at site i: the previous front ends at corner a[i], the next one starts at
+      // b[i].
+      const size_t n = boundary_points.size();
+      constexpr size_t none = static_cast<size_t>(-1);
+      std::vector<size_t> a(n), b(n);
+      for (size_t i = 0; i < n; i++)
+      {
+        a[i] = boundary_mesh_.lastLeftAndRight(boundary_points[(i + n - 1) % n].he_id).second;
+        b[i] = boundary_mesh_.lastLeftAndRight(boundary_points[i].he_id).first;
+      }
+      // A site on the boundary twice (pinch) has two incoming and two outgoing half-edges; the traced polygon may pair
+      // them differently than the fronts were built. Crossed corners there are no gap: both occurrences share one
+      // vertex.
+      std::vector<size_t> shares_vertex_of(n, none);
+      std::unordered_map<size_t, size_t> first_occurrence;
+      for (size_t j = 0; j < n; j++)
+      {
+        const auto [it, inserted] = first_occurrence.emplace(boundary_points[j].vertex_id, j);
+        const size_t i = it->second;
+        if (!inserted && a[i] != b[i] && a[i] == b[j] && a[j] == b[i])
+        {
+          shares_vertex_of[j] = i;
+          shares_vertex_of[i] = i;
+        }
+      }
+      std::vector<size_t> new_vertex_indices(n);
+      for (size_t i = 0; i < n; i++)
+      {
+        const glm::dvec2 boundary_point = boundary_points[i].p;
+        new_vertex_indices[i] = shares_vertex_of[i] != none && shares_vertex_of[i] < i
+          ? new_vertex_indices[shares_vertex_of[i]]
+          : addBoundaryVertex(
+              glm::dvec3 { boundary_point[0], boundary_point[1], t }, centroid, boundary_points[i].vertex_id, t, false);
+      }
+      // Otherwise a radius event gave one of the two fronts a newer corner; close the gap between the two corners and
+      // the new site vertex, or it stays a triangular hole.
+      for (size_t i = 0; i < n; i++)
+      {
+        if (a[i] != none && b[i] != none && a[i] != b[i] && shares_vertex_of[i] == none)
+        {
+          boundary_mesh_.closeCornerGap(a[i], b[i], new_vertex_indices[i],
+            composeBoundaryMeshFaceMetadata(t, "boundary_corner_gap", boundary_points[i].he_id), uv_circum_factor,
+            uv_height_factor);
+        }
+      }
+      for (size_t i = 0; i < n; i++)
+      {
+        completeBoundaryMeshSection(
+          boundary_points[i].he_id, new_vertex_indices[i], new_vertex_indices[(i + 1) % n], t);
+      }
+    });
 }
 
 bool kinDS::SegmentBuilder::isComponentLive(size_t component_index) const
@@ -12565,7 +12633,7 @@ void SegmentBuilder::init()
           << " contains_strand_0=" << (contains_strand_0 ? "true" : "false");
       strandInitDiagnosticLogLine("init_boundary_branch_triangulate", 0, t, oss.str().c_str());
     }
-    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, false, -0.01, &init_strand_to_mesh_vertex);
+    addDelaunayTriangulationToBoundaryMesh(t, { input_branch_id }, false, -0.01, &init_strand_to_mesh_vertex);
   }
 
   // After a mid-tree start one component can span several input branches. Its faces that mix branches are skipped
@@ -12612,8 +12680,8 @@ void SegmentBuilder::init()
       oss << "input_branch_id=" << input_branch_id << " invert_orientation=true offset=0.01 reason=branch_finishing";
       strandInitDiagnosticLogLine("init_boundary_branch_triangulate", 0, t, oss.str().c_str());
     }
-    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
   }
+  addDelaunayTriangulationToBoundaryMesh(t, kin_del.inputBranchesFinishingAtSection(t), true, 0.01);
 
   logStrandInitDiagnosticsSummary(t);
 
@@ -12764,10 +12832,7 @@ void SegmentBuilder::finalize(double t)
   // [start, end), so finishers at the exclusive end_section are never capped in the section
   // callback — always seal them here. mesh_cap_at_end only seals strands truncated by a premature --end.
   createClosingCapsForInputBranchesFinishingAtSection(t);
-  for (size_t input_branch_id : kin_del.inputBranchesFinishingAtSection(t))
-  {
-    addDelaunayTriangulationToBoundaryMesh(t, input_branch_id, true, 0.01);
-  }
+  addDelaunayTriangulationToBoundaryMesh(t, kin_del.inputBranchesFinishingAtSection(t), true, 0.01);
 
   if (mesh_cap_at_end)
   {

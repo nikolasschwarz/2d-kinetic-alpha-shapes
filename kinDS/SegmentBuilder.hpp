@@ -1053,6 +1053,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   void completeBoundaryMeshSection(size_t he_id, size_t new_left, size_t new_right, double t);
 
   size_t addBoundaryTriangle(size_t u, size_t v, size_t w, const std::string& metadata = "{}", int material_id = 0);
+  /// @ref BoundaryMesh::closeFront with this builder's UV factors.
+  std::pair<size_t, size_t> closeBoundaryFront(size_t he_id, size_t apex);
+  /// @ref BoundaryMesh::bridgeCorners with this builder's UV factors.
+  void bridgeBoundaryCorners(size_t from, size_t to, size_t apex);
 
   /// Per-corner bark UV for boundary-interval meshlets (same UV adjustment as @ref BoundaryMesh).
   size_t addBoundaryIntervalTriangle(
@@ -1206,9 +1210,10 @@ class SegmentBuilder : public KineticDelaunay::CallbackManager
   /// Validates both circumcenters (Delaunay face ids) incident to a Voronoi edge.
   void requireLiveRegisteredVoronoiEdgeEndpoints(size_t voronoi_edge_id, const char* context) const;
 
-  /// @p strand_to_mesh_vertex_out (optional) receives the boundary-mesh vertex created for each strand of the branch.
-  void addDelaunayTriangulationToBoundaryMesh(double t, size_t input_branch_id, bool invert_orientation,
-    double offset, std::vector<int>* strand_to_mesh_vertex_out = nullptr);
+  /// Faces whose corners all belong to @p input_branch_ids. @p strand_to_mesh_vertex_out (optional) receives the
+  /// boundary-mesh vertex created for each strand of those branches.
+  void addDelaunayTriangulationToBoundaryMesh(double t, const std::vector<size_t>& input_branch_ids,
+    bool invert_orientation, double offset, std::vector<int>* strand_to_mesh_vertex_out = nullptr);
 
   std::vector<BoundaryPoint> traceConvexHull(double t) const;
 
